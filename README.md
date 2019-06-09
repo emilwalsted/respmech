@@ -14,12 +14,13 @@ this yourself by modifying the 'load()' function.
 For usage, please see the example file 'example.py'.
 
 *** Note to respiratory scientists: ***
-I created this code for the purpose of my own 
-work and shared it hoping that someone else might find it useful. If you have 
-any suggestions that will make the code more useful to you or generally, please 
-email me to discuss.
+
+I created this code for the purpose of my own work and shared it hoping that 
+someone else might find it useful. If you have any suggestions that will make 
+the code more useful to you or generally, please email me to discuss.
 
 *** Note to software engineers/computer scientists: ***
+
 I realise that this code is not as concise or computationally efficient as it 
 could be. I have focused on readability in an attempt to enable respiratory 
 scientists with basic programming skills to understand, debug and modify/extend
