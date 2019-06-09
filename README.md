@@ -1,10 +1,10 @@
 # Respiratory mechanics, work of breathing and diaphragm EMG entropy calculations
 ------------------------------------------------------------------------ 
-(c) Copyright 2019 Emil Schwarz Walsted <emilwalsted@gmail.com>
-This is a rewrite of my MATLAB code from 2016, with some changes/additions.
-The latest version of this code is available at GitHub: ...
+(c) Copyright 2019 Emil Schwarz Walsted (emilwalsted@gmail.com)
 
-This code calculates respiratory mechanics and/or in- and expiratory work of 
+This is a rewrite of my MATLAB code from 2016, with some changes/additions.
+
+The code calculates respiratory mechanics and/or in- and expiratory work of 
 breathing and/or diaphragm EMG entropy from a time series of 
 pressure/flow/volume recordings obtained  e.g. from LabChart.
 
