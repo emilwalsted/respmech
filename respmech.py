@@ -240,11 +240,10 @@ def separateintobreaths(filename, flow, volume, poes, pgas, pdi, entropycolumns,
         entlen = exend-instart
         if len(entropycolumns) > 0:
             entcols = np.zeros([entlen, entropycolumns.shape[1]])
+            for ix in range(0, entropycolumns.shape[1]):      
+                entcols[:,ix] = entropycolumns[instart:exend,ix]
         else:
             entcols = []
-            
-        for ix in range(0, entropycolumns.shape[1]):      
-            entcols[:,ix] = entropycolumns[instart:exend,ix]
         
         breath = OrderedDict([('number', breathcnt),
                              ('name','Breath #' + str(breathcnt)), 
@@ -337,8 +336,11 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
     wob = calculatewob(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, settings)
     retbreath["wob"] = wob
     
-    entropy = calculateentropy(breath, settings)
-    retbreath["entropy"] = entropy.T
+    if len(settings["columns_entropy"]) > 0:
+        entropy = calculateentropy(breath, settings)
+        retbreath["entropy"] = entropy.T
+    else:
+        retbreath["entropy"] = []
     
     mechs = OrderedDict([('poes_maxexp', poes_maxexp),
                              ('poes_mininsp', poes_mininsp),
@@ -399,7 +401,7 @@ def calcptp(pressure, bcnt, vefactor, samplingfreq):
     return ptp, integral
 
 def calculatewob(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, settings):
-    wobunitchangefactor = 98.0638/1000 #Multiplication factor to change cmH2O to Joule;  Pa = J / m3.
+    WOBUNITCHANGEFACTOR = 98.0638/1000 #Multiplication factor to change cmH2O to Joule;  Pa = J / m3.
     
     if settings["calcwobfromaverage"]:
         volin = breath["inspiration"]["volumeavg"]
@@ -417,7 +419,7 @@ def calculatewob(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, av
   
     #Inspiratory elastic WOB:
     wobelpolygon = Polygon([[p[0], p[1]] for p in [eelv, eilv, [eilv[0], eelv[1]]]])
-    wobinela = wobelpolygon.area * wobunitchangefactor
+    wobinela = wobelpolygon.area * WOBUNITCHANGEFACTOR
 
     #Inspiratory resistive WOB:
     slope = (poesin[len(poesin)-1]-poesin[0]) / (volin[len(volin)-1]-volin[0])
@@ -425,12 +427,12 @@ def calculatewob(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, av
     levelpoesin = (poesin*-1) - (flyin*-1)
     levelpoesin[np.where(levelpoesin<0)]=0
      
-    wobinres = max(abs(sp.integrate.simps(levelpoesin, volin)),0) * wobunitchangefactor
+    wobinres = max(abs(sp.integrate.simps(levelpoesin, volin)),0) * WOBUNITCHANGEFACTOR
     
     #Expiratory WOB:
     levelpoesex = poesex - poesex[len(poesex)-1]
     levelpoesex[np.where(levelpoesex<0)]=0
-    wobex = max(abs(sp.integrate.simps(levelpoesex, volex)),0) * wobunitchangefactor
+    wobex = max(abs(sp.integrate.simps(levelpoesex, volex)),0) * WOBUNITCHANGEFACTOR
     
     #Totals
     wobin = wobinela + wobinres
@@ -500,8 +502,8 @@ def calculateentropy(breath, settings):
     
     columns = breath["entcols"]
     
-    epoch = 2
-    tolerancesd = 0.1
+    epoch = settings["entropy_epochs"]
+    tolerancesd = settings["entropy_tolerance"]
     sampen = np.zeros(len(columns[1,:]))
     
     for i in range(0,columns.shape[1]):
@@ -552,7 +554,10 @@ def savepvbreaths(file, breaths, flow, volume, poes, pgas, pdi, settings, averag
     miny = miny*1.1
     
     fig, axes = plt.subplots(nrows=norows, ncols=nocols, figsize=(21,29.7))
-    plt.suptitle(file + " - Campbell diagrams", fontsize=48)
+    if averages:
+        plt.suptitle("Averages - Campbell diagrams", fontsize=48)
+    else:
+        plt.suptitle(file + " - Campbell diagrams", fontsize=48)
 
     no=0
     for breathno in breaths: #for no in range(1, nobreaths+1):

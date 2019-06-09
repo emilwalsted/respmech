@@ -54,7 +54,7 @@ settings = {
     'column_pdi': 6,     #Column number containing transdiaphragmatic pressure
     'column_volume': 23, #Column number containing (inspired) volume, BTPS
     'column_flow': 20,   #Column number containing flow
-    'columns_entropy': [1,2,3,4,5],   #The data columns containing EMG signals to calculate EMG entropy from, e.g. [4,5,6,7,8]. Leave as [] to skip EMG calculation.
+    'columns_entropy': [],   #The data columns containing EMG signals to calculate EMG entropy from, e.g. [4,5,6,7,8]. Leave as [] to skip EMG calculation.
 
     
     #Exclude individual breaths from analysis, if appropriate. Takes ibput in the format [['file1.mat', [04, 07]], ['file2.mat', [01]]]
@@ -96,6 +96,8 @@ settings = {
     #Calculations:
     'calcwobfromaverage': True, #False: calculates WOB for each breath, then averages. True: Averages breaths to produce an averaged Campbell diagram, from which WOB is calculated.
     'avgresamplingobs': 500, #Downsampling to # of observations for breath P/V averaging. A good default would be sampling frequency divided by 8-10. Must be lower than the lowest # of observation in any inspiration or expiration in the file.
+    'entropy_epochs': 2, #Epoch parameter (m) to use with entropy calculation. Default is 2.
+    'entropy_tolerance': 0.1, #Tolerance (r) parameter to use with entropy calculation. This value is multiplied with the SD of the data. Default is 0.1.
     
     #Diagnostics plots (saved as PDF in output folder). False: don't save, True: save.
     'savepvaverage': True,
