@@ -1,4 +1,4 @@
-# Respiratory mechanics, work of breathing and diaphragm EMG entropy calculations
+# Respiratory mechanics, work of breathing and EMG entropy calculations
 ------------------------------------------------------------------------ 
 (c) Copyright 2019 Emil Schwarz Walsted (emilwalsted@gmail.com)
 
