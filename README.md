@@ -39,7 +39,8 @@ _Note for MATLAB input format:_ Files exported from Windows and Macintosh versio
 ```
 
 ## Data recording requirements: 
-This code analyses a time series of respiratory physiological measurements. You must specify the sampling frequency of you data:
+This code analyses a time series of respiratory physiological measurements. Your input data does _not_ need to be a specific length of time, but as some output values are calculated as per-time (i.e. minute ventilation), you must specify the sampling frequency of you data for the calculations to be correct:
+
 ```
 'samplingfrequency': 4000, #No. of data recordings per second
 ```
@@ -105,8 +106,8 @@ In some instances (i.e. irregular breaths), the automatic breath count might not
 
 ```
 'breathcounts': [
-                ['S07 -  Rest.mat', 5],
-                ['S07 - 140W.mat', 11]            
+                ['Testsubject - Rest.mat', 5],
+                ['Testsubject - 140W.mat', 11]            
                 ],
 ```
 
