@@ -10,7 +10,7 @@ The code calculates
 
 * respiratory mechanics
 * in- and expiratory work of breathing 
-* Sample Entropy (e.g. diaphragm EMG Sample Entropy)
+* Sample Entropy (from e.g. diaphragm EMG)
 
 from a time series of recordings (e.g. obtained via LabChart).
 
