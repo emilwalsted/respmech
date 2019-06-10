@@ -52,7 +52,7 @@ Breath segmenting is performed automatically by joining an inspiration with the 
 
 
 ## Output data
-Output data are saved as Excel spreadsheets. There are two options for data output: The overall averages from each file, merged together in a single spreadsheet, and the individual breath-by-breath values for each file in a separate spreadsheet per input file. You can turn these outputs on/off using these settings:
+Output data are saved as Excel spreadsheets in the _'data'_ subfolder of the output folder. There are two options for data output: The overall averages from each file, merged together in a single spreadsheet, and the individual breath-by-breath values for each file in a separate spreadsheet per input file. You can turn these outputs on/off using these settings:
 
 ```
 # Data input/output
@@ -90,18 +90,22 @@ Using these diagnostic plots, you can then determine the breath numbers you wish
                   ],
 ```
 
+---
+
+# About this code
 ### Note to respiratory scientists
 
 I created this code for the purpose of my own work and shared it hoping that 
-someone else might find it useful. If you have any suggestions that will make 
-the code more useful to you or generally, please email me to discuss.
+other researchers working with respiratory physiology  might find it useful. 
+If you have any suggestions that will make the code more useful to you or 
+generally, please email me to discuss.
 
 ### Note to software engineers/computer scientists
 
-I realise that this code is not as concise or computationally efficient as it 
-could be. I have focused on readability in an attempt to enable respiratory 
-scientists with basic programming skills to understand, debug and modify/extend
-the code themselves.
+I realize that this code is not as concise or computationally efficient as it 
+could be. I have focused on some degree of readability in an attempt to enable 
+respiratory scientists with basic programming skills to understand, debug and 
+modify/extend the code themselves.
 
 # License and usage
 This program is free software: you can redistribute it and/or modify
