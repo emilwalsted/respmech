@@ -125,7 +125,6 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public
 
 [Read the entire licence here.](LICENSE)
 
-# About this code
 ## Note to respiratory scientists
 
 I created this code for the purpose of my own work and shared it hoping that 
