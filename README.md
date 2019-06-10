@@ -101,6 +101,15 @@ Using these diagnostic plots you can then determine the breath numbers you wish 
                   ],
 ```
 
+In some instances (i.e. irregular breaths), the automatic breath count might not be accurate. In this case you can override the automatically detected breath count, to allow for correct calculation of per-time based output variables (such as minute ventilation (VE)):
+
+```
+'breathcounts': [
+                ['S07 -  Rest.mat', 5],
+                ['S07 - 140W.mat', 11]            
+                ],
+```
+
 ---
 
 # About this code
