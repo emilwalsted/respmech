@@ -1,12 +1,10 @@
 # Respiratory mechanics, work of breathing and EMG entropy calculations
 ------------------------------------------------------------------------ 
-_(c) Copyright 2019 Emil Schwarz Walsted (emilwalsted@gmail.com)_
+_(c) Copyright 2019 Emil Schwarz Walsted (emilwalsted@gmail.com), ORCID [0000-0002-6640-7175](https://orcid.org/0000-0002-6640-7175)_
 
-This is a rewrite of my MATLAB code from 2016, with some changes/additions.
+This is a port/rewrite of my MATLAB code from 2016, with some changes and additions.
 
-The code calculates respiratory mechanics and/or in- and expiratory work of 
-breathing and/or diaphragm EMG entropy from a time series of 
-pressure/flow/volume recordings obtained  e.g. from LabChart.
+The code calculates respiratory mechanics and/or in- and expiratory work of breathing and/or diaphragm EMG entropy from a time series of pressure/flow/volume recordings (e.g. obtained using LabChart).
 
 # Usage
 
@@ -34,7 +32,7 @@ Next, specify input folder and file mask, and the output path where the results 
 ```
 _Note: The output folder must have two subfolders named 'data' and 'plots', respectively._
 
-**Data recording requirements**: This code analyses a time series of respiratory physiological measurements. The code analysis breat-by-breath and it is imperative that input data **starts with the last part of an expiration and end with the first bit of an inspiration**. The data recording is automatically trimmed at the beginning and end, to start at exactly the first inspiration and end at exactly the last expiration. 
+**Data recording requirements**: This code analyses a time series of respiratory physiological measurements. The code analyses data breat-by-breath and it is imperative that input data **starts with the last part of an expiration and end with the first bit of an inspiration**. The data recording is automatically trimmed at the beginning and end, to start at exactly the first inspiration and end at exactly the last expiration. 
 
 
 ![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/datatrim1.png)
@@ -52,7 +50,7 @@ Breath segmenting is performed automatically by joining an inspiration with the 
 
 
 ## Output data
-Output data are saved as Excel spreadsheets in the _'data'_ subfolder of the output folder. There are two options for data output: The overall averages from each file, merged together in a single spreadsheet, and the individual breath-by-breath values for each file in a separate spreadsheet per input file. You can turn these outputs on/off using these settings:
+Output data are saved as Excel spreadsheets in the _'data'_ subfolder of the output folder. There are two options for data output: The overall averages from each file, merged together in a single spreadsheet, and the individual breath-by-breath values for each file are saved in a separate spreadsheet per input file. You can turn these outputs on/off using these settings:
 
 ```
 # Data input/output
@@ -68,10 +66,10 @@ A number of diagnostic plots allows you to inspect the basis of the calculations
 * Volume drift correction plot (as shown above)
 * Breath-by-breath Campbell diagrams 
 
-Using these diagnostic plots, you can then determine the breath numbers you wish to exclude (if any), and enter this in the exclusion list:
+Using these diagnostic plots you can then determine the breath numbers you wish to exclude (if any), and enter this in the exclusion list:
 
 ```
-#Exclude individual breaths from analysis, if appropriate. Takes ibput in the format [['file1.mat', [04, 07]], ['file2.mat', [01]]]
+#Exclude individual breaths from analysis, if appropriate. Takes input in the format [['file1.mat', [04, 07]], ['file2.mat', [01]]]
 #If no breaths should be excluded, set to []. NOTE: File name is case sensitive!
 'excludebreaths': [
                   ['S07 -  Rest.mat', [5,7]],
@@ -93,16 +91,26 @@ Using these diagnostic plots, you can then determine the breath numbers you wish
 ---
 
 # About this code
-### Note to respiratory scientists
+## Note to respiratory scientists
 
 I created this code for the purpose of my own work and shared it hoping that 
 other researchers working with respiratory physiology  might find it useful. 
 If you have any suggestions that will make the code more useful to you or 
 generally, please email me to discuss.
 
-### Note to software engineers/computer scientists
+### How do I cite this code in scientific papers – and should I?
+It is up to you, really. Personally I am a fan of transparency and Open Source / Open Science and I would appreciate a mention. This will also make readers of your papers aware that the code exists – if you found the code useful, maybe they will too.
 
-I realize that this code is not as concise or computationally efficient as it 
+Every release of the code has a DOI you can use for citation. The current release DOI is: **(TODO INSERT DOI BAGDE)**
+
+_An example of a citation could look like this:_
+```
+[...] were calculated with the Python package RespMech (ES Walsted, RespmMech version 1.0, 2019, https://github.com/emilwalsted/respmech/, DOI: xxxx) [...]
+```
+
+## Note to software engineers/computer scientists
+
+This code is far from as concise or computationally efficient as it 
 could be. I have focused on some degree of readability in an attempt to enable 
 respiratory scientists with basic programming skills to understand, debug and 
 modify/extend the code themselves.
