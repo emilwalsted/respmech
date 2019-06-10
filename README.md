@@ -59,7 +59,7 @@ Breath segmenting is performed automatically by joining an inspiration with the 
 
 **Volume drift** (often as a result of integrating volume from flow) is automatically corrected as shown here:
 
-![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/volumedrift.png)
+![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/volumedrift1.png)
 
 
 ## Output data
@@ -124,7 +124,7 @@ generally, please email me to discuss.
 ### How do I cite this code in scientific papers – and should I?
 It is up to you, really. Personally I am a fan of transparency and Open Source / Open Science and I would appreciate a mention. This will also make readers of your papers aware that the code exists – if you found the code useful, maybe they will too.
 
-Every released version of the code has its own DOI you can use for citation. The current release DOI is: **(TODO INSERT DOI BAGDE)**
+Every released version of the code has its own DOI you can use for citation. The current release DOI is: **(TODO INSERT DOI BADGE)**
 
 An example of a citation could look like this:
 
