@@ -8,12 +8,13 @@ This is a port/rewrite of my MATLAB code from 2016, with some changes and additi
 
 The code calculates respiratory mechanics and/or in- and expiratory work of breathing and/or diaphragm EMG entropy from a time series of pressure/flow/volume recordings (e.g. obtained using LabChart).
 
-# Usage
+# Prerequisites
+The code is tested with Python 3.6+. If you don't have Python installed, I would recommend you to download and install the free [Anaconda](https://www.anaconda.com/distribution/) – An all-inclusive package for scientists that contains everything you need. I prefer running/editing with Spyder (choose from the Anaconda main menu).
 
+# Usage
 Start by making a copy of the example file 'example.py' and modify to reflect your setup and analysis.
 
 ## Input data
-
 Currently, supported input formats are: MATLAB, Excel and CSV. You can extend this yourself by modifying the 'load()' function in respmech.py.
 
 First, you need to modify the path below to point to **respmech.py**. This is to ensure that you are in control of exactly which version of the analysis code you use.
@@ -126,11 +127,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public
 [Read the entire licence here.](LICENSE)
 
 ## Note to respiratory scientists
-
-I created this code for the purpose of my own work and shared it hoping that 
-other researchers working with respiratory physiology  might find it useful. 
-If you have any suggestions that will make the code more useful to you or 
-generally, please email me to discuss.
+I created this code for the purpose of my own work and shared it hoping that other researchers working with respiratory physiology  might find it useful. If you have any questions or suggestions that will make the code more useful to you or generally, please drop me an email.
 
 ### How do I cite this code in scientific papers – and should I?
 It is up to you, really. Personally I am a fan of transparency and Open Source / Open Science and I would appreciate a mention. This will also make readers of your papers aware that this code exists – if you found it useful, perhaps they will too.
@@ -142,5 +139,4 @@ An example of a citation could look like this:
 _[...] using the Python package RespMech (ES Walsted, RespMech v1.0, 2019, https://github.com/emilwalsted/respmech/, DOI: xxxx) [...]_
 
 ## Note to software engineers/computer scientists
-
 This code is far from as concise or computationally efficient as it could be. This is in part because it is a port of code I wrote for myself back in the day, and came to realise that my code 'travelled' among researchers. This is the first step towards a more generally useful code library and I have focused on some degree of readability in an attempt to enable respiratory scientists with basic programming skills to understand, debug and modify/extend the code themselves. Future versions might be properly restructured, encapsulated and offered as a PIP package but for now, this is good enough for jazz.
