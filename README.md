@@ -10,12 +10,12 @@ The code calculates
 
 * respiratory mechanics
 * in- and expiratory work of breathing 
-* Sample Entropy (from e.g. diaphragm EMG)
+* Sample Entropy (e.g. from diaphragm EMG)
 
 from a time series of recordings (e.g. obtained via LabChart).
 
 # Prerequisites
-The code is tested with Python 3.6+. If you don't have Python installed, I would recommend you to download and install the free [Anaconda](https://www.anaconda.com/distribution/) – An all-inclusive package for scientists that contains everything you need. I prefer running/editing with Spyder (choose from the Anaconda main menu).
+The code is tested with Python 3.6+. If you don't have Python installed, I would recommend that you download and install the free [Anaconda](https://www.anaconda.com/distribution/) – An all-inclusive package for scientists that contains everything you need. I prefer running/editing with Spyder (choose from the Anaconda main menu).
 
 # Usage
 The file **respmech.py** contains the actual analysis code. You would then create another Python file for each setting/project which contains the analysis settings for that particular project (i.e. points to input files etc.)
