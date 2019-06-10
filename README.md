@@ -8,11 +8,11 @@ The code calculates respiratory mechanics and/or in- and expiratory work of
 breathing and/or diaphragm EMG entropy from a time series of 
 pressure/flow/volume recordings obtained  e.g. from LabChart.
 
-#Usage#
+# Usage
 
-Start by making a copy of the example file 'example.py'.
+Start by making a copy of the example file 'example.py' and modify to reflect your setup and analysis.
 
-##Input data##
+## Input data
 
 Currently, supported input formats are: MATLAB, Excel and CSV. You can extend
 this yourself by modifying the 'load()' function in respmech.py.
@@ -44,30 +44,30 @@ Breath segmenting is performed automatically by joining an inspiration with the 
 ```
 'breathseparationbuffer': 800,
 
-##Output data##
+##Output data
 
 ```
-#Data input/output
+# Data input/output
 'saveaveragedata': True, #False: don't save, True: save.
 'savebreathbybreathdata': True, #False: don't save, True: save.
 
 
 
 
-###Note to respiratory scientists###
+### Note to respiratory scientists
 
 I created this code for the purpose of my own work and shared it hoping that 
 someone else might find it useful. If you have any suggestions that will make 
 the code more useful to you or generally, please email me to discuss.
 
-###Note to software engineers/computer scientists###
+### Note to software engineers/computer scientists
 
 I realise that this code is not as concise or computationally efficient as it 
 could be. I have focused on readability in an attempt to enable respiratory 
 scientists with basic programming skills to understand, debug and modify/extend
 the code themselves.
 
-#License and usage#
+# License and usage
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
 the Free Software Foundation, either version 3 of the License, or
