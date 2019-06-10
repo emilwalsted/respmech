@@ -73,7 +73,7 @@ Output data are saved as Excel spreadsheets in the _'data'_ subfolder of the out
 A detailed description of the output variables and how they are calculated is available here: [Output variable description (TODO)](http://TODO).
 
 ### Diagnostic plots
-A number of diagnostic plots allows you to inspect the basis of the calculations. In your recordings there might be breaths that you wish to exclude from analysis (e.g. IC manoeuvres or coughs). The diagnostic plots are saved in the output folder, in the _'plots'_ subfolder. The following plots are available for each input file:
+A number of diagnostic plots allows you to interrogate the basis of the calculations. Your recordings might include breaths that you wish to exclude from analysis (e.g. IC manoeuvres or coughs). The diagnostic plots are saved in the output folder, in the _'plots'_ subfolder. The following plots are available for each input file:
 
 * Raw data plot of Flow, Volume, Pes, Pga, and Pdi.
 * Trimmed data plot of the above
