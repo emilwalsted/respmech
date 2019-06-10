@@ -133,7 +133,7 @@ If you have any suggestions that will make the code more useful to you or
 generally, please email me to discuss.
 
 ### How do I cite this code in scientific papers – and should I?
-It is up to you, really. Personally I am a fan of transparency and Open Source / Open Science and I would appreciate a mention. This will also make readers of your papers aware that the code exists – if you found the code useful, maybe they will too.
+It is up to you, really. Personally I am a fan of transparency and Open Source / Open Science and I would appreciate a mention. This will also make readers of your papers aware that this code exists – if you found it useful, maybe they will too.
 
 Every released version of the code has its own DOI you can use for citation. The current release DOI is: **(TODO INSERT DOI BADGE)**
 
