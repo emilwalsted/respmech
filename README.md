@@ -39,7 +39,7 @@ _Note for MATLAB input format:_ Files exported from Windows and Macintosh versio
 ```
 
 ## Data recording requirements: 
-This code analyses a time series of respiratory physiological measurements. Your input data does _not_ need to be a specific length of time, but as some output values are calculated as per-time (i.e. minute ventilation), you must specify the sampling frequency of you data for the calculations to be correct:
+This code analyses a time series of respiratory physiological measurements. Your input data do _not_ need to be a specific length of time, but as some output values are calculated as per-time (i.e. minute ventilation), you must specify the sampling frequency of the input data for the calculations to be correct:
 
 ```
 'samplingfrequency': 4000, #No. of data recordings per second
