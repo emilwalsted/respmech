@@ -30,9 +30,20 @@ Next, specify input folder and file mask, and the output path where the results 
     
 'outputfolder': "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/test/output", 
 ```
-_Note: The output folder must have two subfolders named 'data' and 'plots', respectively._
+The output folder must have two subfolders named 'data' and 'plots', respectively.
 
-**Data recording requirements**: This code analyses a time series of respiratory physiological measurements. The code analyses data breat-by-breath and it is imperative that input data **starts with the last part of an expiration and end with the first bit of an inspiration**. The data recording is automatically trimmed at the beginning and end, to start at exactly the first inspiration and end at exactly the last expiration. 
+_Note for MATLAB input format:_ Files exported from Windows and Macintosh versions of MATLAB have different formats. You must specify if the input files were created using a Windows or Macintosh version:
+```
+    'matlabfileformat': 2,  #Only relevant if input data are in MATLAB format. 1=MATLAB for Windows, 2=MATLAB for Mac.
+```
+
+## Data recording requirements: 
+This code analyses a time series of respiratory physiological measurements. You must specify the sampling frequency of you data:
+```
+'samplingfrequency': 4000, #No. of data recordings per second
+```
+
+The code analyses data breat-by-breath and it is imperative that input data **starts with the last part of an expiration and end with the first bit of an inspiration**. The data recording is automatically trimmed at the beginning and end, to start at exactly the first inspiration and end at exactly the last expiration. 
 
 
 ![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/datatrim1.png)
@@ -58,6 +69,8 @@ Output data are saved as Excel spreadsheets in the _'data'_ subfolder of the out
 'savebreathbybreathdata': True, #False: don't save, True: save.
 ```
 
+A detailed description of the output variables and how they are calculated is available here: [Output variable description (TODO)](http://TODO).
+
 ### Diagnostic plots
 A number of diagnostic plots allows you to inspect the basis of the calculations. In your recordings there might be breaths that you wish to exclude from analysis (e.g. IC manoeuvres or coughs). The diagnostic plots are saved in the output folder, in the _'plots'_ subfolder. The following plots are available for each input file:
 
@@ -69,8 +82,7 @@ A number of diagnostic plots allows you to inspect the basis of the calculations
 Using these diagnostic plots you can then determine the breath numbers you wish to exclude (if any), and enter this in the exclusion list:
 
 ```
-#Exclude individual breaths from analysis, if appropriate. Takes input in the format [['file1.mat', [04, 07]], ['file2.mat', [01]]]
-#If no breaths should be excluded, set to []. NOTE: File name is case sensitive!
+#Exclude individual breaths from analysis, if appropriate. Takes input in the format [['file1.mat', [04, 07]], ['file2.mat', [01]]]. If no breaths should be excluded, set to []. NOTE: File name is case sensitive!
 'excludebreaths': [
                   ['S07 -  Rest.mat', [5,7]],
                   ['S07 - 000W.mat', [2]],
@@ -103,17 +115,14 @@ It is up to you, really. Personally I am a fan of transparency and Open Source /
 
 Every release of the code has a DOI you can use for citation. The current release DOI is: **(TODO INSERT DOI BAGDE)**
 
-_An example of a citation could look like this:_
-```
-[...] were calculated with the Python package RespMech (ES Walsted, RespmMech version 1.0, 2019, https://github.com/emilwalsted/respmech/, DOI: xxxx) [...]
-```
+An example of a citation could look like this:
+
+_[...] using the Python package RespMech (ES Walsted, RespmMech v1.0, 2019, https://github.com/emilwalsted/respmech/, DOI: xxxx) [...]_
+
 
 ## Note to software engineers/computer scientists
 
-This code is far from as concise or computationally efficient as it 
-could be. I have focused on some degree of readability in an attempt to enable 
-respiratory scientists with basic programming skills to understand, debug and 
-modify/extend the code themselves.
+This code is far from as concise or computationally efficient as it could be. This is in part because it is a port of code I wrote for myself back in the day, and came to realise that my code 'travelled' among researchers. This is the first step towards a more generally useful code library and I have focused on some degree of readability in an attempt to enable respiratory scientists with basic programming skills to understand, debug and modify/extend the code themselves. Future versions might be properly restructured, encapsulated and offered as a PIP package but for now, this is good enough for jazz.
 
 # License and usage
 This program is free software: you can redistribute it and/or modify
