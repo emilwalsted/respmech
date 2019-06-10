@@ -19,7 +19,7 @@ To get started, make a copy of the example file **example.py** and modify to ref
 ## Input data
 Currently, supported input formats are: MATLAB, Excel and CSV. You can extend this yourself by modifying the _load()_ function in **respmech.py**.
 
-First, you need to modify the path below to point to **respmech.py**. This is to ensure that you are in control of exactly which version of the analysis code you use. _Note: the examples below use Unix-style paths – if you are on Windows, use 'C:\...' style.
+First, you need to modify the path below to point to **respmech.py**. This is to ensure that you are in control of exactly which version of the analysis code you use. _Note: the examples below use Unix-style paths – if you are on Windows, use 'C:\\...' style.
 
 ```
 #Modify to the location of your respmech.py:
