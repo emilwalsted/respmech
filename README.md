@@ -48,7 +48,7 @@ This code analyses a time series of respiratory physiological measurements. Your
 'samplingfrequency': 4000, #No. of data recordings per second
 ```
 
-The code analyses data breat-by-breath and it is imperative that input data **starts with the last part of an expiration and end with the first bit of an inspiration**. The data recording is automatically trimmed at the beginning and end, to start at exactly the first inspiration and end at exactly the last expiration. 
+The code analyses data breath-by-breath and it is imperative that input data **starts with the last part of an expiration and end with the first bit of an inspiration**. The data recording is automatically trimmed at the beginning and end, to start at exactly the first inspiration and end at exactly the last expiration. 
 
 
 ![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/datatrim1.png)
