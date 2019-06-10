@@ -111,7 +111,19 @@ In some instances (i.e. irregular breaths), the automatic breath count might not
                 ],
 ```
 
+This is an example of the individual breaths Campbell diagrams, including breaths excluded from analysis:
+
+![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/campbell.png)
+
 ---
+
+# License and usage
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+ 
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+[Read the entire licence here.](LICENSE)
 
 # About this code
 ## Note to respiratory scientists
@@ -133,11 +145,3 @@ _[...] using the Python package RespMech (ES Walsted, RespmMech v1.0, 2019, http
 ## Note to software engineers/computer scientists
 
 This code is far from as concise or computationally efficient as it could be. This is in part because it is a port of code I wrote for myself back in the day, and came to realise that my code 'travelled' among researchers. This is the first step towards a more generally useful code library and I have focused on some degree of readability in an attempt to enable respiratory scientists with basic programming skills to understand, debug and modify/extend the code themselves. Future versions might be properly restructured, encapsulated and offered as a PIP package but for now, this is good enough for jazz.
-
-# License and usage
-This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
- 
-This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
-
-[Read the entire licence here.](LICENSE)
