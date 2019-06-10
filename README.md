@@ -12,10 +12,12 @@ The code calculates respiratory mechanics and/or in- and expiratory work of brea
 The code is tested with Python 3.6+. If you don't have Python installed, I would recommend you to download and install the free [Anaconda](https://www.anaconda.com/distribution/) – An all-inclusive package for scientists that contains everything you need. I prefer running/editing with Spyder (choose from the Anaconda main menu).
 
 # Usage
-Start by making a copy of the example file 'example.py' and modify to reflect your setup and analysis.
+The file **respmech.py** contains the actual analysis code. You would then create another Python file for each setting/project which contains the analysis settings for that particular project (i.e. points to input files etc.)
+
+To get started, make a copy of the example file **example.py** and modify to reflect your setup and analysis (see below).
 
 ## Input data
-Currently, supported input formats are: MATLAB, Excel and CSV. You can extend this yourself by modifying the 'load()' function in respmech.py.
+Currently, supported input formats are: MATLAB, Excel and CSV. You can extend this yourself by modifying the _load()_ function in **respmech.py**.
 
 First, you need to modify the path below to point to **respmech.py**. This is to ensure that you are in control of exactly which version of the analysis code you use.
 
