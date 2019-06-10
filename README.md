@@ -7,9 +7,11 @@ _(c) Copyright 2019 Emil Schwarz Walsted (emilwalsted@gmail.com), ORCID [0000-00
 This is a port/rewrite of my MATLAB code from 2016, with some changes and additions.
 
 The code calculates 
+
 * respiratory mechanics
 * in- and expiratory work of breathing 
 * Sample Entropy (e.g. diaphragm EMG Sample Entropy)
+
 from a time series of recordings (e.g. obtained via LabChart).
 
 # Prerequisites
