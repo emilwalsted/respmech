@@ -44,16 +44,51 @@ Breath segmenting is performed automatically by joining an inspiration with the 
 
 ```
 'breathseparationbuffer': 800,
+```
 
-##Output data
+**Volume drift** (often as a result of integrating volume from flow) is automatically corrected as shown here:
+
+![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/volumedrift.png)
+
+
+## Output data
+Output data are saved as Excel spreadsheets. There are two options for data output: The overall averages from each file, merged together in a single spreadsheet, and the individual breath-by-breath values for each file in a separate spreadsheet per input file. You can turn these outputs on/off using these settings:
 
 ```
 # Data input/output
 'saveaveragedata': True, #False: don't save, True: save.
 'savebreathbybreathdata': True, #False: don't save, True: save.
+```
 
+### Diagnostic plots
+A number of diagnostic plots allows you to inspect the basis of the calculations. In your recordings there might be breaths that you wish to exclude from analysis (e.g. IC manoeuvres or coughs). The diagnostic plots are saved in the output folder, in the _'plots'_ subfolder. The following plots are available for each input file:
 
+* Raw data plot of Flow, Volume, Pes, Pga, and Pdi.
+* Trimmed data plot of the above
+* Volume drift correction plot (as shown above)
+* Breath-by-breath Campbell diagrams 
 
+Using these diagnostic plots, you can then determine the breath numbers you wish to exclude (if any), and enter this in the exclusion list:
+
+```
+#Exclude individual breaths from analysis, if appropriate. Takes ibput in the format [['file1.mat', [04, 07]], ['file2.mat', [01]]]
+#If no breaths should be excluded, set to []. NOTE: File name is case sensitive!
+'excludebreaths': [
+                  ['S07 -  Rest.mat', [5,7]],
+                  ['S07 - 000W.mat', [2]],
+                  ['S07 - 020W.mat', [2,3,4,5,6,7,8,9,10]],
+                  ['S07 - 040W.mat', []],
+                  ['S07 - 060W.mat', [1,4,5,6,7]], 
+                  ['S07 - 080W.mat', [1,2,3,4,6,7,9]],
+                  ['S07 - 100W.mat', [6,7]],
+                  ['S07 - 120W.mat', [1,2,3,4,5,6,7,8,9,10,11]],
+                  ['S07 - 140W.mat', [3,10,11,13]],
+                  ['S07 - 160W.mat', [1,3,4,10,11]],
+                  ['S07 - 180W.mat', [1,6,7,8,10,12,16]],
+                  ['S07 - 200W.mat', []],
+                  ['S07 - 220W.mat', []]                       
+                  ],
+```
 
 ### Note to respiratory scientists
 
