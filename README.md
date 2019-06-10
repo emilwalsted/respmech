@@ -37,7 +37,7 @@ _Note: The output folder must have two subfolders named 'data' and 'plots', resp
 **Data recording requirements**: This code analyses a time series of respiratory physiological measurements. The code analysis breat-by-breath and it is imperative that input data **starts with the last part of an expiration and end with the first bit of an inspiration**. The data recording is automatically trimmed at the beginning and end, to start at exactly the first inspiration and end at exactly the last expiration. 
 
 
-![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/datatrim.png)
+![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/datatrim1.png)
 
 
 Breath segmenting is performed automatically by joining an inspiration with the following expiration. The _flow_ signal is used to determine the transition between inspiration and expiration. To allow for a bit of "wobbly" flow around 0 (as it often happens in quiet breathing), a buffer mechanism mitigates these artefacts. You can adjust the buffer length (i.e. in how many observations the "wobbling" could take place):
