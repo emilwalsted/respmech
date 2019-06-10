@@ -2,6 +2,8 @@
 ------------------------------------------------------------------------ 
 _(c) Copyright 2019 Emil Schwarz Walsted (emilwalsted@gmail.com), ORCID [0000-0002-6640-7175](https://orcid.org/0000-0002-6640-7175)_
 
+**Current version: v1.0 BETA** (release v1.0 coming soon).
+
 This is a port/rewrite of my MATLAB code from 2016, with some changes and additions.
 
 The code calculates respiratory mechanics and/or in- and expiratory work of breathing and/or diaphragm EMG entropy from a time series of pressure/flow/volume recordings (e.g. obtained using LabChart).
@@ -12,8 +14,7 @@ Start by making a copy of the example file 'example.py' and modify to reflect yo
 
 ## Input data
 
-Currently, supported input formats are: MATLAB, Excel and CSV. You can extend
-this yourself by modifying the 'load()' function in respmech.py.
+Currently, supported input formats are: MATLAB, Excel and CSV. You can extend this yourself by modifying the 'load()' function in respmech.py.
 
 First, you need to modify the path below to point to **respmech.py**. This is to ensure that you are in control of exactly which version of the analysis code you use.
 
@@ -84,19 +85,19 @@ Using these diagnostic plots you can then determine the breath numbers you wish 
 ```
 #Exclude individual breaths from analysis, if appropriate. Takes input in the format [['file1.mat', [04, 07]], ['file2.mat', [01]]]. If no breaths should be excluded, set to []. NOTE: File name is case sensitive!
 'excludebreaths': [
-                  ['S07 -  Rest.mat', [5,7]],
-                  ['S07 - 000W.mat', [2]],
-                  ['S07 - 020W.mat', [2,3,4,5,6,7,8,9,10]],
-                  ['S07 - 040W.mat', []],
-                  ['S07 - 060W.mat', [1,4,5,6,7]], 
-                  ['S07 - 080W.mat', [1,2,3,4,6,7,9]],
-                  ['S07 - 100W.mat', [6,7]],
-                  ['S07 - 120W.mat', [1,2,3,4,5,6,7,8,9,10,11]],
-                  ['S07 - 140W.mat', [3,10,11,13]],
-                  ['S07 - 160W.mat', [1,3,4,10,11]],
-                  ['S07 - 180W.mat', [1,6,7,8,10,12,16]],
-                  ['S07 - 200W.mat', []],
-                  ['S07 - 220W.mat', []]                       
+                  ['Testsubject - Rest.mat', [5,7]],
+                  ['Testsubject - 000W.mat', [2]],
+                  ['Testsubject - 020W.mat', [2,3,4,10]],
+                  ['Testsubject - 040W.mat', []],
+                  ['Testsubject - 060W.mat', [1,4,5,6,7]], 
+                  ['Testsubject - 080W.mat', [1,2,7,9]],
+                  ['Testsubject - 100W.mat', [6,7]],
+                  ['Testsubject - 120W.mat', [1,2,3,11]],
+                  ['Testsubject - 140W.mat', [3,10,11,13]],
+                  ['Testsubject - 160W.mat', [1,3,11]],
+                  ['Testsubject - 180W.mat', [1,6,16]],
+                  ['Testsubject - 200W.mat', []],
+                  ['Testsubject - 220W.mat', []]                       
                   ],
 ```
 
@@ -125,14 +126,9 @@ _[...] using the Python package RespMech (ES Walsted, RespmMech v1.0, 2019, http
 This code is far from as concise or computationally efficient as it could be. This is in part because it is a port of code I wrote for myself back in the day, and came to realise that my code 'travelled' among researchers. This is the first step towards a more generally useful code library and I have focused on some degree of readability in an attempt to enable respiratory scientists with basic programming skills to understand, debug and modify/extend the code themselves. Future versions might be properly restructured, encapsulated and offered as a PIP package but for now, this is good enough for jazz.
 
 # License and usage
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
  
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 
 [Read the entire licence here.](LICENSE)
