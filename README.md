@@ -6,7 +6,11 @@ _(c) Copyright 2019 Emil Schwarz Walsted (emilwalsted@gmail.com), ORCID [0000-00
 
 This is a port/rewrite of my MATLAB code from 2016, with some changes and additions.
 
-The code calculates respiratory mechanics, in- and expiratory work of breathing and ECG and (diaphragm-) EMG entropy from a time series of pressure/flow/volume recordings (e.g. obtained using LabChart).
+The code calculates 
+* respiratory mechanics
+* in- and expiratory work of breathing 
+* Sample Entropy (e.g. diaphragm EMG Sample Entropy)
+from a time series of recordings (e.g. obtained via LabChart).
 
 # Prerequisites
 The code is tested with Python 3.6+. If you don't have Python installed, I would recommend you to download and install the free [Anaconda](https://www.anaconda.com/distribution/) – An all-inclusive package for scientists that contains everything you need. I prefer running/editing with Spyder (choose from the Anaconda main menu).
