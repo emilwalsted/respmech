@@ -15,12 +15,10 @@ The code calculates
 from a time series of recordings (e.g. obtained via LabChart).
 
 # Prerequisites
-The code is tested with Python 3.6+. If you don't have Python installed, I would recommend that you download and install the free [Anaconda](https://www.anaconda.com/distribution/) – An all-inclusive package for scientists that contains everything you need. I prefer running/editing with Spyder (choose from the Anaconda main menu).
+The code runs on Python 3.6+. If you don't have Python installed, I would recommend that you download and install the free [Anaconda](https://www.anaconda.com/distribution/) – An all-inclusive package for scientists that contains everything you need. I prefer running/editing with Spyder (choose from the Anaconda main menu).
 
-# Usage
-The file **respmech.py** contains the actual analysis code. You would then create another Python file for each setting/project which contains the analysis settings for that particular project (i.e. points to input files etc.)
-
-To get started, make a copy of the example file **example.py** and modify to reflect your setup and analysis (see below).
+# Getting started
+The file **respmech.py** contains the actual analysis code. Start by downloading it. You should then create another Python file for each setting/project which contains the analysis settings for that particular project (i.e. points to input files etc.). Make a copy of the template project file **example.py** and rename/modify to reflect your setup and analysis (see below).
 
 ## Input data
 Currently, supported input formats are: MATLAB, Excel and CSV. You can extend this yourself by modifying the _load()_ function in **respmech.py**.
