@@ -70,6 +70,33 @@ Breath segmenting is performed automatically by joining an inspiration with the 
 
 ![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/volumedrift1.png)
 
+## Specifying input columns
+You need to specify in your settings which columns in your data contain the required individual physiological measurements:
+```
+    'column_poes': 8,     #Column number containing oesophageal pressure
+    'column_pgas': 9,    #Column number containing gastric pressure
+    'column_pdi': 6,     #Column number containing transdiaphragmatic pressure
+    'column_volume': 23, #Column number containing (inspired) volume, BTPS
+    'column_flow': 20,   #Column number containing flow
+    'columns_entropy': [1,2,3,4,5],   #The data columns containing EMG signals to calculate EMG entropy from, e.g. [4,5,6,7,8]. Leave as [] to skip EMG calculation.
+
+```
+
+## Work of breathing
+Two options are available for calculating WOB: Breath-by-breath, calculation WOB from individual breath Campbell diagrams which are then averaged or, alternatively, first create an averaged pressure/volume loop of the breaths in the file, then calculate WOB from a Campbell diagram made from the averaged p/v loop. The two methods give quite similar results but in the case of irregular breaths the latter might be more robust. Also, you can specify the number of observations for resampling when averaging the loop. Unless each breath is very short or your sampling frequency very low, you can leave this at 500.
+
+```
+'calcwobfromaverage': True, #False: calculates WOB for each breath, then averages. True: Averages breaths to produce an averaged Campbell diagram, from which WOB is calculated.
+'avgresamplingobs': 500, #Downsampling to # of observations for breath P/V averaging. A good default would be sampling frequency divided by 8-10. Must be lower than the lowest # of observation in any inspiration or expiration in the file.
+```
+
+## Entropy calculation
+Entropy is calculated for the selected input columns/channels on a per-breath basis, and averaged as the other measurements. If you selected to calculate entropy for one or more columns, you must specify the parameters for entropy calculation in your settings:
+
+```
+'entropy_epochs': 2, #Epoch parameter (m) to use with entropy calculation. Default is 2.
+'entropy_tolerance': 0.1, #Tolerance (r) parameter to use with entropy calculation. This value is multiplied with the SD of the data. Default is 0.1.
+```
 
 ## Output data
 Output data are saved as Excel spreadsheets in the _'data'_ subfolder of the output folder. There are two options for data output: The overall averages from each file, merged together in a single spreadsheet, and the individual breath-by-breath values for each file are saved in a separate spreadsheet per input file. You can turn these outputs on/off using these settings:
@@ -81,6 +108,7 @@ Output data are saved as Excel spreadsheets in the _'data'_ subfolder of the out
 ```
 
 A detailed description of the output variables and how they are calculated is available here: [Output variable description (TODO)](http://TODO).
+
 
 ### Diagnostic plots
 A number of diagnostic plots allows you to interrogate the basis of the calculations. Your recordings might include breaths that you wish to exclude from analysis (e.g. IC manoeuvres or coughs). The diagnostic plots are saved in the output folder, in the _'plots'_ subfolder. The following plots are available for each input file:
@@ -123,6 +151,8 @@ In some instances (i.e. irregular breaths), the automatic breath count might not
 This is an example of the individual breaths Campbell diagrams, including breaths excluded from analysis:
 
 ![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/campbell.png)
+
+
 
 ---
 
