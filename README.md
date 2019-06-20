@@ -22,6 +22,18 @@ The file **respmech.py** contains the actual analysis code. Start by downloading
 
 Specifically, Input and Output location details must be provided in the settings template in order to render the code functional (see details below). Additional details (e.g. samplingfrequency - Line 39; file format – Line 47) are used to further tailor the code to the settings of your data acquisition file and resulting exported analysis files.
 
+### Running the code
+You can run your analysis by opening your modified **example.py** in e.g. Spyder (from within the Anaconda main menu) and selecting "Run". If you prefer running the code in a command line window, type
+
+_Windows:_
+```
+python C:\path\to\my-settings-file.py
+```
+_Mac/Linux:_
+```
+python /path/to/my-settings-file.py
+```
+
 ## Input and Output: Data locations and format
 Currently, supported input formats are: MATLAB, Excel and CSV. You can extend this yourself by modifying the _load()_ function in **respmech.py**.
 
