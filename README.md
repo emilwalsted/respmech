@@ -91,7 +91,7 @@ Two options are available for calculating WOB: Breath-by-breath, calculation WOB
 ```
 
 ## Entropy calculation
-Sample Entropy<sup>[1](#sampenref2),[2](#sampenref2)</sup> here is calculated for the selected input columns/channels on a per-breath basis, and averaged as the other measurements. If you selected to calculate entropy for one or more columns, you must specify the parameters for entropy calculation in your settings:
+Sample Entropy<sup>[1](#sampenref1),[2](#sampenref2)</sup> here is calculated for the selected input columns/channels on a per-breath basis, and averaged as the other measurements. If you selected to calculate entropy for one or more columns, you must specify the parameters for entropy calculation in your settings:
 
 ```
 'entropy_epochs': 2, #Epoch parameter (m) to use with entropy calculation. Default is 2.
