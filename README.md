@@ -20,10 +20,12 @@ The code runs on Python 3.6+. If you don't have Python installed, I would recomm
 # Getting started
 The file **respmech.py** contains the actual analysis code. Start by downloading it. You should then create another Python file for each setting/project which contains the analysis settings for that particular project (i.e. points to input files etc.). Make a copy of the template project file **example.py** and rename/modify to reflect your setup and analysis (see below).
 
-## Input data
+Specifically, Input and Output location details must be provided in the settings template in order to render the code functional (see details below). Additional details (e.g. samplingfrequency - Line 39; file format – Line 47) are used to further tailor the code to the settings of your data acquisition file and resulting exported analysis files.
+
+## Input and Output: Data locations and format
 Currently, supported input formats are: MATLAB, Excel and CSV. You can extend this yourself by modifying the _load()_ function in **respmech.py**.
 
-First, you need to modify the path below to point to **respmech.py**. This is to ensure that you are in control of exactly which version of the analysis code you use. _Note: the examples below use Unix-style paths – if you are on Windows, use 'C:\\...' style._
+First, you need to modify the settings file path below to point to **respmech.py**. This is to ensure that you are in control of exactly which version of the analysis code you use. _Note: the examples below use Unix-style paths – if you are on Windows, use 'C:\\folder\\folder...' style. NOTE: Backslashes __must__ be double._
 
 ```
 #Modify to the location of your respmech.py:
@@ -46,7 +48,7 @@ _Note for MATLAB input format:_ Files exported from Windows and Macintosh versio
 ```
 
 ## Data recording requirements: 
-This code analyses a time series of respiratory physiological measurements. Your input data do _not_ need to be a specific length of time, but as some output values are calculated as per-time (i.e. minute ventilation), you must specify the sampling frequency of the input data for the calculations to be correct:
+The respmech.py code analyses a time series of respiratory physiological measurements. Your input data do _not_ need to be a specific length of time, but as some output values are calculated as per-time (i.e. minute ventilation), you must specify the sampling frequency of the input data for the calculations to be correct:
 
 ```
 'samplingfrequency': 4000, #No. of data recordings per second
@@ -58,13 +60,13 @@ The code analyses data breath-by-breath and it is imperative that input data **s
 ![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/datatrim1.png)
 
 
-Breath segmenting is performed automatically by joining an inspiration with the following expiration. The _flow_ signal is used to determine the transition between inspiration and expiration. To allow for a bit of "wobbly" flow around 0 (as it often happens in quiet breathing), a buffer mechanism mitigates these artefacts. You can adjust the buffer length (i.e. in how many observations the "wobbling" could take place):
+Breath segmenting is performed automatically by joining an inspiration with the following expiration. The _flow_ signal is used to determine the transition between inspiration and expiration. To allow for a bit of "wobbly" flow around 0 (as it often happens in quiet breathing), a buffer mechanism mitigates these artefacts. You can adjust the buffer length (i.e. in how many observations the "wobbling" could take place - value will vary based on sampling frequency and breathing frequency):
 
 ```
 'breathseparationbuffer': 800,
 ```
 
-**Volume drift** (often as a result of integrating volume from flow) is automatically corrected as shown here:
+**Volume drift** (often as a result of integrating volume from flow) is automatically corrected by the respmech.py code as shown here:
 
 ![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/volumedrift1.png)
 
@@ -89,16 +91,24 @@ Two options are available for calculating WOB: Breath-by-breath, calculation WOB
 ```
 
 ## Entropy calculation
-Entropy is calculated for the selected input columns/channels on a per-breath basis, and averaged as the other measurements. If you selected to calculate entropy for one or more columns, you must specify the parameters for entropy calculation in your settings:
+Sample Entropy<sup>[1](#sampenref2),[2](#sampenref2)</sup> here is calculated for the selected input columns/channels on a per-breath basis, and averaged as the other measurements. If you selected to calculate entropy for one or more columns, you must specify the parameters for entropy calculation in your settings:
 
 ```
 'entropy_epochs': 2, #Epoch parameter (m) to use with entropy calculation. Default is 2.
 'entropy_tolerance': 0.1, #Tolerance (r) parameter to use with entropy calculation. This value is multiplied with the SD of the data. Default is 0.1.
 ```
 
-## Output data
-Output data are saved as Excel spreadsheets in the _'data'_ subfolder of the output folder. There are two options for data output: The overall averages from each file, merged together in a single spreadsheet, and the individual breath-by-breath values for each file are saved in a separate spreadsheet per input file. You can turn these outputs on/off using these settings:
+_<a name="sampenref1">1</a>) Lozano-García M, Leonardo, Moxham J, Rafferty F., Torres A, Jolley CJ, Jané R. Assessment of Inspiratory Muscle Activation using Surface Diaphragm Mechanomyography and Crural Diaphragm Electromyography. doi:10.1109/EMBC.2018.8513046._
 
+_<a name="sampenref2">2</a>) Aboy M, David, Austin D, Pau. Characterization of Sample Entropy in the Context of Biomedical  Signal Analysis. 2007. doi:10.1109/IEMBS.2007.4353701._
+
+
+
+## Output data
+Output data are saved as Excel spreadsheets in the _'data'_ subfolder of the output fold    er, while diagnostic plots are saved in the _‘plots’_ subfolder of the output folder. 
+
+### Numeric Data
+There are two options for numeric data output: The overall averages from each file, merged together in a single spreadsheet, and the individual breath-by-breath values for each file are saved in a separate spreadsheet per input file. You can turn these outputs on/off using these settings and choose to output both or either option:
 ```
 # Data input/output
 'saveaveragedata': True, #False: don't save, True: save.
@@ -109,7 +119,7 @@ A detailed description of the output variables and how they are calculated is av
 
 
 ### Diagnostic plots
-A number of diagnostic plots allows you to interrogate the basis of the calculations. Your recordings might include breaths that you wish to exclude from analysis (e.g. IC manoeuvres or coughs). The diagnostic plots are saved in the output folder, in the _'plots'_ subfolder. The following plots are available for each input file:
+A number of diagnostic plots allows you to interrogate the basis and validity of the calculations. For example, your recordings might include breaths that you wish to exclude from analysis (e.g. IC manoeuvres or coughs). The diagnostic plots are saved in the output folder, in the _'plots'_ subfolder. The following plots are available for each input file:
 
 * Raw data plot of Flow, Volume, Pes, Pga, and Pdi.
 * Trimmed data plot of the above
@@ -137,6 +147,11 @@ Using these diagnostic plots you can then determine the breath numbers you wish 
                   ],
 ```
 
+This is an example of the individual breaths Campbell diagrams, including breaths excluded from analysis:
+
+![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/campbell.png)
+
+
 In some instances (i.e. irregular breaths), the automatic breath count might not be accurate. In this case you can override the automatically detected breath count, to allow for correct calculation of per-time based output variables (such as minute ventilation (VE)):
 
 ```
@@ -145,11 +160,6 @@ In some instances (i.e. irregular breaths), the automatic breath count might not
                 ['Testsubject - 140W.mat', 11]            
                 ],
 ```
-
-This is an example of the individual breaths Campbell diagrams, including breaths excluded from analysis:
-
-![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/campbell.png)
-
 
 
 ---
