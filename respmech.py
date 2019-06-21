@@ -46,20 +46,23 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>
 """
 
+VERSION = "0.9.0"
+CREATED = "Created with RespMech.py version " + VERSION + " (www.github.com/emilwalsted/respmech)"
+
 import os
 import glob
 import ntpath
 import math
+import datetime
 from os.path import join as pjoin
 import numpy as np 
-from shapely.geometry import Polygon
-from descartes import PolygonPatch
 import scipy as sp
 import scipy.io as sio  
 from collections import OrderedDict 
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
+from matplotlib.patches import Polygon
 
 import seaborn as sns; sns.set()
 plt.style.use('seaborn-white')
@@ -416,11 +419,12 @@ def calculatewob(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, av
         
     eilv = [volin[len(poesin)-1], poesin[len(poesin)-1]]
     eelv = [volex[len(volex)-1], poesex[len(volex)-1]]
-  
+    
     #Inspiratory elastic WOB:
-    wobelpolygon = Polygon([[p[0], p[1]] for p in [eelv, eilv, [eilv[0], eelv[1]]]])
-    wobinela = wobelpolygon.area * WOBUNITCHANGEFACTOR
-
+    tbase = abs(eilv[0]-eelv[0])
+    theight = abs(eilv[1]-eelv[1])
+    wobinela = tbase * theight / 2 * WOBUNITCHANGEFACTOR
+    
     #Inspiratory resistive WOB:
     slope = (poesin[len(poesin)-1]-poesin[0]) / (volin[len(volin)-1]-volin[0])
     flyin = volin * slope + poesin[0]
@@ -498,8 +502,17 @@ def calculateaveragebreaths(breaths, settings):
 
 
 def calculateentropy(breath, settings):
-    from pyentrp import entropy as ent
+    def import_file(full_name, path):
+        from importlib import util
     
+        spec = util.spec_from_file_location(full_name, path)
+        mod = util.module_from_spec(spec)
+    
+        spec.loader.exec_module(mod)
+        return mod
+
+    ent = import_file("ent", "entropy.py")
+     
     columns = breath["entcols"]
     
     epoch = settings["entropy_epochs"]
@@ -601,18 +614,17 @@ def savepvbreaths(file, breaths, flow, volume, poes, pgas, pdi, settings, averag
             l = mlines.Line2D(lx, ly, linewidth=2, alpha=aline)
             ax.add_line(l)
             
-            wobelpolygon = Polygon([[p[0], p[1]] for p in [eelv, eilv, [eilv[0], eelv[1]]]])
-        
-            GRAY = '#999999'
-            elpatch = PolygonPatch(wobelpolygon, fc=GRAY, ec=GRAY, alpha=afill, zorder=1)
-            ax.add_patch(elpatch)      
-            
+            wobelpolygon = Polygon([[p[0], p[1]] for p in [eelv, eilv, [eilv[0], eelv[1]]]], alpha=afill, color="#999999", fill=True, )
+            ax.add_patch(wobelpolygon)
+           
+           
 
     if averages:
         savefile = pjoin(settings['outputfolder'], "plots", "All files – average Campbell.pdf")
     else:
         savefile = pjoin(settings['outputfolder'], "plots", file + ".Campbell.pdf")
-        
+    
+    plt.figtext(0.99, 0.01, CREATED + " on " + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), horizontalalignment='right')       
     fig.savefig(savefile) 
     plt.close(fig)    
     return []
@@ -635,13 +647,40 @@ def saverawplots(suffix, file, rows, titles, ylabels, settings):
     axes[i].set_xlabel(r'$observation #$', size=16)
 
     savefile = pjoin(settings['outputfolder'], "plots", file + "." + suffix + ".pdf")
+    plt.figtext(0.99, 0.01, CREATED + " on " + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), horizontalalignment='right')       
     fig.savefig(savefile)
     plt.close(fig)
-  
+
+
+def formatheader(df, writer, sheetname):
+    writer.sheets[sheetname].freeze_panes(1, 1)
+    header_format = writer.book.add_format({'bold': True,
+                                            'fg_color': '#ffcccc',
+                                            'border': 1,
+                                            'align': 'right'})
+    for col_num, value in enumerate(df.columns.values):
+        writer.sheets[sheetname].write(0, col_num, value, header_format)  
+        column_len = df[value].astype(str).str.len().max()
+        column_len = max(column_len, len(str(value))) + 1
+        writer.sheets[sheetname].set_column(col_num, col_num, column_len)
+    
 def savedataaverage(totals, settings):   
     savefile = pjoin(settings['outputfolder'], "data", "Average breathdata.xlsx")
-    totals.to_excel(savefile, sheet_name='Output')
+    
+    writer = pd.ExcelWriter(savefile, engine='xlsxwriter', options={'strings_to_urls': True})
+    totals.to_excel(writer, sheet_name='Data', index=False)
+    formatheader(totals, writer, "Data")
 
+    version = pd.DataFrame({'Created': CREATED + " on " + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            'Website': 'https://github.com/emilwalsted/respmech'
+                            }, index=[0]).T
+    
+    version.columns=['Version info']
+    version.to_excel(writer, sheet_name='Version', index=False)
+    formatheader(version, writer, "Version")
+    
+    writer.save()
+    
 def savedataindividual(file, breaths, settings):   
     
     mechs = []
@@ -670,7 +709,19 @@ def savedataindividual(file, breaths, settings):
     ret = ret.drop(columns="breath_no")
     ret.insert(loc=0, column="file", value=file)
     
-    mechs.to_excel(savefile, sheet_name='Output')
+    writer = pd.ExcelWriter(savefile, engine='xlsxwriter', options={'strings_to_urls': True})
+    mechs.to_excel(writer, sheet_name='Data', index=False)
+    formatheader(mechs, writer, "Data")
+    
+    version = pd.DataFrame({'Created': CREATED + " on " + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            'Website': 'https://github.com/emilwalsted/respmech'
+                            }, index=[0]).T
+    version.columns=['Version info']
+    version.to_excel(writer, sheet_name='Version', index=False)
+    formatheader(version, writer, "Version")
+    
+    writer.save()
+    
     return ret
     
 def analyse(settings):
@@ -773,5 +824,3 @@ def analyse(settings):
         
     print('\nFinished analysing \'' + file + '\'.\n')
     return 
-    
-    #TODO: save file version in output
