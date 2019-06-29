@@ -291,7 +291,7 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
     pgas_endexp = exp["pgas"][len(exp["pgas"])-1]
     pgas_maxexp = max(exp["pgas"])
     pgas_minexp = min(exp["pgas"])
-    
+        
     midvolexp = min(exp["volume"]) + ((max(exp["volume"])-min(exp["volume"]))/2); 
     midvolexpix = np.where(exp["volume"] <= midvolexp)[0][0]
     poes_midvolexp = exp["poes"][midvolexpix]
@@ -303,6 +303,10 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
     pdi_maxinsp = max(insp["pdi"])
     pdi_endinsp = insp["pdi"][len(insp["pdi"])-1]
     pgas_endinsp = insp["pgas"][len(insp["pgas"])-1]
+    
+    poes_tidal_swing = abs(max(retbreath["poes"]) - min(retbreath["poes"]))
+    pgas_tidal_swing = abs(max(retbreath["pgas"]) - min(retbreath["pgas"]))
+    pdi_tidal_swing = abs(max(retbreath["pdi"]) - min(retbreath["pdi"]))
 
     midvolinsp = min(insp["volume"]) + ((max(insp["volume"])-min(insp["volume"]))/2)
     midvolinspix = np.where(insp["volume"] >= midvolinsp)[0][0]
@@ -313,7 +317,11 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
     vol_endinsp = insp["volume"][len(insp["volume"])-1]
     vol_endexp = exp["volume"][len(exp["volume"])-1]
     
-    ti_ttot = len(insp["flow"])/len(retbreath["flow"])
+    ti = len(insp["flow"])/settings["samplingfrequency"]
+    te = len(exp["flow"])/settings["samplingfrequency"]
+    ttot = len(retbreath["flow"])/settings["samplingfrequency"]                        
+    ti_ttot = ti/ttot
+    
     vt = max(retbreath["volume"])-min(retbreath["volume"])
     
     ve = vt * bcnt * vefactor
@@ -341,46 +349,52 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
     
     if len(settings["columns_entropy"]) > 0:
         entropy = calculateentropy(breath, settings)
-        retbreath["entropy"] = entropy.T
+        retbreath["entropy"] = np.append(entropy.T, [max(entropy.T), min(entropy.T), np.mean(entropy.T)])
     else:
         retbreath["entropy"] = []
     
-    mechs = OrderedDict([('poes_maxexp', poes_maxexp),
+    mechs = OrderedDict([    ('poes_maxexp', poes_maxexp),
                              ('poes_mininsp', poes_mininsp),
                              ('poes_endinsp', poes_endinsp), 
                              ('poes_endexp',poes_endexp),
                              ('poes_midvolexp',poes_midvolexp),
                              ('poes_midvolinsp',poes_midvolinsp),
-                             ('pdi_minexp',pdi_minexp),
-                             ('pdi_maxinsp',pdi_maxinsp),
-                             ('pdi_endinsp',pdi_endinsp),
-                             ('pdi_endexp',pdi_endexp),
+                             ('int_oesinsp',int_oesinsp),
+                             ('ptp_oesinsp',ptp_oesinsp),
+                             ('poes_tidal_swing',poes_tidal_swing),                             
                              ('pgas_endinsp',pgas_endinsp),
                              ('pgas_endexp',pgas_endexp),
                              ('pgas_maxexp',pgas_maxexp),
                              ('pgas_minexp',pgas_minexp),
+                             ('exp_pgas_rise',exp_pgas_rise),
+                             ('int_pgasexp',int_pgasexp),
+                             ('ptp_pgasexp',ptp_pgasexp),
+                             ('pgas_tidal_swing',pgas_tidal_swing),
+                             ('int_pdiinsp',int_pdiinsp),
+                             ('ptp_pdiinsp',ptp_pdiinsp),
+                             ('pdi_minexp',pdi_minexp),
+                             ('pdi_maxinsp',pdi_maxinsp),
+                             ('pdi_endinsp',pdi_endinsp),
+                             ('pdi_endexp',pdi_endexp),
+                             ('insp_pdi_rise',insp_pdi_rise),
+                             ('pdi_tidal_swing',pdi_tidal_swing),                             
                              ('flow_midvolexp',flow_midvolexp),
                              ('flow_midvolinsp',flow_midvolinsp),
                              ('vol_endinsp',vol_endinsp),
                              ('vol_endexp',vol_endexp),
+                             ('max_in_flow',max_in_flow),
+                             ('max_ex_flow',max_ex_flow),
+                             ('in_flow_midvol',inflowmidvol),
+                             ('ex_flow_midvol',exflowmidvol),
+                             ('ti',ti),
+                             ('te',te),
+                             ('ttot',ttot),
                              ('ti_ttot',ti_ttot),
                              ('vt',vt),
                              ('bf',bcnt * vefactor),
                              ('ve',ve),
                              ('vmr',vmr),
-                             ('tlr_insp',tlr_insp),
-                             ('insp_pdi_rise',insp_pdi_rise),
-                             ('exp_pgas_rise',exp_pgas_rise),
-                             ('int_oesinsp',int_oesinsp),
-                             ('ptp_oesinsp',ptp_oesinsp),
-                             ('int_pdiinsp',int_pdiinsp),
-                             ('ptp_pdiinsp',ptp_pdiinsp),
-                             ('int_pgasexp',int_pgasexp),
-                             ('ptp_pgasexp',ptp_pgasexp),
-                             ('max_in_flow',max_in_flow),
-                             ('max_ex_flow',max_ex_flow),
-                             ('in_flow_midvol',inflowmidvol),
-                             ('ex_flow_midvol',exflowmidvol)
+                             ('tlr_insp',tlr_insp)
                              ])
     retbreath["mechanics"] = mechs
     return retbreath
@@ -694,7 +708,9 @@ def savedataindividual(file, breaths, settings):
             
             if len(settings["columns_entropy"])>0:
                 dfent = pd.DataFrame(breath["entropy"]).transpose()
-                dfent.columns = ["sample_entropy_col_" +  str(settings['columns_entropy'][x]) for x in range(0, len(settings["columns_entropy"]))]
+                cols = ["sample_entropy_col_" +  str(settings['columns_entropy'][x]) for x in range(0, len(settings["columns_entropy"]))]
+                cols = np.append(cols, ['sample_entropy_max', 'sample_entropy_min', 'sample_entropy_mean'])
+                dfent.columns = cols
                 dfmech = dfmech.join(dfent, how="outer", sort=False)
                 
             if len(mechs)>0:
