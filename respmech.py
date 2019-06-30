@@ -85,7 +85,10 @@ def load(filepath, settings):
         cols = list(data.items())
         
         flow = cols[settings["column_flow"]-1][1]
-        volume = cols[settings["column_volume"]-1][1]
+        if np.isnan(settings["column_volume"]):
+            volume = []
+        else:
+            volume = cols[settings["column_volume"]-1][1]
         poes = cols[settings["column_poes"]-1][1]
         pgas = cols[settings["column_pgas"]-1][1]
         pdi = cols[settings["column_pdi"]-1][1]
@@ -105,7 +108,10 @@ def load(filepath, settings):
         cols = list(data["data_block1"])
         
         flow = cols[settings["column_flow"]-1]
-        volume = cols[settings["column_volume"]-1]
+        if np.isnan(settings["column_volume"]):
+            volume = []
+        else:
+            volume = cols[settings["column_volume"]-1]
         poes = cols[settings["column_poes"]-1]
         pgas = cols[settings["column_pgas"]-1]
         pdi = cols[settings["column_pdi"]-1]
@@ -123,7 +129,10 @@ def load(filepath, settings):
         data = pd.read_excel(filename)
         
         flow = data.iloc[:,settings["column_flow"]-1].to_numpy()
-        volume = data.iloc[:,settings["column_volume"]-1].to_numpy()
+        if np.isnan(settings["column_volume"]):
+            volume = []
+        else:
+            volume = data.iloc[:,settings["column_volume"]-1].to_numpy()
         poes = data.iloc[:,settings["column_poes"]-1].to_numpy()
         pgas = data.iloc[:,settings["column_pgas"]-1].to_numpy()
         pdi = data.iloc[:,settings["column_pdi"]-1].to_numpy()
@@ -139,7 +148,10 @@ def load(filepath, settings):
         data = pd.read_csv(filename)
         
         flow = data.iloc[:,settings["column_flow"]-1].to_numpy()
-        volume = data.iloc[:,settings["column_volume"]-1].to_numpy()
+        if np.isnan(settings["column_volume"]):
+            volume = []
+        else:
+            volume = data.iloc[:,settings["column_volume"]-1].to_numpy()
         poes = data.iloc[:,settings["column_poes"]-1].to_numpy()
         pgas = data.iloc[:,settings["column_pgas"]-1].to_numpy()
         pdi = data.iloc[:,settings["column_pdi"]-1].to_numpy()
@@ -147,7 +159,7 @@ def load(filepath, settings):
         if len(settings["columns_entropy"])==0:
             entropycolumns = []
         else:
-            entropycolumns = data.iloc[:,np.array(settings["columns_entropy"])-1].to_numpy()
+            entropycolumns = data.iloc[:,np.array(settings["columns_entropy"])-1].to_numpy().squeeze()
         
         return flow, volume, poes, pgas, pdi, entropycolumns
     
@@ -168,7 +180,23 @@ def load(filepath, settings):
     
     loadfunc = loadfext(fext)
     flow, volume, poes, pgas, pdi, entropycolumns = loadfunc(filepath)
-      
+    flow = flow.squeeze()
+    if len(volume)>0:
+        volume = volume.squeeze()
+    poes = poes.squeeze()
+    pgas = pgas.squeeze()
+    pdi = pdi.squeeze()
+    
+    if settings["inverseflow"]:
+        flow = -flow
+    
+    if settings['integratevolumefromflow']:
+        xval = np.linspace(0, len(flow)/settings['samplingfrequency'], len(flow))
+        volume = -sp.integrate.cumtrapz(flow, xval)
+
+    if settings["inversevolume"]:
+        volume = -volume
+            
     return flow, volume, poes, pgas, pdi, entropycolumns
 
 
@@ -740,7 +768,12 @@ def savedataindividual(file, breaths, settings):
     
     return ret
     
-def analyse(settings):
+def analyse(usersettings):
+    
+    settings = defaultsettings
+    for s in usersettings:
+        settings[s] = usersettings[s]
+    
     print('Loading data...')
     filepath = pjoin(settings['inputfolder'], settings['files'])
     files = [f for f in glob.glob(filepath)]
@@ -778,7 +811,12 @@ def analyse(settings):
         print('\t\tDrift correcting...')
         uncorvol = volume
         zerovol = zero(volume)
-        volume = correctdrift(zerovol, settings)
+        
+        if settings['correctvolumedrift']:
+            volume = correctdrift(zerovol, settings)
+        else:
+            volume = zerovol
+            
         if (settings['savedataviewtrimmed']):
             print('\t\tSaving drift corrected data plots...')
             saverawplots("Drift corrected volume", ntpath.basename(file), [flow, uncorvol, zerovol, volume], 
@@ -840,3 +878,36 @@ def analyse(settings):
         
     print('\nFinished analysing \'' + file + '\'.\n')
     return 
+
+defaultsettings = {
+    'samplingfrequency': np.nan,
+    'matlabfileformat': np.nan, 
+    'breathseparationbuffer': 800, 
+    'saveaveragedata': True,
+    'savebreathbybreathdata': True,
+    'inputfolder': "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/test/input/MATLAB Mac",
+    'files': "*.*", 
+    'outputfolder': "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/test/output", 
+    'column_poes': np.nan,    
+    'column_pgas': np.nan,    
+    'column_pdi': np.nan,    
+    'column_volume': np.nan, 
+    'column_flow': np.nan,   
+    'columns_entropy': [],   
+    'excludebreaths': [],
+    'breathcounts': [],
+    'inverseflow': False,
+    'integratevolumefromflow': False, 
+    'inversevolume': False, 
+    'correctvolumedrift': True,
+    'calcwobfromaverage': True,
+    'avgresamplingobs': 500,
+    'entropy_epochs': 2,
+    'entropy_tolerance': 0.1,
+    'savepvaverage': True,
+    'savepvoverview': True,
+    'savepvindividualworkload': True, 
+    'savedataviewraw': True, 
+    'savedataviewtrimmed': True, 
+    'savedataviewdriftcor': True
+}
