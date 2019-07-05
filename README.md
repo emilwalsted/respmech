@@ -2,7 +2,7 @@
 ------------------------------------------------------------------------ 
 _(c) Copyright 2019 Emil Schwarz Walsted (emilwalsted@gmail.com), ORCID [0000-0002-6640-7175](https://orcid.org/0000-0002-6640-7175)_
 
-**Current version: v1.0 BETA** (release v1.0 coming soon).
+**Current version: v0.9 BETA** (release v1.0 coming soon).
 
 This is a port/rewrite of my MATLAB code from 2016, with some changes and additions.
 
