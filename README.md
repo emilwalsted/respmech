@@ -77,8 +77,32 @@ Breath segmenting is performed automatically by joining an inspiration with the 
 ```
 'breathseparationbuffer': 800,
 ```
+**Flow and volume adjustments**
+For correct analysis the code assumes that the flow signal is negative on inspiration and positive on expiration. Should your data recording have it the other way around, you can use the setting _inverseflow_ to inverse the input signal:
 
-**Volume drift** (often as a result of integrating volume from flow) is automatically corrected by the respmech.py code as shown here:
+```
+'inverseflow': False, #True: For calculations, inspired flow should be negative. This setting inverses the input flow signal. Default is False.
+```
+
+If your input data do not contain a volume signal, RespMech.py can integrate the flow signal for you:
+
+```
+'integratevolumefromflow': True, #True: Creates the volume signal by integrating the (optionally reversed) flow signal. False: Volume is specified in input data.
+```
+
+If your input data does contain a volume signal, it must be _inspired volume_ for analysis. If your volume signal is expired volume, you can inverse this using the setting
+
+```
+'inversevolume': False, #True: For calculations, inspired volume should be positive and expired should be negative. This setting inverses the volume input signal. Default is False.
+```
+
+***Volume drift*** (often as a result of integrating volume from flow) can be automatically corrected by the respmech.py by specifying 
+
+```
+'correctvolumedrift': True, #True: Correct volume drift. False: Do not correct volume drift. Default is True
+```
+
+A flow- and volume corrections overview for each file is created in the output/plots folder, allowing you to visually verify the corrections made:
 
 ![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/volumedrift1.png)
 
