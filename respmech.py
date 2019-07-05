@@ -236,7 +236,7 @@ def ignorebreaths(curfile, settings):
 def separateintobreaths(filename, flow, volume, poes, pgas, pdi, entropycolumns, settings):
     breaths = OrderedDict()
     j = len(flow)
-    bufferwidth = 800
+    bufferwidth = settings["breathseparationbuffer"]
 
     ib = ignorebreaths(filename, settings)
     
