@@ -2,6 +2,8 @@
 ------------------------------------------------------------------------ 
 _(c) Copyright 2019 Emil Schwarz Walsted (emilwalsted@gmail.com), ORCID [0000-0002-6640-7175](https://orcid.org/0000-0002-6640-7175)_
 
+[![DOI](https://zenodo.org/badge/191052676.svg)](https://zenodo.org/badge/latestdoi/191052676)
+
 **Current version: v0.9 BETA** (release v1.0 coming soon).
 
 This is a port/rewrite of my MATLAB code from 2016, with some changes and additions.
@@ -214,7 +216,7 @@ I created this code for the purpose of my own work and shared it hoping that oth
 ### How do I cite this code in scientific papers – and should I?
 It is up to you, really. Personally I am a fan of transparency and Open Source / Open Science and I would appreciate a mention. This will also make readers of your papers aware that this code exists – if you found it useful, perhaps they will too.
 
-Every released version of the code has its own DOI you can use for citation: [![DOI](https://zenodo.org/badge/191052676.svg)](https://zenodo.org/badge/latestdoi/191052676)
+Every released version of the code has its own individual DOI you can use for citation. You can reference the latest version by using this DOI: [![DOI](https://zenodo.org/badge/191052676.svg)](https://zenodo.org/badge/latestdoi/191052676) or a specific version using the DOI of that version. Click the DOI button to see a list of all available versions with a DOI.
 
 An example of a citation could look like this:
 
