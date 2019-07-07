@@ -39,7 +39,7 @@ python /path/to/my-settings-file.py
 ## Input and Output: Data locations and format
 Currently, supported input formats are: MATLAB, Excel and CSV. You can extend this yourself by modifying the _load()_ function in **respmech.py**.
 
-First, you need to modify the settings file path below to point to **respmech.py**. This is to ensure that you are in control of exactly which version of the analysis code you use. _Note: the examples below use Unix-style paths – if you are on Windows, use 'C:\\folder\\folder...' style. NOTE: Backslashes __must__ be double._
+First, you need to modify the settings file path below to point to **respmech.py**. This is to ensure that you are in control of exactly which version of the analysis code you use. _Note: the examples below use Unix-style paths – if you are on Windows, use 'C:\\\\folder\\\\folder...' style. NOTE: Backslashes __must__ be double._
 
 ```
 #Modify to the location of your respmech.py:
@@ -56,13 +56,13 @@ Next, specify input folder and file mask, and the output path where the results 
 ```
 The output folder must have two subfolders named 'data' and 'plots', respectively.
 
-_Note for MATLAB input format:_ Files exported from Windows and Macintosh versions of MATLAB have different formats. You must specify if the input files were created using a Windows or Macintosh version:
+_Note for MATLAB input format:_ MATLAB format files exported from Windows and Macintosh versions of LabChart have different formats. You must specify if the input files were created using a Windows or Macintosh version:
 ```
     'matlabfileformat': 2,  #Only relevant if input data are in MATLAB format. 1=MATLAB for Windows, 2=MATLAB for Mac.
 ```
 
 ## Data recording requirements: 
-The respmech.py code analyses a time series of respiratory physiological measurements. Your input data do _not_ need to be a specific length of time, but as some output values are calculated as per-time (i.e. minute ventilation), you must specify the sampling frequency of the input data for the calculations to be correct:
+The respmech.py code analyses a time series of respiratory physiological measurements. Your input data do _not_ need to be a specific length of time, but as some output values are calculated as per-time (e.g. minute ventilation), you must specify the sampling frequency of the input data for the calculations to be correct:
 
 ```
 'samplingfrequency': 4000, #No. of data recordings per second
