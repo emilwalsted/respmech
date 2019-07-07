@@ -22,7 +22,7 @@ The code runs on Python 3.6+. If you don't have Python installed, I would recomm
 # Getting started
 The file **respmech.py** contains the actual analysis code. Start by downloading it. You should then create another Python file for each setting/project which contains the analysis settings for that particular project (i.e. points to input files etc.). Make a copy of the template project file **example.py** and rename/modify to reflect your setup and analysis (see below).
 
-Specifically, Input and Output location details must be provided in the settings template in order to render the code functional (see details below). Additional details (e.g. samplingfrequency - Line 39; file format – Line 47) are used to further tailor the code to the settings of your data acquisition file and resulting exported analysis files.
+Specifically, Input and Output location details must be provided in the settings template in order to render the code functional (see details below). Additional details (e.g. samplingfrequency; file format) are used to further tailor the code to the settings of your data acquisition file and resulting exported analysis files.
 
 ### Running the code
 You can run your analysis by opening your modified **example.py** in e.g. Spyder (from within the Anaconda main menu) and selecting "Run". If you prefer running the code in a command line window, type
