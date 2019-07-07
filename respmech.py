@@ -62,7 +62,7 @@ from collections import OrderedDict
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
-from matplotlib.patches import Polygon
+from matplotlib.patches import Polygon, Rectangle
 
 import seaborn as sns; sns.set()
 plt.style.use('seaborn-white')
@@ -656,7 +656,7 @@ def savepvbreaths(file, breaths, flow, volume, poes, pgas, pdi, settings, averag
             l = mlines.Line2D(lx, ly, linewidth=2, alpha=aline)
             ax.add_line(l)
             
-            wobelpolygon = Polygon([[p[0], p[1]] for p in [eelv, eilv, [eilv[0], eelv[1]]]], alpha=afill, color="#999999", fill=True, )
+            wobelpolygon = Polygon([[p[0], p[1]] for p in [eelv, eilv, [eilv[0], eelv[1]]]], alpha=afill, color="#999999", fill=True )
             ax.add_patch(wobelpolygon)
            
            
@@ -673,20 +673,41 @@ def savepvbreaths(file, breaths, flow, volume, poes, pgas, pdi, settings, averag
 
 
 
-def saverawplots(suffix, file, rows, titles, ylabels, settings):   
+def saverawplots(suffix, file, rows, titles, ylabels, settings, breaths=None):   
     
     plt.ioff()
     norows = len(rows)
-    fig, axes = plt.subplots(nrows=norows, ncols=1, sharex=True, figsize=(21,29.7))
+    fig, axes = plt.subplots(nrows=norows, ncols=1, sharex=True, figsize=(29.7, 21))
     plt.suptitle(suffix, fontsize=48)    
     
     for i in range(0, norows):
-        axes[i].grid(True)
-        axes[i].plot(rows[i], linewidth=0.5)
-        axes[i].set_title(titles[i],fontweight="bold", size=20)
-        axes[i].set_ylabel(ylabels[i],fontweight="bold", size=16)
+        ax = plt.subplot(norows, 1, i+1)
+        if breaths:
+            ax.yaxis.grid(True)
+        else:
+            ax.grid(True)
+        ax.plot(rows[i], linewidth=1)
+        ax.set_title(titles[i],fontweight="bold", size=20)
+        ax.set_ylabel(ylabels[i],fontweight="bold", size=16)
+        startx = 0
+        yl = list(ax.get_ylim())
+
+        if breaths:
+            for breathno in breaths:
+                blab = " #" + str(breathno)
+                breath= breaths[breathno]
+                if breath["ignored"]:
+                    blab += " (ignored)"
+                    poly = Rectangle([startx, yl[0]], len(breath["poes"]), yl[1]-yl[0], alpha=0.1, color="#FF0000", fill=True)
+                    ax.add_patch(poly)
+                
+                ax.axvline(x=startx, linewidth=0.5, linestyle="--", color="#0000FF")
+                ax.text(startx, yl[1]-((yl[1]-yl[0])*0.05), blab, fontsize=12)
+        
+                startx = startx + len(breath["poes"])
+
     
-    axes[i].set_xlabel(r'$observation #$', size=16)
+    ax.set_xlabel(r'$observation #$', size=16)
 
     savefile = pjoin(settings['outputfolder'], "plots", file + "." + suffix + ".pdf")
     plt.figtext(0.99, 0.01, CREATED + " on " + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), horizontalalignment='right')       
@@ -801,12 +822,9 @@ def analyse(usersettings):
         print('\t\tTrimming to whole breaths...')
         flow, volume, poes, pgas, pdi = trim(flow, volume, poes, pgas, pdi, settings)
         
-        if (settings['savedataviewtrimmed']):
-            print('\t\tSaving trimmed data plots...')
-            saverawplots("Trimmed data", ntpath.basename(file), [flow, volume, poes, pgas, pdi], 
-                         ['Flow', 'Volume (drift corrected)', 'Oesophageal pressure', 'Gastric pressure', 'Trans diaphragmatic pressure'],
-                         [r'$L/s$', r'$L$', r'$cm H_2O$', r'$cm H_2O$', r'$cm H_2O$'],
-                         settings)
+            
+        #Add any post processing that should be performed on the entire data file
+        #here.
         
         print('\t\tDrift correcting...')
         uncorvol = volume
@@ -816,22 +834,26 @@ def analyse(usersettings):
             volume = correctdrift(zerovol, settings)
         else:
             volume = zerovol
-            
-        if (settings['savedataviewtrimmed']):
-            print('\t\tSaving drift corrected data plots...')
-            saverawplots("Drift corrected volume", ntpath.basename(file), [flow, uncorvol, zerovol, volume], 
-                         ['Flow', 'Uncorrected volume', 'Zeroed volume', 'Drift corrected volume'],
-                         [r'$L/s$', r'$L$', r'$L$', r'$L$'],
-                         settings)
-      
-        #Add any post processing that should be performed on the entire data file
-        #here.
         
         print('\t\tDetecting breathing cycles...')
         breaths = separateintobreaths(filename, flow, volume, poes, pgas, pdi, entropycolumns, settings)
         
         #Add any post processing that should be performed for each breath here.
-        
+            
+        if (settings['savedataviewtrimmed']):
+            print('\t\tSaving trimmed data plots...')
+            saverawplots("Trimmed data", ntpath.basename(file), [flow, volume, poes, pgas, pdi], 
+                         ['Flow', 'Volume (drift corrected)', 'Oesophageal pressure', 'Gastric pressure', 'Trans diaphragmatic pressure'],
+                         [r'$L/s$', r'$L$', r'$cm H_2O$', r'$cm H_2O$', r'$cm H_2O$'],
+                         settings, breaths)
+                    
+        if (settings['savedataviewdriftcor']):
+            print('\t\tSaving drift corrected data plots...')
+            saverawplots("Drift corrected volume", ntpath.basename(file), [flow, uncorvol, zerovol, volume], 
+                         ['Flow', 'Uncorrected volume', 'Zeroed volume', 'Drift corrected volume'],
+                         [r'$L/s$', r'$L$', r'$L$', r'$L$'],
+                         settings, breaths)
+            
         print('\t\tCalculating mechanics and WOB...')
         vefactor = 60/(len(flow)/settings["samplingfrequency"]) #Calculate multiplication factor for VE for this file.
         
@@ -844,7 +866,7 @@ def analyse(usersettings):
         avgvolumein, avgvolumeex, avgpoesin, avgpoesex = calculateaveragebreaths(breaths, settings)
         
         breathmechswob = calculatebreathmechsandwob(breaths, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, settings)
-
+  
         for breathno in breathmechswob:
             breath = breathmechswob[breathno]
             if not breath["ignored"]:
