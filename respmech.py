@@ -678,7 +678,7 @@ def saverawplots(suffix, file, rows, titles, ylabels, settings, breaths=None):
     plt.ioff()
     norows = len(rows)
     fig, axes = plt.subplots(nrows=norows, ncols=1, sharex=True, figsize=(29.7, 21))
-    plt.suptitle(suffix, fontsize=48)    
+    plt.suptitle(file + " - " + suffix, fontsize=48)    
     
     for i in range(0, norows):
         ax = plt.subplot(norows, 1, i+1)
