@@ -214,11 +214,11 @@ I created this code for the purpose of my own work and shared it hoping that oth
 ### How do I cite this code in scientific papers – and should I?
 It is up to you, really. Personally I am a fan of transparency and Open Source / Open Science and I would appreciate a mention. This will also make readers of your papers aware that this code exists – if you found it useful, perhaps they will too.
 
-Every released version of the code has its own DOI you can use for citation. The current release DOI is: **(TODO INSERT DOI BADGE)**
+Every released version of the code has its own DOI you can use for citation: [![DOI](https://zenodo.org/badge/191052676.svg)](https://zenodo.org/badge/latestdoi/191052676)
 
 An example of a citation could look like this:
 
-_[...] using the Python package RespMech (ES Walsted, RespMech v1.0, 2019, https://github.com/emilwalsted/respmech/, DOI: xxxx) [...]_
+_[...] were calculated using the Python package RespMech (ES Walsted, RespMech v1.0, 2019, https://github.com/emilwalsted/respmech/, DOI: 10.5281/zenodo.3270826) [...]_
 
 ## Note to software engineers/computer scientists
 This code is far from as concise or computationally efficient as it could be. This is in part because it is a port of old code I wrote just for myself back in the day. I have since come to realise that my code has 'travelled' among researchers and although this is flattering, I would prefer that everyone also got the fixes, updates and improvements, and also proper instructions for usage. This is the first step towards a more generally useful code library and I have focused on some degree of readability in an attempt to enable respiratory scientists with basic programming skills to understand, debug and modify/extend the code themselves. Future versions might be properly restructured and offered as a PIP package but for now, this is good enough for jazz.
