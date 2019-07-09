@@ -6,9 +6,10 @@ _(c) Copyright 2019 Emil Schwarz Walsted (emilwalsted@gmail.com), ORCID [0000-00
 
 **Current version: v0.9 BETA** (release v1.0 coming soon).
 
-This is a port/rewrite of my MATLAB code from 2016, with some changes and additions.
+![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/githubimage.png)
 
-The code calculates 
+# About RespMech
+This is a port/rewrite of my MATLAB code from 2016, with some changes and additions. The code calculates 
 
 * respiratory mechanics
 * in- and expiratory work of breathing 
@@ -152,6 +153,8 @@ There are two options for numeric data output: The overall averages from each fi
 'saveaveragedata': True, #False: don't save, True: save.
 'savebreathbybreathdata': True, #False: don't save, True: save.
 ```
+
+![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/outputdata.png)
 
 A detailed description of the output variables and how they are calculated is available here: [Output variable description (TODO)](http://TODO).
 
