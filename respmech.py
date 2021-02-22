@@ -9,7 +9,8 @@ Respiratory mechanics and work of breathing calculation
 ------------------------------------------------------------------------ 
 (c) Copyright 2019 Emil Schwarz Walsted <emilwalsted@gmail.com>
 This is a rewrite of my MATLAB code from 2016, with some changes/additions.
-The latest version of this code is available at GitHub: ...
+The latest version of this code is available at GitHub: 
+https://github.com/emilwalsted/respmech
 
 This code calculates respiratory mechanics and/or in- and expiratory work of 
 breathing and/or diaphragm EMG entropy from a time series of 
@@ -63,17 +64,30 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 from matplotlib.patches import Polygon, Rectangle
+import json
+from types import SimpleNamespace
+from collections import namedtuple
 
 import seaborn as sns; sns.set()
 plt.style.use('seaborn-white')
 
+def import_file(full_name, path):
+    from importlib import util
+
+    spec = util.spec_from_file_location(full_name, path)
+    mod = util.module_from_spec(spec)
+
+    spec.loader.exec_module(mod)
+    return mod
+
+#ent = import_file("emgpy", "emg.py")
 
 def load(filepath, settings):
     
-    fn, fext = os.path.splitext(filepath)
+    _, fext = os.path.splitext(filepath)
     
     def loadmat(path):
-        if settings["matlabfileformat"] == 2:
+        if settings.input.format.matlabfileformat == 2:
             flow, volume, poes, pgas, pdi, entropycolumns = loadmatmac(filepath)
         else:
             flow, volume, poes, pgas, pdi, entropycolumns = loadmatwin(filepath)               
@@ -84,21 +98,21 @@ def load(filepath, settings):
         data = OrderedDict(rawdata)
         cols = list(data.items())
         
-        flow = cols[settings["column_flow"]-1][1]
-        if np.isnan(settings["column_volume"]):
+        flow = cols[settings.input.data.column_flow-1][1]
+        if np.isnan(settings.input.data.column_volume):
             volume = []
         else:
-            volume = cols[settings["column_volume"]-1][1]
-        poes = cols[settings["column_poes"]-1][1]
-        pgas = cols[settings["column_pgas"]-1][1]
-        pdi = cols[settings["column_pdi"]-1][1]
+            volume = cols[settings.input.data.column_volume-1][1]
+        poes = cols[settings.input.data.column_poes-1][1]
+        pgas = cols[settings.input.data.column_pgas-1][1]
+        pdi = cols[settings.input.data.column_pdi-1][1]
         
-        if len(settings["columns_entropy"])==0:
+        if len(settings.input.data.columns_entropy)==0:
             entropycolumns = []
         else:
-            entropycolumns = np.empty([len(cols[settings["columns_entropy"][0]][1]), len(settings["columns_entropy"])])
-            for i in range(0, len(settings["columns_entropy"])):
-                entropycolumns[:,i] = cols[settings["columns_entropy"][i]-1][1].squeeze()
+            entropycolumns = np.empty([len(cols[settings.input.data.columns_entropy[0]][1]), len(settings.input.data.columns_entropy)])
+            for i in range(0, len(settings.input.data.columns_entropy)):
+                entropycolumns[:,i] = cols[settings.input.data.columns_entropy[i]-1][1].squeeze()
                         
         return flow, volume, poes, pgas, pdi, entropycolumns
         
@@ -107,59 +121,59 @@ def load(filepath, settings):
         data = OrderedDict(rawdata)
         cols = list(data["data_block1"])
         
-        flow = cols[settings["column_flow"]-1]
-        if np.isnan(settings["column_volume"]):
+        flow = cols[settings.input.data.column_flow-1]
+        if np.isnan(settings.input.data.column_volume):
             volume = []
         else:
-            volume = cols[settings["column_volume"]-1]
-        poes = cols[settings["column_poes"]-1]
-        pgas = cols[settings["column_pgas"]-1]
-        pdi = cols[settings["column_pdi"]-1]
+            volume = cols[settings.input.data.column_volume-1]
+        poes = cols[settings.input.data.column_poes-1]
+        pgas = cols[settings.input.data.column_pgas-1]
+        pdi = cols[settings.input.data.column_pdi-1]
         
-        if len(settings["columns_entropy"])==0:
+        if len(settings.input.data.columns_entropy)==0:
             entropycolumns = []
         else:
-            entropycolumns = np.empty([len(cols[settings["columns_entropy"][0]]), len(settings["columns_entropy"])])
-            for i in range(0, len(settings["columns_entropy"])):
-                entropycolumns[:,i] = cols[settings["columns_entropy"][i]-1]
+            entropycolumns = np.empty([len(cols[settings.input.data.columns_entropy[0]]), len(settings.input.data.columns_entropy)])
+            for i in range(0, len(settings.input.data.columns_entropy)):
+                entropycolumns[:,i] = cols[settings.input.data.columns_entropy[i]-1]
         
         return flow, volume, poes, pgas, pdi, entropycolumns
     
     def loadxls(filename):
         data = pd.read_excel(filename)
         
-        flow = data.iloc[:,settings["column_flow"]-1].to_numpy()
-        if np.isnan(settings["column_volume"]):
+        flow = data.iloc[:,settings.input.data.column_flow-1].to_numpy()
+        if np.isnan(settings.input.data.column_volume):
             volume = []
         else:
-            volume = data.iloc[:,settings["column_volume"]-1].to_numpy()
-        poes = data.iloc[:,settings["column_poes"]-1].to_numpy()
-        pgas = data.iloc[:,settings["column_pgas"]-1].to_numpy()
-        pdi = data.iloc[:,settings["column_pdi"]-1].to_numpy()
+            volume = data.iloc[:,settings.input.data.column_volume-1].to_numpy()
+        poes = data.iloc[:,settings.input.data.column_poes-1].to_numpy()
+        pgas = data.iloc[:,settings.input.data.column_pgas-1].to_numpy()
+        pdi = data.iloc[:,settings.input.data.column_pdi-1].to_numpy()
         
-        if len(settings["columns_entropy"])==0:
+        if len(settings.input.data.columns_entropy)==0:
             entropycolumns = []
         else:
-            entropycolumns = data.iloc[:,np.array(settings["columns_entropy"])-1].to_numpy()
+            entropycolumns = data.iloc[:,np.array(settings.input.data.columns_entropy)-1].to_numpy()
         
         return flow, volume, poes, pgas, pdi, entropycolumns
 
     def loadcsv(filename):
         data = pd.read_csv(filename)
         
-        flow = data.iloc[:,settings["column_flow"]-1].to_numpy()
-        if np.isnan(settings["column_volume"]):
+        flow = data.iloc[:,settings.input.data.column_flow-1].to_numpy()
+        if np.isnan(settings.input.data.column_volume):
             volume = []
         else:
-            volume = data.iloc[:,settings["column_volume"]-1].to_numpy()
-        poes = data.iloc[:,settings["column_poes"]-1].to_numpy()
-        pgas = data.iloc[:,settings["column_pgas"]-1].to_numpy()
-        pdi = data.iloc[:,settings["column_pdi"]-1].to_numpy()
+            volume = data.iloc[:,settings.input.data.column_volume-1].to_numpy()
+        poes = data.iloc[:,settings.input.data.column_poes-1].to_numpy()
+        pgas = data.iloc[:,settings.input.data.column_pgas-1].to_numpy()
+        pdi = data.iloc[:,settings.input.data.column_pdi-1].to_numpy()
         
-        if len(settings["columns_entropy"])==0:
+        if len(settings.input.data.columns_entropy)==0:
             entropycolumns = []
         else:
-            entropycolumns = data.iloc[:,np.array(settings["columns_entropy"])-1].to_numpy().squeeze()
+            entropycolumns = data.iloc[:,np.array(settings.input.data.columns_entropy)-1].to_numpy().squeeze()
         
         return flow, volume, poes, pgas, pdi, entropycolumns
     
@@ -187,33 +201,64 @@ def load(filepath, settings):
     pgas = pgas.squeeze()
     pdi = pdi.squeeze()
     
-    if settings["inverseflow"]:
+    if settings.processing.mechanics.inverseflow:
         flow = -flow
     
-    if settings['integratevolumefromflow']:
-        xval = np.linspace(0, len(flow)/settings['samplingfrequency'], len(flow))
+    if settings.processing.mechanics.integratevolumefromflow:
+        xval = np.linspace(0, len(flow)/settings.input.format.samplingfrequency, len(flow))
         volume = -sp.integrate.cumtrapz(flow, xval)
 
-    if settings["inversevolume"]:
+    if settings.processing.mechanics.inversevolume:
         volume = -volume
             
     return flow, volume, poes, pgas, pdi, entropycolumns
 
-
 def zero(indata):
-    return indata-(indata[0]);
+    return indata-(indata[0])
 
 def correctdrift(volume, settings):
     xno = len(volume)-1
       
     a = ((volume[xno])-volume[0])/xno
 
-    val = a;
+    val = a
     corvol=np.zeros(xno)
     for i in range(0, xno):
         corvol[i] = volume[i] + val
         val = val - a
         
+    return corvol
+
+def correcttrend(volume, settings):
+    
+    from scipy import signal
+    
+    vol = volume.squeeze()
+    peaks = signal.find_peaks((vol*-1)+max(vol), height=1, distance=0.25*settings.input.format.samplingfrequency)[0]
+
+    fig, axes = plt.subplots(nrows=3, ncols=1, figsize=(21,29.7))
+    title = "Volume trend adjustment (" + settings.processing.mechanics.volumetrendadjustmethod + ")"
+    plt.suptitle(title, fontsize=48)
+    
+    f = sp.interpolate.interp1d(peaks, vol[peaks], settings.processing.mechanics.volumetrendadjustmethod, fill_value="extrapolate")
+    peaksresampled = f(np.linspace(0, vol.size-1, vol.size))
+            
+    axes[0].plot(volume)
+    axes[0].plot(peaks, vol[peaks], "x", markersize=20)
+    
+    axes[1].plot(volume, linewidth=1.5)
+    axes[1].plot(peaksresampled, linewidth=1.5)
+    
+    corvol = volume - peaksresampled
+            
+    axes[2].plot(corvol)
+    axes[2].plot(np.zeros(corvol.size), '--', linewidth=1.5)
+    
+    savefile = pjoin(settings.output.outputfolder, "plots", title + ".pdf")
+    plt.figtext(0.99, 0.01, CREATED + " on " + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), horizontalalignment='right')       
+    fig.savefig(savefile) 
+    
+    
     return corvol
 
 def trim(flow, volume, poes, pgas, pdi, settings):
@@ -225,7 +270,7 @@ def trim(flow, volume, poes, pgas, pdi, settings):
     return flow[startix:endix], volume[startix:endix], poes[startix:endix], pgas[startix:endix], pdi[startix:endix]
 
 def ignorebreaths(curfile, settings):
-    allignore = settings['excludebreaths']
+    allignore = settings.processing.mechanics.excludebreaths
     d = dict(allignore)
     if curfile in d:
         return d[curfile]
@@ -236,7 +281,7 @@ def ignorebreaths(curfile, settings):
 def separateintobreaths(filename, flow, volume, poes, pgas, pdi, entropycolumns, settings):
     breaths = OrderedDict()
     j = len(flow)
-    bufferwidth = settings["breathseparationbuffer"]
+    bufferwidth = settings.processing.mechanics.breathseparationbuffer
 
     ib = ignorebreaths(filename, settings)
     
@@ -250,7 +295,7 @@ def separateintobreaths(filename, flow, volume, poes, pgas, pdi, entropycolumns,
             i += 1
         inend = i-1
         
-        exstart = i;       
+        exstart = i
         while (i<j and ((flow[i]>0) or (np.mean(flow[i:min(j,i+bufferwidth)])>0))):
             i += 1
         exend = i-1
@@ -320,13 +365,13 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
     pgas_maxexp = max(exp["pgas"])
     pgas_minexp = min(exp["pgas"])
         
-    midvolexp = min(exp["volume"]) + ((max(exp["volume"])-min(exp["volume"]))/2); 
+    midvolexp = min(exp["volume"]) + ((max(exp["volume"])-min(exp["volume"]))/2)
     midvolexpix = np.where(exp["volume"] <= midvolexp)[0][0]
     poes_midvolexp = exp["poes"][midvolexpix]
     flow_midvolexp = -exp["flow"][midvolexpix]
     
     insp = retbreath["inspiration"]
-    poes_mininsp = min(insp["poes"]);
+    poes_mininsp = min(insp["poes"])
     poes_endinsp = insp["poes"][len(insp["poes"])-1]
     pdi_maxinsp = max(insp["pdi"])
     pdi_endinsp = insp["pdi"][len(insp["pdi"])-1]
@@ -345,9 +390,9 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
     vol_endinsp = insp["volume"][len(insp["volume"])-1]
     vol_endexp = exp["volume"][len(exp["volume"])-1]
     
-    ti = len(insp["flow"])/settings["samplingfrequency"]
-    te = len(exp["flow"])/settings["samplingfrequency"]
-    ttot = len(retbreath["flow"])/settings["samplingfrequency"]                        
+    ti = len(insp["flow"])/settings.input.format.samplingfrequency
+    te = len(exp["flow"])/settings.input.format.samplingfrequency
+    ttot = len(retbreath["flow"])/settings.input.format.samplingfrequency                        
     ti_ttot = ti/ttot
     
     vt = max(retbreath["volume"])-min(retbreath["volume"])
@@ -359,13 +404,13 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
     exp_pgas_rise = pgas_maxexp - min(exp["pgas"])
 
     poesinsp = adjustforintegration(-insp["poes"])
-    ptp_oesinsp, int_oesinsp = calcptp(poesinsp, bcnt, vefactor, settings["samplingfrequency"])
+    ptp_oesinsp, int_oesinsp = calcptp(poesinsp, bcnt, vefactor, settings.input.format.samplingfrequency)
     
     pdiinsp = adjustforintegration(insp["pdi"])
-    ptp_pdiinsp, int_pdiinsp = calcptp(pdiinsp, bcnt, vefactor, settings["samplingfrequency"])
+    ptp_pdiinsp, int_pdiinsp = calcptp(pdiinsp, bcnt, vefactor, settings.input.format.samplingfrequency)
     
     pgasexp = adjustforintegration(exp["pgas"])
-    ptp_pgasexp, int_pgasexp = calcptp(pgasexp, bcnt, vefactor, settings["samplingfrequency"])
+    ptp_pgasexp, int_pgasexp = calcptp(pgasexp, bcnt, vefactor, settings.input.format.samplingfrequency)
     
     max_in_flow = min(insp["flow"]) * -1
     max_ex_flow = max(exp["flow"])
@@ -375,7 +420,7 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
     wob = calculatewob(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, settings)
     retbreath["wob"] = wob
     
-    if len(settings["columns_entropy"]) > 0:
+    if len(settings.input.data.columns_entropy) > 0:
         entropy = calculateentropy(breath, settings)
         retbreath["entropy"] = np.append(entropy.T, [max(entropy.T), min(entropy.T), np.mean(entropy.T)])
     else:
@@ -448,7 +493,7 @@ def calcptp(pressure, bcnt, vefactor, samplingfreq):
 def calculatewob(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, settings):
     WOBUNITCHANGEFACTOR = 98.0638/1000 #Multiplication factor to change cmH2O to Joule;  Pa = J / m3.
     
-    if settings["calcwobfromaverage"]:
+    if settings.processing.wob.calcwobfrom == "average":
         volin = breath["inspiration"]["volumeavg"]
         volex = breath["expiration"]["volumeavg"]
         poesin = breath["inspiration"]["poesavg"]
@@ -509,12 +554,12 @@ def calculatebreathmechsandwob(breaths, bcnt, vefactor, avgvolumein, avgvolumeex
 
 def resample(x, settings, kind='linear'):
     x = x.squeeze()
-    n = settings["avgresamplingobs"]
+    n = settings.processing.wob.avgresamplingobs
     f = sp.interpolate.interp1d(np.linspace(0, 1, x.size), x, kind)
     return f(np.linspace(0, 1, n))
 
 def calculateaveragebreaths(breaths, settings):
-    resamplingobs = settings["avgresamplingobs"]
+    resamplingobs = settings.processing.wob.avgresamplingobs
     
     nobreaths = 0
     for breathno in breaths:
@@ -542,34 +587,29 @@ def calculateaveragebreaths(breaths, settings):
         
     return avgvolumein, avgvolumeex, avgpoesin, avgpoesex
 
-
 def calculateentropy(breath, settings):
-    def import_file(full_name, path):
-        from importlib import util
     
-        spec = util.spec_from_file_location(full_name, path)
-        mod = util.module_from_spec(spec)
-    
-        spec.loader.exec_module(mod)
-        return mod
-
     ent = import_file("ent", "entropy.py")
      
     columns = breath["entcols"]
     
-    epoch = settings["entropy_epochs"]
-    tolerancesd = settings["entropy_tolerance"]
+    epoch = settings.processing.entropy.entropy_epochs
+    tolerancesd = settings.processing.entropy.entropy_tolerance
     sampen = np.zeros(len(columns[1,:]))
     
     for i in range(0,columns.shape[1]):
         std_ds = np.std(columns[:,i])
         sample_entropy = ent.sample_entropy(columns[:,i], epoch, tolerancesd * std_ds)
-        sampen[i] = sample_entropy[len(sample_entropy)-1];
+        sampen[i] = sample_entropy[len(sample_entropy)-1]
         
     return sampen
 
-
 def savepvbreaths(file, breaths, flow, volume, poes, pgas, pdi, settings, averages=False):   
+    try:
+        os.makedirs(pjoin(settings.output.outputfolder, "plots"))
+    except FileExistsError:
+        pass
+    
     nobreaths = len(breaths)
     nocols = math.floor(math.sqrt(nobreaths))
     norows = math.ceil(nobreaths/nocols)
@@ -662,9 +702,9 @@ def savepvbreaths(file, breaths, flow, volume, poes, pgas, pdi, settings, averag
            
 
     if averages:
-        savefile = pjoin(settings['outputfolder'], "plots", "All files – average Campbell.pdf")
+        savefile = pjoin(settings.output.outputfolder, "plots", "All files – average Campbell.pdf")
     else:
-        savefile = pjoin(settings['outputfolder'], "plots", file + ".Campbell.pdf")
+        savefile = pjoin(settings.output.outputfolder, "plots", file + ".Campbell.pdf")
     
     plt.figtext(0.99, 0.01, CREATED + " on " + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), horizontalalignment='right')       
     fig.savefig(savefile) 
@@ -674,11 +714,14 @@ def savepvbreaths(file, breaths, flow, volume, poes, pgas, pdi, settings, averag
 
 
 def saverawplots(suffix, file, rows, titles, ylabels, settings, breaths=None):   
-    
+    try:
+        os.makedirs(pjoin(settings.output.outputfolder, "plots"))
+    except FileExistsError:
+        pass
     plt.ioff()
     norows = len(rows)
-    fig, axes = plt.subplots(nrows=norows, ncols=1, sharex=True, figsize=(29.7, 21))
-    plt.suptitle(file + " - " + suffix, fontsize=48)    
+    fig, axes  = plt.subplots(nrows=norows, ncols=1, sharex=True, figsize=(29.7, 21))
+    fig.suptitle(file + " - " + suffix, fontsize=48)    
     
     for i in range(0, norows):
         ax = plt.subplot(norows, 1, i+1)
@@ -709,7 +752,7 @@ def saverawplots(suffix, file, rows, titles, ylabels, settings, breaths=None):
     
     ax.set_xlabel(r'$observation #$', size=16)
 
-    savefile = pjoin(settings['outputfolder'], "plots", file + "." + suffix + ".pdf")
+    savefile = pjoin(settings.output.outputfolder, "plots", file + "." + suffix + ".pdf")
     plt.figtext(0.99, 0.01, CREATED + " on " + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), horizontalalignment='right')       
     fig.savefig(savefile)
     plt.close(fig)
@@ -728,7 +771,12 @@ def formatheader(df, writer, sheetname):
         writer.sheets[sheetname].set_column(col_num, col_num, column_len)
     
 def savedataaverage(totals, settings):   
-    savefile = pjoin(settings['outputfolder'], "data", "Average breathdata.xlsx")
+    try:
+        os.makedirs(pjoin(settings.output.outputfolder, "data"))
+    except FileExistsError:
+        pass
+    
+    savefile = pjoin(settings.output.outputfolder, "data", "Average breathdata.xlsx")
     
     writer = pd.ExcelWriter(savefile, engine='xlsxwriter', options={'strings_to_urls': True})
     totals.to_excel(writer, sheet_name='Data', index=False)
@@ -745,6 +793,10 @@ def savedataaverage(totals, settings):
     writer.save()
     
 def savedataindividual(file, breaths, settings):   
+    try:
+        os.makedirs(pjoin(settings.output.outputfolder, "data"))
+    except FileExistsError:
+        pass
     
     mechs = []
     for breathno in breaths:   
@@ -755,9 +807,9 @@ def savedataindividual(file, breaths, settings):
             dfmech.insert(loc=0, column="breath_no", value=breath["number"])
             dfmech = dfmech.join(dfwob, how="outer", sort=False)
             
-            if len(settings["columns_entropy"])>0:
+            if len(settings.input.data.columns_entropy)>0:
                 dfent = pd.DataFrame(breath["entropy"]).transpose()
-                cols = ["sample_entropy_col_" +  str(settings['columns_entropy'][x]) for x in range(0, len(settings["columns_entropy"]))]
+                cols = ["sample_entropy_col_" +  str(settings.input.data.column_entropy[x]) for x in range(0, len(settings.input.data.columns_entropy))]
                 cols = np.append(cols, ['sample_entropy_max', 'sample_entropy_min', 'sample_entropy_mean'])
                 dfent.columns = cols
                 dfmech = dfmech.join(dfent, how="outer", sort=False)
@@ -767,7 +819,7 @@ def savedataindividual(file, breaths, settings):
             else:
                 mechs = dfmech
                     
-    savefile = pjoin(settings['outputfolder'], "data", file + ".breathdata.xlsx")
+    savefile = pjoin(settings.output.outputfolder, "data", file + ".breathdata.xlsx")
     
     ret = pd.DataFrame(mechs.mean())
     ret = ret.T
@@ -788,15 +840,32 @@ def savedataindividual(file, breaths, settings):
     writer.save()
     
     return ret
+
+def applysubsettings(defaultsettings, newsettings):
+    retsettings = defaultsettings
+    for attr, value in newsettings.__dict__.items():
+        a = str.replace(attr, "'", "")
+        if isinstance(value, SimpleNamespace):
+            subsettings = applysubsettings(defaultsettings.__dict__[a], newsettings.__dict__[a])
+            setattr(retsettings, a, subsettings) 
+        else: 
+            setattr(retsettings, a, value)    
+    return retsettings
+
+def applysettings(defaultsettings, usersettings):
+   
+    defaultset = json.loads(defaultsettings, object_hook=lambda d: SimpleNamespace(**d))   
+    userset = json.loads(json.dumps(usersettings), object_hook=lambda d: SimpleNamespace(**d))
+    
+    settings = applysubsettings(defaultset, userset)
+    return settings
     
 def analyse(usersettings):
     
-    settings = defaultsettings
-    for s in usersettings:
-        settings[s] = usersettings[s]
-    
+    settings = applysettings(defaultsettings, usersettings)
+  
     print('Loading data...')
-    filepath = pjoin(settings['inputfolder'], settings['files'])
+    filepath = pjoin(settings.input.inputfolder, settings.input.files)
     files = [f for f in glob.glob(filepath)]
     files.sort()
 
@@ -812,7 +881,7 @@ def analyse(usersettings):
 
         flow, volume, poes, pgas, pdi, entropycolumns = load(file, settings)
         
-        if (settings['savedataviewraw']):
+        if (settings.output.diagnostics.savedataviewraw):
             print('\t\tSaving raw data plots...')
             saverawplots("Raw data", ntpath.basename(file), [flow, volume, poes, pgas, pdi], 
                          ['Flow', 'Volume (uncorrected)', 'Oesophageal pressure', 'Gastric pressure', 'Trans diaphragmatic pressure'],
@@ -830,35 +899,47 @@ def analyse(usersettings):
         uncorvol = volume
         zerovol = zero(volume)
         
-        if settings['correctvolumedrift']:
-            volume = correctdrift(zerovol, settings)
+        if settings.processing.mechanics.correctvolumedrift:
+            driftvol = correctdrift(zerovol, settings)
         else:
-            volume = zerovol
+            driftvol = zerovol
+            
+        if settings.processing.mechanics.correctvolumetrend:
+            trendcorvol = correcttrend(driftvol, settings)
+            volume = trendcorvol
+        else:
+            volume = driftvol
         
         print('\t\tDetecting breathing cycles...')
         breaths = separateintobreaths(filename, flow, volume, poes, pgas, pdi, entropycolumns, settings)
         
         #Add any post processing that should be performed for each breath here.
             
-        if (settings['savedataviewtrimmed']):
+        if (settings.output.diagnostics.savedataviewtrimmed):
             print('\t\tSaving trimmed data plots...')
             saverawplots("Trimmed data", ntpath.basename(file), [flow, volume, poes, pgas, pdi], 
                          ['Flow', 'Volume (drift corrected)', 'Oesophageal pressure', 'Gastric pressure', 'Trans diaphragmatic pressure'],
                          [r'$L/s$', r'$L$', r'$cm H_2O$', r'$cm H_2O$', r'$cm H_2O$'],
                          settings, breaths)
                     
-        if (settings['savedataviewdriftcor']):
+        if (settings.output.diagnostics.savedataviewdriftcor):
             print('\t\tSaving drift corrected data plots...')
-            saverawplots("Drift corrected volume", ntpath.basename(file), [flow, uncorvol, zerovol, volume], 
-                         ['Flow', 'Uncorrected volume', 'Zeroed volume', 'Drift corrected volume'],
-                         [r'$L/s$', r'$L$', r'$L$', r'$L$'],
-                         settings, breaths)
+            if settings.processing.mechanics.correctvolumetrend:
+                saverawplots("Volume correction", ntpath.basename(file), [flow, uncorvol, zerovol, driftvol, trendcorvol], 
+                             ['Flow', 'Uncorrected volume', 'Zeroed volume', 'Linear drift corrected volume', 'Trend adjusted volume (' + settings.processing.mechanics.volumetrendadjustmethod + ')'],
+                             [r'$L/s$', r'$L$', r'$L$', r'$L$', r'$L$'],
+                             settings, breaths)
+            else:
+                saverawplots("Volume correction", ntpath.basename(file), [flow, uncorvol, zerovol, driftvol], 
+                             ['Flow', 'Uncorrected volume', 'Zeroed volume', 'Linear drift corrected volume'],
+                             [r'$L/s$', r'$L$', r'$L$', r'$L$'],
+                             settings, breaths)
             
         print('\t\tCalculating mechanics and WOB...')
-        vefactor = 60/(len(flow)/settings["samplingfrequency"]) #Calculate multiplication factor for VE for this file.
+        vefactor = 60/(len(flow)/settings.input.format.samplingfrequency) #Calculate multiplication factor for VE for this file.
         
         bcnt = len(breaths) 
-        for bc in settings["breathcounts"]:
+        for bc in settings.processing.mechanics.breathcounts:
             if bc[0] == filename:
                 bcnt = bc[1]
                 break
@@ -873,11 +954,11 @@ def analyse(usersettings):
                 averagebreaths[filename] = breath
                 break
     
-        if (settings['savepvindividualworkload']):
+        if (settings.output.diagnostics.savepvindividualworkload):
             print('\t\tSaving detailed pressure/volume overview plots...')
             savepvbreaths(filename, breathmechswob, flow, volume, poes, pgas, pdi, settings, False)
          
-        if (settings['savebreathbybreathdata']):
+        if (settings.output.data.savebreathbybreathdata):
             print('\t\tSaving individual breath data...')
         
             av = savedataindividual(filename, breathmechswob, settings)
@@ -888,48 +969,78 @@ def analyse(usersettings):
                 averagecalcs = av
 
     #Save data and average breath plots
-    if (settings['savepvaverage']):
+    if (settings.output.diagnostics.savepvaverage):
         print('\n\tSaving average plots...')
         savepvbreaths(filename, averagebreaths, flow, volume, poes, pgas, pdi, settings, True)  
     
     
-    if (settings['saveaveragedata']):
+    if (settings.output.data.saveaveragedata):
         print('\n\tSaving total average data...')
         savedataaverage(averagecalcs, settings)
         
         
     print('\nFinished analysing \'' + file + '\'.\n')
-    return 
+    return settings.output.outputfolder
 
-defaultsettings = {
-    'samplingfrequency': np.nan,
-    'matlabfileformat': np.nan, 
-    'breathseparationbuffer': 800, 
-    'saveaveragedata': True,
-    'savebreathbybreathdata': True,
-    'inputfolder': "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/test/input/MATLAB Mac",
-    'files': "*.*", 
-    'outputfolder': "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/test/output", 
-    'column_poes': np.nan,    
-    'column_pgas': np.nan,    
-    'column_pdi': np.nan,    
-    'column_volume': np.nan, 
-    'column_flow': np.nan,   
-    'columns_entropy': [],   
-    'excludebreaths': [],
-    'breathcounts': [],
-    'inverseflow': False,
-    'integratevolumefromflow': False, 
-    'inversevolume': False, 
-    'correctvolumedrift': True,
-    'calcwobfromaverage': True,
-    'avgresamplingobs': 500,
-    'entropy_epochs': 2,
-    'entropy_tolerance': 0.1,
-    'savepvaverage': True,
-    'savepvoverview': True,
-    'savepvindividualworkload': True, 
-    'savedataviewraw': True, 
-    'savedataviewtrimmed': True, 
-    'savedataviewdriftcor': True
-}
+defaultsettings = """{
+    "input": {
+        "inputfolder": "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/test/input/MATLAB Mac",
+        "files": "*.*",
+        "format": {
+            "samplingfrequency": null,
+            "matlabfileformat": null
+        },
+        "data": {
+            "column_poes": null,
+            "column_pgas": null,
+            "column_pdi": null,
+            "column_volume": null,
+            "column_flow": null,
+            "columns_entropy": []
+        }
+    },
+    "processing": {
+        "mechanics": {
+            "breathseparationbuffer": 800,
+            "inverseflow": false,
+            "integratevolumefromflow": false,
+            "inversevolume": false,
+            "correctvolumedrift": true,
+            "correctvolumetrend": false,
+            "volumetrendadjustmethod": "quadratic",
+            "excludebreaths": [],
+            "breathcounts": []
+        },
+        "wob": {
+            "calcwobfrom": "average",
+            "avgresamplingobs": 500
+        },
+        "entropy": {
+            "entropy_epochs": 2,
+            "entropy_tolerance": 0.1
+        },
+        "emg": {
+            "removeecg": true,
+            "postprocess": {
+                "denoise": true,
+                "settings": "todo"
+            }
+        }
+    },
+    "output": {
+        "outputfolder": "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/test/output",
+        "data": {
+            "saveaveragedata": true,
+            "savebreathbybreathdata": true
+        },
+        "diagnostics": {
+            "savepvaverage": true,
+            "savepvoverview": true,
+            "savepvindividualworkload": true,
+            "savedataviewraw": true,
+            "savedataviewtrimmed": true,
+            "savedataviewdriftcor": true
+        }
+    }
+}"""
+
