@@ -202,7 +202,7 @@ def load(filepath, settings):
         return flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns
 
     def loadtxt(filename):
-        data = pd.read_csv(filename, sep='\t', decimal=",")
+        data = pd.read_csv(filename, sep='\t', decimal=settings.input.format.decimalcharacter)
         
         flow = data.iloc[:,settings.input.data.column_flow-1].to_numpy()
         if np.isnan(settings.input.data.column_volume):
@@ -1179,7 +1179,8 @@ defaultsettings = """{
         "files": "*.*",
         "format": {
             "samplingfrequency": null,
-            "matlabfileformat": null
+            "matlabfileformat": null,
+            "decimalcharacter": "."
         },
         "data": {
             "column_poes": null,
