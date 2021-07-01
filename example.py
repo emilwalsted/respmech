@@ -29,84 +29,75 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>
 import importlib.util
 
 #Modify to the location of your respmech.py:
-spec = importlib.util.spec_from_file_location("analyse", "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/respmech.py")
+spec = importlib.util.spec_from_file_location("analyse", "/Users/emilnielsen/Documents/Medicin/Forskning/Code/RespMech/respmech.py")
 
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 settings = {
     "input": {
-        "inputfolder": "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/test/input/MATLAB Mac",
-        "files": "*.mat", #Filename or mask (e.g. "*.csv" for all CSV files in folder)
+        "inputfolder": "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/txtimport",
+        "files": "33_Healthy.txt", #Filename or mask (e.g. "*.csv" for all CSV files in folder)
         "format": {
             #General settings
-            "samplingfrequency": 4000, #No. of data recordings per second
-            "matlabfileformat": 2,  #Only relevant if input data are in MATLAB format. 1=MATLAB for Windows, 2=MATLAB for Mac.
+            "samplingfrequency": 2000, #No. of data recordings per second
         },
         "data": {
-            "column_poes": 8,     #Column number containing oesophageal pressure
-            "column_pgas": 9,    #Column number containing gastric pressure
-            "column_pdi": 6,     #Column number containing transdiaphragmatic pressure
-            "column_volume": 23, #Column number containing (inspired) volume, BTPS. Exclude this and specify "integratevolumefromflow: True" to instead obtain volume by integrating the flow signal.
-            "column_flow": 20,   #Column number containing flow
-            "columns_entropy": [],   #The data columns containing EMG signals to calculate EMG entropy from, e.g. [4,5,6,7,8]. Leave as [] to skip EMG calculation.
+            "column_poes": 7,     #Column number containing oesophageal pressure
+            "column_pgas": 8,    #Column number containing gastric pressure
+            "column_pdi": 10,     #Column number containing transdiaphragmatic pressure
+            "column_volume": 13, #Column number containing (inspired) volume, BTPS. Exclude this and specify "integratevolumefromflow: True" to instead obtain volume by integrating the flow signal.
+            "column_flow": 9,   #Column number containing flow
+            "columns_emg": [2,3,4,5,6],   #The data columns containing EMG signals to calculate RMS from, e.g. [4,5,6,7,8]. Leave as [] to skip EMG calculation.
+            "columns_entropy": [2,3,4,5,6],   #The data columns to perform entropy calculation on, e.g. [4,5,6,7,8]. Leave as [] to skip entropy calculation.
         }
     },
     "processing": {
         "mechanics": {
-            "breathseparationbuffer": 800, #Number of measurements to average over for breathing cycle detection (default=800). Will depend on your sampling frequency.
+            "breathseparationbuffer": 400, #Number of measurements to average over for breathing cycle detection (default=800). Will depend on your sampling frequency.
             
             #Calculations:
             "inverseflow": False, #True: For calculations, inspired flow should be negative. This setting inverses the input flow signal. Default is False.
             "integratevolumefromflow": True, #True: Creates the volume signal by integrating the (optionally reversed) flow signal. False: Volume is specified in input data.
             "inversevolume": False, #True: For calculations, inspired volume should be positive and expired should be negative. This setting inverses the volume input signal. Default is False.
             "correctvolumedrift": True, #True: Correct volume drift. False: Do not correct volume drift. Default is True
-            "correctvolumetrend": True, #True: Correct volume  for trend changes. False: Do not correct. Default is False
-            "volumetrendadjustmethod": "quadratic",
+            "correctvolumetrend": False, #True: Correct volume  for trend changes. False: Do not correct. Default is False
+            "volumetrendadjustmethod": "linear",
+            "volumetrendpeakminheight": 0.5, #For trend adjustment: How tall (absolute value) a volume peak should at least be, to be considered a peak. Default is 0.8
+            "volumetrendpeakminwidth": 0.005, #For trend adjustment: How far apart (seconds) should peaks at least be, to be considered a peak. Default is 0.01
+            "volumetrendpeakmindistance": 0.25, #For trend adjustment: How far apart (seconds) should peaks at least be, to be considered a peak. Default is 0.25
             "calcwobfromaverage": True, #False: calculates WOB for each breath, then averages. True: Averages breaths to produce an averaged Campbell diagram, from which WOB is calculated.
             "avgresamplingobs": 500, #Downsampling to # of observations for breath P/V averaging. A good default would be sampling frequency divided by 8-10. Must be lower than the lowest # of observation in any inspiration or expiration in the file.
-            "entropy_epochs": 2, #Epoch parameter (m) to use with entropy calculation. Default is 2.
-            "entropy_tolerance": 0.1, #Tolerance (r) parameter to use with entropy calculation. This value is multiplied with the SD of the data. Default is 0.1.
-
+            
             #Exclude individual breaths from analysis, if appropriate. Takes input in the format [["file1.mat", [04, 07]], ["file2.mat", [01]]]
             #If no breaths should be excluded, set to []. NOTE: File name is case sensitive!
-            "excludebreaths": [
-                       ["S07 -  Rest.mat", [5,7]],
-                       ["S07 - 000W.mat", [2]],
-                       ["S07 - 020W.mat", [2,3,4,5,6,7,8,9,10]],
-                       ["S07 - 040W.mat", []],
-                       ["S07 - 060W.mat", [1,4,5,6,7]], 
-                       ["S07 - 080W.mat", [1,2,3,4,6,7,9]],
-                       ["S07 - 100W.mat", [6,7]],
-                       ["S07 - 120W.mat", [1,2,3,4,5,6,7,8,9,10,11]],
-                       ["S07 - 140W.mat", [3,10,11,13]],
-                       ["S07 - 160W.mat", [1,3,4,10,11]],
-                       ["S07 - 180W.mat", [1,6,7,8,10,12,16]],
-                       ["S07 - 200W.mat", []],
-                       ["S07 - 220W.mat", []]                       
-                       ],
+            "excludebreaths": [["33_Healthy.txt", [7]]],
+            
             #Breath count is detected automatically. However, in some cases, the breathing pattern can lead to erroneous breathing frequencies,
             #which will affect the mechanics calculations. In this case you can override the autumatically detected breath count in a specific
             #file by adding below:
-            "breathcounts": [
-                       ["S07 -  Rest.mat", 5],
-                       ["S07 - 000W.mat", 3],
-                       ["S07 - 020W.mat", 6],
-                       ["S07 - 040W.mat", 8],
-                       ["S07 - 060W.mat", 5],
-                       ["S07 - 080W.mat", 8],
-                       ["S07 - 100W.mat", 9],
-                       ["S07 - 120W.mat", 11],
-                       ["S07 - 140W.mat", 11],
-                       ["S07 - 160W.mat", 15],
-                       ["S07 - 180W.mat", 13],
-                       ["S07 - 200W.mat", 19],
-                       ["S07 - 220W.mat", 20]                   
-                       ],
-        }
+            "breathcounts": [],
+        },
+        "emg": {
+            "rms_s": 0.050, #The size of the rolling window centered around the data point, to calculate EMG RMS from (in seconds). Default is 0.05s.
+            "remove_ecg": True, #Perform ECG removal before calculating RMS. Default is True.
+            "column_detect": 4, #Which of the EMG columns to use for ECG detection. Default is the first (0). Use the data column where the ECG is most prominent.
+            "minheight": 0.0005, #(For peak detection): The minimum height (in volt) of an R wave. Default is 0.001.
+            "mindistance": 0.5, #The minimum distance between R waves (in seconds). Default is 0.25
+            "minwidth": 0.001, #The minimum width of R waves (in seconds). Default is 0.005
+            "windowsize": 0.4, #Window size (in seconds) for averaging an ECG complex. Default is 0.8.
+            "avgfitting": 5, #No. of passes to apply ECG removal. Default is 50.
+            "passno": 10, #No. of passes to apply ECG removal. Default is 50.
+            "remove_noise": True, #Perform EMG noise removal before calculating RMS. Default is True.
+            "noise_profile": [["33_Healthy.txt", [3.6, 4]]], #Required for noise removal, for each file processed. Specifies the start- and end times (in seconds) for the noise profile (i.e. an area with no relevant EMG activity).
+        },
+         "entropy": {
+            "entropy_epochs": 2, #Epochs used for entropy calculation. Default is 2.
+            "entropy_tolerance": 0.1 #Tolerance (in standard deviations) used for entropy calculation. Default is 0.1 SD.
+        },
     },
    
     "output": {
-        "outputfolder": "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/test/output", #Note: Output folder must have two subfolders named "data" and "plots", respectively.
+        "outputfolder": "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/txtimport/output", #Note: Output folder must have two subfolders named "data" and "plots", respectively.
         "data": {
             #Data input/output
             "saveaveragedata": True, #False: don"t save, True: save.
