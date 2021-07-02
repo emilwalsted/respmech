@@ -56,7 +56,8 @@ import ntpath
 import math
 import datetime
 from os.path import join as pjoin
-import numpy as np 
+import numpy as np
+from pandas.core.construction import array 
 import scipy as sp
 import scipy.io as sio  
 from collections import OrderedDict 
@@ -614,6 +615,7 @@ def calculatebreathmechsandwob(breaths, bcnt, vefactor, avgvolumein, avgvolumeex
         print('\n\t\t... breath #' + str(breathno) + ":", end="")
         breath = breaths[breathno]
         if breath["ignored"]:
+            print(' (ignored)', end="")
             retbreaths[breathno] = breath
         else:
             breathmechswob = calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, settings)
@@ -925,36 +927,47 @@ def savedataindividual(file, breaths, settings):
     
     return ret
 
-def saveprocesseddata(processeddata, settings):   
+def getprocesseddata(breaths, settings):
+    
+    processeddata = []
+    for breathno in breaths:   
+        breath= breaths[breathno]
+        if settings.output.data.includeignoredbreaths or not breath["ignored"]:
+            times = np.arange(0, len(breath["flow"])-1, dtype=int) / settings.input.format.samplingfrequency
+            dftime = pd.DataFrame(times, columns=["Time"])
+            dftime.set_index(dftime['Time'])
+
+            bnos = np.arange(0, len(breath["flow"])-1, dtype=int) * 0 + breathno
+            dfbreathno = pd.merge(dftime, pd.DataFrame(bnos, columns=["Breathno"]), how="outer", left_index=True, right_index=True)
+            dfflow= pd.merge(dfbreathno, pd.DataFrame(breath["flow"], columns=["Flow"]), how="outer", left_index=True, right_index=True)
+            dfvol = pd.merge(dfflow, pd.DataFrame(breath["volume"], columns=["Volume"]), how="outer", left_index=True, right_index=True)
+            dfpoes = pd.merge(dfvol, pd.DataFrame(breath["poes"], columns=["Poes"]), how="outer", left_index=True, right_index=True)
+            dfpgas = pd.merge(dfpoes, pd.DataFrame(breath["pgas"], columns=["Pgas"]), how="outer", left_index=True, right_index=True)
+            dfpdi = pd.merge(dfpgas, pd.DataFrame(breath["pdi"], columns=["Pdi"]), how="outer", left_index=True, right_index=True)
+            br = dfpdi
+            #dfmech.insert(loc=0, column="time", value=breath["number"])
+            
+            if len(settings.input.data.columns_emg)>0:
+                dfemg = pd.merge(dfpdi, pd.DataFrame(breath["emgcols"], columns=["EMG1", "EMG2", "EMG3", "EMG4", "EMG5"]), how="outer", left_index=True, right_index=True)
+                br = dfemg
+                
+            if len(processeddata)>0:
+                processeddata = pd.concat([processeddata, br], sort=False)
+            else:
+                processeddata = br
+    
+    return processeddata.dropna()
+
+def saveprocesseddata(breaths, settings):   
     try:
         os.makedirs(pjoin(settings.output.outputfolder, "data"))
     except FileExistsError:
         pass
     
-    savefile = pjoin(settings.output.outputfolder, "data", "Processed data.xlsx")
-    
-    writer = pd.ExcelWriter(savefile, engine='xlsxwriter', options={'strings_to_urls': True})
-    processeddata.to_excel(writer, sheet_name='Data', index=False)
-    formatheader(processeddata, writer, "Data")
+    savefile = pjoin(settings.output.outputfolder, "data", "Processed data.csv")
+    processeddata = getprocesseddata(breaths, settings)
 
-    version = pd.DataFrame({'Created': CREATED + " on " + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            'Website': 'https://github.com/emilwalsted/respmech',
-                            'Flow input inversed': settings.processing.mechanics.inverseflow,
-                            'Volume input inversed': settings.processing.mechanics.inversevolume,
-                            'Volume drift corrected': settings.processing.mechanics.correctvolumedrift,
-                            'Volume trend adjusted': settings.processing.mechanics.correctvolumetrend,
-                            'WOB calculated from average Campbell diagram': settings.processing.mechanics.calcwobfromaverage,
-                            'Sampling frequency': settings.input.format.samplingfrequency,
-                            'ECG removed from EMG signal (if present)': settings.processing.emg.remove_ecg,
-                            'Noise removed from EMG signal (if present)': settings.processing.emg.remove_noise,
-                            'RMS calculation rolling average (ms)': settings.processing.emg.rms_s
-                            }, index=[0]).T
-    
-    version.columns=['Version info']
-    version.to_excel(writer, sheet_name='Version', index=False)
-    formatheader(version, writer, "Version")
-    
-    writer.save()
+    processeddata.to_csv(savefile, index=False)
 
 
 def applysubsettings(defaultsettings, newsettings):
@@ -1146,7 +1159,7 @@ def analyse(usersettings):
                 break
     
         if (settings.output.diagnostics.savepvindividualworkload):
-            print('\t\tSaving detailed pressure/volume overview plots...')
+            print('\n\t\tSaving detailed pressure/volume overview plots...')
             savepvbreaths(filename, breathmechswob, flow, volume, poes, pgas, pdi, settings, False)
          
         if (settings.output.data.savebreathbybreathdata):
@@ -1158,6 +1171,9 @@ def analyse(usersettings):
                 averagecalcs = pd.concat([averagecalcs, av])
             else:
                 averagecalcs = av
+
+        if (settings.output.data.saveprocesseddata):
+            saveprocesseddata(breaths, settings)
 
     #Save data and average breath plots
     if (settings.output.diagnostics.savepvaverage):
@@ -1230,7 +1246,9 @@ defaultsettings = """{
         "outputfolder": "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/test/output",
         "data": {
             "saveaveragedata": true,
-            "savebreathbybreathdata": true
+            "savebreathbybreathdata": true,
+            "saveprocesseddata": false,
+            "includeignoredbreaths": true
         },
         "diagnostics": {
             "savepvaverage": true,
