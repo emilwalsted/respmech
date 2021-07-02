@@ -311,13 +311,13 @@ def correcttrend(title, volume, settings):
     
     return corvol
 
-def trim(flow, volume, poes, pgas, pdi, settings):
+def trim(flow, volume, poes, pgas, pdi, emgcolumns, settings):
     startix = np.argmax(flow <= 0)
     
     posflow = np.argwhere(flow >= 0)
     endix = posflow[:,0][len(posflow[:,0])-1]
     
-    return flow[startix:endix], volume[startix:endix], poes[startix:endix], pgas[startix:endix], pdi[startix:endix]
+    return flow[startix:endix], volume[startix:endix], poes[startix:endix], pgas[startix:endix], pdi[startix:endix], emgcolumns[startix:endix]
 
 def ignorebreaths(curfile, settings):
     allignore = settings.processing.mechanics.excludebreaths
@@ -958,13 +958,13 @@ def getprocesseddata(breaths, settings):
     
     return processeddata.dropna()
 
-def saveprocesseddata(breaths, settings):   
+def saveprocesseddata(breaths, settings, file):   
     try:
         os.makedirs(pjoin(settings.output.outputfolder, "data"))
     except FileExistsError:
         pass
     
-    savefile = pjoin(settings.output.outputfolder, "data", "Processed data.csv")
+    savefile = pjoin(settings.output.outputfolder, "data", ntpath.basename(file) + " – Processed data.csv")
     processeddata = getprocesseddata(breaths, settings)
 
     processeddata.to_csv(savefile, index=False)
@@ -1017,22 +1017,15 @@ def analyse(usersettings):
                          [r'$L/s$', r'$L$', r'$cm H_2O$', r'$cm H_2O$', r'$cm H_2O$'],
                          settings)
 
+        print('\t\tTrimming to whole breaths...')
+        flow, volume, poes, pgas, pdi, emgcolumns = trim(flow, volume, poes, pgas, pdi, emgcolumns, settings)
+        
         if len(emgcolumns) > 0:
             print('\t\tProcessing EMG')
             emgcols = np.array(emgcolumns)
+            emgcolsraw = emgcols
             emglib = import_file("emglib", "emg.py")
 
-            colheaders = ["EMG " + str(i) for i in range(1, len(emgcols[0])+1)]
-            savefile = pjoin(settings.output.outputfolder, "plots", ntpath.basename(file) + " - EMG (raw data)" + ".pdf")
-            emglib.saveemgplots(savefile,
-                emgcols,
-                colheaders,
-                [r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$'],
-                "Raw EMG",
-                ylim=[-0.1,0.1],
-                refsig=flow,
-                reflabel="Flow (for reference)"
-                )
             if settings.processing.emg.remove_ecg:
                 print('\t\t...removing ECG')
                 emgcolumns_ecgremoved, ecgw = emglib.remove_ecg(emgcolumns, 
@@ -1046,18 +1039,6 @@ def analyse(usersettings):
                     passes=settings.processing.emg.passno)
 
                 emgcols = np.array(emgcolumns_ecgremoved)
-                savefile = pjoin(settings.output.outputfolder, "plots", ntpath.basename(file) + " - EMG (ECG removed)" + ".pdf")
-                emglib.saveemgplots(savefile,
-                    emgcols,
-                    colheaders,
-                    [r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$'],
-                    "EMG (ECG removed)",
-                    ylim=[-0.1,0.1],
-                    ecgwindows = ecgw,
-                    refsig=flow,
-                    reflabel="Flow (for reference)"
-                    )
-                
 
             if settings.processing.emg.remove_noise:
                 print('\t\t...reducing noise')
@@ -1073,28 +1054,12 @@ def analyse(usersettings):
                 for i in range(0, len(emgcols[0])):
                     nrcol = emglib.reducenoise(np.array(emgcols[:,i]), noiseprofile, settings.input.format.samplingfrequency)
                     nrcols += [nrcol]
-                    
+                   
                 emgcolumns_noiseremoved = np.array(nrcols).T
+                emgcolumns_noiseremoved = np.pad(emgcolumns_noiseremoved, ((0, len(emgcols)-len(emgcolumns_noiseremoved)),(0,0)), 'constant') 
                 emgcols = emgcolumns_noiseremoved
 
-                savefile = pjoin(settings.output.outputfolder, "plots", ntpath.basename(file) + " - EMG (ECG removed and noise reduced)" + ".pdf")
-                emglib.saveemgplots(savefile,
-                    emgcols,
-                    colheaders,
-                    [r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$'],
-                    "EMG (ECG removed and noise reduced)",
-                    ylim=[-0.1,0.1],
-                    ecgwindows = [[int(noiseprofile[0] * settings.input.format.samplingfrequency), int(noiseprofile[1] * settings.input.format.samplingfrequency)]],
-                    refsig=flow,
-                    reflabel="Flow (for reference)"
-                    )
-
-        emgcolumns = emgcols
-
-
-        print('\t\tTrimming to whole breaths...')
-        flow, volume, poes, pgas, pdi = trim(flow, volume, poes, pgas, pdi, settings)
-        
+            emgcolumns = emgcols
             
         #Add any post processing that should be performed on the entire data file
         #here.
@@ -1118,6 +1083,54 @@ def analyse(usersettings):
         breaths = separateintobreaths(filename, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings)
         
         #Add any post processing that should be performed for each breath here.
+        
+        if len(emgcolumns) > 0:
+            print('\t\tSaving EMG raw channel overview...')
+            colheaders = ["EMG " + str(i) for i in range(1, len(emgcols[0])+1)]
+            savefile = pjoin(settings.output.outputfolder, "plots", ntpath.basename(file) + " - EMG (raw data)" + ".pdf")
+            emglib.saveemgplots(savefile,
+                breaths,
+                emgcolsraw,
+                colheaders,
+                [r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$'],
+                "Raw EMG",
+                ylim=[-0.1,0.1],
+                refsig=flow,
+                reflabel="Flow (for reference)"
+                )
+            if settings.processing.emg.remove_ecg:
+                print('\t\tSaving EMG with ECG removed overview...')
+                emgcols = np.array(emgcolumns_ecgremoved)
+                savefile = pjoin(settings.output.outputfolder, "plots", ntpath.basename(file) + " - EMG (ECG removed)" + ".pdf")
+                emglib.saveemgplots(savefile,
+                    breaths,
+                    emgcols,
+                    colheaders,
+                    [r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$'],
+                    "EMG (ECG removed)",
+                    ylim=[-0.1,0.1],
+                    ecgwindows = ecgw,
+                    refsig=flow,
+                    reflabel="Flow (for reference)"
+                    )
+                
+
+            if settings.processing.emg.remove_noise:
+                print('\t\tSaving noise reduced EMG overview...')
+                colheaders = ["EMG " + str(i) for i in range(1, len(emgcols[0])+1)]
+                savefile = pjoin(settings.output.outputfolder, "plots", ntpath.basename(file) + " - EMG (ECG removed and noise reduced)" + ".pdf")
+                emglib.saveemgplots(savefile,
+                    breaths,
+                    emgcolumns_noiseremoved,
+                    colheaders,
+                    [r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$'],
+                    "EMG (ECG removed and noise reduced)",
+                    ylim=[-0.1,0.1],
+                    ecgwindows = [[int(noiseprofile[0] * settings.input.format.samplingfrequency), int(noiseprofile[1] * settings.input.format.samplingfrequency)]],
+                    refsig=flow,
+                    reflabel="Flow (for reference)"
+                    )
+
             
         if (settings.output.diagnostics.savedataviewtrimmed):
             print('\t\tSaving trimmed data plots...')
@@ -1173,7 +1186,7 @@ def analyse(usersettings):
                 averagecalcs = av
 
         if (settings.output.data.saveprocesseddata):
-            saveprocesseddata(breaths, settings)
+            saveprocesseddata(breaths, settings, ntpath.basename(file))
 
     #Save data and average breath plots
     if (settings.output.diagnostics.savepvaverage):

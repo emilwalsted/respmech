@@ -80,7 +80,7 @@ settings = {
         },
         "emg": {
             "rms_s": 0.050, #The size of the rolling window centered around the data point, to calculate EMG RMS from (in seconds). Default is 0.05s.
-            "remove_ecg": False, #Perform ECG removal before calculating RMS. Default is False.
+            "remove_ecg": True, #Perform ECG removal before calculating RMS. Default is False.
             "column_detect": 4, #Which of the EMG columns to use for ECG detection. Default is the first (0). Use the data column where the ECG is most prominent.
             "minheight": 0.0005, #(For peak detection): The minimum height (in volt) of an R wave. Default is 0.001.
             "mindistance": 0.5, #The minimum distance between R waves (in seconds). Default is 0.25
