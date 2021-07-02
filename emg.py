@@ -279,7 +279,8 @@ def _stft(y, n_fft, hop_length, win_length):
     return librosa.stft(y=y, n_fft=n_fft, hop_length=hop_length, win_length=win_length)
 
 
-def _istft(y, hop_length, win_length):
+def _istft(y, n_fft, hop_length, win_length):
+    ###y_pad = librosa.util.fix_length(y, len(y) + n_fft // 2)
     return librosa.istft(y, hop_length, win_length)
 
 
@@ -423,7 +424,7 @@ def removeNoise(
         print("Mask application:", td(seconds=time.time() - start))
         start = time.time()
     # recover the signal
-    recovered_signal = _istft(sig_stft_amp, hop_length, win_length)
+    recovered_signal = _istft(sig_stft_amp, n_fft, hop_length, win_length)
     recovered_spec = _amp_to_db(
         np.abs(_stft(recovered_signal, n_fft, hop_length, win_length))
     )
@@ -475,7 +476,7 @@ def reducenoise(emgchannel, noiseprofile, samplingfrequency):
     sys.stdout = sys.__stdout__
     return np.array(output)
     
-def saveemgplots(outpdf, rows, titles, ylabels, title, rms=[], rmsint=[], refsig=[], reflabel="Reference", ylim=[-0.5,0.5], ecgwindows=[]):   
+def saveemgplots(outpdf, breaths, rows, titles, ylabels, title, rms=[], rmsint=[], refsig=[], reflabel="Reference", ylim=[-0.5,0.5], ecgwindows=[]):   
 
     plt.ioff()
     norows = len(rows[0])
@@ -506,10 +507,26 @@ def saveemgplots(outpdf, rows, titles, ylabels, title, rms=[], rmsint=[], refsig
         if len(rms)>0:
             ax.plot(rms[:,i], 'm-', linewidth=1, label=r'$\frac{\sum_{x-25ms}^{x+25ms}\sqrt{EMG^2}}{50ms}$')
         
-            
+        ax.set_ylim(ylim)
+        
+        startx = 0
+        yl = list(ax.get_ylim())
+        for breathno in breaths:
+                blab = " #" + str(breathno)
+                breath= breaths[breathno]
+                if breath["ignored"]:
+                    blab += " (ignored)"
+                    poly = Rectangle([startx, yl[0]], len(breath["poes"]), yl[1]-yl[0], alpha=0.1, color="#FF0000", fill=True)
+                    ax.add_patch(poly)
+                
+                ax.axvline(x=startx, linewidth=0.5, linestyle="--", color="#0000FF")
+                ax.text(startx, yl[1]-((yl[1]-yl[0])*0.05), blab, fontsize=12)
+        
+                startx = startx + len(breath["poes"])
+
         ax.set_title(titles[i],fontweight="bold", size=20)
         ax.set_ylabel(ylabels[i],fontweight="bold", size=16)
-        ax.set_ylim(ylim)
+        
         ax.legend(loc="upper left")
         
     ax.set_xlabel(r'$observation #$', size=16)
