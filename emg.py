@@ -476,7 +476,7 @@ def reducenoise(emgchannel, noiseprofile, samplingfrequency):
     sys.stdout = sys.__stdout__
     return np.array(output)
     
-def saveemgplots(outpdf, breaths, rows, titles, ylabels, title, rms=[], rmsint=[], refsig=[], reflabel="Reference", ylim=[-0.5,0.5], ecgwindows=[]):   
+def saveemgplots(outpdf, breaths, timecol, rows, titles, ylabels, title, rms=[], rmsint=[], refsig=[], reflabel="Reference", ylim=[-0.5,0.5], ecgwindows=[]):   
 
     plt.ioff()
     norows = len(rows[0])
@@ -488,8 +488,8 @@ def saveemgplots(outpdf, breaths, rows, titles, ylabels, title, rms=[], rmsint=[
         ax.grid(True)
         ax2 = ax.twinx()
 
-        ax.plot(rows[:,i], 'k-', linewidth=0.25, label="EMG")
-
+        ax.plot(timecol, rows[:,i], 'k-', linewidth=0.25, label="EMG")
+        
         #Plot ECG removal windows
         yl = list(ax.get_ylim())
         for ecgwindow in ecgwindows:
@@ -499,15 +499,16 @@ def saveemgplots(outpdf, breaths, rows, titles, ylabels, title, rms=[], rmsint=[
 
         #Plot reference signal
         if len(refsig)>0:
-            ax2.plot(refsig, 'r-',  linewidth=0.5, alpha=1, color="#FF0000", label=reflabel)
+            ax2.plot(timecol, refsig, 'r-',  linewidth=0.5, alpha=1, color="#FF0000", label=reflabel)
             #ax2.set_ylabel(r'mcV $\cdot$ 0.5$s^{-1}$',fontweight="bold", size=16)
             ax2.legend(loc="upper right")
 
         #Plot RMS
         if len(rms)>0:
-            ax.plot(rms[:,i], 'm-', linewidth=1, label=r'$\frac{\sum_{x-25ms}^{x+25ms}\sqrt{EMG^2}}{50ms}$')
+            ax.plot(timecol, rms[:,i], 'm-', linewidth=1, label=r'$\frac{\sum_{x-25ms}^{x+25ms}\sqrt{EMG^2}}{50ms}$')
         
         ax.set_ylim(ylim)
+        ax.set_xlim([min(timecol), max(timecol)])
         
         startx = 0
         yl = list(ax.get_ylim())
@@ -529,7 +530,7 @@ def saveemgplots(outpdf, breaths, rows, titles, ylabels, title, rms=[], rmsint=[
         
         ax.legend(loc="upper left")
         
-    ax.set_xlabel(r'$observation #$', size=16)
+    ax.set_xlabel(r'$time (seconds)$', size=16)
 
     fig.savefig(outpdf)
     plt.close(fig)
