@@ -83,38 +83,6 @@ def calculate_rms(emgchannels, rms_s, samplingfrequency):
     
     #ret = [np.max(rms), np.min[rms], np.mean(rms)]
     return rms + [np.max(rms), np.mean(rms)]
-
-def saveplots(outpdf, rows, titles, ylabels, title, rms=[], rmsint=[], ylim=[-0.5,0.5]):   
-
-    plt.ioff()
-    norows = len(rows)
-    fig, axes = plt.subplots(nrows=norows, ncols=1, sharex=True, figsize=(29.7, 21))
-    fig.suptitle("EMG/ECG correction test – " + title, fontsize=48)    
-    
-    for i in range(0, norows):
-        ax = plt.subplot(norows, 1, i+1)
-        ax.grid(True)
-        ax2 = ax.twinx()
-
-        ax.plot(rows[i], 'k-', linewidth=0.25, label="EMG")
-        
-        if len(rms)>0:
-            ax.plot(rms[i], 'm-', linewidth=1, label=r'$\frac{\sum_{x-25ms}^{x+25ms}\sqrt{EMG^2}}{50ms}$')
-            
-        if len(rmsint) >0:
-            ax2.plot(rmsint[i], 'r-',  linewidth=1, label=r'$\frac{\int_{x-250ms}^{x+250ms}\sqrt{EMG^2}\mathrm{d}x}{500ms}$')
-            ax2.set_ylabel(r'mcV $\cdot$ 0.5$s^{-1}$',fontweight="bold", size=16)
-            ax2.legend(loc="upper right")
-            
-        ax.set_title(titles[i],fontweight="bold", size=20)
-        ax.set_ylabel(ylabels[i],fontweight="bold", size=16)
-        ax.set_ylim(ylim)
-        ax.legend(loc="upper left")
-        
-    ax.set_xlabel(r'$observation #$', size=16)
-
-    fig.savefig(outpdf)
-    plt.close(fig)
     
 def timeshift(inputarray, shift):
     if (shift == 0) or (shift>=len(inputarray)):
