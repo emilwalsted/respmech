@@ -970,6 +970,17 @@ def saveprocesseddata(breaths, settings, file):
 
     processeddata.to_csv(savefile, index=False)
 
+def savesoundemgchannel(emgchannel, filename, settings):
+    from scipy.io.wavfile import write
+    
+    scaled = np.int16(emgchannel/np.max(np.abs(emgchannel)) * 32767)
+    write(filename, settings.input.format.samplingfrequency, scaled)    
+
+def savesoundemg(emgchannels, wavfilename, settings):
+    
+    for i in range(0, len(settings.input.data.columns_emg)):
+        emgchannel = emgchannels[:,i]
+        savesoundemgchannel(emgchannel, str.replace(wavfilename, "#$#", str(i)), settings)
 
 def applysubsettings(defaultsettings, newsettings):
     retsettings = defaultsettings
@@ -1102,6 +1113,12 @@ def analyse(usersettings):
                 refsig=flow,
                 reflabel="Flow (for reference)"
                 )
+
+            if settings.processing.emg.save_sound:
+                print('\t\tSaving EMG raw channel sound files...')
+                wavfile = pjoin(settings.output.outputfolder, "plots", ntpath.basename(file) + " - EMG #$# (raw data)" + ".wav")
+                savesoundemg(emgcolsraw, wavfile, settings)
+
             if settings.processing.emg.remove_ecg:
                 print('\t\tSaving EMG with ECG removed overview...')
                 emgcols = np.array(emgcolumns_ecgremoved)
@@ -1120,6 +1137,10 @@ def analyse(usersettings):
                     reflabel="Flow (for reference)"
                     )
                 
+                if settings.processing.emg.save_sound:
+                    print('\t\tSaving EMG with ECG removed sound files...')
+                    wavfile = pjoin(settings.output.outputfolder, "plots", ntpath.basename(file) + " - EMG #$# (ECG removed)" + ".wav")
+                    savesoundemg(emgcols, wavfile, settings)
 
             if settings.processing.emg.remove_noise:
                 print('\t\tSaving noise reduced EMG overview...')
@@ -1140,7 +1161,11 @@ def analyse(usersettings):
                     reflabel="Flow (for reference)"
                     )
 
-            
+                if settings.processing.emg.save_sound:
+                    print('\t\tSaving EMG with ECG removed and noise reduced sound files...')
+                    wavfile = pjoin(settings.output.outputfolder, "plots", ntpath.basename(file) + " - EMG #$# (ECG removed and noise reduced)" + ".wav")
+                    savesoundemg(emgcolumns_noiseremoved, wavfile, settings)
+                        
         if (settings.output.diagnostics.savedataviewtrimmed):
             print('\t\tSaving trimmed data plots...')
             saverawplots("Trimmed data", ntpath.basename(file), [flow, volume, poes, pgas, pdi], 
@@ -1257,7 +1282,8 @@ defaultsettings = """{
             "windowsize": 0.4, 
             "avgfitting": 5, 
             "passno": 10, 
-            "remove_noise": false
+            "remove_noise": false, 
+            "save_sound": false
         },
         "entropy": {
             "entropy_epochs": 2,

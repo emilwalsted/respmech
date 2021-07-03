@@ -71,7 +71,10 @@ settings = {
             
             #Exclude individual breaths from analysis, if appropriate. Takes input in the format [["file1.mat", [04, 07]], ["file2.mat", [01]]]
             #If no breaths should be excluded, set to []. NOTE: File name is case sensitive!
-            "excludebreaths": [["RIU_H1_100W.txt", [7]]],
+            "excludebreaths": [
+                ["RIU_H1_100W.txt", [7]],
+                ["RIU_H14_20W.txt", [11,12]]
+                ],
             
             #Breath count is detected automatically. However, in some cases, the breathing pattern can lead to erroneous breathing frequencies,
             #which will affect the mechanics calculations. In this case you can override the autumatically detected breath count in a specific
@@ -89,7 +92,11 @@ settings = {
             "avgfitting": 5, #No. of passes to apply ECG removal. Default is 50.
             "passno": 10, #No. of passes to apply ECG removal. Default is 10.
             "remove_noise": True, #Perform EMG noise removal before calculating RMS. Default is False.
-            "noise_profile": [["RIU_H1_100W.txt", [3.75, 4.25]]], #Required for noise removal, for each file processed. Specifies the start- and end times (in seconds) for the noise profile (i.e. an area with no relevant EMG activity).
+            "noise_profile": [
+                ["RIU_H1_100W.txt", [3.75, 4.25]], 
+                ["RIU_H14_20W.txt", [1.5, 2]]
+                ], #Required for noise removal, for each file processed. Specifies the start- and end times (in seconds) for the noise profile (i.e. an area with no relevant EMG activity).
+            "save_sound": True, #Save EMG channels as sound files (at individual processing steps). Default: False.
         },
          "entropy": {
             "entropy_epochs": 2, #Epochs used for entropy calculation. Default is 2.
