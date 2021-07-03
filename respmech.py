@@ -311,13 +311,13 @@ def correcttrend(title, volume, settings):
     
     return corvol
 
-def trim(flow, volume, poes, pgas, pdi, emgcolumns, settings):
+def trim(timecol, flow, volume, poes, pgas, pdi, emgcolumns, settings):
     startix = np.argmax(flow <= 0)
     
     posflow = np.argwhere(flow >= 0)
     endix = posflow[:,0][len(posflow[:,0])-1]
     
-    return flow[startix:endix], volume[startix:endix], poes[startix:endix], pgas[startix:endix], pdi[startix:endix], emgcolumns[startix:endix]
+    return timecol[startix:endix], flow[startix:endix], volume[startix:endix], poes[startix:endix], pgas[startix:endix], pdi[startix:endix], emgcolumns[startix:endix]
 
 def ignorebreaths(curfile, settings):
     allignore = settings.processing.mechanics.excludebreaths
@@ -328,7 +328,7 @@ def ignorebreaths(curfile, settings):
         return []
 
    
-def separateintobreaths(filename, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings):
+def separateintobreaths(filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings):
     breaths = OrderedDict()
     j = len(flow)
     bufferwidth = settings.processing.mechanics.breathseparationbuffer
@@ -351,10 +351,10 @@ def separateintobreaths(filename, flow, volume, poes, pgas, pdi, entropycolumns,
         exend = i-1
         exend = min(exend, j)
         
-        exp = {'flow':flow[exstart:exend].squeeze(), 'poes':poes[exstart:exend].squeeze(),
+        exp = {'time':timecol[exstart:exend].squeeze(), 'flow':flow[exstart:exend].squeeze(), 'poes':poes[exstart:exend].squeeze(),
                    'pgas': pgas[exstart:exend].squeeze(), 'pdi':pdi[exstart:exend].squeeze(), 'volume':volume[exstart:exend].squeeze()}
         
-        insp = {'flow':flow[instart:inend].squeeze(), 'poes':poes[instart:inend].squeeze(), 
+        insp = {'time':timecol[instart:inend].squeeze(), 'flow':flow[instart:inend].squeeze(), 'poes':poes[instart:inend].squeeze(), 
                     'pgas':pgas[instart:inend].squeeze(), 'pdi':pdi[instart:inend].squeeze(), 'volume':volume[instart:inend].squeeze()}
             
         if breathcnt in ib:
@@ -382,6 +382,7 @@ def separateintobreaths(filename, flow, volume, poes, pgas, pdi, entropycolumns,
                              ('name','Breath #' + str(breathcnt)), 
                              ('expiration', exp),
                              ('inspiration', insp), 
+                             ('time', np.concatenate((insp["time"], exp["time"])).squeeze()), 
                              ('flow', np.concatenate((insp["flow"], exp["flow"])).squeeze()),
                              ('volume', np.concatenate((insp["volume"], exp["volume"])).squeeze()),
                              ('poes', np.concatenate((insp["poes"], exp["poes"])).squeeze()),
@@ -1009,6 +1010,8 @@ def analyse(usersettings):
         print('\nProcessing \'' + file + '\'')
 
         flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns = load(file, settings)
+
+        timecol = np.arange(0, len(flow)-1, dtype=int) / settings.input.format.samplingfrequency
         
         if (settings.output.diagnostics.savedataviewraw):
             print('\t\tSaving raw data plots...')
@@ -1018,7 +1021,7 @@ def analyse(usersettings):
                          settings)
 
         print('\t\tTrimming to whole breaths...')
-        flow, volume, poes, pgas, pdi, emgcolumns = trim(flow, volume, poes, pgas, pdi, emgcolumns, settings)
+        timecol, flow, volume, poes, pgas, pdi, emgcolumns = trim(timecol, flow, volume, poes, pgas, pdi, emgcolumns, settings)
         
         if len(emgcolumns) > 0:
             print('\t\tProcessing EMG')
@@ -1037,7 +1040,7 @@ def analyse(usersettings):
                     windowsize=settings.processing.emg.windowsize,
                     avgfitting=settings.processing.emg.avgfitting,
                     passes=settings.processing.emg.passno)
-
+                
                 emgcols = np.array(emgcolumns_ecgremoved)
 
             if settings.processing.emg.remove_noise:
@@ -1080,7 +1083,7 @@ def analyse(usersettings):
             volume = driftvol
         
         print('\t\tDetecting breathing cycles...')
-        breaths = separateintobreaths(filename, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings)
+        breaths = separateintobreaths(filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings)
         
         #Add any post processing that should be performed for each breath here.
         
@@ -1090,6 +1093,7 @@ def analyse(usersettings):
             savefile = pjoin(settings.output.outputfolder, "plots", ntpath.basename(file) + " - EMG (raw data)" + ".pdf")
             emglib.saveemgplots(savefile,
                 breaths,
+                timecol,
                 emgcolsraw,
                 colheaders,
                 [r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$'],
@@ -1101,15 +1105,17 @@ def analyse(usersettings):
             if settings.processing.emg.remove_ecg:
                 print('\t\tSaving EMG with ECG removed overview...')
                 emgcols = np.array(emgcolumns_ecgremoved)
+                ecgw_time = np.array(ecgw) / settings.input.format.samplingfrequency
                 savefile = pjoin(settings.output.outputfolder, "plots", ntpath.basename(file) + " - EMG (ECG removed)" + ".pdf")
                 emglib.saveemgplots(savefile,
                     breaths,
+                    timecol,
                     emgcols,
                     colheaders,
                     [r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$'],
                     "EMG (ECG removed)",
                     ylim=[-0.1,0.1],
-                    ecgwindows = ecgw,
+                    ecgwindows = ecgw_time,
                     refsig=flow,
                     reflabel="Flow (for reference)"
                     )
@@ -1119,14 +1125,17 @@ def analyse(usersettings):
                 print('\t\tSaving noise reduced EMG overview...')
                 colheaders = ["EMG " + str(i) for i in range(1, len(emgcols[0])+1)]
                 savefile = pjoin(settings.output.outputfolder, "plots", ntpath.basename(file) + " - EMG (ECG removed and noise reduced)" + ".pdf")
+                ecgw_time = [[int(noiseprofile[0] * settings.input.format.samplingfrequency), int(noiseprofile[1] * settings.input.format.samplingfrequency)]]
+                ecgw_time = np.array(ecgw_time) / settings.input.format.samplingfrequency
                 emglib.saveemgplots(savefile,
                     breaths,
+                    timecol,
                     emgcolumns_noiseremoved,
                     colheaders,
                     [r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$'],
                     "EMG (ECG removed and noise reduced)",
                     ylim=[-0.1,0.1],
-                    ecgwindows = [[int(noiseprofile[0] * settings.input.format.samplingfrequency), int(noiseprofile[1] * settings.input.format.samplingfrequency)]],
+                    ecgwindows = ecgw_time,
                     refsig=flow,
                     reflabel="Flow (for reference)"
                     )
