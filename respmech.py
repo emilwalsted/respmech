@@ -858,7 +858,7 @@ def savedataaverage(totals, settings):
     
     savefile = pjoin(settings.output.outputfolder, "data", "Average breathdata.xlsx")
     
-    writer = pd.ExcelWriter(savefile, engine='xlsxwriter', options={'strings_to_urls': True})
+    writer = pd.ExcelWriter(savefile, engine='xlsxwriter', options={'strings_to_urls': True}) # pylint: disable=abstract-class-instantiated
     totals.to_excel(writer, sheet_name='Data', index=False)
     formatheader(totals, writer, "Data")
 
@@ -913,7 +913,7 @@ def savedataindividual(file, breaths, settings):
     ret = ret.drop(columns="breath_no")
     ret.insert(loc=0, column="file", value=file)
     
-    writer = pd.ExcelWriter(savefile, engine='xlsxwriter', options={'strings_to_urls': True})
+    writer = pd.ExcelWriter(savefile, engine='xlsxwriter', options={'strings_to_urls': True}) # pylint: disable=abstract-class-instantiated
     mechs.to_excel(writer, sheet_name='Data', index=False)
     formatheader(mechs, writer, "Data")
     
