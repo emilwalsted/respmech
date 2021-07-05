@@ -980,7 +980,7 @@ def savesoundemg(emgchannels, wavfilename, settings):
     
     for i in range(0, len(settings.input.data.columns_emg)):
         emgchannel = emgchannels[:,i]
-        savesoundemgchannel(emgchannel, str.replace(wavfilename, "#$#", str(i)), settings)
+        savesoundemgchannel(emgchannel, str.replace(wavfilename, "#$#", str(i+1)), settings)
 
 def applysubsettings(defaultsettings, newsettings):
     retsettings = defaultsettings
