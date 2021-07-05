@@ -220,7 +220,7 @@ def subtractecg(ch, peaks, samplingfrequency, windowsize):
         retch += [emgecgch]
     return list(np.array(retch).T), retwindows
 
-def remove_ecg(emgecgchannels, peakch, samplingfrequency, ecgminheight, ecgmindistance, ecgminwidth, windowsize, avgfitting, passes):
+def remove_ecg(emgecgchannels, peakch, samplingfrequency, ecgminheight, ecgmindistance, ecgminwidth, windowsize):
     
     peaks, props = signal.find_peaks(peakch, height=ecgminheight, distance=ecgmindistance*samplingfrequency, width=ecgminwidth*samplingfrequency)
   

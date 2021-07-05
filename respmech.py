@@ -81,7 +81,71 @@ def import_file(full_name, path):
     spec.loader.exec_module(mod)
     return mod
 
-#ent = import_file("emgpy", "emg.py")
+def checknotset(setting, text, validate):
+    if setting is None or len(s) == 0: raise ValueError(text)
+
+def validatesettings(s):
+    checknotset(setting=s.input.inputfolder, text="Input folder not specified in settings")
+    checknotset(s.input.files, "Input file(s) not specified in settings")
+    checknotset(s.input.format.samplingfrequency, "Sampling frequency not specified in settings")
+    checknotset(s.input.format.matlabfileformat, "MatLab file format not specified in settings")
+   
+    checknotset(s.input.data,column_flow, "Flow data column not specified in settings")
+    
+    checknotset(s.input.data,column_poes, "Oesophageal pressure data column not specified in settings")
+    checknotset(s.input.data,column_pgas, "Gastric pressure data column not specified in settings")
+    checknotset(s.input.data,column_pdi, "PDI data column not specified in settings")
+
+    if not settings.processing.mechanics.integratevolumefromflow:
+        checknotset(s.input.data,column_volume, "Volume data column not specified in settings – please set 'integratevolumefromflow' to True to allow for automated volume integration.")
+    
+#TODO:
+#     "processing": {
+#         "mechanics": {
+#             "breathseparationbuffer": 800,
+
+#             "volumetrendadjustmethod": "linear",
+#             "excludebreaths": [],
+#             "breathcounts": []
+#         },
+#         "wob": {
+#             "calcwobfrom": "average",
+#             "avgresamplingobs": 500
+#         },
+#         "emg": {
+#             "windowsize": 0.4, 
+#             "avgfitting": 5, 
+#             "passno": 10, 
+#             "remove_noise": false, 
+#             "save_sound": false
+#         },
+#         "entropy": {
+#             "entropy_epochs": 2,
+#             "entropy_tolerance": 0.1
+#         }
+#     },
+#     "output": {
+#         "outputfolder": "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/test/output",
+#         "data": {
+#             "saveaveragedata": true,
+#             "savebreathbybreathdata": true,
+#             "saveprocesseddata": false,
+#             "includeignoredbreaths": true
+#         },
+#         "diagnostics": {
+#             "savepvaverage": true,
+#             "savepvoverview": true,
+#             "savepvindividualworkload": true,
+#             "savedataviewraw": true,
+#             "savedataviewtrimmed": true,
+#             "savedataviewdriftcor": true
+#         }
+#     }
+# }
+
+def validatedata(flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns):
+    #TODO
+    print("")
 
 def load(filepath, settings):
     
@@ -1048,9 +1112,7 @@ def analyse(usersettings):
                     ecgminheight=settings.processing.emg.minheight, 
                     ecgmindistance=settings.processing.emg.mindistance, 
                     ecgminwidth=settings.processing.emg.minwidth, 
-                    windowsize=settings.processing.emg.windowsize,
-                    avgfitting=settings.processing.emg.avgfitting,
-                    passes=settings.processing.emg.passno)
+                    windowsize=settings.processing.emg.windowsize)
                 
                 emgcols = np.array(emgcolumns_ecgremoved)
 
