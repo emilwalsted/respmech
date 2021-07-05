@@ -27,16 +27,21 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>
 """
 
 import importlib.util
+import os.path
 
 #Modify to the location of your respmech.py:
-spec = importlib.util.spec_from_file_location("analyse", "/Users/emilnielsen/Documents/Medicin/Forskning/Code/RespMech/respmech.py")
+rmpath = "/Users/emilnielsen/Documents/Medicin/Forskning/Code/RespMech/respmech.py"
 
+if not os.path.isfile(rmpath): raise ValueError("respech.py not found at the specified location: [" + rmpath + "]")
+spec = importlib.util.spec_from_file_location("analyse", rmpath)
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
+
+
 settings = {
     "input": {
         "inputfolder": "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/txtimport",
-        "files": "RIU_H1_100W.txt", #Filename or mask (e.g. "*.csv" for all CSV files in folder)
+        "files": "RIU*.txt", #Filename or mask (e.g. "*.csv" for all CSV files in folder)
         "format": {
             #General settings
             "samplingfrequency": 2000, #No. of data recordings per second
@@ -56,10 +61,11 @@ settings = {
         "mechanics": {
             "breathseparationbuffer": 400, #Number of measurements to average over for breathing cycle detection (default=800). Will depend on your sampling frequency.
             
-            #Calculations:akt
+            #Calculations:
+            "separateby": "volume", #Which signal to use for detecting breathing cycles. Possible values: "flow" or "volume". Default: "flow". 
             "inverseflow": False, #True: For calculations, inspired flow should be negative. This setting inverses the input flow signal. Default is False.
-            "integratevolumefromflow": False, #True: Creates the volume signal by integrating the (optionally reversed) flow signal. False: Volume is specified in input data.
-            "inversevolume": True, #True: For calculations, inspired volume should be positive and expired should be negative. This setting inverses the volume input signal. Default is False.
+            "integratevolumefromflow": True, #True: Creates the volume signal by integrating the (optionally reversed) flow signal. False: Volume is specified in input data.
+            "inversevolume": False, #True: For calculations, inspired volume should be positive and expired should be negative. This setting inverses the volume input signal. Default is False.
             "correctvolumedrift": True, #True: Correct volume drift. False: Do not correct volume drift. Default is True
             "correctvolumetrend": False, #True: Correct volume  for trend changes. False: Do not correct. Default is False
             "volumetrendadjustmethod": "linear",
@@ -83,7 +89,7 @@ settings = {
         },
         "emg": {
             "rms_s": 0.050, #The size of the rolling window centered around the data point, to calculate EMG RMS from (in seconds). Default is 0.05s.
-            "remove_ecg": True, #Perform ECG removal before calculating RMS. Default is False.
+            "remove_ecg": False, #Perform ECG removal before calculating RMS. Default is False.
             "column_detect": 4, #Which of the EMG columns to use for ECG detection. Default is the first (0). Use the data column where the ECG is most prominent.
             "minheight": 0.0005, #(For peak detection): The minimum height (in volt) of an R wave. Default is 0.001.
             "mindistance": 0.5, #The minimum distance between R waves (in seconds). Default is 0.25
@@ -91,12 +97,12 @@ settings = {
             "windowsize": 0.4, #Window size (in seconds) for averaging an ECG complex. Default is 0.8.
             "avgfitting": 5, #No. of passes to apply ECG removal. Default is 50.
             "passno": 10, #No. of passes to apply ECG removal. Default is 10.
-            "remove_noise": True, #Perform EMG noise removal before calculating RMS. Default is False.
+            "remove_noise": False, #Perform EMG noise removal before calculating RMS. Default is False.
             "noise_profile": [
                 ["RIU_H1_100W.txt", [3.75, 4.25]], 
                 ["RIU_H14_20W.txt", [1.5, 2]]
                 ], #Required for noise removal, for each file processed. Specifies the start- and end times (in seconds) for the noise profile (i.e. an area with no relevant EMG activity).
-            "save_sound": True, #Save EMG channels as sound files (at individual processing steps). Default: False.
+            "save_sound": False, #Save EMG channels as sound files (at individual processing steps). Default: False.
         },
          "entropy": {
             "entropy_epochs": 2, #Epochs used for entropy calculation. Default is 2.
