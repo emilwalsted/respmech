@@ -89,7 +89,7 @@ settings = {
         },
         "emg": {
             "rms_s": 0.050, #The size of the rolling window centered around the data point, to calculate EMG RMS from (in seconds). Default is 0.05s.
-            "remove_ecg": False, #Perform ECG removal before calculating RMS. Default is False.
+            "remove_ecg": True, #Perform ECG removal before calculating RMS. Default is False.
             "column_detect": 4, #Which of the EMG columns to use for ECG detection. Default is the first (0). Use the data column where the ECG is most prominent.
             "minheight": 0.0005, #(For peak detection): The minimum height (in volt) of an R wave. Default is 0.001.
             "mindistance": 0.5, #The minimum distance between R waves (in seconds). Default is 0.25
@@ -97,12 +97,12 @@ settings = {
             "windowsize": 0.4, #Window size (in seconds) for averaging an ECG complex. Default is 0.8.
             "avgfitting": 5, #No. of passes to apply ECG removal. Default is 50.
             "passno": 10, #No. of passes to apply ECG removal. Default is 10.
-            "remove_noise": False, #Perform EMG noise removal before calculating RMS. Default is False.
+            "remove_noise": True, #Perform EMG noise removal before calculating RMS. Default is False.
             "noise_profile": [
                 ["RIU_H1_100W.txt", [3.75, 4.25]], 
                 ["RIU_H14_20W.txt", [1.5, 2]]
                 ], #Required for noise removal, for each file processed. Specifies the start- and end times (in seconds) for the noise profile (i.e. an area with no relevant EMG activity).
-            "save_sound": False, #Save EMG channels as sound files (at individual processing steps). Default: False.
+            "save_sound": True, #Save EMG channels as sound files (at individual processing steps). Default: False.
         },
          "entropy": {
             "entropy_epochs": 2, #Epochs used for entropy calculation. Default is 2.
