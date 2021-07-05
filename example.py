@@ -29,7 +29,12 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>
 import importlib.util
 
 #Modify to the location of your respmech.py:
-spec = importlib.util.spec_from_file_location("analyse", "/Users/emilnielsen/Documents/Medicin/Forskning/Code/RespMech/respmech.py")
+rmpath = "/Users/emilnielsen/Documents/Medicin/Forskning/Code/RespMech/respmech.py"
+
+if not os.path.isfile(rmpath): raise ValueError("respech.py not found at the specified location: [" + rmpath + "]")
+spec = importlib.util.spec_from_file_location("analyse", rmpath)
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
 
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
@@ -89,8 +94,6 @@ settings = {
             "mindistance": 0.5, #The minimum distance between R waves (in seconds). Default is 0.25
             "minwidth": 0.001, #The minimum width of R waves (in seconds). Default is 0.005
             "windowsize": 0.4, #Window size (in seconds) for averaging an ECG complex. Default is 0.8.
-            "avgfitting": 5, #No. of passes to apply ECG removal. Default is 50.
-            "passno": 10, #No. of passes to apply ECG removal. Default is 10.
             "remove_noise": True, #Perform EMG noise removal before calculating RMS. Default is False.
             "noise_profile": [
                 ["RIU_H1_100W.txt", [3.75, 4.25]], 

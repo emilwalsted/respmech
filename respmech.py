@@ -114,8 +114,6 @@ def validatesettings(s):
 #         },
 #         "emg": {
 #             "windowsize": 0.4, 
-#             "avgfitting": 5, 
-#             "passno": 10, 
 #             "remove_noise": false, 
 #             "save_sound": false
 #         },
@@ -1342,8 +1340,6 @@ defaultsettings = """{
             "mindistance": 0.5, 
             "minwidth": 0.001, 
             "windowsize": 0.4, 
-            "avgfitting": 5, 
-            "passno": 10, 
             "remove_noise": false, 
             "save_sound": false
         },
