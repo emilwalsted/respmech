@@ -328,7 +328,7 @@ def ignorebreaths(curfile, settings):
         return []
 
    
-def separateintobreaths(filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings):
+def separateintobreathsbyflow(filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings):
     breaths = OrderedDict()
     j = len(flow)
     bufferwidth = settings.processing.mechanics.breathseparationbuffer
@@ -396,6 +396,99 @@ def separateintobreaths(filename, timecol, flow, volume, poes, pgas, pdi, entrop
         breaths[breathcnt] = breath
         
     return breaths
+
+def separateintobreathsbyvolume(filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings):
+    from scipy import signal
+
+    breaths = OrderedDict()
+    j = len(flow)
+    bufferwidth = settings.processing.mechanics.breathseparationbuffer
+
+    ib = ignorebreaths(filename, settings)
+    
+    breathno = 0
+    breathcnt = 0
+
+    invol = volume
+    exvol = -1 * volume 
+    exvol = exvol + min(exvol)*-1
+    samplingfrequency = settings.input.format.samplingfrequency
+    peakheight = 0.1
+    peakdistance = 0.1
+    peakwidth = 0.1
+    inpeaks, props = signal.find_peaks(invol, height=peakheight, distance=peakdistance*samplingfrequency, width=peakwidth*samplingfrequency)
+    expeaks, props = signal.find_peaks(exvol, height=peakheight, distance=peakdistance*samplingfrequency, width=peakwidth*samplingfrequency)
+
+    for inpeak in inpeaks:
+        
+        breathcnt += 1
+                
+        if breathcnt == 1:
+            instart = 0
+            inend = inpeak - 1
+        else:
+            instart = expeaks[breathcnt-2]
+            inend = inpeak - 1
+        
+        exstart = inend + 1 
+        if breathcnt < len(inpeaks):
+            expeak = expeaks[breathcnt-1]
+            exend = expeak - 1
+        else:
+            exend = len(invol)-1
+       
+        exp = {'time':timecol[exstart:exend].squeeze(), 'flow':flow[exstart:exend].squeeze(), 'poes':poes[exstart:exend].squeeze(),
+                   'pgas': pgas[exstart:exend].squeeze(), 'pdi':pdi[exstart:exend].squeeze(), 'volume':volume[exstart:exend].squeeze()}
+        
+        insp = {'time':timecol[instart:inend].squeeze(), 'flow':flow[instart:inend].squeeze(), 'poes':poes[instart:inend].squeeze(), 
+                    'pgas':pgas[instart:inend].squeeze(), 'pdi':pdi[instart:inend].squeeze(), 'volume':volume[instart:inend].squeeze()}
+            
+        if breathcnt in ib:
+            ignored = True
+        else:
+            breathno += 1
+            ignored = False
+            
+        entlen = exend-instart
+        if len(entropycolumns) > 0:
+            entcols = np.zeros([entlen, entropycolumns.shape[1]])
+            for ix in range(0, entropycolumns.shape[1]):      
+                entcols[:,ix] = entropycolumns[instart:exend,ix]
+        else:
+            entcols = []
+
+        if len(emgcolumns) > 0:
+            emgcols = np.zeros([entlen, emgcolumns.shape[1]])
+            for ix in range(0, emgcolumns.shape[1]):      
+                emgcols[:,ix] = emgcolumns[instart:exend,ix]
+        else:
+            emgcols = []
+#        print("instart:" + str(instart) + " inend:" + str(inend) + " exstart:" + str(exstart) + " exend:" + str(exend))
+
+        breath = OrderedDict([('number', breathcnt),
+                             ('name','Breath #' + str(breathcnt)), 
+                             ('expiration', exp),
+                             ('inspiration', insp), 
+                             ('time', np.concatenate((insp["time"], exp["time"])).squeeze()), 
+                             ('flow', np.concatenate((insp["flow"], exp["flow"])).squeeze()),
+                             ('volume', np.concatenate((insp["volume"], exp["volume"])).squeeze()),
+                             ('poes', np.concatenate((insp["poes"], exp["poes"])).squeeze()),
+                             ('pgas', np.concatenate((insp["pgas"], exp["pgas"])).squeeze()),
+                             ('pdi', np.concatenate((insp["pdi"], exp["pdi"])).squeeze()),
+                             ('breathcnt', breathcnt), 
+                             ('ignored', ignored),
+                             ('entcols', entcols),
+                             ('emgcols', emgcols),
+                             ('filename', filename)])
+        breaths[breathcnt] = breath
+        
+    return breaths
+
+def separateintobreaths(method, filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings):
+    if str(str.lower(method)) == "volume":
+        return separateintobreathsbyvolume(filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings)
+    else:
+        return separateintobreathsbyflow(filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings)
 
 def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, settings):
     retbreath = breath
@@ -1094,7 +1187,10 @@ def analyse(usersettings):
             volume = driftvol
         
         print('\t\tDetecting breathing cycles...')
-        breaths = separateintobreaths(filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings)
+        if settings.processing.mechanics.separateby == "volume":
+            breaths = separateintobreaths("volume", filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings)
+        else:
+            breaths = separateintobreaths("flow", filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings)
         
         #Add any post processing that should be performed for each breath here.
         
