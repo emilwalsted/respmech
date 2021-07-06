@@ -784,8 +784,13 @@ def savepvbreaths(file, breaths, flow, volume, poes, pgas, pdi, settings, averag
         pass
     
     nobreaths = len(breaths)
-    nocols = math.floor(math.sqrt(nobreaths))
-    norows = math.ceil(nobreaths/nocols)
+    maxnocols = 4
+    maxnorows = 5
+    plotsperpage = maxnocols * maxnorows
+    nopages = -(-nobreaths // plotsperpage)
+
+    nocols = maxnocols #math.floor(math.sqrt(nobreaths))
+    norows = maxnorows #math.ceil(nobreaths/nocols)
 
     maxx = -np.inf 
     minx = np.inf 
@@ -820,68 +825,75 @@ def savepvbreaths(file, breaths, flow, volume, poes, pgas, pdi, settings, averag
     maxy = maxy*1.1
     minx = minx*1.1
     miny = miny*1.1
-    
-    fig, axes = plt.subplots(nrows=norows, ncols=nocols, figsize=(21,29.7))
-    if averages:
-        plt.suptitle("Averages - Campbell diagrams", fontsize=48)
-    else:
-        plt.suptitle(file + " - Campbell diagrams", fontsize=48)
-
-    no=0
-    for breathno in breaths: #for no in range(1, nobreaths+1):
-        no += 1
-        breath = breaths[breathno]
-        if breath["ignored"]:
-            aline = 0.2
-            afill = 0.2
-        else:
-            aline = 1
-            afill = 0.5
-        
-        ax = plt.subplot(norows, nocols, no)
-        ax.set_xlim([minx, maxx])
-        ax.set_ylim([miny, maxy])
-        ax.invert_xaxis()
-        
-        if averages:
-            ax.set_title(breath["filename"],fontweight="bold", size=20)
-        else:
-            ax.set_title("Breath #" + str(no),fontweight="bold", size=20)
-                         
-        ax.set_xlabel('Inspired volume (L)', size=16)
-        ax.set_ylabel(r'Oesophageal pressure (cm ' + r'$H_2O$' + ')', size=16)
-        ax.grid(True)
-        
-        ax.plot(breath[calcvol], breath[calcpoes], '-k', linewidth=2, alpha=aline)
-        
-        if breath["ignored"]:
-            ax.plot([minx, maxx], [miny, maxy], '-r', linewidth=1)
-            ax.plot([minx, maxx], [maxy, miny], '-r', linewidth=1)
-        else:
-            if averages:
-                eilv = breath["eilvavg"]
-                eelv = breath["eelvavg"]
-            else:
-                eilv = breath["eilv"]
-                eelv = breath["eelv"]
-                
-            [lx, ly] = list(zip(eilv, eelv))
-            l = mlines.Line2D(lx, ly, linewidth=2, alpha=aline)
-            ax.add_line(l)
-            
-            wobelpolygon = Polygon([[p[0], p[1]] for p in [eelv, eilv, [eilv[0], eelv[1]]]], alpha=afill, color="#999999", fill=True )
-            ax.add_patch(wobelpolygon)
-           
-           
 
     if averages:
         savefile = pjoin(settings.output.outputfolder, "plots", "All files – average Campbell.pdf")
     else:
         savefile = pjoin(settings.output.outputfolder, "plots", file + " - Campbell.pdf")
-    
-    plt.figtext(0.99, 0.01, CREATED + " on " + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), horizontalalignment='right')       
-    fig.savefig(savefile) 
-    plt.close(fig)    
+
+    from matplotlib.backends.backend_pdf import PdfPages
+    with PdfPages(savefile) as pdf:
+        no=0
+        pno = 1
+        for breathno in breaths: #for no in range(1, nobreaths+1):    
+            no += 1
+            if (no == 1):
+                fig, axes = plt.subplots(nrows=norows, ncols=nocols, figsize=(21,29.7))
+                if averages:
+                    plt.suptitle("Averages - Campbell diagrams (page " + str(pno) + " of " + str(nopages), fontsize=48)
+                else:
+                    plt.suptitle(file + " - Campbell diagrams (page " + str(pno) + " of " + str(nopages), fontsize=48)
+
+            breath = breaths[breathno]
+            if breath["ignored"]:
+                aline = 0.2
+                afill = 0.2
+            else:
+                aline = 1
+                afill = 0.5
+            
+            ax = plt.subplot(norows, nocols, no)
+            ax.set_xlim([minx, maxx])
+            ax.set_ylim([miny, maxy])
+            ax.invert_xaxis()
+            
+            if averages:
+                ax.set_title(breath["filename"],fontweight="bold", size=20)
+            else:
+                ax.set_title("Breath #" + str(breathno),fontweight="bold", size=20)
+                            
+            ax.set_xlabel('Inspired volume (L)', size=16)
+            ax.set_ylabel(r'Oesophageal pressure (cm ' + r'$H_2O$' + ')', size=16)
+            ax.grid(True)
+            
+            ax.plot(breath[calcvol], breath[calcpoes], '-k', linewidth=2, alpha=aline)
+            
+            if breath["ignored"]:
+                ax.plot([minx, maxx], [miny, maxy], '-r', linewidth=1)
+                ax.plot([minx, maxx], [maxy, miny], '-r', linewidth=1)
+            else:
+                if averages:
+                    eilv = breath["eilvavg"]
+                    eelv = breath["eelvavg"]
+                else:
+                    eilv = breath["eilv"]
+                    eelv = breath["eelv"]
+                    
+                [lx, ly] = list(zip(eilv, eelv))
+                l = mlines.Line2D(lx, ly, linewidth=2, alpha=aline)
+                ax.add_line(l)
+                
+                wobelpolygon = Polygon([[p[0], p[1]] for p in [eelv, eilv, [eilv[0], eelv[1]]]], alpha=afill, color="#999999", fill=True )
+                ax.add_patch(wobelpolygon)
+
+            if (no == plotsperpage) or (no == nobreaths):
+                plt.figtext(0.99, 0.01, CREATED + " on " + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), horizontalalignment='right')       
+                pdf.savefig() 
+                plt.close(fig)   
+                plt.close()   
+                pno +=1
+                no = 0
+
     return []
 
 
@@ -1185,12 +1197,32 @@ def analyse(usersettings):
             volume = trendcorvol
         else:
             volume = driftvol
-        
+
         print('\t\tDetecting breathing cycles...')
         if settings.processing.mechanics.separateby == "volume":
             breaths = separateintobreaths("volume", filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings)
         else:
             breaths = separateintobreaths("flow", filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings)
+
+        if (settings.output.diagnostics.savedataviewtrimmed):
+            print('\t\tSaving trimmed data plots...')
+            saverawplots("Trimmed data", ntpath.basename(file), [flow, volume, poes, pgas, pdi], 
+                         ['Flow', 'Volume (drift corrected)', 'Oesophageal pressure', 'Gastric pressure', 'Trans diaphragmatic pressure'],
+                         [r'$L/s$', r'$L$', r'$cm H_2O$', r'$cm H_2O$', r'$cm H_2O$'],
+                         settings, breaths)
+                    
+        if (settings.output.diagnostics.savedataviewdriftcor):
+            print('\t\tSaving drift corrected data plots...')
+            if settings.processing.mechanics.correctvolumetrend:
+                saverawplots("Volume correction", ntpath.basename(file), [flow, uncorvol, zerovol, driftvol, trendcorvol], 
+                             ['Flow', 'Uncorrected volume', 'Zeroed volume', 'Linear drift corrected volume', 'Trend adjusted volume (' + settings.processing.mechanics.volumetrendadjustmethod + ')'],
+                             [r'$L/s$', r'$L$', r'$L$', r'$L$', r'$L$'],
+                             settings, breaths)
+            else:
+                saverawplots("Volume correction", ntpath.basename(file), [flow, uncorvol, zerovol, driftvol], 
+                             ['Flow', 'Uncorrected volume', 'Zeroed volume', 'Linear drift corrected volume'],
+                             [r'$L/s$', r'$L$', r'$L$', r'$L$'],
+                             settings, breaths)
         
         #Add any post processing that should be performed for each breath here.
         
@@ -1262,25 +1294,7 @@ def analyse(usersettings):
                     wavfile = pjoin(settings.output.outputfolder, "plots", ntpath.basename(file) + " - EMG #$# (ECG removed and noise reduced)" + ".wav")
                     savesoundemg(emgcolumns_noiseremoved, wavfile, settings)
                         
-        if (settings.output.diagnostics.savedataviewtrimmed):
-            print('\t\tSaving trimmed data plots...')
-            saverawplots("Trimmed data", ntpath.basename(file), [flow, volume, poes, pgas, pdi], 
-                         ['Flow', 'Volume (drift corrected)', 'Oesophageal pressure', 'Gastric pressure', 'Trans diaphragmatic pressure'],
-                         [r'$L/s$', r'$L$', r'$cm H_2O$', r'$cm H_2O$', r'$cm H_2O$'],
-                         settings, breaths)
-                    
-        if (settings.output.diagnostics.savedataviewdriftcor):
-            print('\t\tSaving drift corrected data plots...')
-            if settings.processing.mechanics.correctvolumetrend:
-                saverawplots("Volume correction", ntpath.basename(file), [flow, uncorvol, zerovol, driftvol, trendcorvol], 
-                             ['Flow', 'Uncorrected volume', 'Zeroed volume', 'Linear drift corrected volume', 'Trend adjusted volume (' + settings.processing.mechanics.volumetrendadjustmethod + ')'],
-                             [r'$L/s$', r'$L$', r'$L$', r'$L$', r'$L$'],
-                             settings, breaths)
-            else:
-                saverawplots("Volume correction", ntpath.basename(file), [flow, uncorvol, zerovol, driftvol], 
-                             ['Flow', 'Uncorrected volume', 'Zeroed volume', 'Linear drift corrected volume'],
-                             [r'$L/s$', r'$L$', r'$L$', r'$L$'],
-                             settings, breaths)
+        
             
         print('\t\tCalculating mechanics, WOB, entropy, RMS...')
         vefactor = 60/(len(flow)/settings.input.format.samplingfrequency) #Calculate multiplication factor for VE for this file.
