@@ -784,8 +784,8 @@ def savepvbreaths(file, breaths, flow, volume, poes, pgas, pdi, settings, averag
         pass
     
     nobreaths = len(breaths)
-    maxnocols = 4
-    maxnorows = 5
+    maxnocols = settings.output.diagnostics.pvcolumns
+    maxnorows = settings.output.diagnostics.pvrows
     plotsperpage = maxnocols * maxnorows
     nopages = -(-nobreaths // plotsperpage)
 
@@ -834,15 +834,17 @@ def savepvbreaths(file, breaths, flow, volume, poes, pgas, pdi, settings, averag
     from matplotlib.backends.backend_pdf import PdfPages
     with PdfPages(savefile) as pdf:
         no=0
+        tno=0
         pno = 1
         for breathno in breaths: #for no in range(1, nobreaths+1):    
             no += 1
+            tno += 1
             if (no == 1):
                 fig, axes = plt.subplots(nrows=norows, ncols=nocols, figsize=(21,29.7))
                 if averages:
-                    plt.suptitle("Averages - Campbell diagrams (page " + str(pno) + " of " + str(nopages), fontsize=48)
+                    plt.suptitle("Averages - Campbell diagrams (page " + str(pno) + " of " + str(nopages) + ")", fontsize=48)
                 else:
-                    plt.suptitle(file + " - Campbell diagrams (page " + str(pno) + " of " + str(nopages), fontsize=48)
+                    plt.suptitle(file + " - Campbell diagrams (page " + str(pno) + " of " + str(nopages) + ")", fontsize=48)
 
             breath = breaths[breathno]
             if breath["ignored"]:
@@ -886,7 +888,7 @@ def savepvbreaths(file, breaths, flow, volume, poes, pgas, pdi, settings, averag
                 wobelpolygon = Polygon([[p[0], p[1]] for p in [eelv, eilv, [eilv[0], eelv[1]]]], alpha=afill, color="#999999", fill=True )
                 ax.add_patch(wobelpolygon)
 
-            if (no == plotsperpage) or (no == nobreaths):
+            if (no == plotsperpage) or (tno == nobreaths):
                 plt.figtext(0.99, 0.01, CREATED + " on " + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), horizontalalignment='right')       
                 pdf.savefig() 
                 plt.close(fig)   
@@ -1412,6 +1414,8 @@ defaultsettings = """{
             "savepvaverage": true,
             "savepvoverview": true,
             "savepvindividualworkload": true,
+            "pvcolumns": 2,
+            "pvrows": 2,
             "savedataviewraw": true,
             "savedataviewtrimmed": true,
             "savedataviewdriftcor": true
