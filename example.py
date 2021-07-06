@@ -121,9 +121,11 @@ settings = {
         },
         "diagnostics": {
             #Diagnostics plots (saved as PDF in output folder). False: don"t save, True: save.
-            "savepvaverage": True,
+            "savepvaverage": True,        
             "savepvoverview": True,
             "savepvindividualworkload": True, 
+            "pvcolumns": 2,
+            "pvrows": 2,
             "savedataviewraw": True, 
             "savedataviewtrimmed": True, 
             "savedataviewdriftcor": True
