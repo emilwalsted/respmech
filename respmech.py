@@ -1414,8 +1414,8 @@ defaultsettings = """{
             "savepvaverage": true,
             "savepvoverview": true,
             "savepvindividualworkload": true,
-            "pvcolumns": 2,
-            "pvrows": 2,
+            "pvcolumns": 3,
+            "pvrows": 4,
             "savedataviewraw": true,
             "savedataviewtrimmed": true,
             "savedataviewdriftcor": true
