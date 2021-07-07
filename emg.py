@@ -478,7 +478,6 @@ def saveemgplots(outpdf, breaths, timecol, rows, titles, ylabels, title, rms=[],
         ax.set_ylim(ylim)
         ax.set_xlim([min(timecol), max(timecol)])
         
-        startx = 0
         yl = list(ax.get_ylim())
         for breathno in breaths:
                 blab = " #" + str(breathno)
@@ -488,11 +487,9 @@ def saveemgplots(outpdf, breaths, timecol, rows, titles, ylabels, title, rms=[],
                     poly = Rectangle([breath["time"][0], yl[0]],[breath["time"][len(breath["time"])-1]]-breath["time"][0], yl[1]-yl[0], alpha=0.1, color="#FF0000", fill=True)
                     ax.add_patch(poly)
                 
-                ax.axvline(x=startx, linewidth=0.5, linestyle="--", color="#0000FF")
-                ax.text(startx, yl[1]-((yl[1]-yl[0])*0.05), blab, fontsize=12)
+                ax.axvline(x=breath["time"][0], linewidth=0.5, linestyle="--", color="#0000FF")
+                ax.text(breath["time"][0], yl[1]-((yl[1]-yl[0])*0.05), blab, fontsize=12)
         
-                startx = startx + len(breath["poes"])
-
         ax.set_title(titles[i],fontweight="bold", size=20)
         ax.set_ylabel(ylabels[i],fontweight="bold", size=16)
         

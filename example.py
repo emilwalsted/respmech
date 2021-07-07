@@ -27,6 +27,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>
 """
 
 import importlib.util
+import os.path
 
 #Modify to the location of your respmech.py:
 rmpath = "/Users/emilnielsen/Documents/Medicin/Forskning/Code/RespMech/respmech.py"
@@ -36,12 +37,11 @@ spec = importlib.util.spec_from_file_location("analyse", rmpath)
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 
-m = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(m)
+
 settings = {
     "input": {
         "inputfolder": "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/txtimport",
-        "files": "RIU_H1_100W.txt", #Filename or mask (e.g. "*.csv" for all CSV files in folder)
+        "files": "RIU*.txt", #Filename or mask (e.g. "*.csv" for all CSV files in folder)
         "format": {
             #General settings
             "samplingfrequency": 2000, #No. of data recordings per second
@@ -61,10 +61,11 @@ settings = {
         "mechanics": {
             "breathseparationbuffer": 400, #Number of measurements to average over for breathing cycle detection (default=800). Will depend on your sampling frequency.
             
-            #Calculations:akt
+            #Calculations:
+            "separateby": "volume", #Which signal to use for detecting breathing cycles. Possible values: "flow" or "volume". Default: "flow". 
             "inverseflow": False, #True: For calculations, inspired flow should be negative. This setting inverses the input flow signal. Default is False.
-            "integratevolumefromflow": False, #True: Creates the volume signal by integrating the (optionally reversed) flow signal. False: Volume is specified in input data.
-            "inversevolume": True, #True: For calculations, inspired volume should be positive and expired should be negative. This setting inverses the volume input signal. Default is False.
+            "integratevolumefromflow": True, #True: Creates the volume signal by integrating the (optionally reversed) flow signal. False: Volume is specified in input data.
+            "inversevolume": False, #True: For calculations, inspired volume should be positive and expired should be negative. This setting inverses the volume input signal. Default is False.
             "correctvolumedrift": True, #True: Correct volume drift. False: Do not correct volume drift. Default is True
             "correctvolumetrend": False, #True: Correct volume  for trend changes. False: Do not correct. Default is False
             "volumetrendadjustmethod": "linear",
@@ -118,9 +119,11 @@ settings = {
         },
         "diagnostics": {
             #Diagnostics plots (saved as PDF in output folder). False: don"t save, True: save.
-            "savepvaverage": True,
+            "savepvaverage": True,        
             "savepvoverview": True,
             "savepvindividualworkload": True, 
+            "pvcolumns": 2,
+            "pvrows": 2,
             "savedataviewraw": True, 
             "savedataviewtrimmed": True, 
             "savedataviewdriftcor": True
