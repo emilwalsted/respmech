@@ -154,7 +154,7 @@ def subtractecg(ch, peaks, samplingfrequency, windowsize):
 
                 #align averaging windows:
                 if len(ecgwindows)>0:
-                    t, ecgavgtime = timeshift_average(ecgwindows[0], ecgwindow, -100, 100)
+                    _, ecgavgtime = timeshift_average(ecgwindows[0], ecgwindow, -100, 100)
                     ecgwindows += [ecgavgtime]
                 else:    
                     ecgwindows += [ecgwindow]
@@ -197,8 +197,8 @@ def subtractecg(ch, peaks, samplingfrequency, windowsize):
             if partial == False:
                 ecgwindow = np.array(emgecgch[peak-ecgwindowstart:peak+ecgwindowend])
                 retwindows += [[peak-ecgwindowstart, peak+ecgwindowend]]
-                t, ecgavgtime = timeshift_average(ecgwindow, ecgavg, -200, 0)
-                a, fittedavg = amplitude_average(ecgwindow, ecgavgtime, 1.25, 1000) 
+                _, ecgavgtime = timeshift_average(ecgwindow, ecgavg, -200, 0)
+                _, fittedavg = amplitude_average(ecgwindow, ecgavgtime, 1.25, 1000) 
                 adjwindow = list(ecgwindow - fittedavg)
                 
 #                if peakno == -99:
@@ -222,7 +222,7 @@ def subtractecg(ch, peaks, samplingfrequency, windowsize):
 
 def remove_ecg(emgecgchannels, peakch, samplingfrequency, ecgminheight, ecgmindistance, ecgminwidth, windowsize):
     
-    peaks, props = signal.find_peaks(peakch, height=ecgminheight, distance=ecgmindistance*samplingfrequency, width=ecgminwidth*samplingfrequency)
+    peaks, _ = signal.find_peaks(peakch, height=ecgminheight, distance=ecgmindistance*samplingfrequency, width=ecgminwidth*samplingfrequency)
   
     ret = emgecgchannels
     #for i in range(1, passes+1):
@@ -266,7 +266,7 @@ def plot_spectrogram(signal, title):
         signal,
         origin="lower",
         aspect="auto",
-        cmap=plt.cm.seismic,
+        cmap="seismic",
         vmin=-1 * np.max(np.abs(signal)),
         vmax=np.max(np.abs(signal)),
     )
@@ -280,9 +280,9 @@ def plot_statistics_and_filter(
     mean_freq_noise, std_freq_noise, noise_thresh, smoothing_filter
 ):
     fig, ax = plt.subplots(ncols=2, figsize=(20, 4))
-    plt_mean, = ax[0].plot(mean_freq_noise, label="Mean power of noise")
-    plt_std, = ax[0].plot(std_freq_noise, label="Std. power of noise")
-    plt_std, = ax[0].plot(noise_thresh, label="Noise threshold (by frequency)")
+    ax[0].plot(mean_freq_noise, label="Mean power of noise")
+    ax[0].plot(std_freq_noise, label="Std. power of noise")
+    ax[0].plot(noise_thresh, label="Noise threshold (by frequency)")
     ax[0].set_title("Threshold for mask")
     ax[0].legend()
     cax = ax[1].matshow(smoothing_filter, origin="lower")
@@ -448,7 +448,7 @@ def saveemgplots(outpdf, breaths, timecol, rows, titles, ylabels, title, rms=[],
 
     plt.ioff()
     norows = len(rows[0])
-    fig, axes = plt.subplots(nrows=norows, ncols=1, sharex=True, figsize=(29.7, 21))
+    fig, _ = plt.subplots(nrows=norows, ncols=1, sharex=True, figsize=(29.7, 21))
     fig.suptitle(ntpath.basename(outpdf), fontsize=48)    
     
     for i in range(0, norows):
@@ -457,7 +457,6 @@ def saveemgplots(outpdf, breaths, timecol, rows, titles, ylabels, title, rms=[],
         ax2 = ax.twinx()
 
         ax.plot(timecol, rows[:,i], 'b-', linewidth=0.25, label="EMG")
-
        
         ax.grid(True, which="major", color="black", linewidth='0.5', linestyle="-")
         ax.grid(True, which="minor", color="#D4D4D4", linewidth='0.25', linestyle="-")

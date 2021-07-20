@@ -50,6 +50,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>
 VERSION = "0.9.5"
 CREATED = "Created with RespMech.py version " + VERSION + " (www.github.com/emilwalsted/respmech)"
 
+import sys
 import os
 import glob
 import ntpath
@@ -81,65 +82,43 @@ def import_file(full_name, path):
     spec.loader.exec_module(mod)
     return mod
 
-def checknotset(setting, text, validate):
-    if setting is None or len(s) == 0: raise ValueError(text)
+def checknotset(setting, text):
+    if setting is None or len(setting) == 0: raise ValueError(text)
+
+def checkoptions(setting, settingname, options):
+    if not setting in options: raise ValueError(settingname + " can be one of the following values: " + ' '.join(options))
 
 def validatesettings(s):
-    checknotset(setting=s.input.inputfolder, text="Input folder not specified in settings")
+    checknotset(s.input.inputfolder, text="Input folder not specified in settings")
+    if not os.path.isdir(s.input.inputfolder): raise ValueError("Input folder not found: " + s.input.inputfolder)
+
     checknotset(s.input.files, "Input file(s) not specified in settings")
+    
     checknotset(s.input.format.samplingfrequency, "Sampling frequency not specified in settings")
-    checknotset(s.input.format.matlabfileformat, "MatLab file format not specified in settings")
+    if not s.input.format.samplingfrequency.is_integer(): raise ValueError("Sampling frequency must be an integer")
+    if ".mat" in str.lower(s.input.files):
+        checknotset(s.input.format.matlabfileformat, "MatLab file format not specified in settings")
    
-    checknotset(s.input.data,column_flow, "Flow data column not specified in settings")
+    checknotset(s.input.data.column_flow, "Flow data column not specified in settings")
     
-    checknotset(s.input.data,column_poes, "Oesophageal pressure data column not specified in settings")
-    checknotset(s.input.data,column_pgas, "Gastric pressure data column not specified in settings")
-    checknotset(s.input.data,column_pdi, "PDI data column not specified in settings")
+    checknotset(s.input.data.column_poes, "Oesophageal pressure data column not specified in settings")
+    checknotset(s.input.data.column_pgas, "Gastric pressure data column not specified in settings")
+    checknotset(s.input.data.column_pdi, "PDI data column not specified in settings")
 
-    if not settings.processing.mechanics.integratevolumefromflow:
-        checknotset(s.input.data,column_volume, "Volume data column not specified in settings – please set 'integratevolumefromflow' to True to allow for automated volume integration.")
+    if not s.processing.mechanics.integratevolumefromflow:
+        checknotset(s.input.data.column_volume, "Volume data column not specified in settings – please set 'integratevolumefromflow' to True to allow for automated volume integration.")
     
-#TODO:
-#     "processing": {
-#         "mechanics": {
-#             "breathseparationbuffer": 800,
+    checknotset(s.processing.mechanics.breathseparationbuffer, "Breath separation buffer not specified in settings")
+    if not s.processing.mechanics.breathseparationbuffer.is_integer(): raise ValueError("Breath separation buffer must be an integer")
+    checkoptions(s.processing.mechanics.volumetrendadjustmethod, "Volume trend adjust method", ['linear', 'nearest', 'nearest-up', 'zero', 'slinear', 'quadratic', 'cubic', 'previous', 'next'])
+    checkoptions(s.processing.wob.calcwobfrom, "WOB calculation method (calcwobfrom setting)", ['average', 'individual'])
 
-#             "volumetrendadjustmethod": "linear",
-#             "excludebreaths": [],
-#             "breathcounts": []
-#         },
-#         "wob": {
-#             "calcwobfrom": "average",
-#             "avgresamplingobs": 500
-#         },
-#         "emg": {
-#             "windowsize": 0.4, 
-#             "remove_noise": false, 
-#             "save_sound": false
-#         },
-#         "entropy": {
-#             "entropy_epochs": 2,
-#             "entropy_tolerance": 0.1
-#         }
-#     },
-#     "output": {
-#         "outputfolder": "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/test/output",
-#         "data": {
-#             "saveaveragedata": true,
-#             "savebreathbybreathdata": true,
-#             "saveprocesseddata": false,
-#             "includeignoredbreaths": true
-#         },
-#         "diagnostics": {
-#             "savepvaverage": true,
-#             "savepvoverview": true,
-#             "savepvindividualworkload": true,
-#             "savedataviewraw": true,
-#             "savedataviewtrimmed": true,
-#             "savedataviewdriftcor": true
-#         }
-#     }
-# }
+    if s.processing.wob.calcwobfrom == 'average':
+        if not s.processing.wob.avgresamplingobs.is_integer(): raise ValueError("Average resampling observations must be an integer")
+
+    checknotset(s.output.outputfolder, text="Output folder not specified in settings")
+    if not os.path.isdir(s.input.outputfolder): raise ValueError("Output folder not found: " + s.output.inputfolder)
+
 
 def validatedata(flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns):
     #TODO
@@ -463,8 +442,6 @@ def separateintobreathsbyvolume(filename, timecol, flow, volume, poes, pgas, pdi
     from scipy import signal
 
     breaths = OrderedDict()
-    j = len(flow)
-    bufferwidth = settings.processing.mechanics.breathseparationbuffer
 
     ib = ignorebreaths(filename, settings)
     
@@ -478,8 +455,8 @@ def separateintobreathsbyvolume(filename, timecol, flow, volume, poes, pgas, pdi
     peakheight = 0.1
     peakdistance = 0.1
     peakwidth = 0.1
-    inpeaks, props = signal.find_peaks(invol, height=peakheight, distance=peakdistance*samplingfrequency, width=peakwidth*samplingfrequency)
-    expeaks, props = signal.find_peaks(exvol, height=peakheight, distance=peakdistance*samplingfrequency, width=peakwidth*samplingfrequency)
+    inpeaks, _ = signal.find_peaks(invol, height=peakheight, distance=peakdistance*samplingfrequency, width=peakwidth*samplingfrequency)
+    expeaks, _ = signal.find_peaks(exvol, height=peakheight, distance=peakdistance*samplingfrequency, width=peakwidth*samplingfrequency)
 
     for inpeak in inpeaks:
         
@@ -902,7 +879,7 @@ def savepvbreaths(file, breaths, flow, volume, poes, pgas, pdi, settings, averag
             no += 1
             tno += 1
             if (no == 1):
-                fig, axes = plt.subplots(nrows=norows, ncols=nocols, figsize=(21,29.7))
+                fig, _ = plt.subplots(nrows=norows, ncols=nocols, figsize=(21,29.7))
                 if averages:
                     plt.suptitle("Averages - Campbell diagrams (page " + str(pno) + " of " + str(nopages) + ")", fontsize=48)
                 else:
@@ -969,7 +946,7 @@ def saverawplots(suffix, file, rows, titles, ylabels, settings, breaths=None):
         pass
     plt.ioff()
     norows = len(rows)
-    fig, axes  = plt.subplots(nrows=norows, ncols=1, sharex=True, figsize=(29.7, 21))
+    fig, _  = plt.subplots(nrows=norows, ncols=1, sharex=True, figsize=(29.7, 21))
     fig.suptitle(file + " - " + suffix, fontsize=48)    
     
     for i in range(0, norows):
@@ -1169,14 +1146,39 @@ def applysettings(defaultsettings, usersettings):
     
     settings = applysubsettings(defaultset, userset)
     return settings
+
+def catchexceptions(exctype, value, tb):
+
+    import traceback
+    errstr =  '\n------------------\n'
+    errstr += 'An error occurred.\n'
+    errstr += '------------------\n'
+    errstr += 'Error message: ' + str(value) + '\n' 
+    errstr += 'Type: ' + str(exctype) + '\n'
+    
+    print(errstr)
+
+    try:
+        errorfile = os.path.join(os.getcwd(), "Error log.txt")
+        ef = open(errorfile, "w")
+        ef.write(errstr + '\n')
+        for s in traceback.format_tb(tb):
+            ef.write(s + '\n')
+        print("A detailed error log has been saved here: " + errorfile)
+        ef.close()
+    finally:
+        pass
     
 def analyse(usersettings):
+
+    sys.excepthook = catchexceptions
     
     settings = applysettings(defaultsettings, usersettings)
   
     print('Loading data...')
     filepath = pjoin(settings.input.inputfolder, settings.input.files)
     files = [f for f in glob.glob(filepath)]
+    if len(files) == 0: raise ValueError("No files found for '" + filepath + "'")
     files.sort()
 
     print('Processing ' + str(len(files)) + ' file(s):')

@@ -104,3 +104,4 @@ venv.bak/
 .mypy_cache/
 .vscode/launch.json
 temp.py
+Error log.txt
