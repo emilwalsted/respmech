@@ -453,10 +453,14 @@ def saveemgplots(outpdf, breaths, timecol, rows, titles, ylabels, title, rms=[],
     
     for i in range(0, norows):
         ax = plt.subplot(norows, 1, i+1)
-        ax.grid(True)
+                
         ax2 = ax.twinx()
 
-        ax.plot(timecol, rows[:,i], 'k-', linewidth=0.25, label="EMG")
+        ax.plot(timecol, rows[:,i], 'b-', linewidth=0.25, label="EMG")
+
+       
+        ax.grid(True, which="major", color="black", linewidth='0.5', linestyle="-")
+        ax.grid(True, which="minor", color="#D4D4D4", linewidth='0.25', linestyle="-")
         
         #Plot ECG removal windows
         yl = list(ax.get_ylim())
@@ -477,6 +481,8 @@ def saveemgplots(outpdf, breaths, timecol, rows, titles, ylabels, title, rms=[],
         
         ax.set_ylim(ylim)
         ax.set_xlim([min(timecol), max(timecol)])
+        ax.minorticks_on()
+        ax.tick_params(axis='x', which='minor', bottom=True, direction='out', length=8)
         
         yl = list(ax.get_ylim())
         for breathno in breaths:
@@ -487,7 +493,7 @@ def saveemgplots(outpdf, breaths, timecol, rows, titles, ylabels, title, rms=[],
                     poly = Rectangle([breath["time"][0], yl[0]],[breath["time"][len(breath["time"])-1]]-breath["time"][0], yl[1]-yl[0], alpha=0.1, color="#FF0000", fill=True)
                     ax.add_patch(poly)
                 
-                ax.axvline(x=breath["time"][0], linewidth=0.5, linestyle="--", color="#0000FF")
+                ax.axvline(x=breath["time"][0], linewidth=0.5, linestyle="--", color="k")
                 ax.text(breath["time"][0], yl[1]-((yl[1]-yl[0])*0.05), blab, fontsize=12)
         
         ax.set_title(titles[i],fontweight="bold", size=20)
