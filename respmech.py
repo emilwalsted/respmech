@@ -119,10 +119,48 @@ def validatesettings(s):
     checknotset(s.output.outputfolder, text="Output folder not specified in settings")
     if not os.path.isdir(s.input.outputfolder): raise ValueError("Output folder not found: " + s.output.inputfolder)
 
+def checkcolumn(text, data):
+    if np.isnan(data).any(): raise ValueError(text + " contains NaN values.")
+    if any(isinstance(d, str) for d in data): raise ValueError(text + " contains text values – all values must be numeric.")
+    
+from itertools import groupby
+def alleq(iterable):
+    g = groupby(iterable)
+    return next(g, True) and not next(g, False)
 
-def validatedata(flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns):
-    #TODO
-    print("")
+def validatedata(flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings):
+    checkcolumn("Flow column", flow)
+    checkcolumn("Volume column", volume)
+    checkcolumn("Oesophageal pressure column", poes)
+    checkcolumn("Gastric pressure column", pgas)
+    checkcolumn("Trans-diaphragmatic pressure column", pdi)
+
+    collens = [len(flow), len(volume), len(poes), len(pgas), len(pdi)]
+    coltitles = ["Flow", "Volume", "Poes", "Pgas", "Pdi"]
+
+    n=0
+    for i in range(0, len(entropycolumns[0, :])):
+        c=entropycolumns[:,i]
+        n += 1
+        coltitles += ["Entropy column #" + str(n) + " (data column #" + str(settings.input.data.columns_entropy[n-1]) + ")"]
+        checkcolumn("Entropy column #" + str(n) + " (#" + str(settings.input.data.columns_entropy[n-1]) + " in input data)" , c)
+        collens += [len(c)]
+
+    n=0
+    for i in range(0, len(emgcolumns[0, :])):
+        c=emgcolumns[:,i]
+        n += 1
+        coltitles += ["EMG column #" + str(n) + " (#" + str(settings.input.data.columns_emg[n-1]) + " in input data)"]
+        checkcolumn("EMG column #" + str(n) + " (column #" + str(settings.input.data.columns_emg[n-1]) + " in input data)" , c)
+        collens += [len(c)]
+
+    if not alleq(collens): 
+        cols = "Column lengths:\n"
+        for s in range(0, len(collens)):
+            cols += coltitles[s] + ": " + str(collens[s]) + " observations.\n"
+
+        raise ValueError("Data column lengths differ. All columns must have the same number of observations.\n" + cols)
+
 
 def load(filepath, settings):
     
@@ -301,6 +339,8 @@ def load(filepath, settings):
 
     if settings.processing.mechanics.inversevolume:
         volume = -volume
+
+    validatedata(flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings)
             
     return flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns
 
