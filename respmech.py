@@ -658,7 +658,11 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
 
     if len(breath["emgcols"]) > 0:
         print(', EMG RMS', end="")
-        emglib = import_file("emglib", "emg.py")
+        rmdir = os.path.dirname(os.path.realpath(__file__))
+        try:
+            emglib = import_file("emglib", os.path.join(rmdir, "emg.py"))
+        except:
+            raise FileNotFoundError("emg.py not found at expected location: " + rmdir)
         retbreath["rms"] = emglib.calculate_rms(breath["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
     
     if len(settings.input.data.columns_entropy) > 0:
@@ -1251,7 +1255,11 @@ def analyse(usersettings):
             print('\t\tProcessing EMG')
             emgcols = np.array(emgcolumns)
             emgcolsraw = emgcols
-            emglib = import_file("emglib", "emg.py")
+            rmdir = os.path.dirname(os.path.realpath(__file__))
+            try:
+                emglib = import_file("emglib", os.path.join(rmdir, "emg.py"))
+            except:
+                raise FileNotFoundError("emg.py not found at expected location: " + rmdir)
 
             if settings.processing.emg.remove_ecg:
                 print('\t\t...removing ECG')
