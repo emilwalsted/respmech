@@ -167,10 +167,14 @@ def load(filepath, settings):
     _, fext = os.path.splitext(filepath)
     
     def loadmat(path):
-        if settings.input.format.matlabfileformat == 2:
-            flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns = loadmatmac(filepath)
-        else:
-            flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns = loadmatwin(filepath)               
+        try:
+            if settings.input.format.matlabfileformat == 2:
+                flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns = loadmatmac(filepath)
+            else:
+                flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns = loadmatwin(filepath) 
+        except:
+            raise ImportError("Cannot load MATLab file – please verify your MATLab file format settings. RespMech only supports some MATLab versions / simple format. Alternatively, you can export your MATLab data as a CSV file.")
+
         return flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns
 
     def loadmatmac(filename):
