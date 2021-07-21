@@ -83,7 +83,7 @@ def import_file(full_name, path):
     return mod
 
 def checknotset(setting, text):
-    if setting is None or len(setting) == 0: raise ValueError(text)
+    if setting is None or len(str(setting)) == 0: raise ValueError(text)
 
 def checkoptions(setting, settingname, options):
     if not setting in options: raise ValueError(settingname + " can be one of the following values: " + ' '.join(options))
@@ -95,7 +95,7 @@ def validatesettings(s):
     checknotset(s.input.files, "Input file(s) not specified in settings")
     
     checknotset(s.input.format.samplingfrequency, "Sampling frequency not specified in settings")
-    if not s.input.format.samplingfrequency.is_integer(): raise ValueError("Sampling frequency must be an integer")
+    if not isinstance(s.input.format.samplingfrequency, int): raise ValueError("Sampling frequency must be an integer")
     if ".mat" in str.lower(s.input.files):
         checknotset(s.input.format.matlabfileformat, "MatLab file format not specified in settings")
    
@@ -109,15 +109,15 @@ def validatesettings(s):
         checknotset(s.input.data.column_volume, "Volume data column not specified in settings – please set 'integratevolumefromflow' to True to allow for automated volume integration.")
     
     checknotset(s.processing.mechanics.breathseparationbuffer, "Breath separation buffer not specified in settings")
-    if not s.processing.mechanics.breathseparationbuffer.is_integer(): raise ValueError("Breath separation buffer must be an integer")
+    if not isinstance(s.processing.mechanics.breathseparationbuffer, int): raise ValueError("Breath separation buffer must be an integer")
     checkoptions(s.processing.mechanics.volumetrendadjustmethod, "Volume trend adjust method", ['linear', 'nearest', 'nearest-up', 'zero', 'slinear', 'quadratic', 'cubic', 'previous', 'next'])
     checkoptions(s.processing.wob.calcwobfrom, "WOB calculation method (calcwobfrom setting)", ['average', 'individual'])
 
     if s.processing.wob.calcwobfrom == 'average':
-        if not s.processing.wob.avgresamplingobs.is_integer(): raise ValueError("Average resampling observations must be an integer")
+        if not isinstance(s.processing.wob.avgresamplingobs, int): raise ValueError("Average resampling observations must be an integer")
 
     checknotset(s.output.outputfolder, text="Output folder not specified in settings")
-    if not os.path.isdir(s.input.outputfolder): raise ValueError("Output folder not found: " + s.output.inputfolder)
+    if not os.path.isdir(s.output.outputfolder): raise ValueError("Output folder not found: " + s.output.outputfolder)
 
 def checkcolumn(text, data):
     if np.isnan(data).any(): raise ValueError(text + " contains NaN values.")
@@ -1213,8 +1213,10 @@ def analyse(usersettings):
 
     sys.excepthook = catchexceptions
     
+    print('Applying settings...')
     settings = applysettings(defaultsettings, usersettings)
-  
+    validatesettings(settings)
+
     print('Loading data...')
     filepath = pjoin(settings.input.inputfolder, settings.input.files)
     files = [f for f in glob.glob(filepath)]
