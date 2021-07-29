@@ -52,9 +52,11 @@ plt.style.use('seaborn-white')
 
 def calculate_rms(emgchannels, rms_s, samplingfrequency):
     rms = []
+    intemg = []
     #intrms = []
     for emgch in emgchannels.T:
         
+        #Root mean square
         rmsch = []
         rollingwindowsize = int(rms_s * samplingfrequency)
     
@@ -67,22 +69,16 @@ def calculate_rms(emgchannels, rms_s, samplingfrequency):
         
         rmsch = np.max(r)
         rms += [rmsch]
-    #     intrmsch = []
-    #     rollingwindowsize = int(0.5 * 4000)   
-    #     rollend = rollingwindowsize-1
 
-    #     for i in range(0+int(rollingwindowsize/2)-1,len(emgch)-int(rollingwindowsize/2)):
-    #         xval = np.linspace(0, rollingwindowsize-1, rollingwindowsize)
-    #         xval = xval / 4000 #sampling rate
-    #         intrmsch += [sp.integrate.simps(rmsch[i-int(rollingwindowsize/2)+1:i+int(rollingwindowsize/2)+1], xval)]
+        #Integral
+        intemgch = []
+        intch = np.abs(emgch)
+        xval = np.linspace(0, len(emgch)-1, len(emgch)) / samplingfrequency
+        intemgch += [sp.integrate.simps(intch, xval)]
 
-    #     intrms += [intrmsch]
-
-    # for i in range(0,len(intrms)):
-    #     intrms[i] = [np.nan] * int(rollingwindowsize/2) + intrms[i] + [None] * (int(rollingwindowsize/2))
+        intemg = np.append(intemg, intemgch)
     
-    #ret = [np.max(rms), np.min[rms], np.mean(rms)]
-    return rms + [np.max(rms), np.mean(rms)]
+    return rms + [np.max(rms), np.mean(rms)], list(intemg) + [np.max(intemg), np.mean(intemg)]
     
 def timeshift(inputarray, shift):
     if (shift == 0) or (shift>=len(inputarray)):
@@ -145,6 +141,7 @@ def subtractecg(ch, peaks, samplingfrequency, windowsize):
               
         ecgwindowstart = int(windowsize * samplingfrequency/2)
         ecgwindowend = int(windowsize * samplingfrequency/2)
+        shiftinterval = int(0.2 * samplingfrequency)
 
         #Create average ECG for the window
         for peak in peaks:
@@ -154,25 +151,15 @@ def subtractecg(ch, peaks, samplingfrequency, windowsize):
 
                 #align averaging windows:
                 if len(ecgwindows)>0:
-                    _, ecgavgtime = timeshift_average(ecgwindows[0], ecgwindow, -100, 100)
+                    _, ecgavgtime = timeshift_average(ecgwindows[0], ecgwindow, -shiftinterval, shiftinterval)
                     ecgwindows += [ecgavgtime]
                 else:    
                     ecgwindows += [ecgwindow]
 
         ecgavg = np.mean(ecgwindows, axis=0)
-
-#Averaging diagnostics:     
-#        plt.figure(figsize=(10, 6))
-#        ino = 0
-#        for w in ecgwindows:
-#            ino += 1
-#            plt.plot(w, label=str(ino), linewidth=0.2)
-#        #plt.plot(ecgavg)
-#        plt.legend(loc="upper left")
-#        plt.show()
-     
-        peakno = 0
+   
         #Subtract average ECG from EMG
+        peakno = 0
         retwindows = []
         for peak in peaks:
             peakno += 1
@@ -180,16 +167,12 @@ def subtractecg(ch, peaks, samplingfrequency, windowsize):
             partial = False
             if (peak-ecgwindowstart < 0) :
                 ecgwindow = emgecgch[0:peak+ecgwindowend]
-                #plt.plot(ecgwindow, label="ecgwindow, first partial")
-                #plt.plot(ecgavg, label="ecgavg, first partial")
                 emgecgch[0:peak+ecgwindowend] = list(np.array(ecgwindow) - np.array(ecgavg[len(ecgavg)-len(ecgwindow):len(ecgavg)]))
                 retwindows += [[0, peak+ecgwindowend]]
                 partial = True
 
             if (peak+ecgwindowend > len(emgecgch)):
                 ecgwindow = emgecgch[peak-ecgwindowstart:len(emgecgch)-1]
-                #plt.plot(ecgwindow, label="ecgwindow, last partial")
-                #plt.plot(ecgavg, label="ecgavg, last partial")
                 emgecgch[peak-ecgwindowstart:len(emgecgch)-1] = list(np.array(ecgwindow) - np.array(ecgavg[0:len(ecgwindow)]))
                 retwindows += [[peak-ecgwindowstart, len(emgecgch)-1]]
                 partial = True
@@ -197,25 +180,23 @@ def subtractecg(ch, peaks, samplingfrequency, windowsize):
             if partial == False:
                 ecgwindow = np.array(emgecgch[peak-ecgwindowstart:peak+ecgwindowend])
                 retwindows += [[peak-ecgwindowstart, peak+ecgwindowend]]
-                _, ecgavgtime = timeshift_average(ecgwindow, ecgavg, -200, 0)
+                
+                _, ecgavgtime = timeshift_average(ecgwindow, ecgavg, -shiftinterval, shiftinterval)
                 _, fittedavg = amplitude_average(ecgwindow, ecgavgtime, 1.25, 1000) 
                 adjwindow = list(ecgwindow - fittedavg)
                 
-#                if peakno == -99:
-#                                   
-#                    plt.figure()
-#                    plt.plot(ecgwindow, label="ecgwindow", color='b')
-#                    #plt.plot(ecgavg, label="ecgavg")
-#                    plt.plot(fittedavg, label="fittedavg", color='r')
-#                    #plt.twinx().plot(adjwindow, label="adjwindow", color='m')
-#                    #plt.show()
-#                    plt.suptitle("Channel # " + str(chno) + ", ECG complex #" + str(peakno) + ", pass #" + str(passno))   
-#                    plt.legend(loc="upper left")
-#                    #plt.twinx().legend(loc="upper right")
-#                    plt.savefig("/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/EMG/diag/ch" + str(chno) + "_#" + str(peakno) + "_B_p" + str(passno) + ".pdf")
-#                    plt.close()
+                # Diagnostics:
+                # if chno == 1:
+                                  
+                #    plt.figure()
+                #    plt.plot(ecgwindow, label="ecgwindow", color='b')
+                #    plt.plot(fittedavg, label="fittedavg", color='r')
+                #    plt.suptitle("Channel # " + str(chno) + ", ECG complex #" + str(peakno))   
+                #    plt.legend(loc="upper left")
+                #    plt.savefig("/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/txtimport/output/diag/ch" + str(chno) + "_#" + str(peakno) + ".pdf")
+                #    plt.close()
                 
-                emgecgch[peak-ecgwindowstart:peak+ecgwindowend] =  adjwindow #list(np.array(ecgwindow) - np.array(ecgavg))
+                emgecgch[peak-ecgwindowstart:peak+ecgwindowend] =  adjwindow 
                 
         retch += [emgecgch]
     return list(np.array(retch).T), retwindows
@@ -223,12 +204,7 @@ def subtractecg(ch, peaks, samplingfrequency, windowsize):
 def remove_ecg(emgecgchannels, peakch, samplingfrequency, ecgminheight, ecgmindistance, ecgminwidth, windowsize):
     
     peaks, _ = signal.find_peaks(peakch, height=ecgminheight, distance=ecgmindistance*samplingfrequency, width=ecgminwidth*samplingfrequency)
-  
-    ret = emgecgchannels
-    #for i in range(1, passes+1):
-        #ret = [[r for r in row] for row in ret]
-        #ret = subtractecg(ret, peaks, samplingfrequency,  windowsize)
-    ret = subtractecg(ret, peaks, samplingfrequency,  windowsize)
+    ret = subtractecg(emgecgchannels, peaks, samplingfrequency,  windowsize)
 
     return ret
 
