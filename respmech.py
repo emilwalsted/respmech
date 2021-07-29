@@ -667,7 +667,7 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
             emglib = import_file("emglib", os.path.join(rmdir, "emg.py"))
         except:
             raise FileNotFoundError("emg.py not found at expected location: " + rmdir)
-        retbreath["rms"] = emglib.calculate_rms(breath["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
+        retbreath["rms"], retbreath["intemg"] = emglib.calculate_rms(breath["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
     
     if len(settings.input.data.columns_entropy) > 0:
         print(', Entropy', end="")
@@ -1084,9 +1084,15 @@ def savedataindividual(file, breaths, settings):
             if len(settings.input.data.columns_emg)>0:
                 dfemg = pd.DataFrame(breath["rms"]).transpose()
                 cols = ["rms_col_" +  str(settings.input.data.columns_emg[x]) for x in range(0, len(settings.input.data.columns_emg))]
-                cols = np.append(cols, ['RMS_max', 'RMS_mean'])
+                cols = np.append(cols, ['rms_max', 'rms_mean'])
                 dfemg.columns = cols
                 dfmech = dfmech.join(dfemg, how="outer", sort=False)
+
+                dfint = pd.DataFrame(breath["intemg"]).transpose()
+                cols = ["integralemg_col_" +  str(settings.input.data.columns_emg[x]) for x in range(0, len(settings.input.data.columns_emg))]
+                cols = np.append(cols, ['integralemg_max', 'integralemg_mean'])
+                dfint.columns = cols
+                dfmech = dfmech.join(dfint, how="outer", sort=False)
 
             if len(settings.input.data.columns_entropy)>0:
                 dfent = pd.DataFrame(breath["entropy"]).transpose()
