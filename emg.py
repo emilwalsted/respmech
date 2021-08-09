@@ -407,14 +407,17 @@ def band_limited_noise(min_freq, max_freq, samples=1024, samplerate=1):
     f[np.logical_and(freqs >= min_freq, freqs <= max_freq)] = 1
     return fftnoise(f)
 
-def reducenoise(emgchannel, noiseprofile, samplingfrequency):
+def reducenoise(emgchannel, noiseprofile, noiseprofilecolumn, samplingfrequency):
     #from scipy.io import wavfile
     #rate, data = wavfile.read(wavpath)
     #data = data / 32768    
     import sys, os
     sys.stdout = open(os.devnull, "w")
 
-    noise = np.array(emgchannel[int(noiseprofile[0]*samplingfrequency):int(noiseprofile[1]*samplingfrequency)])
+    if len(noiseprofilecolumn) == 0:
+        noiseprofilecolumn = emgchannel
+
+    noise = np.array(noiseprofilecolumn[int(noiseprofile[0]*samplingfrequency):int(noiseprofile[1]*samplingfrequency)])
     output = removeNoise(audio_clip=emgchannel, noise_clip=noise, verbose=False, visual=False, n_fft=len(noise)**2)
 
     sys.stdout = sys.__stdout__
