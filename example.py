@@ -41,7 +41,7 @@ spec.loader.exec_module(m)
 settings = {
     "input": {
         "inputfolder": "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/txtimport",
-        "files": "RIU*.txt", #Filename or mask (e.g. "*.csv" for all CSV files in folder)
+        "files": "RIU_H1*.txt", #Filename or mask (e.g. "*.csv" for all CSV files in folder)
         "format": {
             #General settings
             "samplingfrequency": 2000, #No. of data recordings per second
@@ -64,10 +64,10 @@ settings = {
             #Calculations:
             "separateby": "volume", #Which signal to use for detecting breathing cycles. Possible values: "flow" or "volume". Default: "flow". 
             "inverseflow": False, #True: For calculations, inspired flow should be negative. This setting inverses the input flow signal. Default is False.
-            "integratevolumefromflow": True, #True: Creates the volume signal by integrating the (optionally reversed) flow signal. False: Volume is specified in input data.
-            "inversevolume": False, #True: For calculations, inspired volume should be positive and expired should be negative. This setting inverses the volume input signal. Default is False.
+            "integratevolumefromflow": False, #True: Creates the volume signal by integrating the (optionally reversed) flow signal. False: Volume is specified in input data.
+            "inversevolume": True, #True: For calculations, inspired volume should be positive and expired should be negative. This setting inverses the volume input signal. Default is False.
             "correctvolumedrift": True, #True: Correct volume drift. False: Do not correct volume drift. Default is True
-            "correctvolumetrend": False, #True: Correct volume  for trend changes. False: Do not correct. Default is False
+            "correctvolumetrend": True, #True: Correct volume  for trend changes. False: Do not correct. Default is False
             "volumetrendadjustmethod": "linear",
             "volumetrendpeakminheight": 0.5, #For trend adjustment: How tall (absolute value) a volume peak should at least be, to be considered a peak. Default is 0.8
             "volumetrendpeakminwidth": 0.005, #For trend adjustment: How far apart (seconds) should peaks at least be, to be considered a peak. Default is 0.01
@@ -94,12 +94,14 @@ settings = {
             "minheight": 0.0005, #(For peak detection): The minimum height (in volt) of an R wave. Default is 0.001.
             "mindistance": 0.5, #The minimum distance between R waves (in seconds). Default is 0.25
             "minwidth": 0.001, #The minimum width of R waves (in seconds). Default is 0.005
-            "windowsize": 0.4, #Window size (in seconds) for averaging an ECG complex. Default is 0.8.
+            "windowsize": 0.4, #Window size (in seconds) for averaging an ECG complex. Default is 0.4.
+            "emgplotyscale": [-0.05, 0.05], #The [lower, upper] limits of the y-axis on the diagnostic EMG plots
             "remove_noise": True, #Perform EMG noise removal before calculating RMS. Default is False.
+            #Required for noise removal, for each file processed. Specifies the start- and end times (in seconds) for the noise profile (i.e. an area with no relevant EMG activity).
             "noise_profile": [
-                ["RIU_H1_100W.txt", [3.75, 4.25]], 
-                ["RIU_H14_20W.txt", [1.5, 2]]
-                ], #Required for noise removal, for each file processed. Specifies the start- and end times (in seconds) for the noise profile (i.e. an area with no relevant EMG activity).
+                ["RIU_H1_100W.txt", "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/txtimport/RIU_H14_20W.txt", [1.5, 2.5]], 
+                ["RIU_H14_20W.txt", "", [1.5, 2.5]]
+                ], 
             "save_sound": True, #Save EMG channels as sound files (at individual processing steps). Default: False.
         },
          "entropy": {
