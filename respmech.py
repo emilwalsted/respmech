@@ -1393,7 +1393,7 @@ def analyse(usersettings):
                     colheaders,
                     [r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$'],
                     "EMG (ECG removed)",
-                    ylim=[-0.1,0.1],
+                    ylim = settings.processing.emg.emgplotyscale,
                     ecgwindows = ecgw_time,
                     refsig=flow,
                     reflabel="Flow (for reference)"
@@ -1423,7 +1423,7 @@ def analyse(usersettings):
                     colheaders,
                     [r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$'],
                     "EMG (ECG removed and noise reduced)",
-                    ylim=[-0.1,0.1],
+                    ylim = settings.processing.emg.emgplotyscale,
                     ecgwindows = ecgw_time,
                     refsig=flow,
                     reflabel="Flow (for reference)"
@@ -1531,7 +1531,8 @@ defaultsettings = """{
             "minwidth": 0.001, 
             "windowsize": 0.4, 
             "remove_noise": false, 
-            "save_sound": false
+            "save_sound": false,
+            "emgplotyscale": [-0.1, 0.1]
         },
         "entropy": {
             "entropy_epochs": 2,

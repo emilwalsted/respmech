@@ -423,7 +423,7 @@ def reducenoise(emgchannel, noiseprofile, noiseprofilecolumn, samplingfrequency)
     sys.stdout = sys.__stdout__
     return np.array(output)
     
-def saveemgplots(outpdf, breaths, timecol, rows, titles, ylabels, title, rms=[], rmsint=[], refsig=[], reflabel="Reference", ylim=[-0.5,0.5], ecgwindows=[]):   
+def saveemgplots(outpdf, breaths, timecol, rows, titles, ylabels, title, rms=[], rmsint=[], refsig=[], reflabel="Reference", ylim=[], ecgwindows=[]):   
 
     plt.ioff()
     norows = len(rows[0])
