@@ -1288,14 +1288,24 @@ def analyse(usersettings):
                 colheaders = ["EMG " + str(i) for i in range(1, len(emgcols[0])+1)]
                 noiseprofiles = settings.processing.emg.noise_profile
                 noiseprofile = []
+                noiseprofilepath = ""
                 for nop in noiseprofiles:
                     if nop[0]==filename:
-                        noiseprofile=nop[1]
+                        noiseprofilepath = nop[1]
+                        noiseprofile=nop[2]
                         break
                 
+                npcolumn =[]
+                if len(noiseprofilepath) > 0:
+                    try:
+                        _, _, _, _, _, _, npcolumns = load(noiseprofilepath, settings)
+                        npcolumn = npcolumns[:,i]
+                    except:
+                        raise FileNotFoundError("Could not load file containing noise profile: " + noiseprofilepath)
+                    
                 nrcols=[]
                 for i in range(0, len(emgcols[0])):
-                    nrcol = emglib.reducenoise(np.array(emgcols[:,i]), noiseprofile, settings.input.format.samplingfrequency)
+                    nrcol = emglib.reducenoise(np.array(emgcols[:,i]), noiseprofile, npcolumn, settings.input.format.samplingfrequency)
                     nrcols += [nrcol]
                    
                 emgcolumns_noiseremoved = np.array(nrcols).T
@@ -1398,8 +1408,14 @@ def analyse(usersettings):
                 print('\t\tSaving noise reduced EMG overview...')
                 colheaders = ["EMG " + str(i) for i in range(1, len(emgcols[0])+1)]
                 savefile = pjoin(settings.output.outputfolder, "plots", ntpath.basename(file) + " - EMG (ECG removed and noise reduced)" + ".pdf")
-                ecgw_time = [[int(noiseprofile[0] * settings.input.format.samplingfrequency), int(noiseprofile[1] * settings.input.format.samplingfrequency)]]
-                ecgw_time = np.array(ecgw_time) / settings.input.format.samplingfrequency
+                
+                if len(noiseprofilepath) > 0:
+                    ecgw_time = []
+                else:
+                    # Add noise profile window
+                    ecgw_time = [[int(noiseprofile[0] * settings.input.format.samplingfrequency), int(noiseprofile[1] * settings.input.format.samplingfrequency)]]
+                    ecgw_time = np.array(ecgw_time) / settings.input.format.samplingfrequency
+
                 emglib.saveemgplots(savefile,
                     breaths,
                     timecol,
