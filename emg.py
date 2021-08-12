@@ -64,10 +64,15 @@ def calculate_rms(emgchannels, rms_s, samplingfrequency):
         rollend = rollingwindowsize-1
         
         r = [] 
-        for i in range(0+int(rollingwindowsize/2),len(emgch)-int(rollingwindowsize/2)):
-            r += [np.sqrt(np.mean(np.square(emgch[i+rollstart:i+rollend])))]
-        
-        rmsch = np.max(r)
+        try:
+            for i in range(0+int(rollingwindowsize/2),len(emgch)-int(rollingwindowsize/2)):
+                r += [np.sqrt(np.mean(np.square(emgch[i+rollstart:i+rollend])))]
+            
+            rmsch = np.max(r)
+        except:
+            #If breath is too small (i.e. invalid and should be ignored)
+            rmsch = 0
+            
         rms += [rmsch]
 
         #Integral

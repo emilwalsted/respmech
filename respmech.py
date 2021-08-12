@@ -437,10 +437,19 @@ def separateintobreathsbyflow(filename, timecol, flow, volume, poes, pgas, pdi, 
         exend = min(exend, j)
         
         exp = {'time':timecol[exstart:exend].squeeze(), 'flow':flow[exstart:exend].squeeze(), 'poes':poes[exstart:exend].squeeze(),
-                   'pgas': pgas[exstart:exend].squeeze(), 'pdi':pdi[exstart:exend].squeeze(), 'volume':volume[exstart:exend].squeeze()}
+                   'pgas': pgas[exstart:exend].squeeze(), 'pdi':pdi[exstart:exend].squeeze(), 'volume':volume[exstart:exend].squeeze()                   
+                   }
         
         insp = {'time':timecol[instart:inend].squeeze(), 'flow':flow[instart:inend].squeeze(), 'poes':poes[instart:inend].squeeze(), 
                     'pgas':pgas[instart:inend].squeeze(), 'pdi':pdi[instart:inend].squeeze(), 'volume':volume[instart:inend].squeeze()}
+
+        if len(entropycolumns)>0:
+            exp = {**exp, **{'entcols': entropycolumns[exstart:exend, :].squeeze()}}
+            insp = {**insp, **{'entcols': entropycolumns[instart:inend, :].squeeze()}}
+
+        if len(emgcolumns)>0:
+            exp = {**exp, **{'emgcols': emgcolumns[exstart:exend, :].squeeze()}}
+            insp = {**insp , **{'emgcols': emgcolumns[instart:inend, :].squeeze()}}
             
         if breathcnt in ib:
             ignored = True
@@ -525,6 +534,14 @@ def separateintobreathsbyvolume(filename, timecol, flow, volume, poes, pgas, pdi
         
         insp = {'time':timecol[instart:inend].squeeze(), 'flow':flow[instart:inend].squeeze(), 'poes':poes[instart:inend].squeeze(), 
                     'pgas':pgas[instart:inend].squeeze(), 'pdi':pdi[instart:inend].squeeze(), 'volume':volume[instart:inend].squeeze()}
+
+        if len(entropycolumns)>0:
+            exp = {**exp, **{'columns_emg': entropycolumns[exstart:exend, :].squeeze()}}
+            insp = {**insp, **{'columns_entropy': entropycolumns[instart:inend, :].squeeze()}}
+
+        if len(emgcolumns)>0:
+            exp = {**exp, **{'columns_emg': emgcolumns[exstart:exend, :].squeeze()}}
+            insp = {**insp , **{'columns_entropy': emgcolumns[instart:inend, :].squeeze()}}
             
         if breathcnt in ib:
             ignored = True
@@ -668,11 +685,17 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
         except:
             raise FileNotFoundError("emg.py not found at expected location: " + rmdir)
         retbreath["rms"], retbreath["intemg"] = emglib.calculate_rms(breath["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
+        retbreath["rms_insp"], retbreath["intemg_insp"] = emglib.calculate_rms(breath["inspiration"]["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
+        retbreath["rms_exp"], retbreath["intemg_exp"] = emglib.calculate_rms(breath["expiration"]["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
     
     if len(settings.input.data.columns_entropy) > 0:
         print(', Entropy', end="")
         entropy = calculateentropy(breath, settings)
+        entropy_insp = calculateentropy(breath, settings, "inspiration")
+        entropy_exp = calculateentropy(breath, settings, "expiration")
         retbreath["entropy"] = np.append(entropy.T, [max(entropy.T), min(entropy.T), np.mean(entropy.T)])
+        retbreath["entropy_insp"] = np.append(entropy_insp.T, [max(entropy_insp.T), min(entropy_insp.T), np.mean(entropy_insp.T)])
+        retbreath["entropy_exp"] = np.append(entropy_exp.T, [max(entropy_exp.T), min(entropy_exp.T), np.mean(entropy_exp.T)])
     else:
         retbreath["entropy"] = []
     
@@ -839,11 +862,14 @@ def calculateaveragebreaths(breaths, settings):
         
     return avgvolumein, avgvolumeex, avgpoesin, avgpoesex
 
-def calculateentropy(breath, settings):
+def calculateentropy(breath, settings, phase = None):
     
     ent = import_file("ent", "entropy.py")
      
-    columns = breath["entcols"]
+    if phase is None:
+        columns = breath["entcols"]
+    else:
+        columns = breath[phase]["entcols"]
 
     #If EMG columns contained in entropy columns, use the processed data (not the original input)
     if len(settings.input.data.columns_emg)>0:
@@ -851,7 +877,10 @@ def calculateentropy(breath, settings):
         for entcolno in range(0, len(settings.input.data.columns_entropy)):
             entc = settings.input.data.columns_entropy[entcolno]
             if entc in emgcolnos:
-                columns[:,entcolno] = breath["emgcols"][:,emgcolnos.index(entc)]
+                if phase is None:
+                    columns[:,entcolno] = breath["emgcols"][:,emgcolnos.index(entc)]
+                else:
+                    columns[:,entcolno] = breath[phase]["emgcols"][:,emgcolnos.index(entc)]
     
     epoch = settings.processing.entropy.entropy_epochs
     tolerancesd = settings.processing.entropy.entropy_tolerance
@@ -1066,6 +1095,13 @@ def savedataaverage(totals, settings):
     
     writer.save()
     
+def getbreathdata(breath, datacol, colsprefix, appendcols, settings):
+    df = pd.DataFrame(breath[datacol]).transpose()
+    cols = [colsprefix +  str(settings.input.data.columns_emg[x]) for x in range(0, len(settings.input.data.columns_emg))]
+    cols = np.append(cols, appendcols)
+    df.columns = cols
+    return df
+
 def savedataindividual(file, breaths, settings):   
     try:
         os.makedirs(pjoin(settings.output.outputfolder, "data"))
@@ -1082,25 +1118,34 @@ def savedataindividual(file, breaths, settings):
             dfmech = dfmech.join(dfwob, how="outer", sort=False)
             
             if len(settings.input.data.columns_emg)>0:
-                dfemg = pd.DataFrame(breath["rms"]).transpose()
-                cols = ["rms_col_" +  str(settings.input.data.columns_emg[x]) for x in range(0, len(settings.input.data.columns_emg))]
-                cols = np.append(cols, ['rms_max', 'rms_mean'])
-                dfemg.columns = cols
+                dfemg = getbreathdata(breath, "rms", "rms_col_", ['rms_max', 'rms_mean'], settings)
                 dfmech = dfmech.join(dfemg, how="outer", sort=False)
 
-                dfint = pd.DataFrame(breath["intemg"]).transpose()
-                cols = ["integralemg_col_" +  str(settings.input.data.columns_emg[x]) for x in range(0, len(settings.input.data.columns_emg))]
-                cols = np.append(cols, ['integralemg_max', 'integralemg_mean'])
-                dfint.columns = cols
+                dfemginsp = getbreathdata(breath, "rms_insp", "rms_insp_col_", ['rms_insp_max', 'rms_insp_mean'], settings)
+                dfmech = dfmech.join(dfemginsp, how="outer", sort=False)
+
+                dfemgexp = getbreathdata(breath, "rms_exp", "rms_exp_col_", ['rms_exp_max', 'rms_exp_mean'], settings)
+                dfmech = dfmech.join(dfemgexp, how="outer", sort=False)
+
+                dfint = getbreathdata(breath, "intemg", "integral_emg_col_", ['integralemg_max', 'integralemg_mean'], settings)
                 dfmech = dfmech.join(dfint, how="outer", sort=False)
 
+                dfintinsp = getbreathdata(breath, "intemg_insp", "integral_emg_insp_col_", ['integralemg_insp_max', 'integralemg_insp_mean'], settings)
+                dfmech = dfmech.join(dfintinsp, how="outer", sort=False)
+
+                dfintexp = getbreathdata(breath, "intemg_exp", "integral_emg_exp_col_", ['integralemg_exp_max', 'integralemg_exp_mean'], settings)
+                dfmech = dfmech.join(dfintexp, how="outer", sort=False)
+
             if len(settings.input.data.columns_entropy)>0:
-                dfent = pd.DataFrame(breath["entropy"]).transpose()
-                cols = ["sample_entropy_col_" +  str(settings.input.data.columns_entropy[x]) for x in range(0, len(settings.input.data.columns_entropy))]
-                cols = np.append(cols, ['sample_entropy_max', 'sample_entropy_min', 'sample_entropy_mean'])
-                dfent.columns = cols
+                dfent = getbreathdata(breath, "entropy", "sample_entropy_col_", ['sample_entropy_max', 'sample_entropy_min', 'sample_entropy_mean'], settings)
                 dfmech = dfmech.join(dfent, how="outer", sort=False)
-                
+
+                dfentinsp = getbreathdata(breath, "entropy_insp", "sample_entropy_insp_col_", ['sample_entropy_insp_max', 'sample_entropy_insp_min', 'sample_entropy_insp_mean'], settings)
+                dfmech = dfmech.join(dfentinsp, how="outer", sort=False)
+
+                dfentexp = getbreathdata(breath, "entropy_exp", "sample_entropy_exp_col_", ['sample_entropy_exp_max', 'sample_entropy_exp_min', 'sample_entropy_exp_mean'], settings)
+                dfmech = dfmech.join(dfentexp, how="outer", sort=False)
+                    
             if len(mechs)>0:
                 mechs = pd.concat([mechs, dfmech], sort=False)
             else:
@@ -1294,20 +1339,19 @@ def analyse(usersettings):
                         noiseprofilepath = nop[1]
                         noiseprofile=nop[2]
                         break
-                
-                npcolumn =[]
+                if len(noiseprofile) == 0: raise ValueError("Noise profile interval not specified for filename '" + filename + "'")
+                npcolumns=emgcolumns
+                nrcols=[]
                 if len(noiseprofilepath) > 0:
                     try:
-                        _, _, _, _, _, _, npcolumns = load(noiseprofilepath, settings)
-                        npcolumn = npcolumns[:,i]
+                        _, _, _, _, _, _, npcolumns = load(noiseprofilepath, settings)                       
                     except:
                         raise FileNotFoundError("Could not load file containing noise profile: " + noiseprofilepath)
                     
-                nrcols=[]
                 for i in range(0, len(emgcols[0])):
-                    nrcol = emglib.reducenoise(np.array(emgcols[:,i]), noiseprofile, npcolumn, settings.input.format.samplingfrequency)
+                    nrcol = emglib.reducenoise(np.array(emgcols[:,i]), noiseprofile, npcolumns[:,i], settings.input.format.samplingfrequency)
                     nrcols += [nrcol]
-                   
+                
                 emgcolumns_noiseremoved = np.array(nrcols).T
                 emgcolumns_noiseremoved = np.pad(emgcolumns_noiseremoved, ((0, len(emgcols)-len(emgcolumns_noiseremoved)),(0,0)), 'constant') 
                 emgcols = emgcolumns_noiseremoved
