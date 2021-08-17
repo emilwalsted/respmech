@@ -505,11 +505,11 @@ def separateintobreathsbyvolume(filename, timecol, flow, volume, poes, pgas, pdi
     exvol = -1 * volume 
     exvol = exvol + min(exvol)*-1
     samplingfrequency = settings.input.format.samplingfrequency
-    peakheight = 0.1
-    peakdistance = 0.1
-    peakwidth = 0.1
+    peakheight = settings.processing.mechanics.peakheight
+    peakdistance = settings.processing.mechanics.peakdistance
+    peakwidth = settings.processing.mechanics.peakwidth
     inpeaks, _ = signal.find_peaks(invol, height=peakheight, distance=peakdistance*samplingfrequency, width=peakwidth*samplingfrequency)
-    expeaks, _ = signal.find_peaks(exvol, height=peakheight, distance=peakdistance*samplingfrequency, width=peakwidth*samplingfrequency)
+    expeaks, _ = signal.find_peaks(exvol, height=peakheight, distance=peakdistance*samplingfrequency, width=peakwidth*samplingfrequency) 
 
     for inpeak in inpeaks:
         
@@ -536,12 +536,12 @@ def separateintobreathsbyvolume(filename, timecol, flow, volume, poes, pgas, pdi
                     'pgas':pgas[instart:inend].squeeze(), 'pdi':pdi[instart:inend].squeeze(), 'volume':volume[instart:inend].squeeze()}
 
         if len(entropycolumns)>0:
-            exp = {**exp, **{'columns_emg': entropycolumns[exstart:exend, :].squeeze()}}
-            insp = {**insp, **{'columns_entropy': entropycolumns[instart:inend, :].squeeze()}}
+            exp = {**exp, **{'entcols': entropycolumns[exstart:exend, :].squeeze()}}
+            insp = {**insp, **{'entcols': entropycolumns[instart:inend, :].squeeze()}}
 
         if len(emgcolumns)>0:
-            exp = {**exp, **{'columns_emg': emgcolumns[exstart:exend, :].squeeze()}}
-            insp = {**insp , **{'columns_entropy': emgcolumns[instart:inend, :].squeeze()}}
+            exp = {**exp, **{'emgcols': emgcolumns[exstart:exend, :].squeeze()}}
+            insp = {**insp , **{'emgcols': emgcolumns[instart:inend, :].squeeze()}}
             
         if breathcnt in ib:
             ignored = True
@@ -850,10 +850,13 @@ def calculateaveragebreaths(breaths, settings):
         breath = breaths[breathno]
         if not breath["ignored"]:
             nobreaths -= 1
-            volumein[:,nobreaths] = resample(breath["inspiration"]["volume"], settings)
-            volumeex[:,nobreaths] = resample(breath["expiration"]["volume"], settings)
-            poesin[:,nobreaths] = resample(breath["inspiration"]["poes"], settings)
-            poesex[:,nobreaths] = resample(breath["expiration"]["poes"], settings)            
+            try:
+                volumein[:,nobreaths] = resample(breath["inspiration"]["volume"], settings)
+                volumeex[:,nobreaths] = resample(breath["expiration"]["volume"], settings)
+                poesin[:,nobreaths] = resample(breath["inspiration"]["poes"], settings)
+                poesex[:,nobreaths] = resample(breath["expiration"]["poes"], settings)   
+            except:
+                raise ValueError("Could not resample breath #" + str(breath["number"]) + ". Please inspect your 'avgresamplingobs' setting (if separating by flow) or peak settings (if separating by volume) and breath separation settings (examine diagnostic output plots)")         
             
     avgvolumein = np.mean(volumein, axis=1)
     avgvolumeex = np.mean(volumeex, axis=1)
@@ -1552,6 +1555,9 @@ defaultsettings = """{
     "processing": {
         "mechanics": {
             "breathseparationbuffer": 800,
+            "peakheight": 0.1,
+            "peakdistance": 0.1,
+            "peakwidth": 0.1,
             "inverseflow": false,
             "integratevolumefromflow": false,
             "inversevolume": false,
