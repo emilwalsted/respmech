@@ -1557,7 +1557,7 @@ defaultsettings = """{
             "breathseparationbuffer": 800,
             "peakheight": 0.1,
             "peakdistance": 0.1,
-            "peakwidth": 0.1,
+            "peakwidth": 0.5,
             "inverseflow": false,
             "integratevolumefromflow": false,
             "inversevolume": false,
