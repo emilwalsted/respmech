@@ -139,20 +139,22 @@ def validatedata(flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, sett
     coltitles = ["Flow", "Volume", "Poes", "Pgas", "Pdi"]
 
     n=0
-    for i in range(0, len(entropycolumns[0, :])):
-        c=entropycolumns[:,i]
-        n += 1
-        coltitles += ["Entropy column #" + str(n) + " (data column #" + str(settings.input.data.columns_entropy[n-1]) + ")"]
-        checkcolumn("Entropy column #" + str(n) + " (#" + str(settings.input.data.columns_entropy[n-1]) + " in input data)" , c)
-        collens += [len(c)]
+    if len(entropycolumns)>0:
+        for i in range(0, len(entropycolumns[0, :])):
+            c=entropycolumns[:,i]
+            n += 1
+            coltitles += ["Entropy column #" + str(n) + " (data column #" + str(settings.input.data.columns_entropy[n-1]) + ")"]
+            checkcolumn("Entropy column #" + str(n) + " (#" + str(settings.input.data.columns_entropy[n-1]) + " in input data)" , c)
+            collens += [len(c)]
 
     n=0
-    for i in range(0, len(emgcolumns[0, :])):
-        c=emgcolumns[:,i]
-        n += 1
-        coltitles += ["EMG column #" + str(n) + " (#" + str(settings.input.data.columns_emg[n-1]) + " in input data)"]
-        checkcolumn("EMG column #" + str(n) + " (column #" + str(settings.input.data.columns_emg[n-1]) + " in input data)" , c)
-        collens += [len(c)]
+    if len(entropycolumns)>0:
+        for i in range(0, len(emgcolumns[0, :])):
+            c=emgcolumns[:,i]
+            n += 1
+            coltitles += ["EMG column #" + str(n) + " (#" + str(settings.input.data.columns_emg[n-1]) + " in input data)"]
+            checkcolumn("EMG column #" + str(n) + " (column #" + str(settings.input.data.columns_emg[n-1]) + " in input data)" , c)
+            collens += [len(c)]
 
     if not alleq(collens): 
         cols = "Column lengths:\n"
@@ -402,7 +404,7 @@ def trim(timecol, flow, volume, poes, pgas, pdi, emgcolumns, settings):
     posflow = np.argwhere(flow >= 0)
     endix = posflow[:,0][len(posflow[:,0])-1]
     
-    return timecol[startix:endix], flow[startix:endix], volume[startix:endix], poes[startix:endix], pgas[startix:endix], pdi[startix:endix], emgcolumns[startix:endix]
+    return timecol[startix:endix], flow[startix:endix], volume[startix:endix], poes[startix:endix], pgas[startix:endix], pdi[startix:endix], emgcolumns[startix:endix], startix, endix
 
 def ignorebreaths(curfile, settings):
     allignore = settings.processing.mechanics.excludebreaths
@@ -1307,7 +1309,7 @@ def analyse(usersettings):
                          settings)
 
         print('\t\tTrimming to whole breaths...')
-        timecol, flow, volume, poes, pgas, pdi, emgcolumns = trim(timecol, flow, volume, poes, pgas, pdi, emgcolumns, settings)
+        timecol, flow, volume, poes, pgas, pdi, emgcolumns, startix, endix = trim(timecol, flow, volume, poes, pgas, pdi, emgcolumns, settings)
         
         if len(emgcolumns) > 0:
             print('\t\tProcessing EMG')
@@ -1321,14 +1323,14 @@ def analyse(usersettings):
 
             if settings.processing.emg.remove_ecg:
                 print('\t\t...removing ECG')
-                emgcolumns_ecgremoved, ecgw = emglib.remove_ecg(emgcolumns, 
+                emgcolumns_ecgremoved, ecgw, peaks = emglib.remove_ecg(emgcolumns, 
                     emgcols[:,settings.processing.emg.column_detect], 
                     samplingfrequency=settings.input.format.samplingfrequency, 
                     ecgminheight=settings.processing.emg.minheight, 
                     ecgmindistance=settings.processing.emg.mindistance, 
                     ecgminwidth=settings.processing.emg.minwidth, 
                     windowsize=settings.processing.emg.windowsize)
-                
+                peaks += startix/2000
                 emgcols = np.array(emgcolumns_ecgremoved)
 
             if settings.processing.emg.remove_noise:
@@ -1411,6 +1413,14 @@ def analyse(usersettings):
             print('\t\tSaving EMG raw channel overview...')
             colheaders = ["EMG " + str(i) for i in range(1, len(emgcols[0])+1)]
             savefile = pjoin(settings.output.outputfolder, "plots", ntpath.basename(file) + " - EMG (raw data)" + ".pdf")
+            ecgw_time=[]
+            if settings.processing.emg.remove_ecg:
+                ecgw_time = np.array(ecgw) / settings.input.format.samplingfrequency
+                ecgw_time = ecgw_time + (startix/2000)
+            else:
+                peaks=[]
+                ecgw_time=[]
+                
             emglib.saveemgplots(savefile,
                 breaths,
                 timecol,
@@ -1418,9 +1428,11 @@ def analyse(usersettings):
                 colheaders,
                 [r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$'],
                 "Raw EMG",
-                ylim=[-0.1,0.1],
+                ylim = settings.processing.emg.emgplotyscale,
                 refsig=flow,
-                reflabel="Flow (for reference)"
+                reflabel="Flow (for reference)",
+                ecgwindows=ecgw_time,
+                peaks=peaks
                 )
 
             if settings.processing.emg.save_sound:
@@ -1431,7 +1443,6 @@ def analyse(usersettings):
             if settings.processing.emg.remove_ecg:
                 print('\t\tSaving EMG with ECG removed overview...')
                 emgcols = np.array(emgcolumns_ecgremoved)
-                ecgw_time = np.array(ecgw) / settings.input.format.samplingfrequency
                 savefile = pjoin(settings.output.outputfolder, "plots", ntpath.basename(file) + " - EMG (ECG removed)" + ".pdf")
                 emglib.saveemgplots(savefile,
                     breaths,
@@ -1442,6 +1453,7 @@ def analyse(usersettings):
                     "EMG (ECG removed)",
                     ylim = settings.processing.emg.emgplotyscale,
                     ecgwindows = ecgw_time,
+                    peaks=peaks,
                     refsig=flow,
                     reflabel="Flow (for reference)"
                     )
@@ -1472,6 +1484,7 @@ def analyse(usersettings):
                     "EMG (ECG removed and noise reduced)",
                     ylim = settings.processing.emg.emgplotyscale,
                     ecgwindows = ecgw_time,
+                    peaks=peaks,
                     refsig=flow,
                     reflabel="Flow (for reference)"
                     )

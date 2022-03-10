@@ -192,14 +192,17 @@ def subtractecg(ch, peaks, samplingfrequency, windowsize):
                 
                 # Diagnostics:
                 # if chno == 1:
-                                  
-                #    plt.figure()
-                #    plt.plot(ecgwindow, label="ecgwindow", color='b')
-                #    plt.plot(fittedavg, label="fittedavg", color='r')
-                #    plt.suptitle("Channel # " + str(chno) + ", ECG complex #" + str(peakno))   
-                #    plt.legend(loc="upper left")
-                #    plt.savefig("/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/txtimport/output/diag/ch" + str(chno) + "_#" + str(peakno) + ".pdf")
-                #    plt.close()
+                #                   
+                #     plt.figure()
+                #     plt.plot(ecgwindow, label="Raw data", color='black', linewidth=0.5)
+                #     plt.plot(ecgavg, label="Average ECG", color='silver', linewidth=0.5)
+                #     plt.plot(ecgavgtime, label="Time shifted average ECG", color='orange', linewidth=0.5)
+                #     plt.plot(fittedavg, label="Amplitude adjusted average ECG", color='green', linewidth=0.5)
+                #     plt.plot(adjwindow, label="ECG reduced signal", color='r', linewidth=0.5)
+                #     plt.suptitle("Channel # " + str(chno) + ", ECG complex #" + str(peakno))   
+                #     plt.legend(loc="upper left")
+                #     plt.savefig("/Users/emilnielsen/Documents/Medicin/Forskning/RespMech validation/ERS/Annie troubleshooting/NEP302_V2/output/diag/ch" + str(chno) + "_#" + str(peakno) + ".pdf")
+                #     plt.close()
                 
                 emgecgch[peak-ecgwindowstart:peak+ecgwindowend] =  adjwindow 
                 
@@ -209,9 +212,9 @@ def subtractecg(ch, peaks, samplingfrequency, windowsize):
 def remove_ecg(emgecgchannels, peakch, samplingfrequency, ecgminheight, ecgmindistance, ecgminwidth, windowsize):
     
     peaks, _ = signal.find_peaks(peakch, height=ecgminheight, distance=ecgmindistance*samplingfrequency, width=ecgminwidth*samplingfrequency)
-    ret = subtractecg(emgecgchannels, peaks, samplingfrequency,  windowsize)
+    processedchannels, ecgwindows = subtractecg(emgecgchannels, peaks, samplingfrequency,  windowsize)
 
-    return ret
+    return processedchannels, ecgwindows, peaks/samplingfrequency
 
     
 def savesoundemg(emgchannel, wavpath):
@@ -428,7 +431,7 @@ def reducenoise(emgchannel, noiseprofile, noiseprofilecolumn, samplingfrequency)
     sys.stdout = sys.__stdout__
     return np.array(output)
     
-def saveemgplots(outpdf, breaths, timecol, rows, titles, ylabels, title, rms=[], rmsint=[], refsig=[], reflabel="Reference", ylim=[], ecgwindows=[]):   
+def saveemgplots(outpdf, breaths, timecol, rows, titles, ylabels, title, rms=[], rmsint=[], refsig=[], reflabel="Reference", ylim=[], ecgwindows=[], peaks=[]):   
 
     plt.ioff()
     norows = len(rows[0])
@@ -448,9 +451,11 @@ def saveemgplots(outpdf, breaths, timecol, rows, titles, ylabels, title, rms=[],
         #Plot ECG removal windows
         yl = list(ax.get_ylim())
         for ecgwindow in ecgwindows:
-            #poly = Rectangle([ecgwindow[0], yl[0]], ecgwindow[1]-ecgwindow[0], yl[1]-yl[0], alpha=0.05, color="#0000FF", fill=True)
             poly = Rectangle([ecgwindow[0], ylim[0]], ecgwindow[1]-ecgwindow[0], ylim[1]-ylim[0], alpha=0.05, color="#0000FF", fill=True)
-            ax.add_patch(poly)
+            ax.add_patch(poly)         
+
+        ax.scatter(peaks, np.full((len(peaks),1),ylim[1]*0.99), s=20, c='r', marker=11)
+
 
         #Plot reference signal
         if len(refsig)>0:
