@@ -869,7 +869,11 @@ def calculateaveragebreaths(breaths, settings):
 
 def calculateentropy(breath, settings, phase = None):
     
-    ent = import_file("ent", "entropy.py")
+    rmdir = os.path.dirname(os.path.realpath(__file__))
+    try:
+        ent = import_file("ent", os.path.join(rmdir, "entropy.py"))
+    except:
+        raise FileNotFoundError("entropy.py not found at expected location: " + rmdir)
      
     if phase is None:
         columns = breath["entcols"]

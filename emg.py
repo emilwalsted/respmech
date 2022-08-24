@@ -474,15 +474,15 @@ def saveemgplots(outpdf, breaths, timecol, rows, titles, ylabels, title, rms=[],
         
         yl = list(ax.get_ylim())
         for breathno in breaths:
-                blab = " #" + str(breathno)
-                breath= breaths[breathno]
-                if breath["ignored"]:
-                    blab += " (ignored)"
-                    poly = Rectangle([breath["time"][0], yl[0]],[breath["time"][len(breath["time"])-1]]-breath["time"][0], yl[1]-yl[0], alpha=0.1, color="#FF0000", fill=True)
-                    ax.add_patch(poly)
-                
-                ax.axvline(x=breath["time"][0], linewidth=0.5, linestyle="--", color="k")
-                ax.text(breath["time"][0], yl[1]-((yl[1]-yl[0])*0.05), blab, fontsize=12)
+            blab = " #" + str(breathno)
+            breath= breaths[breathno]
+            if breath["ignored"]:
+                blab += " (ignored)"
+                poly = Rectangle([breath["time"][0], yl[0]],[breath["time"][len(breath["time"])-1]]-breath["time"][0], yl[1]-yl[0], alpha=0.1, color="#FF0000", fill=True)
+                ax.add_patch(poly)
+            
+            ax.axvline(x=breath["time"][0], linewidth=0.5, linestyle="--", color="k")
+            ax.text(breath["time"][0], yl[1]-((yl[1]-yl[0])*0.05), blab, fontsize=12)
         
         ax.set_title(titles[i],fontweight="bold", size=20)
         ax.set_ylabel(ylabels[i],fontweight="bold", size=16)
