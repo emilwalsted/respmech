@@ -748,7 +748,7 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
     return retbreath
 
 def adjustforintegration(data):
-    mind = min(data)
+    mind = min(min(data),0)
     maxd = max(data)
     
     adjustment = mind
