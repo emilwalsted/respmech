@@ -664,10 +664,10 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
     poesinsp = adjustforintegration(-insp["poes"])
     ptp_oesinsp, int_oesinsp = calcptp(poesinsp, bcnt, vefactor, settings.input.format.samplingfrequency)
     
-    pdiinsp = adjustforintegration(insp["pdi"])
+    pdiinsp = insp["pdi"]-min(insp["pdi"]) 
     ptp_pdiinsp, int_pdiinsp = calcptp(pdiinsp, bcnt, vefactor, settings.input.format.samplingfrequency)
     
-    pgasexp = adjustforintegration(exp["pgas"])
+    pgasexp = exp["pgas"]-min(exp["pgas"]) #adjustforintegration(exp["pgas"])
     ptp_pgasexp, int_pgasexp = calcptp(pgasexp, bcnt, vefactor, settings.input.format.samplingfrequency)
     
     max_in_flow = min(insp["flow"]) * -1
@@ -1313,8 +1313,11 @@ def analyse(usersettings):
                          settings)
 
         print('\t\tTrimming to whole breaths...')
-        timecol, flow, volume, poes, pgas, pdi, emgcolumns, startix, endix = trim(timecol, flow, volume, poes, pgas, pdi, emgcolumns, settings)
-        
+        try:
+            timecol, flow, volume, poes, pgas, pdi, emgcolumns, startix, endix = trim(timecol, flow, volume, poes, pgas, pdi, emgcolumns, settings)
+        except:
+            raise ValueError("Could not trim data to whole breaths. Please ensure that the specified flow channel is correct.")
+
         if len(emgcolumns) > 0:
             print('\t\tProcessing EMG')
             emgcols = np.array(emgcolumns)
