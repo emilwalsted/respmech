@@ -1111,6 +1111,22 @@ def getbreathdata(breath, datacol, colsprefix, appendcols, settings):
     df.columns = cols
     return df
 
+def processoutliers(data, settings):
+    #Process EMG RMS outliers outside of x Standard Deviations
+    ret = data
+
+    for index, row in data.iterrows():
+        otherrows = data.loc[data["breath_no"] != row["breath_no"]]
+        othermean = otherrows["rms_max"].mean()
+        othersd = otherrows["rms_max"].std()
+        sdmultiplier = settings.processing.emg.outlierrmssdlimit
+        minval = othermean - othersd * sdmultiplier
+        maxval = othermean + othersd * sdmultiplier
+        if ((row["rms_max"]< minval) | (row["rms_max"] > maxval)):
+            ret.loc[ret["breath_no"] == row["breath_no"], "rms_max"] = othermean
+
+    return ret
+
 def savedataindividual(file, breaths, settings):   
     try:
         os.makedirs(pjoin(settings.output.outputfolder, "data"))
@@ -1162,11 +1178,16 @@ def savedataindividual(file, breaths, settings):
                     
     savefile = pjoin(settings.output.outputfolder, "data", file + ".breathdata.xlsx")
     
+    if settings.processing.emg.outlierrmssdlimit > 0:
+        #Process EMG RMS outliers outside of x Standard Deviations
+        mechs = processoutliers(mechs, settings)
+
     ret = pd.DataFrame(mechs.mean())
     ret = ret.T
     ret = ret.drop(columns="breath_no")
     ret.insert(loc=0, column="file", value=file)
     
+
     writer = pd.ExcelWriter(savefile, engine='xlsxwriter', options={'strings_to_urls': True}) # pylint: disable=abstract-class-instantiated
     mechs.to_excel(writer, sheet_name='Data', index=False)
     formatheader(mechs, writer, "Data")
@@ -1606,7 +1627,7 @@ defaultsettings = """{
             "mindistance": 0.5, 
             "minwidth": 0.001, 
             "windowsize": 0.4, 
-            "sdlimit": 3,
+            "outlierrmssdlimit": 0,
             "remove_noise": false, 
             "save_sound": false,
             "emgplotyscale": [-0.1, 0.1]
