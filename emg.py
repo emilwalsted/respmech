@@ -233,7 +233,7 @@ def _stft(y, n_fft, hop_length, win_length):
 
 def _istft(y, n_fft, hop_length, win_length):
     ###y_pad = librosa.util.fix_length(y, len(y) + n_fft // 2)
-    return librosa.istft(y, hop_length, win_length)
+    return librosa.istft(y, hop_length=hop_length, win_length=win_length)
 
 
 def _amp_to_db(x):
