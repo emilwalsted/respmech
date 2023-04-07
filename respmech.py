@@ -1111,6 +1111,27 @@ def getbreathdata(breath, datacol, colsprefix, appendcols, settings):
     df.columns = cols
     return df
 
+def processoutliers(data, settings):
+    #Replace EMG RMS/poes_mininsp outliers outside of x Standard Deviations with mean of other observations.
+    #Rationale: RMS values without a corresponding physiological relation to change in Poes are considered outliers.
+    ret = data
+    ret["rms_poes"] = ret["rms_max"] / ret["poes_mininsp"]
+
+    for index, row in data.iterrows():
+        otherrows = data.loc[data["breath_no"] != row["breath_no"]]
+        othermean = otherrows["rms_poes"].mean()
+        othersd = otherrows["rms_poes"].std()
+        sdmultiplier = settings.processing.emg.outlierrmssdlimit
+        minval = othermean - othersd * sdmultiplier
+        maxval = othermean + othersd * sdmultiplier
+        if ((row["rms_poes"]< minval) | (row["rms_poes"] > maxval)):
+            ret.loc[ret["breath_no"] == row["breath_no"], "rms_max"] = otherrows["rms_max"].mean()
+            ret.loc[ret["breath_no"] == row["breath_no"], "rms_mean"] = otherrows["rms_mean"].mean()
+
+    ret = ret.drop(columns="rms_poes")
+    
+    return ret
+
 def savedataindividual(file, breaths, settings):   
     try:
         os.makedirs(pjoin(settings.output.outputfolder, "data"))
@@ -1162,11 +1183,16 @@ def savedataindividual(file, breaths, settings):
                     
     savefile = pjoin(settings.output.outputfolder, "data", file + ".breathdata.xlsx")
     
+    if settings.processing.emg.outlierrmssdlimit > 0:
+        #Process EMG RMS outliers outside of x Standard Deviations
+        mechs = processoutliers(mechs, settings)
+
     ret = pd.DataFrame(mechs.mean())
     ret = ret.T
     ret = ret.drop(columns="breath_no")
     ret.insert(loc=0, column="file", value=file)
     
+
     writer = pd.ExcelWriter(savefile, engine='xlsxwriter', options={'strings_to_urls': True}) # pylint: disable=abstract-class-instantiated
     mechs.to_excel(writer, sheet_name='Data', index=False)
     formatheader(mechs, writer, "Data")
@@ -1301,27 +1327,27 @@ def analyse(usersettings):
         filename = ntpath.basename(file)
         print('\nProcessing \'' + file + '\'')
 
-        flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns = load(file, settings)
+        flowraw, volumeraw, poesraw, pgasraw, pdiraw, entropycolumnsraw, emgcolumnsraw = load(file, settings)
+        entropycolumns = entropycolumnsraw
 
-        timecol = np.arange(0, len(flow)-1, dtype=int) / settings.input.format.samplingfrequency
+        timecolraw = np.arange(0, len(flowraw), dtype=int) / settings.input.format.samplingfrequency
         
         if (settings.output.diagnostics.savedataviewraw):
             print('\t\tSaving raw data plots...')
-            saverawplots("Flow, volume and pressures (raw data)", ntpath.basename(file), [flow, volume, poes, pgas, pdi], 
+            saverawplots("Flow, volume and pressures (raw data)", ntpath.basename(file), [flowraw, volumeraw, poesraw, pgasraw, pdiraw], 
                          ['Flow', 'Volume (uncorrected)', 'Oesophageal pressure', 'Gastric pressure', 'Trans diaphragmatic pressure'],
                          [r'$L/s$', r'$L$', r'$cm H_2O$', r'$cm H_2O$', r'$cm H_2O$'],
                          settings)
 
         print('\t\tTrimming to whole breaths...')
         try:
-            timecol, flow, volume, poes, pgas, pdi, emgcolumns, startix, endix = trim(timecol, flow, volume, poes, pgas, pdi, emgcolumns, settings)
+            timecol, flow, volume, poes, pgas, pdi, emgcolumns, startix, endix = trim(timecolraw, flowraw, volumeraw, poesraw, pgasraw, pdiraw, emgcolumnsraw, settings)
         except:
             raise ValueError("Could not trim data to whole breaths. Please ensure that the specified flow channel is correct.")
 
         if len(emgcolumns) > 0:
             print('\t\tProcessing EMG')
-            emgcols = np.array(emgcolumns)
-            emgcolsraw = emgcols
+            emgcols = np.array(emgcolumnsraw)
             rmdir = os.path.dirname(os.path.realpath(__file__))
             try:
                 emglib = import_file("emglib", os.path.join(rmdir, "emg.py"))
@@ -1330,7 +1356,7 @@ def analyse(usersettings):
 
             if settings.processing.emg.remove_ecg:
                 print('\t\t...removing ECG')
-                emgcolumns_ecgremoved, ecgw, peaks = emglib.remove_ecg(emgcolumns, 
+                emgcolumns_ecgremoved, ecgw, peaks = emglib.remove_ecg(emgcols, 
                     emgcols[:,settings.processing.emg.column_detect], 
                     samplingfrequency=settings.input.format.samplingfrequency, 
                     ecgminheight=settings.processing.emg.minheight, 
@@ -1339,6 +1365,12 @@ def analyse(usersettings):
                     windowsize=settings.processing.emg.windowsize)
                 peaks += startix/2000
                 emgcols = np.array(emgcolumns_ecgremoved)
+
+            print('\t\tTrimming to whole breaths...')
+            try:
+                _, _, _, _, _, _, emgcols, startix, endix = trim(timecolraw, flowraw, volumeraw, poesraw, pgasraw, pdiraw, emgcols, settings)
+            except:
+                raise ValueError("Could not trim data to whole breaths. Please ensure that the specified flow channel is correct.")
 
             if settings.processing.emg.remove_noise:
                 print('\t\t...reducing noise')
@@ -1352,7 +1384,7 @@ def analyse(usersettings):
                         noiseprofile=nop[2]
                         break
                 if len(noiseprofile) == 0: raise ValueError("Noise profile interval not specified for filename '" + filename + "'")
-                npcolumns=emgcolumns
+                npcolumns=emgcols
                 nrcols=[]
                 if len(noiseprofilepath) > 0:
                     try:
@@ -1430,13 +1462,13 @@ def analyse(usersettings):
                 
             emglib.saveemgplots(savefile,
                 breaths,
-                timecol,
-                emgcolsraw,
+                timecolraw,
+                emgcolumnsraw,
                 colheaders,
                 [r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$'],
                 "Raw EMG",
                 ylim = settings.processing.emg.emgplotyscale,
-                refsig=flow,
+                refsig=flowraw,
                 reflabel="Flow (for reference)",
                 ecgwindows=ecgw_time,
                 peaks=peaks
@@ -1445,7 +1477,7 @@ def analyse(usersettings):
             if settings.processing.emg.save_sound:
                 print('\t\tSaving EMG raw channel sound files...')
                 wavfile = pjoin(settings.output.outputfolder, "plots", ntpath.basename(file) + " - EMG #$# (raw data)" + ".wav")
-                savesoundemg(emgcolsraw, wavfile, settings)
+                savesoundemg(emgcolumnsraw, wavfile, settings)
 
             if settings.processing.emg.remove_ecg:
                 print('\t\tSaving EMG with ECG removed overview...')
@@ -1453,7 +1485,7 @@ def analyse(usersettings):
                 savefile = pjoin(settings.output.outputfolder, "plots", ntpath.basename(file) + " - EMG (ECG removed)" + ".pdf")
                 emglib.saveemgplots(savefile,
                     breaths,
-                    timecol,
+                    timecolraw,
                     emgcols,
                     colheaders,
                     [r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$', r'$mcV$'],
@@ -1461,7 +1493,7 @@ def analyse(usersettings):
                     ylim = settings.processing.emg.emgplotyscale,
                     ecgwindows = ecgw_time,
                     peaks=peaks,
-                    refsig=flow,
+                    refsig=flowraw,
                     reflabel="Flow (for reference)"
                     )
                 
@@ -1600,6 +1632,7 @@ defaultsettings = """{
             "mindistance": 0.5, 
             "minwidth": 0.001, 
             "windowsize": 0.4, 
+            "outlierrmssdlimit": 0,
             "remove_noise": false, 
             "save_sound": false,
             "emgplotyscale": [-0.1, 0.1]
