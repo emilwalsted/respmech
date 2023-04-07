@@ -1112,19 +1112,24 @@ def getbreathdata(breath, datacol, colsprefix, appendcols, settings):
     return df
 
 def processoutliers(data, settings):
-    #Process EMG RMS outliers outside of x Standard Deviations
+    #Replace EMG RMS/poes_mininsp outliers outside of x Standard Deviations with mean of other observations.
+    #Rationale: RMS values without a corresponding physiological relation to change in Poes are considered outliers.
     ret = data
+    ret["rms_poes"] = ret["rms_max"] / ret["poes_mininsp"]
 
     for index, row in data.iterrows():
         otherrows = data.loc[data["breath_no"] != row["breath_no"]]
-        othermean = otherrows["rms_max"].mean()
-        othersd = otherrows["rms_max"].std()
+        othermean = otherrows["rms_poes"].mean()
+        othersd = otherrows["rms_poes"].std()
         sdmultiplier = settings.processing.emg.outlierrmssdlimit
         minval = othermean - othersd * sdmultiplier
         maxval = othermean + othersd * sdmultiplier
-        if ((row["rms_max"]< minval) | (row["rms_max"] > maxval)):
-            ret.loc[ret["breath_no"] == row["breath_no"], "rms_max"] = othermean
+        if ((row["rms_poes"]< minval) | (row["rms_poes"] > maxval)):
+            ret.loc[ret["breath_no"] == row["breath_no"], "rms_max"] = otherrows["rms_max"].mean()
+            ret.loc[ret["breath_no"] == row["breath_no"], "rms_mean"] = otherrows["rms_mean"].mean()
 
+    ret = ret.drop(columns="rms_poes")
+    
     return ret
 
 def savedataindividual(file, breaths, settings):   
