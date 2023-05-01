@@ -4,7 +4,7 @@ _(c) Copyright 2019 Emil Schwarz Walsted (emilwalsted@gmail.com), ORCID [0000-00
 
 [![DOI](https://zenodo.org/badge/191052676.svg)](https://zenodo.org/badge/latestdoi/191052676)
 
-**Current version: v0.9 BETA** (release v1.0 coming soon).
+** Current version: v1.0.0 ** 
 
 ![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/githubimage.png)
 
