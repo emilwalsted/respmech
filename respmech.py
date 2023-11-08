@@ -758,7 +758,7 @@ def adjustforintegration(data):
     return data - adjustment
 
 def calcptp(pressure, bcnt, vefactor, samplingfreq):
-    pressure = pressure.squeeze()
+    pressure = pressure.squeeze() - pressure[0]
     xval = np.linspace(0, len(pressure)/samplingfreq, len(pressure))
     integral = sp.integrate.simps(pressure, xval)
     ptp = integral * bcnt * vefactor
@@ -1363,7 +1363,6 @@ def analyse(usersettings):
                     ecgmindistance=settings.processing.emg.mindistance, 
                     ecgminwidth=settings.processing.emg.minwidth, 
                     windowsize=settings.processing.emg.windowsize)
-                peaks += startix/2000
                 emgcols = np.array(emgcolumns_ecgremoved)
 
             try:
@@ -1454,7 +1453,7 @@ def analyse(usersettings):
             ecgw_time=[]
             if settings.processing.emg.remove_ecg:
                 ecgw_time = np.array(ecgw) / settings.input.format.samplingfrequency
-                ecgw_time = ecgw_time + (startix/2000)
+                #ecgw_time = ecgw_time + (startix/settings.input.format.samplingfrequency)
             else:
                 peaks=[]
                 ecgw_time=[]
