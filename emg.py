@@ -190,19 +190,19 @@ def subtractecg(ch, peaks, samplingfrequency, windowsize):
                 _, fittedavg = amplitude_average(ecgwindow, ecgavgtime, 1.25, 1000) 
                 adjwindow = list(ecgwindow - fittedavg)
                 
-                # Diagnostics:
-                # if chno == 1:
-                #                   
-                #     plt.figure()
-                #     plt.plot(ecgwindow, label="Raw data", color='black', linewidth=0.5)
-                #     plt.plot(ecgavg, label="Average ECG", color='silver', linewidth=0.5)
-                #     plt.plot(ecgavgtime, label="Time shifted average ECG", color='orange', linewidth=0.5)
-                #     plt.plot(fittedavg, label="Amplitude adjusted average ECG", color='green', linewidth=0.5)
-                #     plt.plot(adjwindow, label="ECG reduced signal", color='r', linewidth=0.5)
-                #     plt.suptitle("Channel # " + str(chno) + ", ECG complex #" + str(peakno))   
-                #     plt.legend(loc="upper left")
-                #     plt.savefig("/Users/emilnielsen/Documents/Medicin/Forskning/RespMech validation/ERS/Annie troubleshooting/NEP302_V2/output/diag/ch" + str(chno) + "_#" + str(peakno) + ".pdf")
-                #     plt.close()
+                #Diagnostics:
+                if chno == 1:
+                                  
+                    plt.figure()
+                    plt.plot(ecgwindow, label="Raw data", color='black', linewidth=0.5)
+                    plt.plot(ecgavg, label="Average ECG", color='silver', linewidth=0.5)
+                    plt.plot(ecgavgtime, label="Time shifted average ECG", color='orange', linewidth=0.5)
+                    plt.plot(fittedavg, label="Amplitude adjusted average ECG", color='green', linewidth=0.5)
+                    plt.plot(adjwindow, label="ECG reduced signal", color='r', linewidth=0.5)
+                    plt.suptitle("Channel # " + str(chno) + ", ECG complex #" + str(peakno))   
+                    plt.legend(loc="upper left")
+                    plt.savefig("/Users/emilnielsen/Documents/Medicin/Forskning/RespMech demo/Output/diag/ch" + str(chno) + "_#" + str(peakno) + ".pdf")
+                    plt.close()
                 
                 emgecgch[peak-ecgwindowstart:peak+ecgwindowend] =  adjwindow 
                 
