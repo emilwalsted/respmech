@@ -71,7 +71,7 @@ from types import SimpleNamespace
 from collections import namedtuple
 
 import seaborn as sns; sns.set()
-plt.style.use('seaborn-white')
+plt.style.use('seaborn-v0_8-white')
 
 def import_file(full_name, path):
     from importlib import util
@@ -859,7 +859,7 @@ def calculateaveragebreaths(breaths, settings):
                 poesex[:,nobreaths] = resample(breath["expiration"]["poes"], settings)   
             except:
                 raise ValueError("Could not resample breath #" + str(breath["number"]) + ". Please inspect your 'avgresamplingobs' setting (if separating by flow) or peak settings (if separating by volume) and breath separation settings (examine diagnostic output plots)")         
-            
+             
     avgvolumein = np.mean(volumein, axis=1)
     avgvolumeex = np.mean(volumeex, axis=1)
     avgpoesin = np.mean(poesin, axis=1)
@@ -1336,7 +1336,7 @@ def analyse(usersettings):
             print('\t\tSaving raw data plots...')
             saverawplots("Flow, volume and pressures (raw data)", ntpath.basename(file), [flowraw, volumeraw, poesraw, pgasraw, pdiraw], 
                          ['Flow', 'Volume (uncorrected)', 'Oesophageal pressure', 'Gastric pressure', 'Trans diaphragmatic pressure'],
-                         [r'$L/s$', r'$L$', r'$cm H_2O$', r'$cm H_2O$', r'$cm H_2O$'],
+                         ['L/s', 'L', 'cm H_2O', 'cm H_2O', 'cm H_2O'],
                          settings)
 
         print('\t\tTrimming to whole breaths...')
