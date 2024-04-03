@@ -45,6 +45,10 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon, Rectangle
 from collections import OrderedDict 
 from scipy import signal
+import librosa
+import librosa.display as libdisp
+from scipy.io import wavfile
+import ntpath
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -494,11 +498,6 @@ def saveemgplots(outpdf, breaths, timecol, rows, titles, ylabels, title, rms=[],
     fig.savefig(outpdf)
     plt.close(fig)
     
-
-import librosa
-import librosa.display as libdisp
-from scipy.io import wavfile
-import ntpath
 
 def plotRawWave(plotTitle, sampleRate, samples, figWidth=14, figHeight=4):
     fig = plt.figure(figsize=(figWidth, figHeight))
