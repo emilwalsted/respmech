@@ -52,6 +52,7 @@ CREATED = "Created with RespMech.py version " + VERSION + " (www.github.com/emil
 
 import sys
 import os
+import importlib.util
 import glob
 import ntpath
 import math
@@ -70,16 +71,20 @@ import json
 from types import SimpleNamespace
 from collections import namedtuple
 
-import seaborn as sns; sns.set()
-plt.style.use('seaborn-v0_8-white')
+import seaborn as sns; sns.set_theme('paper', 'white')
+#plt.style.use('seaborn-v0_8-white')
 
 def import_file(full_name, path):
     from importlib import util
 
     spec = util.spec_from_file_location(full_name, path)
     mod = util.module_from_spec(spec)
-
-    spec.loader.exec_module(mod)
+    try:
+        spec.loader.exec_module(mod)
+    except ModuleNotFoundError as err:
+        raise ModuleNotFoundError("ModuleNotFoundError: " + str(err)) from err
+    except Exception as exc:
+        raise FileNotFoundError("Could not load emg.py from expected location: " + path) from exc
     return mod
 
 def checknotset(setting, text):
@@ -682,10 +687,7 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
     if len(breath["emgcols"]) > 0:
         print(', EMG RMS', end="")
         rmdir = os.path.dirname(os.path.realpath(__file__))
-        try:
-            emglib = import_file("emglib", os.path.join(rmdir, "emg.py"))
-        except:
-            raise FileNotFoundError("emg.py not found at expected location: " + rmdir)
+        emglib = import_file("emglib", os.path.join(rmdir, "emg.py"))
         retbreath["rms"], retbreath["intemg"] = emglib.calculate_rms(breath["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
         retbreath["rms_insp"], retbreath["intemg_insp"] = emglib.calculate_rms(breath["inspiration"]["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
         retbreath["rms_exp"], retbreath["intemg_exp"] = emglib.calculate_rms(breath["expiration"]["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
@@ -870,11 +872,8 @@ def calculateaveragebreaths(breaths, settings):
 def calculateentropy(breath, settings, phase = None):
     
     rmdir = os.path.dirname(os.path.realpath(__file__))
-    try:
-        ent = import_file("ent", os.path.join(rmdir, "entropy.py"))
-    except:
-        raise FileNotFoundError("entropy.py not found at expected location: " + rmdir)
-     
+    ent = import_file("ent", os.path.join(rmdir, "entropy.py"))
+         
     if phase is None:
         columns = breath["entcols"]
     else:
@@ -1090,7 +1089,7 @@ def savedataaverage(totals, settings):
     
     savefile = pjoin(settings.output.outputfolder, "data", "Average breathdata.xlsx")
     
-    writer = pd.ExcelWriter(savefile, engine='xlsxwriter', options={'strings_to_urls': True}) # pylint: disable=abstract-class-instantiated
+    writer = pd.ExcelWriter(savefile, engine='xlsxwriter', engine_kwargs={'options': {'strings_to_urls': True}}) # pylint: disable=abstract-class-instantiated
     totals.to_excel(writer, sheet_name='Data', index=False)
     formatheader(totals, writer, "Data")
 
@@ -1102,7 +1101,7 @@ def savedataaverage(totals, settings):
     version.to_excel(writer, sheet_name='Version', index=False)
     formatheader(version, writer, "Version")
     
-    writer.save()
+    writer.close()
     
 def getbreathdata(breath, datacol, colsprefix, appendcols, colsettings):
     df = pd.DataFrame(breath[datacol]).transpose()
@@ -1193,7 +1192,7 @@ def savedataindividual(file, breaths, settings):
     ret.insert(loc=0, column="file", value=file)
     
 
-    writer = pd.ExcelWriter(savefile, engine='xlsxwriter', options={'strings_to_urls': True}) # pylint: disable=abstract-class-instantiated
+    writer = pd.ExcelWriter(savefile, engine='xlsxwriter', engine_kwargs={'options': {'strings_to_urls': True}}) # pylint: disable=abstract-class-instantiated
     mechs.to_excel(writer, sheet_name='Data', index=False)
     formatheader(mechs, writer, "Data")
     
@@ -1204,7 +1203,7 @@ def savedataindividual(file, breaths, settings):
     version.to_excel(writer, sheet_name='Version', index=False)
     formatheader(version, writer, "Version")
     
-    writer.save()
+    writer.close()
     
     return ret
 
@@ -1349,11 +1348,8 @@ def analyse(usersettings):
             print('\t\tProcessing EMG')
             emgcols = np.array(emgcolumnsraw)
             rmdir = os.path.dirname(os.path.realpath(__file__))
-            try:
-                emglib = import_file("emglib", os.path.join(rmdir, "emg.py"))
-            except:
-                raise FileNotFoundError("emg.py not found at expected location: " + rmdir)
-
+            emglib = import_file("emglib", os.path.join(rmdir, "emg.py"))
+            
             if settings.processing.emg.remove_ecg:
                 print('\t\t...removing ECG')
                 emgcolumns_ecgremoved, ecgw, peaks = emglib.remove_ecg(emgcols, 
@@ -1585,7 +1581,7 @@ def analyse(usersettings):
 
 defaultsettings = """{
     "input": {
-        "inputfolder": "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/test/input/MATLAB Mac",
+        "inputfolder": "input",
         "files": "*.*",
         "format": {
             "samplingfrequency": null,
@@ -1641,7 +1637,7 @@ defaultsettings = """{
         }
     },
     "output": {
-        "outputfolder": "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/test/output",
+        "outputfolder": "output",
         "data": {
             "saveaveragedata": true,
             "savebreathbybreathdata": true,
