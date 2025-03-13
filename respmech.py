@@ -1062,7 +1062,7 @@ def saverawplots(suffix, file, rows, titles, ylabels, settings, breaths=None):
                 startx = startx + len(breath["poes"])
 
     
-    ax.set_xlabel(r'$observation #$', size=16)
+    ax.set_xlabel(r'observation #', size=16)
 
     savefile = pjoin(settings.output.outputfolder, "plots", file + " - " + suffix + ".pdf")
     plt.figtext(0.99, 0.01, CREATED + " on " + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), horizontalalignment='right')       
