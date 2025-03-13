@@ -51,8 +51,7 @@ from scipy.io import wavfile
 import ntpath
 import warnings
 warnings.filterwarnings("ignore")
-
-plt.style.use('seaborn-white')
+np.float = float
 
 def calculate_rms(emgchannels, rms_s, samplingfrequency):
     rms = []
