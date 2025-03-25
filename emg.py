@@ -82,7 +82,7 @@ def calculate_rms(emgchannels, rms_s, samplingfrequency):
         intemgch = []
         intch = np.abs(emgch)
         xval = np.linspace(0, len(emgch)-1, len(emgch)) / samplingfrequency
-        intemgch += [sp.integrate.simps(intch, xval)]
+        intemgch += [sp.integrate.simpson(intch, xval)]
 
         intemg = np.append(intemg, intemgch)
     
