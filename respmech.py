@@ -762,7 +762,7 @@ def adjustforintegration(data):
 def calcptp(pressure, bcnt, vefactor, samplingfreq):
     pressure = pressure.squeeze() - pressure[0]
     xval = np.linspace(0, len(pressure)/samplingfreq, len(pressure))
-    integral = sp.integrate.simps(pressure, xval)
+    integral = sp.integrate.simpson(pressure, xval)
     ptp = integral * bcnt * vefactor
 
     return ptp, integral
@@ -795,12 +795,12 @@ def calculatewob(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, av
     levelpoesin = (poesin*-1) - (flyin*-1)
     levelpoesin[np.where(levelpoesin<0)]=0
      
-    wobinres = max(abs(sp.integrate.simps(levelpoesin, volin)),0) * WOBUNITCHANGEFACTOR
+    wobinres = max(abs(sp.integrate.simpson(levelpoesin, volin)),0) * WOBUNITCHANGEFACTOR
     
     #Expiratory WOB:
     levelpoesex = poesex - poesex[len(poesex)-1]
     levelpoesex[np.where(levelpoesex<0)]=0
-    wobex = max(abs(sp.integrate.simps(levelpoesex, volex)),0) * WOBUNITCHANGEFACTOR
+    wobex = max(abs(sp.integrate.simpson(levelpoesex, volex)),0) * WOBUNITCHANGEFACTOR
     
     #Totals
     wobin = wobinela + wobinres
