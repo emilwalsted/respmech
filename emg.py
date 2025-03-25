@@ -82,7 +82,7 @@ def calculate_rms(emgchannels, rms_s, samplingfrequency):
         intemgch = []
         intch = np.abs(emgch)
         xval = np.linspace(0, len(emgch)-1, len(emgch)) / samplingfrequency
-        intemgch += [sp.integrate.simps(intch, xval)]
+        intemgch += [sp.integrate.simpson(intch, xval)]
 
         intemg = np.append(intemg, intemgch)
     
@@ -194,18 +194,18 @@ def subtractecg(ch, peaks, samplingfrequency, windowsize):
                 adjwindow = list(ecgwindow - fittedavg)
                 
                 #Diagnostics:
-                if chno == 1:
-                                  
-                    plt.figure()
-                    plt.plot(ecgwindow, label="Raw data", color='black', linewidth=0.5)
-                    plt.plot(ecgavg, label="Average ECG", color='silver', linewidth=0.5)
-                    plt.plot(ecgavgtime, label="Time shifted average ECG", color='orange', linewidth=0.5)
-                    plt.plot(fittedavg, label="Amplitude adjusted average ECG", color='green', linewidth=0.5)
-                    plt.plot(adjwindow, label="ECG reduced signal", color='r', linewidth=0.5)
-                    plt.suptitle("Channel # " + str(chno) + ", ECG complex #" + str(peakno))   
-                    plt.legend(loc="upper left")
-                    plt.savefig("/Users/emilnielsen/Documents/Medicin/Forskning/RespMech demo/Output/diag/ch" + str(chno) + "_#" + str(peakno) + ".pdf")
-                    plt.close()
+                #if chno == 1:
+                #                  
+                #    plt.figure()
+                #    plt.plot(ecgwindow, label="Raw data", color='black', linewidth=0.5)
+                #    plt.plot(ecgavg, label="Average ECG", color='silver', linewidth=0.5)
+                #    plt.plot(ecgavgtime, label="Time shifted average ECG", color='orange', linewidth=0.5)
+                #    plt.plot(fittedavg, label="Amplitude adjusted average ECG", color='green', linewidth=0.5)
+                #    plt.plot(adjwindow, label="ECG reduced signal", color='r', linewidth=0.5)
+                #    plt.suptitle("Channel # " + str(chno) + ", ECG complex #" + str(peakno))   
+                #    plt.legend(loc="upper left")
+                #    plt.savefig("/Users/emilnielsen/Documents/Medicin/Forskning/RespMech demo/Output/diag/ch" + str(chno) + "_#" + str(peakno) + ".pdf")
+                #    plt.close()
                 
                 emgecgch[peak-ecgwindowstart:peak+ecgwindowend] =  adjwindow 
                 
@@ -429,7 +429,7 @@ def reducenoise(emgchannel, noiseprofile, noiseprofilecolumn, samplingfrequency)
         noiseprofilecolumn = emgchannel
 
     noise = np.array(noiseprofilecolumn[int(noiseprofile[0]*samplingfrequency):int(noiseprofile[1]*samplingfrequency)])
-    output = removeNoise(audio_clip=emgchannel, noise_clip=noise, verbose=False, visual=False, n_fft=len(noise)**2)
+    output = removeNoise(audio_clip=emgchannel, noise_clip=noise, verbose=False, visual=False, n_fft=len(noise)**2, win_length=len(noise)**2)
 
     sys.stdout = sys.__stdout__
     return np.array(output)

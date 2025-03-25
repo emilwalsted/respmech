@@ -762,7 +762,7 @@ def adjustforintegration(data):
 def calcptp(pressure, bcnt, vefactor, samplingfreq):
     pressure = pressure.squeeze() - pressure[0]
     xval = np.linspace(0, len(pressure)/samplingfreq, len(pressure))
-    integral = sp.integrate.simps(pressure, xval)
+    integral = sp.integrate.simpson(pressure, xval)
     ptp = integral * bcnt * vefactor
 
     return ptp, integral
@@ -795,12 +795,12 @@ def calculatewob(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, av
     levelpoesin = (poesin*-1) - (flyin*-1)
     levelpoesin[np.where(levelpoesin<0)]=0
      
-    wobinres = max(abs(sp.integrate.simps(levelpoesin, volin)),0) * WOBUNITCHANGEFACTOR
+    wobinres = max(abs(sp.integrate.simpson(levelpoesin, volin)),0) * WOBUNITCHANGEFACTOR
     
     #Expiratory WOB:
     levelpoesex = poesex - poesex[len(poesex)-1]
     levelpoesex[np.where(levelpoesex<0)]=0
-    wobex = max(abs(sp.integrate.simps(levelpoesex, volex)),0) * WOBUNITCHANGEFACTOR
+    wobex = max(abs(sp.integrate.simpson(levelpoesex, volex)),0) * WOBUNITCHANGEFACTOR
     
     #Totals
     wobin = wobinela + wobinres
@@ -1302,6 +1302,25 @@ def catchexceptions(exctype, value, tb):
     finally:
         pass
     
+
+def resampledata(channel, settings):
+    origdata = channel.squeeze()
+    origfreq = settings.input.format.samplingfrequency
+    newfreq = settings.processing.sampling.resampletofrequency
+    changefactor = newfreq/origfreq
+    resamplefunc = sp.interpolate.interp1d(np.linspace(0, 1, origdata.size), origdata, "nearest")
+    return resamplefunc(np.linspace(0, 1, round(origdata.size * changefactor)))
+
+def resampledatamul(channels, settings): 
+    nocols = len(channels[0,:])
+    origfreq = settings.input.format.samplingfrequency
+    newfreq = settings.processing.sampling.resampletofrequency
+    changefactor = newfreq/origfreq
+    retchannels = np.zeros((nocols, round(changefactor * len(channels[:,0]))))
+    for i in range(0, nocols):
+        retchannels[i] = resampledata(channels[:, i], settings)
+    return retchannels.transpose()
+ 
 def analyse(usersettings):
 
     sys.excepthook = catchexceptions
@@ -1327,9 +1346,22 @@ def analyse(usersettings):
         print('\nProcessing \'' + file + '\'')
 
         flowraw, volumeraw, poesraw, pgasraw, pdiraw, entropycolumnsraw, emgcolumnsraw = load(file, settings)
-        entropycolumns = entropycolumnsraw
-
         timecolraw = np.arange(0, len(flowraw), dtype=int) / settings.input.format.samplingfrequency
+
+        #Resample data if specified in settings
+        if (settings.processing.sampling.resample):
+            timecolraw = resampledata(timecolraw, settings)
+            flowraw = resampledata(flowraw, settings)
+            volumeraw = resampledata(volumeraw, settings)
+            poesraw = resampledata(poesraw, settings)
+            pgasraw = resampledata(pgasraw, settings)
+            pdiraw = resampledata(pdiraw, settings)
+            if len(entropycolumnsraw)>0: entropycolumnsraw = resampledatamul(entropycolumnsraw, settings)
+            if len(emgcolumnsraw)>0: emgcolumnsraw = resampledatamul(emgcolumnsraw, settings)
+            settings.input.format.samplingfrequency = settings.processing.sampling.resampletofrequency
+            
+        entropycolumns = entropycolumnsraw
+        
         
         if (settings.output.diagnostics.savedataviewraw):
             print('\t\tSaving raw data plots...')
@@ -1599,6 +1631,10 @@ defaultsettings = """{
         }
     },
     "processing": {
+        "sampling": {
+            "resample": false,
+            "resampletofrequency": 500
+        },
         "mechanics": {
             "breathseparationbuffer": 800,
             "peakheight": 0.1,
