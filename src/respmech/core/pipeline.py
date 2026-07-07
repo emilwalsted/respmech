@@ -53,6 +53,7 @@ class FileResult:
     average_row: object = None         # 1-row DataFrame
     processed: object = None           # processed-data DataFrame or None
     breaths: object = None             # raw computed breaths (for plotting)
+    ecg: object = None                 # ECG-removal diagnostics (n_peaks, suppression)
     error: Optional[str] = None
 
 
@@ -76,28 +77,48 @@ def _emit(cb: Optional[ProgressCallback], event: ProgressEvent):
         cb(event)
 
 
-def _ecg_remove_trim(s, emgcolumnsraw, startix, endix):
-    """ECG removal on the raw signal, then trim to [startix:endix]."""
+def _ecg_remove(s, emgcolumnsraw):
+    """Run ECG removal on the (full, untrimmed) raw EMG. Returns (emgcols, diag) where
+    diag reports R-peak count and peak-window RMS suppression on the detect channel,
+    or None if ECG removal is off. Detection/template parameters come from the
+    test-level settings and are applied identically to every file."""
     emgcols = np.array(emgcolumnsraw)
-    if s.processing.emg.remove_ecg:
-        emgcols_ecg, _ecgw, _peaks = emglib.remove_ecg(
-            emgcols, emgcols[:, s.processing.emg.column_detect],
-            samplingfrequency=s.input.format.samplingfrequency,
-            ecgminheight=s.processing.emg.minheight,
-            ecgmindistance=s.processing.emg.mindistance,
-            ecgminwidth=s.processing.emg.minwidth,
-            windowsize=s.processing.emg.windowsize)
-        emgcols = np.array(emgcols_ecg)
+    if not s.processing.emg.remove_ecg:
+        return emgcols, None
+    detect = s.processing.emg.column_detect
+    raw_detect = np.array(emgcols[:, detect], dtype=float)
+    emgcols_ecg, _ecgw, peaks_s = emglib.remove_ecg(
+        emgcols, emgcols[:, detect],
+        samplingfrequency=s.input.format.samplingfrequency,
+        ecgminheight=s.processing.emg.minheight,
+        ecgmindistance=s.processing.emg.mindistance,
+        ecgminwidth=s.processing.emg.minwidth,
+        windowsize=s.processing.emg.windowsize)
+    emgcols = np.array(emgcols_ecg)
+    fs = s.input.format.samplingfrequency
+    peaks_samp = (np.asarray(peaks_s) * fs).astype(int)
+    before = emglib.peak_window_rms(raw_detect, peaks_samp, fs)
+    after = emglib.peak_window_rms(np.array(emgcols[:, detect], dtype=float), peaks_samp, fs)
+    supp = (1.0 - after / before) if (before and before == before) else float("nan")
+    diag = {"n_peaks": int(len(peaks_samp)), "detect_channel": int(detect),
+            "peak_rms_before": before, "peak_rms_after": after, "suppression": supp}
+    return emgcols, diag
+
+
+def _ecg_remove_trim(s, emgcolumnsraw, startix, endix):
+    """ECG removal (no diagnostics) then trim — used for internal reference building."""
+    emgcols, _ = _ecg_remove(s, emgcolumnsraw)
     return emgcols[startix:endix]
 
 
-def _process_emg(s, flowraw, emgcolumnsraw, startix, endix, filename, noise_set=None):
+def _process_emg(s, emgcolumnsraw, startix, endix, noise_set=None):
     """ECG removal -> trim -> shared-profile noise reduction (applied identically to
-    every file when ``noise_set`` is provided)."""
-    emgcols = _ecg_remove_trim(s, emgcolumnsraw, startix, endix)
+    every file when ``noise_set`` is provided). Returns (emgcols, ecg_diag)."""
+    emgcols, ecg_diag = _ecg_remove(s, emgcolumnsraw)
+    emgcols = emgcols[startix:endix]
     if noise_set is not None:
         emgcols = noise_set.apply_columns(emgcols)
-    return emgcols
+    return emgcols, ecg_diag
 
 
 def _emg_segmented(path, s):
@@ -215,9 +236,10 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
             entropycolumns = entropycolumnsraw[startix:endix] if len(entropycolumnsraw) else entropycolumnsraw
 
             emgcolumns = []
+            ecg_diag = None
             if len(emgcolumnsraw) > 0:
                 _emit(progress, ProgressEvent("stage", file=filename, message="processing EMG"))
-                emgcolumns = _process_emg(s, flowraw, emgcolumnsraw, startix, endix, filename, noise_set)
+                emgcolumns, ecg_diag = _process_emg(s, emgcolumnsraw, startix, endix, noise_set)
 
             _emit(progress, ProgressEvent("stage", file=filename, message="volume correction"))
             zerovol = compute.zero(volume)
@@ -255,7 +277,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
 
             result.files[filename] = FileResult(
                 file=filename, breaths_table=breaths_table, average_row=average_row,
-                processed=processed, breaths=breaths)
+                processed=processed, breaths=breaths, ecg=ecg_diag)
             average_rows.append(average_row)
             _emit(progress, ProgressEvent("file_done", file=filename, message=f"{total} breaths"))
 

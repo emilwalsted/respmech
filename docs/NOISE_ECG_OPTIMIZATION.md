@@ -143,12 +143,15 @@ would drop ch0 to 0.751). Per-channel at the chosen value: fidelity 0.87–1.23,
   reference, not a single 0.05 s gap,
 - `n_grad_time = 4`, `n_grad_freq = 0` are fine.
 
-### ECG removal
-The template-subtraction method is sound. Suggested: keep it, tune `minheight`/
-`mindistance`/`minwidth`/`column_detect` per subject from the channel where the R-wave
-is most prominent (H5 used `column_detect=0`, H6 `=4`); verify suppression with the
-peak-window-RMS metric (H5 reached ~70 %). Detection parameters should be **fixed per
-test** so every file is treated identically.
+### ECG removal (implemented — milestone 2)
+The template-subtraction method is kept (it is sound). Detection/template parameters
+(`detect_channel`, `ecg_min_height/distance/width`, `ecg_window_s`) are **test-level
+settings applied identically to every file** — never re-tuned per file. The pipeline
+now attaches an **ECG suppression report** to each `FileResult.ecg`
+(`n_peaks`, `peak_rms_before/after`, `suppression`), computed as the peak-window RMS
+reduction on the detect channel (H5 reached ~70 %), so consistency and quality are
+visible per test. Tune `detect_channel` to the channel where the R-wave is most
+prominent (H5 `0`, H6 `4`).
 
 _Caveats: single-file/channel frontier on one subject; band 20–250 Hz; expiration
 assumed diaphragm-quiet. Values illustrate the trade-off and the trap, not final
