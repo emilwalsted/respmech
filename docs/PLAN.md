@@ -236,8 +236,14 @@ disk.
 
 1. **Golden lock (done, Phase 1)** — `tests/golden/` freezes current numeric output
    across the scenario matrix; the refactored core must reproduce it within
-   tolerance. Volume-separation and ECG/noise paths will be locked against **Emil's
-   real production dataset + expected results** (offered — see §8).
+   tolerance. **Now includes a production golden** built from Emil's real datasets
+   (`tests/golden/production_*`), locking **volume-based breath separation** and
+   **ECG removal + noise reduction + RMS outlier** — the paths synthetic data could
+   not cover. See [`production_comparison.md`](../tests/golden/production_comparison.md).
+   Two correctness questions surfaced there must be **decided in Phase 2**:
+   (a) the **PTP baseline convention** (the post-`1630c40` `- pressure[0]` appears to
+   double-subtract a baseline `adjustforintegration` already applied), and
+   (b) which **ECG-removal/noise version** is canonical.
 2. **Unit tests per formula (Phase 2)** — small analytic inputs with hand-derived
    expected values for WOB (triangle areas, known integrals), PTP, VE/VT/timing,
    sample entropy (reference vectors), RMS — so each formula is independently

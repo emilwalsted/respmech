@@ -1,0 +1,137 @@
+{
+  "emg_h5_ecg_noise_outlier": {
+    "RIU_H5_40W.txt": {
+      "expected_sha256": "2dc6957631f64da2ea74ab35c3cd85c97b05d4f780dd47baac212480123cdadf",
+      "input_bytes": 15227137,
+      "input_sha256": "67cc4895258f7360ee4f47db10bb43f9100ce81c16c3f0c52470c183c08b2928"
+    },
+    "RIU_H5_60W.txt": {
+      "expected_sha256": "0583a42b7663d926224e666a2daaac1ebcac847e97cc3dca37ddcccfbb6a7352",
+      "input_bytes": 14866601,
+      "input_sha256": "4a079e55663c358dd7cf5f4d1b3baa153de3bdc513434481873b05510cf8e9e0"
+    },
+    "RIU_H5_Baseline.txt": {
+      "expected_sha256": "503b5d46bd57f0df7f3ff69529a66a8449b0d3498cdeccf57da302968529fb90",
+      "input_bytes": 15951741,
+      "input_sha256": "32e35f476fadc6ad0578c0b761e145bbd0ee56b45769c35640c6370a44e5b09e"
+    },
+    "RIU_H5_IC.txt": {
+      "expected_sha256": "8abd9421a4faa387f8dd5d499e102edcefd560ae61702156235ae9dad8c95c07",
+      "input_bytes": 9470927,
+      "input_sha256": "cf0314dafbc841c3b0e01a5f22ec58c1ecd5d3ad067ba31680cc9e6d21d20354"
+    },
+    "RIU_H5_Peak180W.txt": {
+      "expected_sha256": "33206591c2b097f4f4bdad0951af65d7f9c68037300152b4bde8b11d0f9ec487",
+      "input_bytes": 4298209,
+      "input_sha256": "0ffc5aa531b12ba2ef42c393f0ce39eea7d0ff18dfd843d54a2e718c5bcf77b2"
+    }
+  },
+  "emg_h6_ecg_noise_outlier": {
+    "RIU_H6_40W.txt": {
+      "expected_sha256": "72134a4143aeab0044652acc37517ddac379c29779f93050b03bd6abbbe67af3",
+      "input_bytes": 15274474,
+      "input_sha256": "ec6b82938492710f9e3c7887812ba946605dd22d92866051794e6f8c25f445a7"
+    },
+    "RIU_H6_60W.txt": {
+      "expected_sha256": "595d2759129a1f2eb8613b674dec83632a96478d43846207634a323de7f51036",
+      "input_bytes": 15084466,
+      "input_sha256": "bfdbabb277f1c02bcc7777642c7b53e0472caf55589e8bc15475d24257810f88"
+    },
+    "RIU_H6_Baseline.txt": {
+      "expected_sha256": "2a99eef7a6b234a77b0dd4b4742a2585a5a43a1251c4bb232f1ece336d7bdb84",
+      "input_bytes": 15062182,
+      "input_sha256": "89c17ad253fe1ba2faa15dc0e43e153d1e56f63ed1a76d53fb88fa50e082c8f6"
+    },
+    "RIU_H6_IC.txt": {
+      "expected_sha256": "7a3897ff3ee12bdcb128685c6c88d88a11f8b39cdef9bb868397d686a42103c4",
+      "input_bytes": 11501958,
+      "input_sha256": "74d8936de8cc71305e2847cb57f38352fec768077ef3666408318a7fe86eb298"
+    },
+    "RIU_H6_Peak220W.txt": {
+      "expected_sha256": "85474e9ebc1897946349b302b75d7d555c3ba6f0ad5dc8002ff7e75619d2ea0f",
+      "input_bytes": 5320395,
+      "input_sha256": "eeff15267ebe080ced2d016a781d6f0c3da92455d55b6ad28baabe3b92f631ce"
+    }
+  },
+  "resampling_volume_sep": {
+    "RIU_H1_60W.txt": {
+      "expected_sha256": "cb1691a82a7154ede52302fcff5a6e7afe37b54104035f84e92ab3706bdb149d",
+      "input_bytes": 17199097,
+      "input_sha256": "5ccc5594925d4fe3defc8d904d261b63bb1bc7da8a1657e6af244e84abb23759"
+    }
+  },
+  "trimming_debugging": {
+    "NEP301_V2_140W 1.txt": {
+      "expected_sha256": "93b7d141a1261856e1a4831b563d5df48e41b6dc179515658ff81897828bce06",
+      "input_bytes": 11252937,
+      "input_sha256": "edc68ed4e5538d628802acc69a3b59c788ab86818fc6141ea028ee06e7602425"
+    },
+    "NEP301_V2_140W 2.txt": {
+      "expected_sha256": "9c83a6dbfabb4a880980eb0a9d36945e3310d80532a554387db1255600be6667",
+      "input_bytes": 12338505,
+      "input_sha256": "e7297ed5ed598b8905f9394c8dc4a93321c253eb709ded606968a7c535520e7f"
+    },
+    "NEP301_V2_140W testbegin.txt": {
+      "expected_sha256": "7dcc8cd82a7854667d394b0f684a61c24f62c634b12e76a42af94fa1da7a5211",
+      "input_bytes": 10832016,
+      "input_sha256": "339cbbc4c892c3d834833fec95d5b708d9a3e785a0a7caa8628d3b72c835b7d1"
+    },
+    "NEP301_V2_140W testend.txt": {
+      "expected_sha256": "1ddd90c8e5f8477d36df9701374d6bbcb980e777791cfe6430d42320cbfd29df",
+      "input_bytes": 11138525,
+      "input_sha256": "bf4a0443b59af7fc2831587748ac25cda67234fc9e009554939905aeef4c59e4"
+    },
+    "NEP307_V2_140W 1.txt": {
+      "expected_sha256": "68ba4edf394dd20ddea68a3663b0021d8486b204ce875cc85b355f95a293fc59",
+      "input_bytes": 11076139,
+      "input_sha256": "9f4f2ee59e85fb746b469af9b47d7597051ca617d072ca5caea8e3918193bd5e"
+    },
+    "NEP307_V2_40W 1.txt": {
+      "expected_sha256": "e158665e89ab94e1c08e91e0e000a8804e09bed054a17c0a1be3142f9a67ad75",
+      "input_bytes": 24984177,
+      "input_sha256": "e0930fa751f9efd76769520f3ebd3bab35365c7c5e1e8317870f0bc336ab44f8"
+    },
+    "NEP307_V2_Baseline 1.txt": {
+      "expected_sha256": "b49c47da95a9056fcbcc142f1fbd3d490b194a5b2aa42c4e0249376083442edf",
+      "input_bytes": 52942081,
+      "input_sha256": "23a2ae631c47a42fa288c73bf58a1e3b65cf164206b5b150d6a734307804257f"
+    },
+    "NEP307_V2_IC 1.txt": {
+      "expected_sha256": "3f118b71bf1f09d00341f0bd786907fd78c2be49dd38465859fcfe7b865e5ff5",
+      "input_bytes": 12306674,
+      "input_sha256": "cb34794aa72399e5b82539b508da4196342428f85c066f8decd213180b209f1c"
+    },
+    "NEP307_V2_Peak340W 1.txt": {
+      "expected_sha256": "4f1f81d82af6572afb55fa0b76844d8ed10c7d52f67ecd4e1da59b6e8fa51913",
+      "input_bytes": 10154976,
+      "input_sha256": "765db0c06d52833ae55b846a6c9c849e268f76664ae2ba98cff93bf7a62da3e3"
+    }
+  },
+  "zeros_debugging": {
+    "NEP303_V2_140W.txt": {
+      "expected_sha256": "f0dd21d4ed36e923fbcd4f99caf12fa8113b4fa3caacce56f45d3bf156fe58c0",
+      "input_bytes": 16585275,
+      "input_sha256": "039df2118ed6ba7cd03facb20714d77eec5bb8fea620195491d7aa6dd867aa66"
+    },
+    "NEP303_V2_40W.txt": {
+      "expected_sha256": "6e60f4a6f24b5d7be320f7ffbee68953369710aa7fa42f00b3e174e7cb0bd0a1",
+      "input_bytes": 25847353,
+      "input_sha256": "35f4e8eb8ab3c21f8652b92a1ed557d81c3f7bf599031da00e23f065def64ba3"
+    },
+    "NEP303_V2_Baseline.txt": {
+      "expected_sha256": "60e7068a54250ea70f428183bf03f0b8b30346027d9e7d0e2c019ce4fc193c11",
+      "input_bytes": 27939101,
+      "input_sha256": "47af6ce4f14b739f6cef73da814877c265b7a81a811beb75e189504c9fb9387e"
+    },
+    "NEP303_V2_IC.txt": {
+      "expected_sha256": "434a569d869cefbeb96f8440735507b128db8a4ecebd65aa7175c3d1e4e5be56",
+      "input_bytes": 5615326,
+      "input_sha256": "3fdb32e4eac53ca677bfce1c7710f25f1e1e9297e01f2fbfe32f21c94ab8e678"
+    },
+    "NEP303_V2_Peak240W.txt": {
+      "expected_sha256": "f1c7ac0067e6375e87e2c631cefebd2c7800392635a016219d17364bfc960312",
+      "input_bytes": 22183730,
+      "input_sha256": "18c02955542f18da0946bc523fbf030fce9b26cc13b5fe51b7ba73b419a8ad50"
+    }
+  }
+}
