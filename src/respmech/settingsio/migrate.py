@@ -178,6 +178,41 @@ def migrate_dict(legacy: dict) -> tuple[Settings, MigrationReport]:
       "windowsize->ecg_window_s; outlierrmssdlimit->outlier_rms_sd_limit; "
       "emgplotyscale->plot_yscale")
 
+    # --- noise reduction: consolidate the legacy per-file noise_profile list into a
+    #     single shared reference + fixed parameters (identical transformation for
+    #     every file). See docs/NOISE_ECG_OPTIMIZATION.md. ---
+    legacy_np = emg.get("noise_profile", [])
+    if emg.get("remove_noise", False):
+        # reference file = the (shared) source file the entries point at, if any.
+        sources = [e[1] for e in legacy_np if len(e) >= 2 and isinstance(e[1], str) and e[1]]
+        ref_file = None
+        if sources:
+            ref_file = _basename(sources[0])
+            if len({_basename(x) for x in sources}) > 1:
+                r.normalised.append(
+                    "emg.noise_profile referenced multiple source files; the shared "
+                    f"profile now uses '{ref_file}' for ALL files (identical transform).")
+        intervals = sorted({tuple(e[2]) for e in legacy_np if len(e) >= 3 and e[2]})
+        if len({tuple(e[2]) for e in legacy_np if len(e) >= 3 and e[2]}) > 1:
+            r.normalised.append(
+                "emg.noise_profile used different intervals per file; consolidated to "
+                "one shared interval set (per-file re-tuning is invalid for EMG "
+                "normalisation).")
+        new_proc["emg"]["noise"] = {
+            "enabled": True,
+            "reference_file": ref_file,
+            "reference_intervals": [list(iv) for iv in intervals],
+            "use_expiration": len(intervals) == 0,
+            # fixed STFT params (legacy n_fft=len(noise)**2 was a bug — dropped):
+            "n_fft": 256, "hop_length": 64, "win_length": 256,
+            "n_std_thresh": 1.0, "prop_decrease": 0.6, "auto_prop": True,
+            "fidelity_target": 0.8,
+        }
+        r.normalised.append(
+            "emg.remove_noise + per-file noise_profile -> processing.emg.noise "
+            "(shared profile, fixed n_fft=256, fidelity-gated prop_decrease). The "
+            "legacy n_fft=len(noise)**2 parameterisation was a bug and is dropped.")
+
     # --- entropy ---
     new_proc["entropy"] = {
         "epochs": ent.get("entropy_epochs", 2),
@@ -229,6 +264,11 @@ def migrate_dict(legacy: dict) -> tuple[Settings, MigrationReport]:
 
 def migrate_file(py_path: str | Path) -> tuple[Settings, MigrationReport]:
     return migrate_dict(extract_legacy_dict(py_path))
+
+
+def _basename(path):
+    import ntpath
+    return ntpath.basename(str(path))
 
 
 def _nan_to_none(v):

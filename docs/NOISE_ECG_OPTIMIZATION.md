@@ -1,9 +1,10 @@
 # EMGdi noise reduction & ECG removal — optimisation study
 
-_Exploratory analysis + recommendation. **No canonical behaviour or golden was
-changed** — this awaits Emil's decision and is tied to the open "canonical EMG/noise
-baseline" question (master + `resampling-options`). Measurements were run on the real
-H5 production set (same individual: Baseline / 40W / 60W / IC / Peak180W)._
+_Started as exploratory analysis; **Emil approved making this canonical**. The
+shared-profile, fidelity-gated design below is now **implemented** in
+`respmech.core.noise` + the pipeline (Phase-2 EMG milestone 1). The EMG golden is
+regenerated from this canonical code in the settings/CLI/UI milestone. Measurements
+were run on the real H5/H6 production sets (same individuals)._
 
 ## Design constraint (governs everything below)
 
@@ -112,6 +113,27 @@ A long, diaphragm-quiet noise sample gives a stable per-frequency estimate. Fron
 `prop_decrease` trades ΔSNR vs fidelity along a smooth frontier. `n_fft=256` (≈128 ms
 at 2 kHz) slightly beats 512 for this band.
 
+### 3c. Rendered figures (real H5/H6 EMG)
+Signal figures are kept **out of this public repo**; they live in Emil's Dropbox:
+`/Users/emilwalsted/Dropbox/RespMech/figures/`
+- `H5_RIU_H5_Peak180W_ch4_time.png` / `_psd.png` — raw vs current (near-no-op) vs
+  proposed; proposed removes the 20–50 Hz noise floor while preserving the 80–200 Hz
+  EMG (ΔSNR +2.35 dB, fidelity 0.94).
+- `H5_RIU_H5_60W_ch2_time.png` / `_psd.png` and `..._variants_*` — an already-clean
+  channel where prop_decrease=0.6 over-subtracts (fidelity 0.54); prop 0.3/0.2 lift
+  fidelity to 0.76/0.88.
+- `H6_RIU_H6_Peak220W_ch0_*` / `H6_RIU_H6_40W_ch4_*` — H6 confirms the pattern.
+- `OVERVIEW_snr_fidelity_vs_prop_decrease.png` — ΔSNR & fidelity vs prop_decrease per
+  channel with the fidelity ≥ 0.8 line: **the safe choice varies per channel/subject.**
+
+### 3d. Per-channel frontier is now computed automatically (implemented)
+Running the implemented shared-profile pipeline on the full H5 test auto-selects, from
+the whole-test frontier, the highest `prop_decrease` keeping the **worst channel** ≥
+target (0.8) — here **prop_decrease = 0.2** (ch0=0.874 is the binding channel; prop=0.3
+would drop ch0 to 0.751). Per-channel at the chosen value: fidelity 0.87–1.23, ΔSNR
++0.14…+0.59 dB. Conservative but guaranteed non-destructive across every channel, and
+**identical for all five files** (verified by test).
+
 ### Recommended noise-reduction settings
 - **`n_fft = 256`, `win_length = 256`, `hop_length = 64`** (decouple from clip length),
 - **`n_std_thresh = 1.0`**, **`prop_decrease = 0.5–0.7`** (safety margin; fidelity
@@ -132,43 +154,39 @@ _Caveats: single-file/channel frontier on one subject; band 20–250 Hz; expirat
 assumed diaphragm-quiet. Values illustrate the trade-off and the trap, not final
 per-subject numbers — those should be set from each subject's rest reference._
 
-## 4. Shared-profile workflow (the mathematically-required design)
+## 4. Shared-profile workflow — **implemented** (`respmech.core.noise`)
 
-**Does the current code already do this? Partially — and not correctly.** It can
-share the noise *source file*, but (i) `n_fft`/`win_length` tie the transform to clip
-length, (ii) intervals differ per file (H5 Baseline ≠ siblings), and (iii) the noise
-statistics are recomputed inside every `removeNoise` call. So the transformation is
-**not guaranteed identical** across a test. **This needs a small refactor.**
+The legacy code only *partially* supported this (shared *source file*, but
+`n_fft=len(noise)**2`, per-file intervals, and noise stats recomputed per call → not
+guaranteed identical). It is now replaced by:
 
-**Proposed design — one reusable noise/ECG profile per test:**
-1. Build a **`NoiseProfile` artefact once** from a rest reference: concatenate
-   EMG-free expiration (or an apnoea segment), compute the per-frequency
-   `mean+n_std·std` threshold spectrum with **fixed** `n_fft/hop/win`. Store it
-   (e.g. the noise clip + fixed params, or the precomputed threshold array).
-2. Apply the **same** profile + params to **every** file in the test (identical gate
-   ⇒ comparable RMS). `noisereduce` (the maintained Sainburg successor) supports
-   passing a fixed `y_noise` + `stationary=True`; even cleaner is to precompute the
-   threshold spectrum once.
-3. Likewise fix the **ECG detection parameters** per test; the per-file adaptive
-   template is acceptable (contaminant removal), but the detection settings must be
-   shared.
-4. Settings shape: a single `[processing.noise_reference]` (file + interval(s) +
-   fixed STFT params) reused for all files, replacing the per-file `noise_profile`
-   list — this makes "identical transformation" the default, not a coincidence.
+1. **`NoiseProfile`** (`respmech/core/noise.py`) — a serialisable per-channel gate:
+   fixed `n_fft/hop/win` + a precomputed `mean + n_std·std` threshold spectrum, built
+   **once** from an EMG-free rest reference (explicit intervals or expiration).
+2. **`NoiseProfileSet`** — one profile per EMG channel + one `prop_decrease`, applied
+   **identically** to every file (`apply_columns`). Built once per test in
+   `pipeline.run_batch` from the **whole** test's file list, so a single-file/GUI test
+   run denoises exactly as the full batch (verified:
+   `test_identical_transformation_regardless_of_batch_subset`).
+3. **Fidelity gate** — `fidelity()` (retained inspiratory in-band power) +
+   `select_prop_decrease()` picks, once per test, the highest `prop_decrease` whose
+   worst active channel stays ≥ `fidelity_target`. Manual `prop_decrease` is also
+   supported (`auto_prop=false`). Per-channel fidelity/ΔSNR + the full frontier are
+   returned in `BatchResult.noise_report`.
 
-We had a representative multi-file, same-individual set (H5) to design against, so no
-extra data is needed to validate the workflow; a dedicated rest/apnoea reference
-recording per test would make the noise profile cleaner still.
+The implementation is the established Sainburg spectral-gating math driven by a fixed,
+precomputed threshold (equivalent in spirit to `noisereduce` with a fixed `y_noise` +
+`stationary=True`, but with a serialisable profile and no per-call re-estimation). A
+too-short reference raises a clear error / warning (≥ ~8 STFT frames recommended).
 
-## 5. Recommendation & next step (for Emil)
+## 5. Status & remaining
 
-1. **Fix `n_fft`/`win_length`** (decouple from `len(noise)`) — the current values are
-   a bug that makes noise reduction a near-no-op and non-identical across files.
-2. Adopt **`n_fft=256, n_std_thresh=1.0, prop_decrease≈0.5–0.7`** with a **long
-   EMG-free noise clip**, prioritising **fidelity ≥ 0.8**.
-3. Introduce a **shared noise/ECG profile artefact** applied identically to every file
-   in a test (§4).
+**Done (this milestone):** the `n_fft`/`win_length` bug fix (fixed STFT params), the
+shared serialisable `NoiseProfile`, the fidelity metric + gate + auto-selection, and
+the identical-transformation guarantee — all with tests, on real H5/H6 data.
 
-These change EMG RMS outputs, so — like the canonical EMG/noise baseline question —
-they must be decided by Emil and then locked with a regenerated EMG golden. **Nothing
-here is applied yet.**
+**Remaining (later milestones):** fix the ECG detection parameters per test and expose
+them (milestone 2); expose the new `processing.emg.noise` settings in TOML + migrator
+mapping and a GUI fidelity/noise preview (milestone 3); **regenerate the EMG golden**
+from this canonical code and document the before/after on the EMG columns (milestone
+3). Everything non-EMG in the golden is held constant.

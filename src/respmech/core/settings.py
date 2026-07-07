@@ -94,6 +94,32 @@ class WobSettings:
 
 
 @dataclass
+class NoiseSettings:
+    """Shared-profile EMG noise reduction. ONE profile + ONE parameter set built from
+    a rest reference and applied identically to every file in a test (never re-tuned
+    per file). See docs/NOISE_ECG_OPTIMIZATION.md."""
+    enabled: bool = False
+    # EMG-free rest reference the noise profile is built from (shared across the test).
+    reference_file: str | None = None
+    # explicit EMG-free windows [[t0, t1], ...] in reference_file; if empty and
+    # use_expiration is True, the profile is built from the reference's expiration.
+    reference_intervals: list[Any] = field(default_factory=list)
+    use_expiration: bool = True
+    # fixed STFT parameters (decoupled from the noise-clip length — the legacy bug).
+    n_fft: int = 256
+    hop_length: int = 64
+    win_length: int = 256
+    n_std_thresh: float = 1.0
+    n_grad_freq: int = 0
+    n_grad_time: int = 4
+    # prop_decrease is chosen ONCE per test: auto (highest value keeping worst-channel
+    # fidelity >= target) or a fixed manual value.
+    prop_decrease: float = 0.6
+    auto_prop: bool = True
+    fidelity_target: float = 0.8
+
+
+@dataclass
 class EmgSettings:
     rms_window_s: float = 0.050
     remove_ecg: bool = False
@@ -106,8 +132,11 @@ class EmgSettings:
     outlier_rms_sd_limit: float = 0.0
     save_sound: bool = False
     plot_yscale: list[float] = field(default_factory=lambda: [-0.1, 0.1])
-    # filename-keyed noise-profile intervals: [[file, source_file_or_empty, [t0,t1]], ...]
+    # legacy filename-keyed noise-profile intervals (kept for migration):
+    # [[file, source_file_or_empty, [t0,t1]], ...]
     noise_profile: list[Any] = field(default_factory=list)
+    # new shared-profile noise reduction (canonical):
+    noise: NoiseSettings = field(default_factory=NoiseSettings)
 
 
 @dataclass
