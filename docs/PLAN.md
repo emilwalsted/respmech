@@ -276,14 +276,19 @@ The newest code must **run on all valid real input**. Phase 2 distinguishes:
   trim edge-case files whose data violates the start-expiration/end-inspiration
   precondition. The refactor should say *which* file/precondition failed and why.
 
-### 6b. Post-refactor review list (parked — do NOT change now)
-Items intentionally deferred until after the refactor lands, so behaviour is held
-constant meanwhile:
-- **PTP baseline (possible double subtraction).** `calcptp`'s `- pressure[0]`
-  (commit `1630c40`) subtracts a baseline on top of the `adjustforintegration` the
-  caller already applied. Emil wants this **reviewed later**. Until then the current
-  `master` PTP behaviour is **preserved as-is** in the golden — not touched in the
-  refactor.
+### 6b. Post-refactor review list
+- **PTP baseline — ✅ RESOLVED (verified correct, not a bug).** The investigation in
+  [PTP_INVESTIGATION.md](PTP_INVESTIGATION.md) established, against an independent
+  from-first-principles reference, that `calcptp`'s `- pressure[0]` (commit `1630c40`)
+  is a **correct single end-expiratory baseline**, not a double subtraction:
+  `adjustforintegration(-Poes)` is a no-op on the all-positive input, and
+  `∫(f - f[0])` is invariant to the earlier constant pre-shift, so only one baseline
+  is in effect. The after-fix values equal the independent ground truth; the old
+  spreadsheets' `int_*`/`ptp_*` were physiologically wrong (they carried the DC
+  offset `P_ee·T`). The current behaviour and golden are kept. Follow-ups actioned:
+  removed the redundant `adjustforintegration`/`- min` pre-steps (no numeric change),
+  and switched the baseline to a short end-expiratory window mean (documented,
+  deliberate golden update).
 
 ---
 
