@@ -11,6 +11,8 @@ def main(argv=None) -> int:
 
     argv = list(sys.argv if argv is None else argv)
     app = QApplication(argv)
+    from respmech.ui import theme
+    theme.apply_theme(app)          # Fusion + palette + QSS + plot styling; import-safe
     state = AppState()
     # Optional: a settings file passed on the command line is loaded on start.
     if len(argv) > 1 and argv[1].endswith(".toml"):
