@@ -149,6 +149,17 @@ def remove_ecg(emgecgchannels, peakch, samplingfrequency, ecgminheight, ecgmindi
     return processedchannels, ecgwindows, peaks / samplingfrequency
 
 
+def peak_window_rms(channel, peaks_samples, samplingfrequency, halfwidth_s=0.04):
+    """RMS of the signal within +/- halfwidth around each R-peak — a measure of ECG
+    contamination. Comparing before vs after ECG removal gives the suppression."""
+    channel = np.asarray(channel, dtype=float)
+    w = int(halfwidth_s * samplingfrequency)
+    segs = [channel[max(0, p - w):p + w] for p in peaks_samples if 0 <= p < len(channel)]
+    if not segs:
+        return float("nan")
+    return float(np.sqrt(np.mean(np.concatenate(segs) ** 2)))
+
+
 # --- spectral noise reduction (adapted from Tim Sainburg) -------------------
 
 def _stft(y, n_fft, hop_length, win_length):
