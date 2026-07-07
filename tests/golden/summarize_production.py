@@ -20,11 +20,46 @@ PTP_COLS = {"int_oesinsp", "ptp_oesinsp", "int_pdiinsp", "ptp_pdiinsp",
 WOB_COLS = {"wob_ex_total", "wob_in_res", "wobtotal", "wob_in_total", "wob_in_ela"}
 
 ANALYSIS = """
+## Ground truth (Emil's decision)
+
+**Ground truth = the input data processed by the NEWEST algorithms.** The old
+runs' spreadsheets can be outdated and are **not** the correctness target where they
+differ from the newest code. The golden reference is therefore the **newest code's
+output** on the inputs (captured here from the current repo). Consequently, a
+difference between "current code" and an "expected" spreadsheet below is attributed
+to **outdated run data**, not a code error — unless it is one of the genuine bugs
+called out in §D.
+
+### Is `master` actually the newest algorithm? (verified)
+
+Checked across all branches. Result:
+- **ECG removal (`subtractecg`/`remove_ecg`) — `master` IS newest.** `master`'s only
+  two post-divergence EMG commits are non-algorithmic (`de4d0f2` comments out a
+  debug plot; `41097aa` renames `simps`→`simpson`). Numerically identical to the
+  branches.
+- **Noise reduction (`reducenoise`) — a NEWER variant exists OFF `master`.** Branch
+  `origin/resampling-options` passes `win_length=len(noise)**2` to `removeNoise`
+  (master does not) and also carries the **resampling** feature that the production
+  settings' `processing.sampling` section requires. `master` and
+  `resampling-options` have **diverged** (each has commits the other lacks), so
+  neither is a strict superset.
+- **Neither branch reproduces the old EMG spreadsheets** (both 0/42; the
+  `win_length` change alone shifts noise-reduced RMS by >10×), consistent with the
+  spreadsheets being outdated.
+
+**FLAG for Emil:** the canonical "newest" for the EMG/noise path is a **merge of
+`master` + `origin/resampling-options`** (ECG from master ≡ branch; noise-reduction
+`win_length` and resampling from the branch). Until you confirm the canonical
+baseline, the **EMG/noise numbers in `production_golden.json` are PROVISIONAL**
+(captured from `master`) and should be regenerated from the confirmed newest code
+and validated for physiological plausibility — not against the old spreadsheets.
+The mechanics/WOB/volume-separation golden is unaffected and solid.
+
 ## Root-cause analysis of the mismatches
 
 All differences below are **characterised, not fixed** (fixes are Phase 2). The
 current repo code (`master`) was run unmodified in the pinned env (Python 3.12 /
-SciPy 1.13); "expected" = the spreadsheets Emil generated.
+SciPy 1.13); "expected" = the (possibly outdated) spreadsheets Emil generated.
 
 ### A. PTP / pressure-time-integral columns differ by a large factor — *explained*
 The six columns `int_oesinsp, ptp_oesinsp, int_pdiinsp, ptp_pdiinsp, int_pgasexp,
@@ -39,6 +74,11 @@ an integration-method or SciPy-version effect — trapezoid and Simpson agree to
 decimals on the same array. In the **Resampling** and **EMG H5/H6** datasets (which
 Emil generated *after* the fix) these same PTP columns **match**.
 
+**Decision (Emil): PTP baseline is PARKED for a post-refactor review** (see
+`PLAN.md` "Post-refactor review"). The possible double baseline subtraction
+(`- pressure[0]` on top of `adjustforintegration`) is **not** touched now; the
+current `master` PTP behaviour is preserved as-is in the golden until then.
+
 ### B. WOB columns differ at the ~1e-5 level — negligible / float-level
 `wob_*` differ only at rtol ~1e-5 where they differ at all — consistent with the
 `scipy.integrate.simps`→`simpson` rename and floating-point reassociation. No
@@ -52,21 +92,41 @@ noise-reduction path differs from it. Mechanics/WOB (non-EMG) are unaffected, wh
 localises the difference to the EMG conditioning chain. (~20/42 EMG columns still
 coincide with `master`; the rest track the ECG/noise algorithm.)
 
-### D. Runtime failures on the current code — real latent bugs, on real data
+### C2. EMG columns and the ground-truth decision
+Because ground truth is the newest code (not the old spreadsheets), the EMG
+mismatches are **not** counted as errors. They must be re-established from the
+confirmed canonical newest code (see the FLAG above), then validated for
+physiological plausibility.
+
+### D. Runtime failures on the current code — real latent bugs vs legitimate preconditions
+
+Emil's decision: the newest code must actually **run on all valid real input**.
+Distinguish two kinds of failure:
+
+**(i) Genuine bugs — fix in Phase 2, then establish the golden for these files from
+the fixed code** (validated for physiological plausibility, since the old
+spreadsheets are outdated):
 - **`RIU_H5_IC`, `RIU_H6_IC`, `RIU_H6_Baseline` crash** with
   "setting an array element with a sequence … shape (4,)". This is latent bug #1
   (the EMG overview plot builds an ignored-breath `Rectangle` width as a 1-element
   array). These files have **excluded breaths + EMG**, so the always-on EMG plot
-  crashes — the current code cannot process them at all.
+  crashes — the current code cannot process them at all. These are **valid inputs**,
+  so the refactor must fix this and produce output for them.
+- **The `processing.sampling` (resampling) settings section** crashes `master`'s
+  `applysettings` (KeyError) because its naive default-merge cannot handle a nested
+  subsection absent from defaults (bug #6). Stripped before running here (recorded
+  per file). The refactored settings loader must accept this gracefully.
+- **Processed-data export hardcodes 5 EMG channels** (bug #3) — not hit here (these
+  use 5), but a real bug for any other channel count.
+
+**(ii) Legitimate precondition failures — must be handled with a clear error, not
+forced to produce output:**
 - **`NEP301_V2_140W 1`, `…testbegin`, `…testend` (Trimming) fail** with "Could not
   trim data to whole breaths" — these are deliberate trim edge-case files whose
   data does not start in late expiration / end in early inspiration, so `trim()`
-  produces an empty range. Characterises the trim precondition.
-- **The `processing.sampling` (resampling) settings section** crashes `master`'s
-  `applysettings` (KeyError) because its naive default-merge cannot handle a nested
-  subsection absent from defaults. `master` does not implement resampling (that
-  lives on the unmerged `resampling-options` branch); the section is stripped before
-  running (recorded per file). `resample` was `False` here anyway.
+  produces an empty range. The refactor should surface a **clear, actionable error**
+  (which input/precondition failed) rather than a generic trace — but it is correct
+  to refuse to process them.
 
 ### E. Segmentation sensitivity — `RIU_H5_Baseline`
 Beyond the PTP columns, `RIU_H5_Baseline` also differs in timing/segmentation
