@@ -60,6 +60,7 @@ class FileResult:
 class BatchResult:
     files: dict = field(default_factory=dict)   # filename -> FileResult
     average_table: object = None                # concatenated average rows
+    noise_report: object = None                 # shared-profile prop + per-channel fidelity/ΔSNR
 
     @property
     def ok_files(self):
@@ -75,12 +76,11 @@ def _emit(cb: Optional[ProgressCallback], event: ProgressEvent):
         cb(event)
 
 
-def _process_emg(s, flowraw, emgcolumnsraw, startix, endix, filename):
-    """ECG removal (on raw) -> trim -> noise reduction. Mirrors legacy analyse."""
+def _ecg_remove_trim(s, emgcolumnsraw, startix, endix):
+    """ECG removal on the raw signal, then trim to [startix:endix]."""
     emgcols = np.array(emgcolumnsraw)
-    ecgw = []
     if s.processing.emg.remove_ecg:
-        emgcols_ecg, ecgw, _peaks = emglib.remove_ecg(
+        emgcols_ecg, _ecgw, _peaks = emglib.remove_ecg(
             emgcols, emgcols[:, s.processing.emg.column_detect],
             samplingfrequency=s.input.format.samplingfrequency,
             ecgminheight=s.processing.emg.minheight,
@@ -88,38 +88,83 @@ def _process_emg(s, flowraw, emgcolumnsraw, startix, endix, filename):
             ecgminwidth=s.processing.emg.minwidth,
             windowsize=s.processing.emg.windowsize)
         emgcols = np.array(emgcols_ecg)
-    emgcols = emgcols[startix:endix]
+    return emgcols[startix:endix]
 
-    if s.processing.emg.remove_noise:
-        noiseprofile, noiseprofilepath = [], ""
-        for nop in s.processing.emg.noise_profile:
-            if nop[0] == filename:
-                noiseprofilepath = nop[1]
-                noiseprofile = nop[2]
-                break
-        if len(noiseprofile) == 0:
-            raise ValueError(f"Noise profile interval not specified for file '{filename}'")
-        npcolumns = emgcols
-        if len(noiseprofilepath) > 0:
-            _, _, _, _, _, _, npcolumns = load(noiseprofilepath, _NSWrap(s))
-        nrcols = [emglib.reducenoise(np.array(emgcols[:, i]), noiseprofile,
-                                     np.asarray(npcolumns)[:, i] if len(npcolumns) else [],
-                                     s.input.format.samplingfrequency)
-                  for i in range(emgcols.shape[1])]
-        nr = np.array(nrcols).T
-        nr = np.pad(nr, ((0, len(emgcols) - len(nr)), (0, 0)), 'constant')
-        emgcols = nr
+
+def _process_emg(s, flowraw, emgcolumnsraw, startix, endix, filename, noise_set=None):
+    """ECG removal -> trim -> shared-profile noise reduction (applied identically to
+    every file when ``noise_set`` is provided)."""
+    emgcols = _ecg_remove_trim(s, emgcolumnsraw, startix, endix)
+    if noise_set is not None:
+        emgcols = noise_set.apply_columns(emgcols)
     return emgcols
 
 
-class _NSWrap:
-    """load() expects an object with .input/.processing attributes (legacy shape).
-    The pipeline already holds the legacy-ns; wrap it so load() can be reused for a
-    noise-profile source file."""
-    def __init__(self, ns):
-        self.input = ns.input
-        self.processing = ns.processing
-        self.output = ns.output
+def _emg_segmented(path, s):
+    """Load a file, ECG-remove + trim its EMG, and segment breaths (by flow).
+    Returns (emg_ecg_trimmed, insp_mask, exp_mask). Used to build the noise
+    reference (expiration) and to gather active/quiet EMG for prop selection."""
+    flow, vol, poes, pgas, pdi, ent, emg = load(path, s)
+    tc = np.arange(len(flow)) / s.input.format.samplingfrequency
+    tcT, fT, vT, pT, gT, dT, _e, si, ei = compute.trim(
+        tc, flow, vol, poes, pgas, pdi, np.array(emg) if len(emg) else np.array([]), s)
+    emg_full = _ecg_remove_trim(s, emg, si, ei)
+    volc = compute.correctdrift(compute.zero(vT), s) if s.processing.mechanics.correctvolumedrift else compute.zero(vT)
+    br = compute.separateintobreaths("flow", ntpath.basename(path), tcT, fT, volc,
+                                     pT, gT, dT, [], emg_full, s)
+    ins = np.zeros(len(fT), bool); ex = np.zeros(len(fT), bool); p = 0
+    for b in br.values():
+        ni = len(b["inspiration"]["poes"]); ne = len(b["expiration"]["poes"])
+        ins[p:p + ni] = True; ex[p + ni:p + ni + ne] = True; p += ni + ne
+    n = min(len(emg_full), len(ins))
+    return emg_full[:n], ins[:n], ex[:n]
+
+
+def _reference_noise_clip(settings, s):
+    """Build the EMG-free noise reference clip (multichannel) once per test."""
+    ns_cfg = settings.processing.emg.noise
+    ref = ns_cfg.reference_file
+    if not ref:
+        raise ValueError("processing.emg.noise.reference_file is required when noise reduction is enabled")
+    path = os.path.join(s.input.inputfolder, ref)
+    fs = s.input.format.samplingfrequency
+    if ns_cfg.reference_intervals:
+        flow, vol, poes, pgas, pdi, ent, emg = load(path, s)
+        emg_ecg = _ecg_remove_trim(s, emg, 0, len(emg))  # ECG-remove full length (no trim)
+        parts = [emg_ecg[int(t0 * fs):int(t1 * fs)] for t0, t1 in ns_cfg.reference_intervals]
+        clip = np.concatenate(parts, axis=0)
+    else:
+        emg_full, ins, ex = _emg_segmented(path, s)
+        clip = emg_full[ex]   # diaphragm-quiet expiration
+    return clip
+
+
+def _build_noise_set(settings, s, files, progress=None):
+    from respmech.core import noise as noiselib
+    cfg = settings.processing.emg.noise
+    clip = _reference_noise_clip(settings, s)
+    profiles = noiselib.build_profiles(
+        clip, s.input.format.samplingfrequency, n_fft=cfg.n_fft, hop_length=cfg.hop_length,
+        win_length=cfg.win_length, n_std_thresh=cfg.n_std_thresh,
+        n_grad_freq=cfg.n_grad_freq, n_grad_time=cfg.n_grad_time)
+
+    if cfg.auto_prop:
+        # Gather active/quiet EMG across the test (capped) to choose prop ONCE.
+        act, qui, cap = [], [], 40000
+        for fi in files:
+            emg_full, ins, ex = _emg_segmented(os.path.abspath(fi), s)
+            act.append(emg_full[ins]); qui.append(emg_full[ex])
+            if sum(len(a) for a in act) >= cap:
+                break
+        active = np.concatenate(act, axis=0)[:cap]
+        quiet = np.concatenate(qui, axis=0)[:cap]
+        prop, report = noiselib.select_prop_decrease(
+            profiles, active, quiet, s.input.format.samplingfrequency,
+            target=cfg.fidelity_target)
+    else:
+        prop, report = cfg.prop_decrease, {"prop_decrease": cfg.prop_decrease, "auto": False}
+    _emit(progress, ProgressEvent("stage", message=f"noise profile built (prop_decrease={prop})"))
+    return noiselib.NoiseProfileSet(profiles, prop), report
 
 
 def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
@@ -133,14 +178,22 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
     s = to_legacy_ns(settings)
 
     filepath = os.path.join(s.input.inputfolder, s.input.files)
-    files = sorted(glob.glob(filepath))
-    if only_files is not None:
-        files = [f for f in files if ntpath.basename(f) in set(only_files)]
+    allfiles = sorted(glob.glob(filepath))          # the full test (defines the shared profile)
+    files = [f for f in allfiles if only_files is None or ntpath.basename(f) in set(only_files)]
     if len(files) == 0:
         raise FileNotFoundError(f"No input files found for '{filepath}'")
 
     result = BatchResult()
     average_rows = []
+
+    # ONE shared noise profile + parameter set for the whole test, built once and
+    # applied identically to every file (never re-tuned per file). Built from the
+    # full test even when only_files restricts processing (e.g. a GUI test run), so a
+    # single file is denoised exactly as it would be in the full batch.
+    noise_set = None
+    if settings.processing.emg.noise.enabled and len(s.input.data.columns_emg) > 0:
+        _emit(progress, ProgressEvent("stage", message="building shared noise profile"))
+        noise_set, result.noise_report = _build_noise_set(settings, s, allfiles, progress)
 
     for fi in files:
         if cancel_check is not None and cancel_check():
@@ -164,7 +217,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
             emgcolumns = []
             if len(emgcolumnsraw) > 0:
                 _emit(progress, ProgressEvent("stage", file=filename, message="processing EMG"))
-                emgcolumns = _process_emg(s, flowraw, emgcolumnsraw, startix, endix, filename)
+                emgcolumns = _process_emg(s, flowraw, emgcolumnsraw, startix, endix, filename, noise_set)
 
             _emit(progress, ProgressEvent("stage", file=filename, message="volume correction"))
             zerovol = compute.zero(volume)
