@@ -265,6 +265,32 @@ Confirmed by running the current code (see [`tests/golden/README.md`](../tests/g
 5. **Settings drift** — `example.py` sets `calcwobfromaverage` and `volumetrendpeakminwidth`
    under `mechanics`, but the code reads `wob.calcwobfrom` and never reads
    `peakminwidth`; those example keys are silently ignored (§7).
+6. **`applysettings` crashes on a new nested subsection** — the merge
+   (`applysubsettings`) only handles new *leaf* keys; a settings file containing a
+   `processing.sampling` subsection absent from `defaultsettings` raises
+   `KeyError: 'sampling'`. Real production settings (targeting the unmerged
+   resampling branch) hit this.
+
+### 6a. Confirmed against real production data
+
+Running the current code over Emil's real validation datasets (see
+[`tests/golden/production_comparison.md`](../tests/golden/production_comparison.md))
+confirmed the above on real recordings and added two version-difference findings —
+important for "fully correct calculations":
+
+- **PTP zeroing is version-dependent.** Commit `1630c40` "Fixed PTP calculations
+  (zeroing)" added `pressure = pressure.squeeze() - pressure[0]` to `calcptp`. This
+  changes all `int_*` / `ptp_*` outputs by a large factor (verified: 13.06 → 2.71
+  on one breath). Expected spreadsheets generated before that commit differ from
+  the current code accordingly. **Which baseline convention is physiologically
+  correct must be decided in Phase 2** (the extra `- pressure[0]` double-subtracts a
+  baseline that `adjustforintegration` already set).
+- **EMG/ECG-removal is version-dependent.** The current `master` EMG conditioning
+  (ECG removal + spectral noise reduction) differs from the "new ECG removal"
+  version Emil validated with; EMG RMS / integrated-EMG columns differ by up to
+  ~90 % while mechanics/WOB are unaffected. Latent bug #1 additionally **crashes**
+  real files that combine excluded breaths with EMG (`RIU_H5_IC`, `RIU_H6_IC`,
+  `RIU_H6_Baseline`).
 
 ---
 

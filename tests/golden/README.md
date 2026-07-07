@@ -60,6 +60,29 @@ reference with justification):
    hardcodes column names `EMG1..EMG5`, so exporting processed data with any other
    EMG channel count raises a shape error.
 
+## Production golden (real validation data)
+
+A second golden is built from Emil's real validation recordings under
+`production/` (raw data + expected spreadsheets are **gitignored** — public repo).
+Only the derived numbers are committed: `production_golden.json` (the current
+code's captured output), `production_manifest.json` (input SHA-256 + sizes), and
+`production_comparison.md` (comparison against Emil's expected spreadsheets, with
+root-cause analysis).
+
+Build/verify (raw data must be present locally):
+```bash
+python tests/golden/build_production_golden.py        # all scenarios
+python tests/golden/summarize_production.py            # regenerate the report
+pytest tests/golden/test_production_golden.py -v       # skips if data absent
+```
+
+It covers the paths the synthetic golden could not: **volume-based breath
+separation**, **ECG removal + spectral noise reduction + RMS outlier processing**,
+and real **trim / quiet-breathing** edge cases. See `production_comparison.md` for
+the full match analysis (notably: the current code's PTP columns differ from the
+older pre-`1630c40` expected spreadsheets by design, and the EMG columns track a
+newer ECG-removal algorithm than `master`).
+
 ## Environment
 
 The original code only runs faithfully on an older SciPy stack (see
