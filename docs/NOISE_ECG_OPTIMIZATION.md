@@ -182,6 +182,25 @@ precomputed threshold (equivalent in spirit to `noisereduce` with a fixed `y_noi
 `stationary=True`, but with a serialisable profile and no per-call re-estimation). A
 too-short reference raises a clear error / warning (≥ ~8 STFT frames recommended).
 
+## 4a. EMG golden regenerated from the canonical code (milestone 3)
+
+The production EMG golden (H5 + H6) was regenerated from the new canonical core
+(`tests/golden/regen_production_emg_golden.py --write`; locked by
+`test_production_emg_golden.py`). Every changed column was categorised against the
+previous golden:
+
+| Category | Columns changed | Cause |
+|---|---|---|
+| **EMG** (`rms_*`, `integral_emg_*`) | 294 (42/file × 7 files) | this milestone's shared-profile noise reduction (max rel change 0.6–0.99) |
+| **PTP** (`int_*`, `ptp_*`) | 42 (6/file) | the earlier **approved** end-expiratory window baseline (Commit B) — production golden simply hadn't been regenerated for it |
+| **OTHER** (timing, VE, WOB, pressures, entropy) | **0** | — **unchanged**, as required |
+
+Additionally, three files that previously **crashed** on the legacy code now run
+(bug #1, the EMG-plot-on-excluded-breaths crash, is fixed): `RIU_H5_IC`,
+`RIU_H6_Baseline`, `RIU_H6_IC`. Output is deterministic (re-running reproduces the
+golden with zero diff). The non-EMG production scenarios (Zeros/Trimming/Resampling)
+still carry their pre-Commit-B PTP values and are a separate, out-of-scope follow-up.
+
 ## 5. Status & remaining
 
 **Done (this milestone):** the `n_fft`/`win_length` bug fix (fixed STFT params), the

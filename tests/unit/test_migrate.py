@@ -62,6 +62,28 @@ def test_migrate_maps_and_normalises():
     assert s.processing.emg.noise_profile == [["a.txt", "", [1.0, 1.1]]]
 
 
+def test_noise_mapping_and_toml_round_trip(tmp_path):
+    from respmech.settingsio.toml_io import save_toml, load_toml
+    legacy = dict(LEGACY)
+    legacy["processing"] = dict(LEGACY["processing"])
+    legacy["processing"]["emg"] = {
+        "remove_ecg": True, "remove_noise": True, "column_detect": 4,
+        "noise_profile": [["RIU_H5_40W.txt", "/abs/RIU_H5_Baseline.txt", [20.5, 20.55]],
+                          ["RIU_H5_60W.txt", "/abs/RIU_H5_Baseline.txt", [20.5, 20.55]]],
+    }
+    s, r = migrate_dict(legacy)
+    n = s.processing.emg.noise
+    assert n.enabled is True
+    assert n.reference_file == "RIU_H5_Baseline.txt"        # consolidated shared source
+    assert n.reference_intervals == [[20.5, 20.55]]
+    assert n.n_fft == 256 and n.auto_prop is True           # bug fix + fidelity gate defaults
+    assert any("n_fft=len(noise)**2" in x for x in r.normalised)
+    # survives a TOML round-trip (declarative, no code)
+    p = tmp_path / "s.toml"
+    save_toml(s, p)
+    assert load_toml(p).to_dict() == s.to_dict()
+
+
 def test_matlab_windows_variant():
     legacy = {"input": {"format": {"samplingfrequency": 1, "matlabfileformat": 1},
                         "data": {"column_poes": 1, "column_pgas": 2, "column_pdi": 3,
