@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "respmech"
+version = "2.0.0-dev"
+description = "Respiratory mechanics, work of breathing and diaphragm EMG entropy analysis"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Emil Schwarz Walsted", email = "emilwalsted@gmail.com" }]
+keywords = ["respiratory", "mechanics", "work-of-breathing", "EMG", "physiology"]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "tomli-w>=1.0",
+]
+
+[project.optional-dependencies]
+# EMG spectral noise reduction needs librosa; diagnostic plots need matplotlib.
+emg = ["librosa>=0.10"]
+plots = ["matplotlib>=3.7", "seaborn>=0.12"]
+gui = ["PySide6>=6.6", "pyqtgraph>=0.13", "matplotlib>=3.7"]
+dev = ["pytest>=7.0", "librosa>=0.10", "matplotlib>=3.7", "seaborn>=0.12"]
+
+[project.scripts]
+respmech = "respmech.cli.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/emilwalsted/respmech"
+Repository = "https://github.com/emilwalsted/respmech"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/respmech"]
+
+[tool.pytest.ini_options]
+# src/ before cwd so the package wins over the legacy root respmech.py.
+pythonpath = ["src"]
+addopts = "--import-mode=importlib"
