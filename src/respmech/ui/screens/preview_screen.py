@@ -17,7 +17,7 @@ import numpy as np
 from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QPushButton,
                                QTableWidget, QTableWidgetItem, QVBoxLayout,
                                QWidget, QSplitter)
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread
 
 import pyqtgraph as pg
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -27,6 +27,7 @@ from respmech.core import compute
 from respmech.core.io.loaders import load
 from respmech.core.pipeline import run_batch
 from respmech.core._legacy_ns import to_legacy_ns
+from respmech.ui.workers import BatchWorker
 
 _CHANNELS = ["flow", "volume", "poes", "pgas", "pdi"]
 
@@ -44,8 +45,10 @@ class PreviewScreen(QWidget):
         btn_refresh = QPushButton("Refresh files"); btn_refresh.clicked.connect(self._refresh_files)
         btn_preview = QPushButton("Preview channels"); btn_preview.clicked.connect(self._preview)
         btn_test = QPushButton("Test run this file"); btn_test.clicked.connect(self._test_run)
+        self.btn_noise = QPushButton("Noise & fidelity preview"); self.btn_noise.clicked.connect(self._start_noise_preview)
         bar.addWidget(QLabel("File:")); bar.addWidget(self.file_combo, 1)
         bar.addWidget(btn_refresh); bar.addWidget(btn_preview); bar.addWidget(btn_test)
+        bar.addWidget(self.btn_noise)
         root.addLayout(bar)
         self.status = QLabel("Pick a file and preview.")
         root.addWidget(self.status)
@@ -59,8 +62,12 @@ class PreviewScreen(QWidget):
         lower.addWidget(self.table)
         self.campbell = FigureCanvasQTAgg(Figure(figsize=(4, 4)))
         lower.addWidget(self.campbell)
+        self.fidelity_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 4)))
+        lower.addWidget(self.fidelity_canvas)
         split.addWidget(lower)
         root.addWidget(split, 1)
+        self._thread = None
+        self._worker = None
         self._refresh_files()
 
     def _refresh_files(self):
@@ -154,3 +161,73 @@ class PreviewScreen(QWidget):
         ax.invert_xaxis()
         ax.set_title("Campbell diagram (test run)")
         self.campbell.draw()
+
+    # -- noise / fidelity preview (non-blocking) ----------------------------
+    def _start_noise_preview(self):
+        path = self._current_file()
+        if not path or self._thread is not None:
+            return
+        if not self.state.settings.processing.emg.noise.enabled:
+            self.status.setText("Enable noise reduction (Settings) to preview fidelity.")
+            return
+        try:
+            self.state.settings.validate()
+        except Exception as e:
+            self.status.setText(f"Cannot preview: {e}")
+            return
+        self.status.setText("Building shared noise profile for the test (this may take a moment)…")
+        self.btn_noise.setEnabled(False)
+        name = os.path.basename(path)
+        self._thread = QThread()
+        # process just this file, but the shared profile is built from the WHOLE test.
+        self._worker = BatchWorker(self.state.settings, write=False, only_files=[name])
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.finished.connect(self._on_noise_done)
+        self._worker.failed.connect(lambda msg: self.status.setText(f"Noise preview failed: {msg}"))
+        self._thread.start()
+
+    def _on_noise_done(self, result):
+        self.btn_noise.setEnabled(True)
+        if self._thread is not None:
+            self._thread.quit(); self._thread.wait(2000)
+        self._thread = None; self._worker = None
+        if result is None or result.noise_report is None:
+            self.status.setText("No noise report produced (check settings/reference).")
+            return
+        self._render_noise(result)
+
+    def render_noise_report(self, result):
+        """Testable: plot the per-channel fidelity frontier + summarise. The chosen
+        prop_decrease and the fidelity ≥ target line make the per-test tuning visible."""
+        nr = result.noise_report
+        frontier = nr.get("frontier", {})
+        chosen = nr.get("prop_decrease")
+        target = nr.get("fidelity_target", 0.8)
+        fig = self.fidelity_canvas.figure
+        fig.clear()
+        ax = fig.add_subplot(111)
+        if frontier:
+            props = sorted(frontier)
+            nch = len(next(iter(frontier.values())))
+            for ch in range(nch):
+                ax.plot(props, [frontier[p][ch] for p in props], marker="o", ms=3, label=f"ch{ch}")
+            ax.axhline(target, color="k", ls=":", lw=1)
+            if chosen is not None:
+                ax.axvline(chosen, color="r", ls="--", lw=1, label=f"chosen={chosen}")
+            ax.set_xlabel("prop_decrease"); ax.set_ylabel("fidelity")
+            ax.set_title("Noise fidelity frontier (per channel)")
+            ax.legend(fontsize=7)
+        self.fidelity_canvas.draw()
+        parts = [f"chosen prop_decrease={chosen} (fidelity target {target})"]
+        for row in nr.get("channels", []):
+            parts.append(f"ch{row['channel']}: fid={row['fidelity']:.2f} ΔSNR={row['delta_snr_db']:+.1f}dB")
+        # ECG suppression for the previewed file, if available
+        for fr in result.ok_files.values():
+            if getattr(fr, "ecg", None):
+                parts.append(f"ECG suppression={fr.ecg.get('suppression', float('nan')):.0%}")
+                break
+        self.status.setText("  |  ".join(parts))
+
+    def _render_noise(self, result):
+        self.render_noise_report(result)

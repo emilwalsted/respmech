@@ -90,6 +90,25 @@ def test_worker_runs_and_writes(qapp, tmp_path):
     assert os.path.exists(os.path.join(tmp_path, "data", "Average breathdata.xlsx"))
 
 
+def test_preview_noise_fidelity_render(qapp, tmp_path):
+    """The preview/tuning screen renders the per-test noise fidelity frontier."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    s = _settings(str(tmp_path))
+    s.processing.emg.noise.enabled = True
+    s.processing.emg.noise.reference_file = "synth_case_A.csv"
+    s.processing.emg.noise.use_expiration = False
+    s.processing.emg.noise.reference_intervals = [[1.0, 5.0]]
+    s.processing.emg.noise.auto_prop = True
+    win = MainWindow(AppState(s))
+    result = run_batch(s, only_files=["synth_case_B.csv"])
+    assert result.noise_report is not None
+    win.preview_screen.render_noise_report(result)
+    assert "prop_decrease" in win.preview_screen.status.text()
+    # the fidelity frontier figure has been drawn
+    assert len(win.preview_screen.fidelity_canvas.figure.axes) == 1
+
+
 def test_worker_cancellation(qapp, tmp_path):
     from respmech.ui.workers import BatchWorker
     w = BatchWorker(_settings(str(tmp_path)), write=False)
