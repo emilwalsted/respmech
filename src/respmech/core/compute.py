@@ -220,18 +220,10 @@ def separateintobreaths(method, filename, timecol, flow, volume, poes, pgas, pdi
 
 # --- pressure-time product & integration -----------------------------------
 
-def adjustforintegration(data):
-    mind = min(min(data), 0)
-    maxd = max(data)
-    adjustment = mind
-    if (maxd < 0):
-        adjustment = maxd
-    return data - adjustment
-
-
 def calcptp(pressure, bcnt, vefactor, samplingfreq):
-    # NOTE: the `- pressure[0]` baseline is PARKED for post-refactor review
-    # (Emil): preserved exactly as in legacy master.
+    # Pressure-time product: integrate the pressure relative to its phase-start
+    # (end-expiratory) baseline. Verified physiologically correct — see
+    # docs/PTP_INVESTIGATION.md.
     pressure = pressure.squeeze() - pressure[0]
     xval = np.linspace(0, len(pressure) / samplingfreq, len(pressure))
     integral = sp.integrate.simpson(pressure, x=xval)
@@ -414,12 +406,14 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
     insp_pdi_rise = pdi_maxinsp - min(insp["pdi"])
     exp_pgas_rise = pgas_maxexp - min(exp["pgas"])
 
-    poesinsp = adjustforintegration(-insp["poes"])
-    ptp_oesinsp, int_oesinsp = calcptp(poesinsp, bcnt, vefactor, settings.input.format.samplingfrequency)
-    pdiinsp = insp["pdi"] - min(insp["pdi"])
-    ptp_pdiinsp, int_pdiinsp = calcptp(pdiinsp, bcnt, vefactor, settings.input.format.samplingfrequency)
-    pgasexp = exp["pgas"] - min(exp["pgas"])
-    ptp_pgasexp, int_pgasexp = calcptp(pgasexp, bcnt, vefactor, settings.input.format.samplingfrequency)
+    # PTP is integrated relative to the phase-start (end-expiratory) baseline inside
+    # calcptp. The former adjustforintegration / "- min" pre-steps were redundant:
+    # since integ(f - f[0]) is invariant to any constant pre-shift, they had no
+    # numeric effect (see docs/PTP_INVESTIGATION.md). Pass the signed signals
+    # directly (Poes negated so inspiratory effort is positive).
+    ptp_oesinsp, int_oesinsp = calcptp(-insp["poes"], bcnt, vefactor, settings.input.format.samplingfrequency)
+    ptp_pdiinsp, int_pdiinsp = calcptp(insp["pdi"], bcnt, vefactor, settings.input.format.samplingfrequency)
+    ptp_pgasexp, int_pgasexp = calcptp(exp["pgas"], bcnt, vefactor, settings.input.format.samplingfrequency)
 
     max_in_flow = min(insp["flow"]) * -1
     max_ex_flow = max(exp["flow"])
