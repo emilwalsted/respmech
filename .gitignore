@@ -105,3 +105,6 @@ venv.bak/
 .vscode/launch.json
 temp.py
 Error log.txt
+
+# RespMech golden-test transient output
+tests/golden/_work/
