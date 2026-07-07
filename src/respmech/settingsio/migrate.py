@@ -202,7 +202,10 @@ def migrate_dict(legacy: dict) -> tuple[Settings, MigrationReport]:
             "enabled": True,
             "reference_file": ref_file,
             "reference_intervals": [list(iv) for iv in intervals],
-            "use_expiration": len(intervals) == 0,
+            # Prefer expiration of the rest reference: it yields many STFT frames
+            # (~hundreds) for a stable estimate, vs the legacy short interval (~7
+            # frames). The legacy intervals are kept as an explicit override.
+            "use_expiration": True,
             # fixed STFT params (legacy n_fft=len(noise)**2 was a bug — dropped):
             "n_fft": 256, "hop_length": 64, "win_length": 256,
             "n_std_thresh": 1.0, "prop_decrease": 0.6, "auto_prop": True,
@@ -210,8 +213,9 @@ def migrate_dict(legacy: dict) -> tuple[Settings, MigrationReport]:
         }
         r.normalised.append(
             "emg.remove_noise + per-file noise_profile -> processing.emg.noise "
-            "(shared profile, fixed n_fft=256, fidelity-gated prop_decrease). The "
-            "legacy n_fft=len(noise)**2 parameterisation was a bug and is dropped.")
+            "(shared profile, fixed n_fft=256, expiration-based reference for a "
+            "stable estimate, fidelity-gated prop_decrease). The legacy short "
+            "interval + n_fft=len(noise)**2 parameterisation was a bug and is dropped.")
 
     # --- entropy ---
     new_proc["entropy"] = {

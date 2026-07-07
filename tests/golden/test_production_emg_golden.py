@@ -36,7 +36,12 @@ def golden():
         return json.load(f)
 
 
-@pytest.mark.parametrize("scenario", R.EMG_SCENARIOS)
+# EMG-carrying scenarios: the shared-profile noise reduction + ECG removal
+# (Resampling also exercises volume-based breath separation).
+EMG_GOLDEN_SCENARIOS = ["resampling_volume_sep"] + R.EMG_SCENARIOS
+
+
+@pytest.mark.parametrize("scenario", EMG_GOLDEN_SCENARIOS)
 def test_emg_scenario_reproduces_golden(scenario, golden):
     res = R.run_scenario(scenario)
     gfiles = golden[scenario]["files"]
