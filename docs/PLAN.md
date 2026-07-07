@@ -234,16 +234,27 @@ disk.
 
 ## 6. Correctness strategy (how the refactor stays honest)
 
+0. **Ground truth (Emil's decision)** — ground truth = the **input data processed by
+   the newest algorithms**. The old runs' spreadsheets may be outdated and are **not**
+   the correctness target where they differ from the newest code. The golden = the
+   newest code's output on the inputs. Where newest-code ≠ old spreadsheet, the diff
+   is attributed to **outdated run data**, not a code bug (except the genuine bugs
+   below).
 1. **Golden lock (done, Phase 1)** — `tests/golden/` freezes current numeric output
    across the scenario matrix; the refactored core must reproduce it within
    tolerance. **Now includes a production golden** built from Emil's real datasets
    (`tests/golden/production_*`), locking **volume-based breath separation** and
    **ECG removal + noise reduction + RMS outlier** — the paths synthetic data could
    not cover. See [`production_comparison.md`](../tests/golden/production_comparison.md).
-   Two correctness questions surfaced there must be **decided in Phase 2**:
-   (a) the **PTP baseline convention** (the post-`1630c40` `- pressure[0]` appears to
-   double-subtract a baseline `adjustforintegration` already applied), and
-   (b) which **ECG-removal/noise version** is canonical.
+   - **Canonical-newest verification (done):** `master`'s **ECG removal** is newest
+     (its post-divergence EMG commits are non-algorithmic). But a **newer
+     noise-reduction variant** (`reducenoise` `win_length=len(noise)**2`) plus the
+     **resampling** feature live on `origin/resampling-options`, which has **diverged**
+     from `master`. **FLAG:** the canonical newest EMG/noise baseline is a **merge of
+     `master` + `resampling-options`**; until Emil confirms it, the **EMG/noise
+     numbers in the production golden are provisional** and will be regenerated from
+     the confirmed baseline (validated for physiological plausibility, since the old
+     spreadsheets are outdated). Mechanics/WOB/volume-separation golden is solid.
 2. **Unit tests per formula (Phase 2)** — small analytic inputs with hand-derived
    expected values for WOB (triangle areas, known integrals), PTP, VE/VT/timing,
    sample entropy (reference vectors), RMS — so each formula is independently
@@ -251,6 +262,28 @@ disk.
 3. **Legacy-equivalence test (Phase 2)** — migrated TOML ≡ legacy dict output.
 4. **Deliberate-fix protocol** — when a latent bug (RE doc §6) is fixed, the golden
    reference is regenerated **in the same commit** with the numeric diff explained.
+
+### 6a. Error handling: genuine bugs vs legitimate preconditions (Emil's decision)
+The newest code must **run on all valid real input**. Phase 2 distinguishes:
+- **Genuine bugs → fix, then establish the golden for those files from the fixed
+  code** (validated for physiological plausibility, since old spreadsheets are
+  outdated). Confirmed on real data: bug #1 (EMG plot crashes on excluded breaths —
+  kills `RIU_H5_IC`, `RIU_H6_IC`, `RIU_H6_Baseline`), bug #6 (`applysettings`
+  KeyError on `processing.sampling`), bug #3 (processed-data export hardcodes 5 EMG
+  channels).
+- **Legitimate precondition failures → fail with a clear, actionable error**, not a
+  forced/garbage output. Example: "Could not trim data to whole breaths" on the
+  trim edge-case files whose data violates the start-expiration/end-inspiration
+  precondition. The refactor should say *which* file/precondition failed and why.
+
+### 6b. Post-refactor review list (parked — do NOT change now)
+Items intentionally deferred until after the refactor lands, so behaviour is held
+constant meanwhile:
+- **PTP baseline (possible double subtraction).** `calcptp`'s `- pressure[0]`
+  (commit `1630c40`) subtracts a baseline on top of the `adjustforintegration` the
+  caller already applied. Emil wants this **reviewed later**. Until then the current
+  `master` PTP behaviour is **preserved as-is** in the golden — not touched in the
+  refactor.
 
 ---
 
