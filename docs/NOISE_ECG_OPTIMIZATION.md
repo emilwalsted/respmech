@@ -127,12 +127,20 @@ Signal figures are kept **out of this public repo**; they live in Emil's Dropbox
   channel with the fidelity ≥ 0.8 line: **the safe choice varies per channel/subject.**
 
 ### 3d. Per-channel frontier is now computed automatically (implemented)
-Running the implemented shared-profile pipeline on the full H5 test auto-selects, from
-the whole-test frontier, the highest `prop_decrease` keeping the **worst channel** ≥
-target (0.8) — here **prop_decrease = 0.2** (ch0=0.874 is the binding channel; prop=0.3
-would drop ch0 to 0.751). Per-channel at the chosen value: fidelity 0.87–1.23, ΔSNR
-+0.14…+0.59 dB. Conservative but guaranteed non-destructive across every channel, and
-**identical for all five files** (verified by test).
+The pipeline builds the shared profile from an **expiration-based rest reference** —
+for H5 that is **16.0 s of Baseline expiration → 497 STFT frames** (vs the ~7 frames
+of the legacy 0.05 s interval), a stable per-frequency estimate. It then auto-selects,
+from the whole-test frontier, the highest `prop_decrease` keeping the **worst channel**
+≥ target (0.8):
+
+| Test | frames | auto `prop_decrease` | binding channel | per-channel fidelity / ΔSNR |
+|---|---|---|---|---|
+| H5 | 497 | **0.5** | ch4 = 0.812 | fidelity 0.81–1.06, ΔSNR +0.26…+1.71 dB |
+| H6 | ~440 | **0.2** | ch2 = 0.839 | fidelity 0.84–1.13, ΔSNR +0.03…+1.20 dB |
+
+The stable reference lets H5 denoise more (0.5 vs the 0.2 the borderline reference
+forced) while every channel stays ≥ 0.8. The chosen value is applied **identically to
+all files** (verified by test).
 
 ### Recommended noise-reduction settings
 - **`n_fft = 256`, `win_length = 256`, `hop_length = 64`** (decouple from clip length),
@@ -182,33 +190,40 @@ precomputed threshold (equivalent in spirit to `noisereduce` with a fixed `y_noi
 `stationary=True`, but with a serialisable profile and no per-call re-estimation). A
 too-short reference raises a clear error / warning (≥ ~8 STFT frames recommended).
 
-## 4a. EMG golden regenerated from the canonical code (milestone 3)
+## 4a. Whole production golden regenerated from the canonical core
 
-The production EMG golden (H5 + H6) was regenerated from the new canonical core
+The **entire** production golden was regenerated from the new canonical core
 (`tests/golden/regen_production_emg_golden.py --write`; locked by
-`test_production_emg_golden.py`). Every changed column was categorised against the
-previous golden:
+`test_production_golden.py` for Zeros/Trimming and `test_production_emg_golden.py`
+for Resampling/H5/H6 — both now drive the **new core**, not the legacy runner). Every
+changed column was categorised against the previous golden across **all** scenarios:
 
 | Category | Columns changed | Cause |
 |---|---|---|
-| **EMG** (`rms_*`, `integral_emg_*`) | 294 (42/file × 7 files) | this milestone's shared-profile noise reduction (max rel change 0.6–0.99) |
-| **PTP** (`int_*`, `ptp_*`) | 42 (6/file) | the earlier **approved** end-expiratory window baseline (Commit B) — production golden simply hadn't been regenerated for it |
-| **OTHER** (timing, VE, WOB, pressures, entropy) | **0** | — **unchanged**, as required |
+| **EMG** (`rms_*`, `integral_emg_*`) | 462 | shared-profile noise reduction (all EMG scenarios: Resampling, H5, H6) |
+| **PTP** (`int_*`, `ptp_*`) | 64 | the **approved** end-expiratory window baseline (Commit B), now propagated to Zeros/Trimming/Resampling too |
+| **OTHER** (timing, VE, WOB, pressures, entropy, volume-separation mechanics) | **0** | — **unchanged**, as required |
 
-Additionally, three files that previously **crashed** on the legacy code now run
-(bug #1, the EMG-plot-on-excluded-breaths crash, is fixed): `RIU_H5_IC`,
-`RIU_H6_Baseline`, `RIU_H6_IC`. Output is deterministic (re-running reproduces the
-golden with zero diff). The non-EMG production scenarios (Zeros/Trimming/Resampling)
-still carry their pre-Commit-B PTP values and are a separate, out-of-scope follow-up.
+Per scenario: Zeros/Trimming changed **only PTP**; Resampling and H5/H6 changed EMG
+(+ PTP where not already updated). Three previously-**crashing** files now run
+(bug #1 fixed): `RIU_H5_IC`, `RIU_H6_Baseline`, `RIU_H6_IC`. Output is deterministic
+(re-run reproduces with zero diff). The synthetic golden is unchanged (noise off
+there).
 
-## 5. Status & remaining
+## 5. Status
 
-**Done (this milestone):** the `n_fft`/`win_length` bug fix (fixed STFT params), the
-shared serialisable `NoiseProfile`, the fidelity metric + gate + auto-selection, and
-the identical-transformation guarantee — all with tests, on real H5/H6 data.
+**Done:** the `n_fft`/`win_length` bug fix (fixed STFT params); the shared,
+serialisable `NoiseProfile`; an **expiration-based rest reference by default** (~500
+STFT frames — stable, no borderline 7-frame estimate); the fidelity metric + gate +
+once-per-test auto-selection; the identical-transformation guarantee; per-test ECG
+parameters + suppression report; TOML settings + migrator mapping; a GUI fidelity
+preview; and the **whole production golden regenerated** from the canonical core (only
+EMG + the approved PTP change; everything else intact) — all with tests on real
+H5/H6 data.
 
-**Remaining (later milestones):** fix the ECG detection parameters per test and expose
-them (milestone 2); expose the new `processing.emg.noise` settings in TOML + migrator
-mapping and a GUI fidelity/noise preview (milestone 3); **regenerate the EMG golden**
-from this canonical code and document the before/after on the EMG columns (milestone
-3). Everything non-EMG in the golden is held constant.
+_(Historical note — the milestone breakdown below is retained for provenance.)_
+
+**Superseded remaining (now done):** ECG detection parameters per test and exposing
+them; the new `processing.emg.noise` settings in TOML + migrator mapping and a GUI
+fidelity/noise preview; and regenerating the golden from this canonical code —
+everything non-EMG/non-PTP is held constant.

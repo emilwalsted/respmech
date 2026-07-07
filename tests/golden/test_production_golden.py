@@ -1,88 +1,64 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""Production golden — non-EMG scenarios (Zeros, Trimming) reproduced by the NEW
+canonical core (window-baseline PTP included). EMG-carrying scenarios (Resampling,
+H5, H6) are locked by test_production_emg_golden.py.
+
+Raw data is gitignored (public repo); this SKIPS when it is absent.
 """
-Production golden regression test.
-
-Unlike the synthetic golden, the production golden is built from Emil's real
-validation recordings, which are **gitignored** (public repo). So this test:
-
-  * SKIPS entirely when the raw data is not present locally, and
-  * otherwise re-runs the current code over the fast (non-EMG) scenarios and
-    asserts the captured numbers still match the committed production_golden.json.
-
-The EMG scenarios are slow (ECG removal + spectral noise reduction + forced
-plots) and are not re-run here by default; verify them with
-`python build_production_golden.py emg_h5_ecg_noise_outlier` when needed.
-
-Run with (pinned env — see requirements-golden.txt):
-    pytest tests/golden/test_production_golden.py -v
-"""
-import os
 import json
 import math
+import os
 
+import numpy as np
+import pandas as pd
 import pytest
 
-import build_production_golden as bpg
+import regen_production_emg_golden as R
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-GOLDEN = os.path.join(HERE, "production_golden.json")
-
-# Only the fast, deterministic, non-EMG scenarios are re-run in the test.
-FAST_SCENARIOS = {"zeros_debugging", "trimming_debugging"}
-
-RTOL = 1e-9
-ATOL = 1e-12
+GOLDEN = R.GOLDEN
+RTOL, ATOL = 1e-9, 1e-12
+SCENARIOS = ["zeros_debugging", "trimming_debugging"]
 
 
-def _has_production_data():
-    for sc in bpg.SCENARIOS:
-        if sc["name"] in FAST_SCENARIOS:
-            d = os.path.join(bpg.PROD, sc["input_dir"])
-            if os.path.isdir(d) and any(f.endswith(".txt") for f in os.listdir(d)):
-                return True
+def _has_data():
+    for name in ("Zeros debugging/input", "Trimming debugging"):
+        d = os.path.join(R.bpg.PROD, name)
+        if os.path.isdir(d) and any(f.endswith(".txt") for f in os.listdir(d)):
+            return True
     return False
 
 
 pytestmark = pytest.mark.skipif(
-    not os.path.exists(GOLDEN) or not _has_production_data(),
-    reason="production raw data not present locally (gitignored); nothing to verify",
-)
+    not os.path.exists(GOLDEN) or not _has_data(),
+    reason="production data not present locally (gitignored)")
 
 
 @pytest.fixture(scope="module")
-def committed():
+def golden():
     with open(GOLDEN) as f:
         return json.load(f)
 
 
-def _close(a, b):
-    if isinstance(a, str) or isinstance(b, str) or a is None or b is None:
-        return a == b
-    if isinstance(a, bool) or isinstance(b, bool):
-        return a == b
-    if isinstance(a, float) and math.isnan(a) and isinstance(b, float) and math.isnan(b):
-        return True
-    return math.isclose(a, b, rel_tol=RTOL, abs_tol=ATOL)
-
-
-@pytest.mark.parametrize("scenario", sorted(FAST_SCENARIOS))
-def test_fast_scenario_reproduces_golden(scenario, committed):
-    assert scenario in committed, f"{scenario} missing from committed golden"
-    sc = next(s for s in bpg.SCENARIOS if s["name"] == scenario)
-    fresh = bpg.run_scenario(sc, manifest={})
-
-    for fname, exp in committed[scenario]["files"].items():
-        got = fresh["files"].get(fname)
-        assert got is not None, f"{scenario}/{fname} not produced now"
-        assert got["status"] == exp["status"], \
-            f"{scenario}/{fname} status changed: {got['status']} != {exp['status']}"
-        if exp["status"] != "ok":
+@pytest.mark.parametrize("scenario", SCENARIOS)
+def test_scenario_reproduces_golden(scenario, golden):
+    res = R.run_scenario(scenario)
+    gfiles = golden[scenario]["files"]
+    # every golden 'ok' file must reproduce; every golden 'error' file must still error
+    for fname, gentry in gfiles.items():
+        if gentry.get("status") == "error":
+            assert fname in res.failed_files, f"{fname} expected to error but did not"
             continue
-        eg, gg = exp["golden"], got["golden"]
-        assert set(eg) == set(gg), f"{scenario}/{fname} columns changed"
-        for col in eg:
-            ev, gv = eg[col], gg[col]
-            assert len(ev) == len(gv), f"{scenario}/{fname}/{col} length changed"
-            for i, (a, b) in enumerate(zip(ev, gv)):
-                assert _close(a, b), f"{scenario}/{fname}/{col}[{i}]: {a} != {b}"
+        assert fname in res.ok_files, f"{fname} expected ok but errored/absent"
+        cur = res.ok_files[fname].breaths_table.reset_index(drop=True)
+        gcols = gentry["golden"]
+        assert set(gcols) == set(map(str, cur.columns)), f"{fname}: columns changed"
+        for col in gcols:
+            a = pd.to_numeric(pd.Series(gcols[col]), errors="coerce").to_numpy(float)
+            b = pd.to_numeric(cur[col], errors="coerce").to_numpy(float)
+            assert len(a) == len(b), f"{fname}/{col}: length changed"
+            for i, (x, y) in enumerate(zip(a, b)):
+                if math.isnan(x) and math.isnan(y):
+                    continue
+                assert math.isclose(x, y, rel_tol=RTOL, abs_tol=ATOL), \
+                    f"{fname}/{col}[{i}]: {x} != {y}"

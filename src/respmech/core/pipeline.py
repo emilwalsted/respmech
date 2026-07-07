@@ -149,14 +149,16 @@ def _reference_noise_clip(settings, s):
         raise ValueError("processing.emg.noise.reference_file is required when noise reduction is enabled")
     path = os.path.join(s.input.inputfolder, ref)
     fs = s.input.format.samplingfrequency
-    if ns_cfg.reference_intervals:
+    # Prefer expiration-based reference (many STFT frames -> stable estimate). Explicit
+    # intervals are used only when use_expiration is False (a deliberate override).
+    if ns_cfg.use_expiration or not ns_cfg.reference_intervals:
+        emg_full, ins, ex = _emg_segmented(path, s)
+        clip = emg_full[ex]   # diaphragm-quiet expiration of the rest reference
+    else:
         flow, vol, poes, pgas, pdi, ent, emg = load(path, s)
         emg_ecg = _ecg_remove_trim(s, emg, 0, len(emg))  # ECG-remove full length (no trim)
         parts = [emg_ecg[int(t0 * fs):int(t1 * fs)] for t0, t1 in ns_cfg.reference_intervals]
         clip = np.concatenate(parts, axis=0)
-    else:
-        emg_full, ins, ex = _emg_segmented(path, s)
-        clip = emg_full[ex]   # diaphragm-quiet expiration
     return clip
 
 

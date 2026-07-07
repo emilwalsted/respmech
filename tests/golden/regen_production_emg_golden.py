@@ -32,6 +32,16 @@ EMG_RE = re.compile(r"(rms|emg|integral)", re.IGNORECASE)
 
 EMG_SCENARIOS = ["emg_h5_ecg_noise_outlier", "emg_h6_ecg_noise_outlier"]
 
+# Per-scenario input mask + (for EMG scenarios) the shared rest/noise reference file.
+SCENARIO_CFG = {
+    "zeros_debugging": {"files": "NEP303*.txt", "noise_ref": None},
+    "trimming_debugging": {"files": "NEP*.txt", "noise_ref": None},
+    "resampling_volume_sep": {"files": "*.txt", "noise_ref": "RIU_H1_60W.txt"},
+    "emg_h5_ecg_noise_outlier": {"files": "RIU_H5_*.txt", "noise_ref": "RIU_H5_Baseline.txt"},
+    "emg_h6_ecg_noise_outlier": {"files": "RIU_H6_*.txt", "noise_ref": "RIU_H6_Baseline.txt"},
+}
+ALL_SCENARIOS = list(SCENARIO_CFG)
+
 
 def _classify(col):
     if EMG_RE.search(col):
@@ -49,27 +59,28 @@ def _jsonify(df):
 
 
 def run_scenario(scname):
+    """Run the NEW canonical core on one production scenario (local paths)."""
     sc = next(s for s in bpg.SCENARIOS if s["name"] == scname)
+    cfg = SCENARIO_CFG[scname]
     raw = bpg.extract_settings(os.path.join(bpg.PROD, sc["settings_py"]))
-    subj = "H5" if "h5" in scname.lower() else "H6"
     s, _ = migrate_dict(raw)
     s.input.folder = os.path.join(bpg.PROD, sc["input_dir"])
-    s.input.files = f"RIU_{subj}_*.txt"
+    s.input.files = cfg["files"]
     s.output.folder = os.path.join(HERE, "_prod_work_emg", scname)
     s.output.data.save_processed = False
-    # the shared noise reference is the rest/Baseline file (already set by migrator);
-    # ensure it points at the local Baseline.
-    s.processing.emg.noise.reference_file = f"RIU_{subj}_Baseline.txt"
-    res = run_batch(s)
-    return res
+    if cfg["noise_ref"] is not None:
+        s.processing.emg.noise.reference_file = cfg["noise_ref"]
+    return run_batch(s)
 
 
 def main():
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
     write = "--write" in sys.argv
+    scenarios = [a for a in args if a in SCENARIO_CFG] or ALL_SCENARIOS
     golden = json.load(open(GOLDEN))
     summary = {"changed": {"EMG": 0, "PTP": 0, "OTHER": 0}, "other_cols": [], "new_ok": []}
 
-    for scname in EMG_SCENARIOS:
+    for scname in scenarios:
         print(f"\n===== {scname} =====")
         res = run_scenario(scname)
         gold_files = golden.get(scname, {}).get("files", {})
