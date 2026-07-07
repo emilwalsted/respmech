@@ -220,11 +220,15 @@ def separateintobreaths(method, filename, timecol, flow, volume, poes, pgas, pdi
 
 # --- pressure-time product & integration -----------------------------------
 
-def calcptp(pressure, bcnt, vefactor, samplingfreq):
-    # Pressure-time product: integrate the pressure relative to its phase-start
-    # (end-expiratory) baseline. Verified physiologically correct — see
-    # docs/PTP_INVESTIGATION.md.
-    pressure = pressure.squeeze() - pressure[0]
+def calcptp(pressure, bcnt, vefactor, samplingfreq, baseline_samples=1):
+    # Pressure-time product: integrate the pressure relative to its end-expiratory
+    # baseline (see docs/PTP_INVESTIGATION.md). The baseline is the mean over a short
+    # window at the phase start (``baseline_samples``), which is robust to boundary
+    # noise; baseline_samples=1 reproduces the single-sample behaviour.
+    pressure = pressure.squeeze()
+    n = int(max(1, min(baseline_samples, len(pressure))))
+    baseline = np.mean(pressure[:n])
+    pressure = pressure - baseline
     xval = np.linspace(0, len(pressure) / samplingfreq, len(pressure))
     integral = sp.integrate.simpson(pressure, x=xval)
     ptp = integral * bcnt * vefactor
@@ -406,14 +410,16 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
     insp_pdi_rise = pdi_maxinsp - min(insp["pdi"])
     exp_pgas_rise = pgas_maxexp - min(exp["pgas"])
 
-    # PTP is integrated relative to the phase-start (end-expiratory) baseline inside
-    # calcptp. The former adjustforintegration / "- min" pre-steps were redundant:
-    # since integ(f - f[0]) is invariant to any constant pre-shift, they had no
-    # numeric effect (see docs/PTP_INVESTIGATION.md). Pass the signed signals
+    # PTP is integrated relative to the end-expiratory baseline inside calcptp
+    # (mean over a short window at the phase start). The former adjustforintegration
+    # / "- min" pre-steps were redundant (integ(f - f[0]) is invariant to a constant
+    # pre-shift — see docs/PTP_INVESTIGATION.md); the signed signals are passed
     # directly (Poes negated so inspiratory effort is positive).
-    ptp_oesinsp, int_oesinsp = calcptp(-insp["poes"], bcnt, vefactor, settings.input.format.samplingfrequency)
-    ptp_pdiinsp, int_pdiinsp = calcptp(insp["pdi"], bcnt, vefactor, settings.input.format.samplingfrequency)
-    ptp_pgasexp, int_pgasexp = calcptp(exp["pgas"], bcnt, vefactor, settings.input.format.samplingfrequency)
+    fs = settings.input.format.samplingfrequency
+    ptp_bw = int(max(1, round(settings.processing.mechanics.ptp_baseline_window_s * fs)))
+    ptp_oesinsp, int_oesinsp = calcptp(-insp["poes"], bcnt, vefactor, fs, ptp_bw)
+    ptp_pdiinsp, int_pdiinsp = calcptp(insp["pdi"], bcnt, vefactor, fs, ptp_bw)
+    ptp_pgasexp, int_pgasexp = calcptp(exp["pgas"], bcnt, vefactor, fs, ptp_bw)
 
     max_in_flow = min(insp["flow"]) * -1
     max_ex_flow = max(exp["flow"])

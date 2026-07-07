@@ -67,6 +67,7 @@ def to_legacy_ns(s: Settings) -> SimpleNamespace:
                 volumetrendpeakmindistance=vol.trend_peak_min_distance_s,
                 excludebreaths=[[e.file, list(e.breaths)] for e in s.processing.exclude_breaths],
                 breathcounts=[[e.file, e.count] for e in s.processing.breath_counts],
+                ptp_baseline_window_s=s.processing.ptp.baseline_window_s,
             ),
             wob=SimpleNamespace(
                 calcwobfrom=wob.calc_from,

@@ -117,6 +117,14 @@ class EntropySettings:
 
 
 @dataclass
+class PtpSettings:
+    # Pressure-time product baseline = mean over a short window at the phase start
+    # (end-expiratory for inspiration, end-inspiratory for expiration). A window
+    # (vs a single sample) is robust to boundary noise. 0.05 s is a good default.
+    baseline_window_s: float = 0.05
+
+
+@dataclass
 class ExcludeEntry:
     file: str
     breaths: list[int] = field(default_factory=list)
@@ -136,6 +144,7 @@ class ProcessingSettings:
     wob: WobSettings = field(default_factory=WobSettings)
     emg: EmgSettings = field(default_factory=EmgSettings)
     entropy: EntropySettings = field(default_factory=EntropySettings)
+    ptp: PtpSettings = field(default_factory=PtpSettings)
     exclude_breaths: list[ExcludeEntry] = field(default_factory=list)
     breath_counts: list[BreathCountEntry] = field(default_factory=list)
 
