@@ -29,6 +29,9 @@ dev = ["pytest>=7.0", "librosa>=0.10", "matplotlib>=3.7", "seaborn>=0.12"]
 [project.scripts]
 respmech = "respmech.cli.__main__:main"
 
+[project.gui-scripts]
+respmech-gui = "respmech.ui.app:main"
+
 [project.urls]
 Homepage = "https://github.com/emilwalsted/respmech"
 Repository = "https://github.com/emilwalsted/respmech"

@@ -122,12 +122,20 @@ class _NSWrap:
         self.output = ns.output
 
 
-def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None) -> BatchResult:
+def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
+              cancel_check: Optional[Callable[[], bool]] = None,
+              only_files: Optional[list] = None) -> BatchResult:
+    """Process the batch. ``progress`` receives :class:`ProgressEvent`s. If
+    ``cancel_check`` returns True (checked before each file), processing stops
+    cooperatively. ``only_files`` (basenames) restricts the run — used for GUI test
+    runs on a single file."""
     settings.validate()
     s = to_legacy_ns(settings)
 
     filepath = os.path.join(s.input.inputfolder, s.input.files)
     files = sorted(glob.glob(filepath))
+    if only_files is not None:
+        files = [f for f in files if ntpath.basename(f) in set(only_files)]
     if len(files) == 0:
         raise FileNotFoundError(f"No input files found for '{filepath}'")
 
@@ -135,6 +143,9 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None) -
     average_rows = []
 
     for fi in files:
+        if cancel_check is not None and cancel_check():
+            _emit(progress, ProgressEvent("finished", message="cancelled"))
+            return result
         file = os.path.abspath(fi)
         filename = ntpath.basename(file)
         _emit(progress, ProgressEvent("file_start", file=filename, message="loading"))
