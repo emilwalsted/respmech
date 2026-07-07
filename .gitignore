@@ -118,3 +118,4 @@ tests/golden/_prod_work/
 
 # macOS
 .DS_Store
+tests/golden/_prod_work_newcore/
