@@ -109,6 +109,54 @@ def test_preview_noise_fidelity_render(qapp, tmp_path):
     assert len(win.preview_screen.fidelity_canvas.figure.axes) == 1
 
 
+def test_theme_applies_light_and_dark(qapp, monkeypatch):
+    from respmech.ui import theme
+    assert theme.apply_theme(qapp) in ("light", "dark")
+    monkeypatch.setenv("RESPMECH_THEME", "dark")
+    assert theme.apply_theme(qapp) == "dark"
+    assert len(qapp.styleSheet()) > 1000
+
+
+def test_reactive_file_list_and_noise_gating(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    sc, pv = win.settings_screen, win.preview_screen
+    assert pv.file_combo.count() == 2
+    # changing the mask in Settings refreshes the Preview file list (reactive)
+    sc.in_files.setText("synth_case_A.csv"); sc._on_inputs_changed()
+    assert pv.file_combo.count() == 1
+    sc.in_files.setText("synth_case_*.csv"); sc._on_inputs_changed()
+    assert pv.file_combo.count() == 2
+    # noise on but no reference -> noise preview button disabled + hint
+    sc.remove_noise.setChecked(True); sc.noise_ref.setText(""); sc._on_field_changed()
+    pv.file_combo.setCurrentIndex(0); pv._update_actions()
+    assert pv.btn_noise.isEnabled() is False
+    assert "reference" in pv.status.text().lower()
+    # setting a reference enables it
+    sc.noise_ref.setText("synth_case_A.csv"); sc._on_field_changed(); pv._update_actions()
+    assert pv.btn_noise.isEnabled() is True
+
+
+def test_remove_noise_checkbox_binds_noise_enabled(qapp, tmp_path):
+    from respmech.ui.screens.settings_screen import SettingsScreen
+    sc = SettingsScreen(AppState(_settings(str(tmp_path))))
+    sc.remove_noise.setChecked(True)
+    sc.to_state()
+    # the checkbox drives the real gate (noise.enabled) and the legacy mirror
+    assert sc.state.settings.processing.emg.noise.enabled is True
+    assert sc.state.settings.processing.emg.remove_noise is True
+
+
+def test_empty_input_folder_is_handled(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    s = _settings(str(tmp_path))
+    s.input.folder = str(tmp_path / "does_not_exist")
+    win = MainWindow(AppState(s))
+    win.preview_screen.refresh_files()
+    assert win.preview_screen.file_combo.count() == 0
+    assert "not found" in win.preview_screen.status.text().lower()
+
+
 def test_worker_cancellation(qapp, tmp_path):
     from respmech.ui.workers import BatchWorker
     w = BatchWorker(_settings(str(tmp_path)), write=False)

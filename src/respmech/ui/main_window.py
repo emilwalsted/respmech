@@ -1,4 +1,9 @@
-"""Main window — a tabbed shell holding the three screens, sharing one AppState."""
+"""Main window — a tabbed shell holding the three screens, sharing one AppState.
+
+The Settings screen is the single source of change events; the main window is the
+only place cross-screen signals are wired, so the Qt-free ``AppState`` never grows
+Qt dependencies. A status bar mirrors each screen's status line.
+"""
 from __future__ import annotations
 
 from PySide6.QtWidgets import QMainWindow, QTabWidget
@@ -15,7 +20,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.state = state or AppState()
         self.setWindowTitle(f"RespMech {__version__}")
-        self.resize(1100, 800)
+        self.resize(1180, 820)
 
         self.tabs = QTabWidget()
         self.settings_screen = SettingsScreen(self.state, on_settings_changed=self._on_settings_changed)
@@ -27,11 +32,22 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.setCentralWidget(self.tabs)
 
+        sc, pv, rn = self.settings_screen, self.preview_screen, self.run_screen
+        sc.inputs_changed.connect(pv.refresh_files)
+        sc.settings_changed.connect(pv.sync_from_settings)
+        sc.settings_changed.connect(rn.refresh_actions)
+        bar = self.statusBar()          # creates the status bar (offscreen-safe)
+        for scr in (sc, pv, rn):
+            scr.status_changed.connect(lambda msg, b=bar: b.showMessage(msg))
+        bar.showMessage("Ready.")
+
     def _on_tab_changed(self, index):
-        # Push the settings form into the shared state before preview/run use it.
-        self.settings_screen.to_state()
-        if self.tabs.widget(index) is self.preview_screen:
-            self.preview_screen._refresh_files()
+        self.settings_screen.to_state()             # belt-and-suspenders sync
+        w = self.tabs.widget(index)
+        if w is self.preview_screen:
+            self.preview_screen.refresh_files()
+        elif w is self.run_screen:
+            self.run_screen.refresh_actions()
 
     def _on_settings_changed(self):
         pass
