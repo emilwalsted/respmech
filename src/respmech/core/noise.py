@@ -24,6 +24,7 @@ import scipy as sp
 from scipy import signal as _sig
 
 from respmech.core.emg import _amp_to_db, _db_to_amp, _stft, _istft
+from respmech.core._compat import trapezoid
 
 # Default fixed STFT parameters (decoupled from the noise-clip length — the bug fix).
 DEFAULT_N_FFT = 256
@@ -149,7 +150,7 @@ def inband_power(x, sr, band=EMG_BAND):
     x = np.asarray(x, dtype=float)
     f, p = _sig.welch(x, sr, nperseg=min(1024, len(x)))
     m = (f >= band[0]) & (f <= band[1])
-    return float(np.trapz(p[m], f[m]))
+    return float(trapezoid(p[m], f[m]))
 
 
 def fidelity(raw_active, processed_active, sr, band=EMG_BAND):

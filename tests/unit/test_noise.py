@@ -15,6 +15,16 @@ def _clip(seed=0, n=4000):
     return np.random.default_rng(seed).normal(0, 1, n)
 
 
+def test_trapezoid_compat_numpy2():
+    """np.trapz was removed in NumPy 2.0 (-> np.trapezoid); the compat shim must work
+    on both and match a manual trapezoidal integral."""
+    from respmech.core._compat import trapezoid
+    x = np.linspace(0, 1, 11)
+    y = x ** 2
+    manual = np.sum((y[:-1] + y[1:]) / 2 * np.diff(x))
+    assert float(trapezoid(y, x)) == pytest.approx(manual)
+
+
 def test_from_clip_determinism_and_serialisation():
     prof = N.NoiseProfile.from_clip(_clip(), 2000)
     x = _clip(1, 6000)
