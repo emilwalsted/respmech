@@ -30,7 +30,8 @@ from respmech.core import compute
 from respmech.core.io.loaders import load
 from respmech.core.pipeline import run_batch
 from respmech.core._legacy_ns import to_legacy_ns
-from respmech.ui.workers import BatchWorker
+from respmech.core.settings import ExcludeEntry
+from respmech.ui.workers import BatchWorker, EmgConditioningWorker
 
 # channel -> (axis label with units, pen colour by physiological meaning)
 _CHANNELS = [
@@ -44,6 +45,9 @@ _CHANNELS = [
 
 class PreviewScreen(QWidget):
     status_changed = Signal(str)
+    # emitted when a noise reference is chosen on the graph (feature B), so the
+    # Settings screen + shared state stay coherent: (file, intervals, use_expiration)
+    noise_reference_changed = Signal(str, object, bool)
 
     def __init__(self, state):
         super().__init__()
@@ -51,7 +55,15 @@ class PreviewScreen(QWidget):
         self._thread = None
         self._worker = None
         self._noise_error = None
+        self._emg_error = None
         self._previewed_file = None
+        # breath-overlay interaction state (feature A)
+        self._channel_plots = []
+        self._breath_spans = {}       # breath_no -> (t0, t1)  seconds
+        self._breath_regions = {}     # breath_no -> [LinearRegionItem per channel plot]
+        self._breath_texts = {}       # breath_no -> TextItem (number label)
+        # draggable noise-selection region on the EMG view (feature B)
+        self._noise_region = None
         self._build()
 
     def _build(self):
@@ -72,6 +84,9 @@ class PreviewScreen(QWidget):
 
         split = QSplitter(Qt.Vertical)
         self.plots = pg.GraphicsLayoutWidget()
+        # single click -> hit-test a breath region -> toggle include/exclude (feature A).
+        # Connected to the persistent scene (survives self.plots.clear()).
+        self.plots.scene().sigMouseClicked.connect(self._on_plot_clicked)
         split.addWidget(self.plots)
 
         lower = QSplitter(Qt.Horizontal)
@@ -82,6 +97,37 @@ class PreviewScreen(QWidget):
         self.fidelity_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 4)))
         lower.addWidget(self.fidelity_canvas)
         split.addWidget(lower)
+
+        # -- EMG conditioning / noise-region panel (features B + C) -----------
+        emg_box = QWidget()
+        ev = QVBoxLayout(emg_box); ev.setContentsMargins(0, 0, 0, 0)
+        ebar = QHBoxLayout()
+        self.emg_channel = QComboBox()
+        self.emg_channel.setToolTip("EMG channel to inspect / condition.")
+        self.btn_use_region = QPushButton("Use selection as noise profile")
+        self.btn_use_region.setToolTip("Set the shaded rest span as processing.emg.noise "
+                                       "reference_intervals for the current file.")
+        self.btn_use_region.clicked.connect(self._use_region_as_noise)
+        self.btn_emg_preview = QPushButton("Preview EMG conditioning")
+        self.btn_emg_preview.setToolTip("Stage raw ▸ ECG-removed ▸ noise-reduced for the "
+                                        "selected channel (off the GUI thread).")
+        self.btn_emg_preview.clicked.connect(self._start_emg_preview)
+        ebar.addWidget(QLabel("EMG channel:")); ebar.addWidget(self.emg_channel)
+        ebar.addWidget(self.btn_use_region); ebar.addWidget(self.btn_emg_preview)
+        ebar.addStretch(1)
+        ev.addLayout(ebar)
+        emg_split = QSplitter(Qt.Horizontal)
+        self.emg_plots = pg.PlotWidget()
+        self.emg_plots.setLabel("bottom", "Time (s)")
+        self.emg_plots.setLabel("left", "EMG (a.u.)")
+        emg_split.addWidget(self.emg_plots)
+        self.emg_psd_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 3)))
+        emg_split.addWidget(self.emg_psd_canvas)
+        ev.addWidget(emg_split, 1)
+        split.addWidget(emg_box)
+        self._refresh_emg_channels()
+        self._ensure_noise_region()
+
         root.addWidget(split, 1)
 
         self.file_combo.currentTextChanged.connect(self._on_file_selected)
@@ -120,6 +166,7 @@ class PreviewScreen(QWidget):
         self.refresh_files()
 
     def sync_from_settings(self):
+        self._refresh_emg_channels()
         self._update_actions()
 
     def _current_file(self):
@@ -139,10 +186,14 @@ class PreviewScreen(QWidget):
         ok, why = self._settings_ok()
         emg = self.state.settings.processing.emg
         noise_on, ref = emg.noise.enabled, emg.noise.reference_file
+        has_emg = bool(self.state.settings.input.channels.emg)
         busy = self._thread is not None
         self.btn_preview.setEnabled(has_file and not busy)
         self.btn_test.setEnabled(has_file and ok and not busy)
         self.btn_noise.setEnabled(has_file and ok and noise_on and bool(ref) and not busy)
+        self.emg_channel.setEnabled(has_emg and not busy)
+        self.btn_use_region.setEnabled(has_file and has_emg and not busy)
+        self.btn_emg_preview.setEnabled(has_file and has_emg and not busy)
         if noise_on and not ref:
             self._set_status("Noise reduction is on but no reference file is set "
                              "(Settings ▸ Rest reference file).")
@@ -177,13 +228,16 @@ class PreviewScreen(QWidget):
 
         t = np.arange(len(flowT)) / fs      # seconds, from start of trimmed data
         series = {"flow": flowT, "volume": volc, "poes": poesT, "pgas": pgasT, "pdi": pdiT}
-        # breath start times + ignored flag (contiguous partition of the trimmed data)
-        bounds, cum = [], 0
-        for b in breaths.values():
-            bounds.append((cum / fs, b["ignored"]))
-            cum += len(b["poes"])
+        # per-breath spans (contiguous partition of the trimmed data): the breath key
+        # is the 1-based `breathcnt` used by exclude_breaths / ignorebreaths.
+        spans, cum = [], 0
+        for bno, b in breaths.items():
+            length = len(np.atleast_1d(b["poes"]))
+            spans.append((bno, cum / fs, (cum + length) / fs, bool(b["ignored"])))
+            cum += length
 
         self.plots.clear()
+        self._channel_plots = []
         prev = None
         n = len(_CHANNELS)
         for i, (key, label, colour) in enumerate(_CHANNELS):
@@ -192,21 +246,256 @@ class PreviewScreen(QWidget):
             p.setLabel("left", label)
             y = series[key]
             p.plot(t[:len(y)], y, pen=pg.mkPen(colour, width=1))
-            for x, ignored in bounds:
-                p.addLine(x=x, pen=pg.mkPen((180, 50, 42) if ignored else (150, 165, 180),
-                                            width=1, style=Qt.DashLine))
             if i == n - 1:
                 p.setLabel("bottom", "Time (s)")
             if prev is not None:
                 p.setXLink(prev)
             prev = p
-        nign = sum(1 for _, ig in bounds if ig)
+            self._channel_plots.append(p)
+        label_y = float(np.nanmax(series["flow"])) if len(series["flow"]) else 0.0
+        self._draw_breath_overlays(spans, label_y)
+
+        nign = sum(1 for _n, _a, _b, ig in spans if ig)
         self._previewed_file = os.path.basename(path)
         self._set_status(
             f"{os.path.basename(path)}: {len(breaths)} breaths"
             + (f" ({nign} excluded)" if nign else "")
-            + f", trimmed to {startix / fs:.2f}–{endix / fs:.2f} s "
-            "(dashed = breath start; red = excluded)")
+            + f", trimmed to {startix / fs:.2f}–{endix / fs:.2f} s. "
+            "Click a shaded breath to include/exclude (red = excluded).")
+
+    # -- feature A: breath overlays + include/exclude ----------------------
+    @staticmethod
+    def _breath_brush(ignored):
+        return pg.mkBrush(180, 50, 42, 70) if ignored else pg.mkBrush(44, 110, 155, 32)
+
+    @staticmethod
+    def _breath_label_color(ignored):
+        return pg.mkColor(180, 50, 42) if ignored else pg.mkColor(90, 107, 122)
+
+    def _draw_breath_overlays(self, spans, label_y=0.0):
+        """Overlay each breath as a shaded, labelled ``LinearRegionItem`` on every
+        stacked channel plot (blue = included, red = excluded). ``spans`` is a list
+        of ``(breath_no, t0, t1, ignored)``. Regions are stored so ``_toggle_breath``
+        can recolour them in place. Non-movable — clicks are hit-tested at the scene
+        level. Headless-safe (no mouse needed to construct)."""
+        self._breath_spans = {n: (t0, t1) for (n, t0, t1, _ig) in spans}
+        self._breath_regions = {n: [] for (n, _0, _1, _ig) in spans}
+        self._breath_texts = {}
+        for n, t0, t1, ignored in spans:
+            for plot in self._channel_plots:
+                reg = pg.LinearRegionItem(values=(t0, t1), movable=False,
+                                          brush=self._breath_brush(ignored),
+                                          pen=pg.mkPen(None))
+                reg.setZValue(-10)
+                plot.addItem(reg)
+                self._breath_regions[n].append(reg)
+                plot.addLine(x=t0, pen=pg.mkPen((150, 165, 180), width=1, style=Qt.DashLine))
+            if self._channel_plots:
+                txt = pg.TextItem(str(n), color=self._breath_label_color(ignored), anchor=(0.5, 1.0))
+                txt.setPos((t0 + t1) / 2.0, label_y)
+                self._channel_plots[0].addItem(txt)
+                self._breath_texts[n] = txt
+
+    def _breath_at(self, t):
+        for n, (t0, t1) in self._breath_spans.items():
+            if t0 <= t <= t1:
+                return n
+        return None
+
+    def _on_plot_clicked(self, ev):
+        """Scene click -> which channel viewbox -> time -> breath -> toggle. Guarded
+        so ordinary pan/zoom on empty space is a no-op."""
+        if not self._breath_spans:
+            return
+        try:
+            pos = ev.scenePos()
+        except Exception:                              # noqa: BLE001
+            return
+        for plot in self._channel_plots:
+            vb = plot.getViewBox()
+            if vb is not None and vb.sceneBoundingRect().contains(pos):
+                bno = self._breath_at(vb.mapSceneToView(pos).x())
+                if bno is not None:
+                    self._toggle_breath(bno)
+                return
+
+    def _toggle_breath(self, breath_no):
+        """Toggle include/exclude for ``breath_no`` (1-based) of the CURRENT file in
+        ``settings.processing.exclude_breaths``, recolour its overlay, and update the
+        status live. Returns the new excluded state (or ``None`` if not applicable).
+        Callable headless — no mouse required."""
+        name = self.file_combo.currentText()
+        if not name or breath_no not in self._breath_spans:
+            return None
+        excl = self.state.settings.processing.exclude_breaths
+        entry = next((e for e in excl if e.file == name), None)
+        if entry is None:
+            entry = ExcludeEntry(file=name, breaths=[])
+            excl.append(entry)
+        now_excluded = breath_no not in entry.breaths
+        if now_excluded:
+            entry.breaths = sorted(set(entry.breaths) | {breath_no})
+        else:
+            entry.breaths = [b for b in entry.breaths if b != breath_no]
+            if not entry.breaths:
+                excl.remove(entry)
+        for reg in self._breath_regions.get(breath_no, []):
+            reg.setBrush(self._breath_brush(now_excluded))
+            reg.update()
+        txt = self._breath_texts.get(breath_no)
+        if txt is not None:
+            txt.setColor(self._breath_label_color(now_excluded))
+        nexcl = len({b for e in excl if e.file == name for b in e.breaths}
+                    & set(self._breath_spans))
+        self._set_status(
+            f"{name}: breath {breath_no} "
+            f"{'excluded' if now_excluded else 'included'} "
+            f"({nexcl}/{len(self._breath_spans)} excluded). "
+            "Re-run Preview or Test run to apply.")
+        return now_excluded
+
+    # -- feature B: select a noise-profile region on the graph -------------
+    def _refresh_emg_channels(self):
+        cols = list(self.state.settings.input.channels.emg)
+        cur = self.emg_channel.currentIndex()
+        self.emg_channel.blockSignals(True)
+        self.emg_channel.clear()
+        for c in cols:
+            self.emg_channel.addItem(f"EMGdi col {c}")
+        if 0 <= cur < self.emg_channel.count():
+            self.emg_channel.setCurrentIndex(cur)
+        self.emg_channel.blockSignals(False)
+
+    def _ensure_noise_region(self):
+        """Add (once) a draggable highlighted time span on the EMG view; re-attach it
+        after an ``emg_plots.clear()`` (which detaches scene items)."""
+        reg = self._noise_region
+        if reg is None:
+            ivals = self.state.settings.processing.emg.noise.reference_intervals
+            t0, t1 = (float(ivals[0][0]), float(ivals[0][1])) if ivals else (0.0, 1.0)
+            reg = pg.LinearRegionItem(values=(t0, t1), movable=True,
+                                      brush=pg.mkBrush(44, 110, 155, 45))
+            reg.setZValue(10)
+            self._noise_region = reg
+        if reg.scene() is None:
+            self.emg_plots.addItem(reg)
+
+    def _use_region_as_noise(self):
+        """Read the shaded span [t0, t1] and set it as the shared noise reference for
+        the CURRENT file: ``noise.reference_file = file``,
+        ``reference_intervals = [[t0, t1]]``, ``use_expiration = False``. Emits
+        ``noise_reference_changed`` so the Settings screen mirrors it. Headless-safe."""
+        name = self.file_combo.currentText()
+        reg = self._noise_region
+        if not name or reg is None:
+            self._set_status("Draw a rest region on the EMG channel, then apply.")
+            return None
+        t0, t1 = reg.getRegion()
+        t0, t1 = float(min(t0, t1)), float(max(t0, t1))
+        if t1 - t0 <= 0:
+            self._set_status("The selected noise region has zero width.")
+            return None
+        n = self.state.settings.processing.emg.noise
+        n.reference_file = name
+        n.reference_intervals = [[t0, t1]]
+        n.use_expiration = False
+        fs = self.state.settings.input.format.sampling_frequency or 0
+        span = int(round((t1 - t0) * fs))
+        nframes = 1 + max(0, span - n.win_length) // max(1, n.hop_length)
+        self.noise_reference_changed.emit(name, [[t0, t1]], False)
+        self._set_status(
+            f"Noise profile ← {name} [{t0:.2f}–{t1:.2f} s]: {span} samples "
+            f"≈ {nframes} STFT frames "
+            + ("(good)" if nframes >= 8 else "(short — pick a longer rest span)")
+            + ". Enable 'Reduce EMG noise' to apply it.")
+        self._update_actions()
+        return (t0, t1)
+
+    # -- feature C: preview EMG conditioning (off-thread) ------------------
+    def _start_emg_preview(self):
+        path = self._current_file()
+        if not path or self._thread is not None:
+            return
+        if not self.state.settings.input.channels.emg:
+            self._set_status("No EMG channels configured (Settings ▸ Channels).")
+            return
+        ch = max(0, self.emg_channel.currentIndex())
+        self._set_status(f"Staging EMG {self.emg_channel.currentText()} "
+                         "(raw ▸ ECG-removed ▸ noise-reduced)…")
+        self.btn_emg_preview.setEnabled(False)
+        self._emg_error = None
+        self._thread = QThread()
+        self._worker = EmgConditioningWorker(self.state.settings, path, ch)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.finished.connect(self._on_emg_staged)
+        self._worker.failed.connect(self._on_emg_failed)
+        self._thread.start()
+
+    def _on_emg_failed(self, msg):
+        self._emg_error = msg
+
+    def _on_emg_staged(self, data):
+        if self._thread is not None:
+            self._thread.quit(); self._thread.wait(2000)
+        self._thread = None; self._worker = None
+        if self._emg_error or data is None:
+            self._set_status(f"EMG preview failed: {self._emg_error or 'no data'}")
+            self._update_actions(); return
+        try:
+            self.render_emg_time(data)
+            self.render_emg_psd(data)
+        except Exception as e:                          # noqa: BLE001
+            self._set_status(f"Could not render EMG preview: {e}")
+            self._update_actions(); return
+        applied = ("noise reduction applied" if data.get("noise_applied")
+                   else "no noise reference set — showing raw vs ECG-removed")
+        self._set_status(f"EMG {self.emg_channel.currentText()}: {applied} "
+                         "(band 20–250 Hz marked on the PSD).")
+        self._update_actions()
+
+    def render_emg_time(self, data):
+        """Time-domain overlay of raw vs ECG-removed vs noise-reduced (pyqtgraph).
+        Takes the precomputed arrays dict from ``workers.stage_emg_channel`` so it is
+        directly unit-testable headless."""
+        t = np.asarray(data["t"])
+        self.emg_plots.clear()
+        self.emg_plots.plot(t, np.asarray(data["raw"]),
+                            pen=pg.mkPen((150, 165, 180), width=1), name="raw")
+        self.emg_plots.plot(t, np.asarray(data["ecg"]),
+                            pen=pg.mkPen((44, 110, 155), width=1), name="ECG-removed")
+        if data.get("noise_applied"):
+            self.emg_plots.plot(t, np.asarray(data["noise"]),
+                                pen=pg.mkPen((31, 122, 77), width=1), name="noise-reduced")
+        self.emg_plots.setLabel("bottom", "Time (s)")
+        self.emg_plots.setLabel("left", "EMG (a.u.)")
+        self._ensure_noise_region()
+
+    def render_emg_psd(self, data):
+        """Log-power PSD of each stage with the 20–250 Hz EMG band marked (matplotlib
+        on ``emg_psd_canvas`` — kept separate from ``fidelity_canvas``). Takes the
+        precomputed arrays dict; unit-testable headless. Always exactly 1 axis."""
+        freqs = np.asarray(data["freqs"], dtype=float)
+        band = data.get("band", (20.0, 250.0))
+        fig = self.emg_psd_canvas.figure
+        fig.clear()
+        ax = fig.add_subplot(111)
+
+        def _db(p):
+            return 10.0 * np.log10(np.maximum(np.asarray(p, dtype=float), 1e-30))
+
+        ax.plot(freqs, _db(data["psd_raw"]), color="0.6", lw=1.0, label="raw")
+        ax.plot(freqs, _db(data["psd_ecg"]), color="#2C6E9B", lw=1.2, label="ECG-removed")
+        if data.get("noise_applied"):
+            ax.plot(freqs, _db(data["psd_noise"]), color="#1F7A4D", lw=1.2, label="noise-reduced")
+        ax.axvspan(band[0], band[1], color="#B7791F", alpha=0.12, label="EMG band 20–250 Hz")
+        ax.set_xlim(0, min(500.0, float(freqs[-1]) if len(freqs) else 500.0))
+        ax.set_xlabel("Frequency (Hz)")
+        ax.set_ylabel("Power (dB)")
+        ax.set_title(f"EMG PSD — channel {int(data.get('channel', 0)) + 1}")
+        ax.legend(fontsize=7)
+        fig.tight_layout()
+        self.emg_psd_canvas.draw()
 
     # -- test run -----------------------------------------------------------
     def _test_run(self):
@@ -214,6 +503,9 @@ class PreviewScreen(QWidget):
         if not path:
             return
         name = os.path.basename(path)
+        # Always show the breaths on the channel graph for a test run, reflecting the
+        # current include/exclude state (so they can be toggled here too).
+        self._preview()
         try:
             self.state.settings.validate()
             result = run_batch(self.state.settings, only_files=[name])  # never writes

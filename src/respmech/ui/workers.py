@@ -16,6 +16,7 @@ Usage (moveToThread pattern):
 """
 from __future__ import annotations
 
+import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
 
 from respmech.core.pipeline import run_batch
@@ -60,5 +61,121 @@ class BatchWorker(QObject):
             # Final result carries every file's table for the results view.
             self.finished.emit(None if self._cancel else result)
         except Exception as e:  # fatal (e.g. no files, invalid settings)
+            self.failed.emit(f"{type(e).__name__}: {e}")
+            self.finished.emit(None)
+
+
+# --------------------------------------------------------------------------- #
+# EMG-conditioning preview (Preview & tuning screen). Stages ONE EMG channel
+# through the exact core conditioning the batch would apply, so the tuning view
+# matches the real run. Pure compute here (Qt-free, no disk writes) so it is both
+# unit-testable headless and safe to run on a QThread.
+# --------------------------------------------------------------------------- #
+def stage_emg_channel(settings: Settings, file_path: str, channel_index: int) -> dict:
+    """Stage one EMG channel of ``file_path`` through the conditioning pipeline and
+    return time-domain + PSD arrays for plotting:
+
+        raw -> ECG-removed (averaged-template subtraction)
+            -> shared-profile spectral noise reduction (this channel only)
+
+    Reuses the core exactly as ``run_batch`` does. The noise stage builds this
+    channel's profile from the same reference clip the batch would use
+    (``pipeline._reference_noise_clip``), so the preview is faithful. Stages that
+    are not configured fall through unchanged (no reference -> ``noise`` == ``ecg``).
+    Never writes to disk and never touches Qt."""
+    from scipy.signal import welch
+
+    from respmech.core.io.loaders import load
+    from respmech.core._legacy_ns import to_legacy_ns
+    from respmech.core import emg as emglib
+    from respmech.core import noise as noiselib
+    from respmech.core.pipeline import _reference_noise_clip
+
+    s = to_legacy_ns(settings)
+    fs = int(s.input.format.samplingfrequency)
+    flow, vol, poes, pgas, pdi, ent, emg = load(file_path, s)
+    emg = np.asarray(emg, dtype=float)
+    if emg.ndim == 1:
+        emg = emg[:, None]
+    nch = emg.shape[1]
+    if nch == 0:
+        raise ValueError("No EMG channels are configured for this file.")
+    ch = max(0, min(int(channel_index), nch - 1))
+    raw = emg[:, ch].astype(float)
+
+    # -- stage 2: ECG removal (test-level detect params, applied to all channels) --
+    ecg = raw
+    try:
+        detect = max(0, min(int(s.processing.emg.column_detect), nch - 1))
+        proc, _win, _peaks = emglib.remove_ecg(
+            emg, emg[:, detect], samplingfrequency=fs,
+            ecgminheight=s.processing.emg.minheight,
+            ecgmindistance=s.processing.emg.mindistance,
+            ecgminwidth=s.processing.emg.minwidth,
+            windowsize=s.processing.emg.windowsize)
+        proc = np.asarray(proc, dtype=float)
+        if proc.ndim == 1:
+            proc = proc[:, None]
+        ecg = proc[:, ch].astype(float)
+    except Exception:                                  # noqa: BLE001 — preview stays useful
+        ecg = raw
+
+    # -- stage 3: shared-profile spectral noise reduction on this channel --
+    cfg = settings.processing.emg.noise
+    noise_out = ecg
+    noise_applied = False
+    if cfg.reference_file:
+        try:
+            clip = np.asarray(_reference_noise_clip(settings, s), dtype=float)
+            if clip.ndim == 1:
+                clip = clip[:, None]
+            prof = noiselib.NoiseProfile.from_clip(
+                clip[:, min(ch, clip.shape[1] - 1)], fs,
+                n_fft=cfg.n_fft, hop_length=cfg.hop_length, win_length=cfg.win_length,
+                n_std_thresh=cfg.n_std_thresh, n_grad_freq=cfg.n_grad_freq,
+                n_grad_time=cfg.n_grad_time)
+            noise_out = np.asarray(prof.apply(ecg, cfg.prop_decrease), dtype=float)
+            noise_applied = True
+        except Exception:                              # noqa: BLE001 — e.g. clip too short
+            noise_out = ecg
+            noise_applied = False
+
+    t = np.arange(len(raw), dtype=float) / fs
+
+    def _psd(x):
+        x = np.asarray(x, dtype=float)
+        f, p = welch(x, fs, nperseg=int(min(1024, len(x))) or 1)
+        return f, p
+
+    freqs, psd_raw = _psd(raw)
+    _, psd_ecg = _psd(ecg)
+    _, psd_noise = _psd(noise_out)
+    return {
+        "channel": ch, "fs": fs, "t": t,
+        "raw": raw, "ecg": ecg, "noise": noise_out,
+        "freqs": freqs, "psd_raw": psd_raw, "psd_ecg": psd_ecg, "psd_noise": psd_noise,
+        "band": noiselib.EMG_BAND, "noise_applied": noise_applied,
+    }
+
+
+class EmgConditioningWorker(QObject):
+    """Off-thread EMG-conditioning staging for the Preview screen. Same
+    ``moveToThread`` seam as :class:`BatchWorker`: it never touches Qt widgets and
+    only emits results. ``finished`` carries the arrays dict (or ``None`` on error)."""
+    finished = Signal(object)   # dict of arrays, or None
+    failed = Signal(str)        # error message
+
+    def __init__(self, settings: Settings, file_path: str, channel_index: int):
+        super().__init__()
+        self._settings = settings
+        self._path = file_path
+        self._ch = channel_index
+
+    @Slot()
+    def run(self):
+        try:
+            data = stage_emg_channel(self._settings, self._path, self._ch)
+            self.finished.emit(data)
+        except Exception as e:  # noqa: BLE001
             self.failed.emit(f"{type(e).__name__}: {e}")
             self.finished.emit(None)
