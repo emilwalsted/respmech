@@ -26,6 +26,7 @@ All computation reuses the core; nothing here writes to disk.
 """
 from __future__ import annotations
 
+import copy
 import glob
 import os
 import traceback
@@ -99,6 +100,12 @@ class _Job:
 # threads that would not stop within the shutdown budget are parked here (kept
 # referenced forever) so CPython never GCs a still-running QThread and aborts.
 _ORPHANED_THREADS = []
+
+
+class _FileRunError(RuntimeError):
+    """A per-file analysis error (the core returned FileResult.error). Raised so
+    _on_job_done labels it 'failed' — not a 'display error' — but still routes it
+    to the copyable error card."""
 
 
 class BusyOverlay(QWidget):
@@ -526,7 +533,10 @@ class PreviewScreen(QWidget):
     def _job_running(self, kind):
         return kind in self._jobs
 
-    def _update_actions(self):
+    def _update_actions(self, status=True):
+        """Refresh button/widget enablement. ``status=False`` updates enablement
+        only and never touches the status line — used after a job completes so a
+        fresh result/error message is not clobbered by a guidance hint."""
         has_file = bool(self.file_combo.currentText())
         ok, why = self._settings_ok()
         emg = self.state.settings.processing.emg
@@ -544,6 +554,8 @@ class PreviewScreen(QWidget):
         self.noise_opts.setEnabled(bool(has_emg and noise_on and ref))
         if noise_on:
             self.noise_prop.setEnabled(bool(ref) and not self.noise_auto.isChecked())
+        if not status:
+            return
         if noise_on and not ref:
             self._set_status("Noise reduction is on — pick a reference file (Settings) or "
                              "select a rest region below and 'Use selection as noise profile'.")
@@ -582,24 +594,26 @@ class PreviewScreen(QWidget):
         if not path:
             return
         has_emg = bool(self.state.settings.input.channels.emg)
+        # snapshot the settings on the GUI thread so a worker never reads them while
+        # the GUI mutates them in place (Settings is a plain, deep-copyable model)
+        snap = copy.deepcopy(self.state.settings)
         worker = None
         if kind == "mech":
-            worker = FnWorker(stage_mechanics_preview, self.state.settings, path)
+            worker = FnWorker(stage_mechanics_preview, snap, path)
         elif kind == "batch":
             ok, _ = self._settings_ok()
             if not ok:
                 return
-            worker = BatchWorker(self.state.settings, write=False,
-                                 only_files=[os.path.basename(path)])
+            worker = BatchWorker(snap, write=False, only_files=[os.path.basename(path)])
         elif kind == "emg_all":
             if not has_emg:
                 return
-            worker = EmgAllChannelsWorker(self.state.settings, path)
+            worker = EmgAllChannelsWorker(snap, path)
         elif kind == "emg_detail":
             if not has_emg:
                 return
             ch = max(0, self.emg_channel.currentIndex())
-            worker = EmgConditioningWorker(self.state.settings, path, ch)
+            worker = EmgConditioningWorker(snap, path, ch)
         if worker is None:
             return
         self._tokens[kind] += 1
@@ -630,7 +644,7 @@ class PreviewScreen(QWidget):
         if hasattr(worker, "failed"):
             worker.failed.connect(self._job_failed_slot)
         thread.start()
-        self._update_actions()
+        self._update_actions(status=False)
 
     def _find_job(self, worker):
         for j in list(self._jobs.values()) + list(self._draining):
@@ -649,8 +663,11 @@ class PreviewScreen(QWidget):
             self._on_job_done(job, result)
 
     def _on_job_done(self, job, result):
-        # join + release the thread (the ONLY place a worker thread is joined)
-        job.thread.quit(); job.thread.wait(2000)
+        # join + release the thread (the ONLY place a worker thread is joined);
+        # a thread that will not stop is parked, never GC'd while running
+        job.thread.quit()
+        if not job.thread.wait(2000):
+            _ORPHANED_THREADS.append((job.thread, job.worker))
         if self._jobs.get(job.kind) is job:
             del self._jobs[job.kind]
         self._draining.discard(job)
@@ -663,7 +680,7 @@ class PreviewScreen(QWidget):
                 for p in _PANELS[job.kind]:
                     if not self._overlays[p].error:
                         self._overlays[p].stop()
-            self._update_actions()
+            self._update_actions(status=False)
             return
         label = _KIND_LABEL.get(job.kind, job.kind)
         err = job.error
@@ -672,20 +689,27 @@ class PreviewScreen(QWidget):
             self._set_status(f"{label} failed — {short_error(detail)}")
             for p in _PANELS[job.kind]:
                 self._overlays[p].show_error(f"{label} failed", detail)
-            self._update_actions()
+            self._update_actions(status=False)
             return
         try:
             self._RENDER[job.kind](result)
-        except Exception:                              # noqa: BLE001
+        except _FileRunError as e:                     # a per-file analysis error -> "failed"
+            detail = str(e)
+            self._set_status(f"{label} failed — {short_error(detail)}")
+            for p in _PANELS[job.kind]:
+                self._overlays[p].show_error(f"{label} failed", detail)
+            self._update_actions(status=False)
+            return
+        except Exception:                              # noqa: BLE001 — a rendering bug
             detail = traceback.format_exc()
             self._set_status(f"{label} — display error: {short_error(detail)}")
             for p in _PANELS[job.kind]:
                 self._overlays[p].show_error(f"{label} — display error", detail)
-            self._update_actions()
+            self._update_actions(status=False)
             return
         for p in _PANELS[job.kind]:
             self._overlays[p].stop()
-        self._update_actions()
+        self._update_actions(status=False)
 
     def shutdown(self, wait_ms=5000):
         """Cancel and join every worker thread (current + draining). Called from
@@ -739,10 +763,12 @@ class PreviewScreen(QWidget):
             return
         try:
             data = stage_mechanics_preview(self.state.settings, path)
-        except Exception as e:              # noqa: BLE001
-            self._set_status(f"Preview failed: {e}")
-            return
-        self._render_preview(data)
+            self._render_preview(data)               # render also inside the guard
+        except Exception:                            # noqa: BLE001 — copyable error card
+            detail = traceback.format_exc()
+            self._set_status(f"Channel preview failed — {short_error(detail)}")
+            for p in ("channels", "raw"):
+                self._overlays[p].show_error("Channel preview failed", detail)
 
     def _render_preview(self, data):
         """Draw the mechanics channel stack + breath overlays and the raw EMG
@@ -886,7 +912,10 @@ class PreviewScreen(QWidget):
         reg = self._noise_region
         if reg is None:
             ivals = self.state.settings.processing.emg.noise.reference_intervals
-            t0, t1 = (float(ivals[0][0]), float(ivals[0][1])) if ivals else (0.0, 1.0)
+            try:                                     # a malformed settings file must not abort construction
+                t0, t1 = (float(ivals[0][0]), float(ivals[0][1])) if ivals else (0.0, 1.0)
+            except Exception:                        # noqa: BLE001 — any bad shape -> cosmetic default
+                t0, t1 = 0.0, 1.0
             reg = pg.LinearRegionItem(values=(t0, t1), movable=True, brush=pg.mkBrush(44, 110, 155, 45))
             reg.setZValue(10)
             self._noise_region = reg
@@ -938,10 +967,15 @@ class PreviewScreen(QWidget):
     def _on_emg_detail_result(self, data):
         self.render_emg_time(data)
         self.render_emg_psd(data)
-        applied = ("noise reduction applied" if data.get("noise_applied")
-                   else "no noise reference — raw vs ECG-removed")
-        ch = int(data.get("channel", 0))
-        self._set_status(f"EMG detail (channel {ch + 1}): {applied} (band 20–250 Hz marked).")
+        col = data.get("col", int(data.get("channel", 0)) + 1)
+        if data.get("noise_applied"):
+            applied = "noise reduction applied"
+        elif data.get("noise_error"):
+            applied = "noise conditioning failed — showing ECG-removed"
+        else:
+            applied = "no noise reference — raw vs ECG-removed"
+        note = " · ECG removal failed (showing raw)" if data.get("ecg_error") else ""
+        self._set_status(f"EMG detail (col {col}): {applied}{note} (band 20–250 Hz marked).")
 
     def render_emg_time(self, data):
         t = np.asarray(data["t"])
@@ -970,7 +1004,7 @@ class PreviewScreen(QWidget):
         ax.axvspan(band[0], band[1], color="#B7791F", alpha=0.12, label="EMG band 20–250 Hz")
         ax.set_xlim(0, min(500.0, float(freqs[-1]) if len(freqs) else 500.0))
         ax.set_xlabel("Frequency (Hz)"); ax.set_ylabel("Power (dB)")
-        ax.set_title(f"EMG PSD — channel {int(data.get('channel', 0)) + 1}")
+        ax.set_title(f"EMG PSD — col {data.get('col', int(data.get('channel', 0)) + 1)}")
         ax.legend(fontsize=7)
         fig.tight_layout()
         self.emg_psd_canvas.draw()
@@ -979,8 +1013,19 @@ class PreviewScreen(QWidget):
     def _on_emg_all_result(self, data):
         self._emg_all = data
         self._render_emg_result()
-        applied = "conditioned (ECG + noise)" if data.get("noise_applied") else "ECG-removed"
-        self._set_status(f"EMG result: {applied}. Tick channels above to show/hide them.")
+        if data.get("noise_applied"):
+            applied = "conditioned (ECG + noise)"
+        elif data.get("ecg_applied"):
+            applied = "ECG-removed"
+        else:
+            applied = "raw"
+        notes = []
+        if data.get("ecg_error"):
+            notes.append("ECG removal failed")
+        if data.get("noise_error"):
+            notes.append("noise conditioning failed")
+        note = (" · " + ", ".join(notes)) if notes else ""
+        self._set_status(f"EMG result: {applied}{note}. Tick channels above to show/hide them.")
 
     def _render_emg_result(self, *_):
         """Overlay the conditioned result for the ticked channels."""
@@ -1007,15 +1052,17 @@ class PreviewScreen(QWidget):
         try:
             self.state.settings.validate()
             result = run_batch(self.state.settings, only_files=[name])  # never writes
-        except Exception as e:              # noqa: BLE001
-            self._set_status(f"Test run failed: {e}")
+            fr = result.files.get(name)
+            if fr is None or fr.error:
+                raise RuntimeError(fr.error if fr else "The run produced no result for this file.")
+            self._fill_table(fr.breaths_table)
+            self._draw_campbell(fr.breaths)
+        except Exception:              # noqa: BLE001 — surface a copyable error card
+            detail = traceback.format_exc()
+            self._set_status(f"Test run failed — {short_error(detail)}")
+            for p in ("campbell", "fidelity"):
+                self._overlays[p].show_error("Test run failed", detail)
             return
-        fr = result.files.get(name)
-        if fr is None or fr.error:
-            self._set_status(f"Test run: {fr.error if fr else 'no result'}")
-            return
-        self._fill_table(fr.breaths_table)
-        self._draw_campbell(fr.breaths)
         self._clear_panel_overlays("campbell", "fidelity")   # dismiss any stale error card
         n = len(fr.breaths_table)
         msg = f"Test run OK: {n} breaths (nothing written)"
@@ -1034,8 +1081,9 @@ class PreviewScreen(QWidget):
         if getattr(result, "files", None):
             fr = result.files.get(cur) or next(iter(result.files.values()), None)
         if fr is None or getattr(fr, "error", None):
-            self._set_status(f"Test run: {getattr(fr, 'error', None) or 'no result'}")
-            return
+            # raise so _on_job_done paints a copyable "Test run failed" error card
+            raise _FileRunError(getattr(fr, "error", None)
+                                or "The run produced no result for this file.")
         self._fill_table(fr.breaths_table)
         self._draw_campbell(fr.breaths)
         nr = getattr(result, "noise_report", None)
@@ -1043,9 +1091,11 @@ class PreviewScreen(QWidget):
             self.render_noise_report(result)         # sets its own status incl. prop_decrease
             # the auto-selected suppression lives only in the report — write it
             # back so the spinbox AND the re-conditioned EMG views use the value
-            # the batch actually chose (the core never mutates settings).
+            # the batch actually chose (the core never mutates settings). Only do so
+            # if auto-selection is still on, so a user who un-ticked it (or loaded
+            # different settings) mid-run isn't overwritten.
             chosen = nr.get("prop_decrease")
-            if chosen is not None:
+            if chosen is not None and self.state.settings.processing.emg.noise.auto_prop:
                 self.state.settings.processing.emg.noise.prop_decrease = float(chosen)
         else:
             n = len(fr.breaths_table)

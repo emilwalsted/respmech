@@ -53,10 +53,20 @@ class MainWindow(QMainWindow):
         sc.settings_changed.connect(rn.refresh_actions)
         # a noise reference chosen on the Preview graph (feature B) mirrors into Settings
         pv.noise_reference_changed.connect(sc.set_noise_reference)
+        # while a batch runs, lock the Settings screen so its state can't be swapped
+        # (e.g. Load TOML) out from under the running worker
+        rn.run_started.connect(self._on_run_started)
+        rn.run_finished.connect(self._on_run_finished)
         bar = self.statusBar()          # creates the status bar (offscreen-safe)
         for scr in (sc, pv, rn):
             scr.status_changed.connect(lambda msg, b=bar: b.showMessage(msg))
         bar.showMessage("Ready.")
+
+    def _on_run_started(self):
+        self.settings_screen.setEnabled(False)
+
+    def _on_run_finished(self):
+        self.settings_screen.setEnabled(True)
 
     def _make_header(self) -> QFrame:
         """A calm application header bar (title + subtitle) above the tabs."""
@@ -106,8 +116,11 @@ class MainWindow(QMainWindow):
         pass
 
     def closeEvent(self, ev):
-        # join every reactive Preview worker so no thread outlives the window
-        try:
-            self.preview_screen.shutdown()
-        finally:
-            super().closeEvent(ev)
+        # join every worker thread (Preview reactive jobs + a running batch) so none
+        # outlives the window and gets destroyed while running
+        for screen in (self.preview_screen, self.run_screen):
+            try:
+                screen.shutdown()
+            except Exception:               # pragma: no cover - best-effort teardown
+                pass
+        super().closeEvent(ev)
