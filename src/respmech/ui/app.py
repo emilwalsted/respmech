@@ -45,6 +45,8 @@ def main(argv=None) -> int:
     splash = make_splash(app)       # None if Qt SVG support is unavailable
     if splash is not None:
         splash.show()
+        splash.raise_()
+        splash.activateWindow()
         app.processEvents()         # paint the splash immediately
 
     try:
@@ -90,13 +92,20 @@ def main(argv=None) -> int:
             _fatal_startup(build_error)
             return 1
 
+    if splash is not None:          # keep the (modal) splash on top after the build
+        splash.raise_()
+        app.processEvents()
+
     def _reveal():
+        # show the window first, THEN close the modal splash (which releases the
+        # modality) so focus/activation of the window actually takes effect
         try:
             win.showMaximized()     # maximised to the screen, not fullscreen
-            win.raise_(); win.activateWindow()
         finally:
             if splash is not None:
                 splash.finish(win)
+        win.raise_()
+        win.activateWindow()
         if startup_error is not None:
             fn, tb = startup_error
             box = QMessageBox(win)

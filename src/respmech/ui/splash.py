@@ -227,4 +227,7 @@ def make_splash(app=None, width: int = 780, height: int = 460):
 
     splash = QSplashScreen(pm)
     splash.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+    # application-modal so nothing (incl. the main window being built) can take
+    # focus or cover the splash before it is finished
+    splash.setWindowModality(Qt.ApplicationModal)
     return splash
