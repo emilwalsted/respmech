@@ -51,19 +51,18 @@ def _wave(x0, x1, y0, amp, cyc, ph, n=220):
     return " ".join(pts)
 
 
-def _emg_on_flow(x0, x1, fy0, famp, cyc, ph, emg_amp, carrier, n=680):
-    """A clean diaphragm-EMG trace superimposed ON the flow curve (same fy0/famp/
-    cyc/ph): it rides along the blue flow line and, during inspiration (the flow's
-    upper/crest half), fuzzes into a smooth crescendo-decrescendo burst; during
-    expiration it lies quietly on the flow line. Inspiration = crest = the half
-    where the flow rises toward the top (−sin), so the burst sits on the crest."""
+def _emg_di(x0, x1, y0, amp, cyc, ph, carrier, n=680):
+    """A clean diaphragm-EMG trace on a FLAT horizontal baseline ``y0``, drawn
+    BELOW the flow curve: a flat line during expiration, and a smooth crescendo-
+    decrescendo burst rising off the baseline during each inspiration (aligned to
+    the flow crests — the half where ``-sin(2π·cyc·x + ph)`` is positive). Bursts
+    go upward (−y)."""
     pts = []
     for i in range(n + 1):
         x = x0 + (x1 - x0) * i / n
         theta = 2.0 * math.pi * cyc * i / n + ph
-        yflow = fy0 + famp * math.sin(theta)
-        env = max(0.0, -math.sin(theta)) ** 0.85        # inspiration = flow crest (top)
-        y = yflow - emg_amp * env * math.sin(2.0 * math.pi * carrier * i / n)
+        env = max(0.0, -math.sin(theta)) ** 0.85        # inspiration = flow crest
+        y = y0 - amp * env * math.sin(2.0 * math.pi * carrier * i / n)
         pts.append(f"{x:.1f},{y:.1f}")
     return " ".join(pts)
 
@@ -133,11 +132,11 @@ def build_splash_svg(width: int = 780, height: int = 460, version: str | None = 
     </linearGradient>
   </defs>
   <rect x="0" y="0" width="{w}" height="{h}" rx="16" fill="url(#veil)"/>
-  <!-- respiratory flow (blue) -->
-  <polyline points="{_wave(0, w, 360, 30, 2.3, 1.6)}" fill="none" stroke="{_AZURE_SOFT}"
+  <!-- wavy ventilation / flow curve (blue) -->
+  <polyline points="{_wave(0, w, 344, 26, 2.3, 1.6)}" fill="none" stroke="{_AZURE_SOFT}"
             stroke-width="3" stroke-opacity="0.7" stroke-linecap="round" stroke-linejoin="round"/>
-  <!-- diaphragm EMG (orange) superimposed ON the flow curve, gated to inspiration -->
-  <polyline points="{_emg_on_flow(0, w, 360, 30, 2.3, 1.6, 26, 44)}" fill="none" stroke="{_ORANGE}"
+  <!-- diaphragm EMG (orange): a flat baseline BELOW the flow, bursting at inspiration -->
+  <polyline points="{_emg_di(0, w, 404, 22, 2.3, 1.6, 44)}" fill="none" stroke="{_ORANGE}"
             stroke-width="1.6" stroke-opacity="0.85" stroke-linecap="round" stroke-linejoin="round"/>
 
   <text x="204" y="152" font-family="{_FONT}" font-size="60" font-weight="800"
