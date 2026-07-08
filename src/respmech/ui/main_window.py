@@ -21,6 +21,13 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.state = state or AppState()
         self.setWindowTitle(f"RespMech {__version__}")
+        try:
+            from respmech.ui.logo import app_icon
+            icon = app_icon()
+            if icon is not None:
+                self.setWindowIcon(icon)
+        except Exception:                       # pragma: no cover - icon is cosmetic
+            pass
         self._fit_to_screen()
 
         self.tabs = QTabWidget()
