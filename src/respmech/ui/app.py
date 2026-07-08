@@ -9,9 +9,8 @@ import sys
 import time
 import traceback
 
-# minimum time (ms) the splash stays up so it is actually seen even if the main
-# window builds quickly
-_MIN_SPLASH_MS = 1500
+# minimum time (ms) the splash stays visible before the window is revealed
+_MIN_SPLASH_MS = 5000
 
 
 def _fatal_startup(tb: str) -> None:
@@ -38,6 +37,16 @@ def main(argv=None) -> int:
 
     argv = list(sys.argv if argv is None else argv)
     app = QApplication(argv)
+
+    # Show the splash as the VERY FIRST thing on screen (it is a self-contained
+    # pixmap, so it needs neither the theme nor the icon), then keep it up for at
+    # least _MIN_SPLASH_MS before the window is revealed.
+    t0 = time.monotonic()
+    splash = make_splash(app)       # None if Qt SVG support is unavailable
+    if splash is not None:
+        splash.show()
+        app.processEvents()         # paint the splash immediately
+
     try:
         theme.apply_theme(app)      # Fusion + palette + QSS + plot styling (cosmetic)
     except Exception:               # noqa: BLE001 — never fail to start over theming
@@ -49,12 +58,6 @@ def main(argv=None) -> int:
             app.setWindowIcon(icon)
     except Exception:               # noqa: BLE001 — icon is cosmetic
         pass
-
-    t0 = time.monotonic()
-    splash = make_splash(app)       # None if Qt SVG support is unavailable
-    if splash is not None:
-        splash.show()
-        app.processEvents()         # paint the splash before the (slower) build
 
     from respmech.ui.state import AppState
     from respmech.ui.main_window import MainWindow
