@@ -51,18 +51,20 @@ def _wave(x0, x1, y0, amp, cyc, ph, n=220):
     return " ".join(pts)
 
 
-def _emg_di(x0, x1, y0, amp, cyc, ph, carrier, n=680):
-    """A clean diaphragm-EMG trace on a FLAT horizontal baseline ``y0``, drawn
-    BELOW the flow curve: a flat line during expiration, and a smooth crescendo-
-    decrescendo burst rising off the baseline during each inspiration (aligned to
-    the flow crests — the half where ``-sin(2π·cyc·x + ph)`` is positive). Bursts
-    go upward (−y)."""
+def _emg_di(x0, x1, mid, amp, cyc, ph, carrier, n=720):
+    """A clean diaphragm-EMG trace whose baseline sits on the flow's 0-flow line
+    (``mid`` — halfway between the flow peak and nadir). It is flat on that line,
+    and each burst spans exactly from a flow PEAK to the following NADIR — the
+    descending half where ``-cos(2π·cyc·x + ph)`` is positive (0 at the peak,
+    maximal at the mid-descent, 0 at the nadir) — oscillating symmetrically about
+    the 0-flow line. Assumes the flow is ``mid - A·sin(2π·cyc·x + ph)`` (peak at
+    the top), so the burst starts at the peak and ends at the nadir."""
     pts = []
     for i in range(n + 1):
         x = x0 + (x1 - x0) * i / n
         theta = 2.0 * math.pi * cyc * i / n + ph
-        env = max(0.0, -math.sin(theta)) ** 0.85        # inspiration = flow crest
-        y = y0 - amp * env * math.sin(2.0 * math.pi * carrier * i / n)
+        env = max(0.0, -math.cos(theta)) ** 0.9         # peak -> nadir gate
+        y = mid - amp * env * math.sin(2.0 * math.pi * carrier * i / n)
         pts.append(f"{x:.1f},{y:.1f}")
     return " ".join(pts)
 
@@ -132,12 +134,12 @@ def build_splash_svg(width: int = 780, height: int = 460, version: str | None = 
     </linearGradient>
   </defs>
   <rect x="0" y="0" width="{w}" height="{h}" rx="16" fill="url(#veil)"/>
-  <!-- wavy ventilation / flow curve (blue) -->
-  <polyline points="{_wave(0, w, 344, 26, 2.3, 1.6)}" fill="none" stroke="{_AZURE_SOFT}"
+  <!-- wavy ventilation / flow curve (blue): peak at top, nadir at bottom -->
+  <polyline points="{_wave(0, w, 352, -32, 2.3, 1.6)}" fill="none" stroke="{_AZURE_SOFT}"
             stroke-width="3" stroke-opacity="0.7" stroke-linecap="round" stroke-linejoin="round"/>
-  <!-- diaphragm EMG (orange): a flat baseline BELOW the flow, bursting at inspiration -->
-  <polyline points="{_emg_di(0, w, 404, 22, 2.3, 1.6, 44)}" fill="none" stroke="{_ORANGE}"
-            stroke-width="1.6" stroke-opacity="0.85" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- diaphragm EMG (orange): baseline on the 0-flow line, burst spans peak->nadir -->
+  <polyline points="{_emg_di(0, w, 352, 22, 2.3, 1.6, 44)}" fill="none" stroke="{_ORANGE}"
+            stroke-width="1.6" stroke-opacity="0.9" stroke-linecap="round" stroke-linejoin="round"/>
 
   <text x="204" y="152" font-family="{_FONT}" font-size="60" font-weight="800"
         letter-spacing="-1.0" fill="{_TEXT}">RespMech</text>
