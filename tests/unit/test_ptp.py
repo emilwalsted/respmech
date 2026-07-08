@@ -1,9 +1,11 @@
 """Unit tests for the PTP baseline (window mean vs single sample).
 
-Correctness is checked against an independent numpy.trapz integral (the code uses
-scipy.integrate.simpson; they agree closely on smooth signals)."""
+Correctness is checked against an independent trapezoidal integral (the code uses
+scipy.integrate.simpson; they agree closely on smooth signals). Uses the same
+numpy-2-safe ``trapezoid`` shim as the core, so the test runs on numpy 1.x and 2.x."""
 import numpy as np
 
+from respmech.core._compat import trapezoid
 from respmech.core.compute import calcptp
 
 FS = 1000
@@ -12,7 +14,7 @@ X = np.linspace(0.0, len(Y) / FS, len(Y))
 
 
 def _trapz(sig):
-    return np.trapz(sig, X)
+    return trapezoid(sig, X)
 
 
 def test_single_sample_baseline_matches_independent_integral():

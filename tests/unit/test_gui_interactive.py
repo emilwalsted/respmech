@@ -149,3 +149,65 @@ def test_emg_preview_disabled_without_emg_channels(qapp, tmp_path):
     pv._update_actions()
     assert pv.btn_emg_preview.isEnabled() is False
     assert pv.emg_channel.count() == 0
+
+
+# -- Sub-tab structure: Mechanics always, EMG only with EMG channels --------
+def test_emg_subtab_visibility_tracks_channels(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    # with EMG channels -> both sub-tabs present
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    titles = [pv.subtabs.tabText(i) for i in range(pv.subtabs.count())]
+    assert titles == ["Mechanics", "EMG processing"]
+    # remove the EMG channels and re-sync -> EMG sub-tab disappears, Mechanics stays
+    win.state.settings.input.channels.emg = []
+    pv.sync_from_settings()
+    titles = [pv.subtabs.tabText(i) for i in range(pv.subtabs.count())]
+    assert titles == ["Mechanics"]
+    # the widgets still exist (just not shown), so nothing referencing them breaks
+    assert pv.emg_channel.count() == 0
+
+
+# -- Moved noise-window options live on the EMG tab, gated on a reference ----
+def test_noise_options_gated_on_reference_file(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    s = _settings(str(tmp_path))
+    s.processing.emg.noise.enabled = True
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_combo.setCurrentIndex(0); pv._update_actions()
+    # noise on but no reference -> options disabled
+    assert pv.noise_opts.isEnabled() is False
+    # choose a rest region on the graph -> sets the reference -> options enable
+    pv._ensure_noise_region(); pv._noise_region.setRegion((1.0, 5.0))
+    pv._use_region_as_noise(); pv._update_actions()
+    assert win.state.settings.processing.emg.noise.reference_file != ""
+    assert pv.noise_opts.isEnabled() is True
+    # editing a noise-window widget writes straight back to settings
+    pv.noise_auto.setChecked(False)
+    pv.noise_prop.setValue(0.35)
+    assert win.state.settings.processing.emg.noise.auto_prop is False
+    assert abs(win.state.settings.processing.emg.noise.prop_decrease - 0.35) < 1e-9
+
+
+# -- Result view: stage all channels, pick which to show --------------------
+def test_emg_result_view_selectable_channels(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_emg_all_channels
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_combo.setCurrentIndex(0)
+    path = os.path.join(INPUT, "synth_case_A.csv")
+    data = stage_emg_all_channels(s, path)
+    assert data["cols"] == [2, 3, 4]
+    assert len(data["raw"]) == len(data["conditioned"]) == 3
+    # a checkbox per EMG channel; the result view plots only the ticked ones
+    assert len(pv.result_checks) == 3
+    pv._emg_all = data
+    for _c, cb in pv.result_checks:
+        cb.setChecked(False)
+    pv.result_checks[1][1].setChecked(True)   # triggers a re-render
+    pv._render_emg_result()
+    plotted = [it for it in pv.emg_result_plots.getPlotItem().listDataItems()]
+    assert len(plotted) == 1
