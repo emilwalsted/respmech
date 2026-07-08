@@ -170,9 +170,17 @@ class EmgConditioningWorker(QObject):
         self._settings = settings
         self._path = file_path
         self._ch = channel_index
+        self._cancelled = False
+
+    @Slot()
+    def cancel(self):
+        self._cancelled = True
 
     @Slot()
     def run(self):
+        if self._cancelled:                 # superseded before we got the thread
+            self.finished.emit(None)
+            return
         try:
             data = stage_emg_channel(self._settings, self._path, self._ch)
             self.finished.emit(data)
@@ -256,11 +264,99 @@ class EmgAllChannelsWorker(QObject):
         super().__init__()
         self._settings = settings
         self._path = file_path
+        self._cancelled = False
+
+    @Slot()
+    def cancel(self):
+        self._cancelled = True
 
     @Slot()
     def run(self):
+        if self._cancelled:
+            self.finished.emit(None)
+            return
         try:
             self.finished.emit(stage_emg_all_channels(self._settings, self._path))
+        except Exception as e:  # noqa: BLE001
+            self.failed.emit(f"{type(e).__name__}: {e}")
+            self.finished.emit(None)
+
+
+# --------------------------------------------------------------------------- #
+# Mechanics channel preview staging (Preview & tuning screen). Pure compute
+# (Qt-free, no disk writes): load -> trim -> zero/drift-correct -> breath split,
+# returning plot-ready arrays. The synchronous _preview() and the off-thread
+# reactive job both call this, so they render identically.
+# --------------------------------------------------------------------------- #
+def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
+    """Stage a file's mechanics channels for the preview: load, trim to the
+    analysis window, zero + optional drift-correct the volume, and split into
+    breaths. Returns plot-ready arrays plus breath spans (with 1-based numbers
+    and the ignored flag). Reuses the core exactly as ``run_batch`` does; never
+    writes to disk and never touches Qt."""
+    import os
+
+    from respmech.core import compute
+    from respmech.core.io.loaders import load
+    from respmech.core._legacy_ns import to_legacy_ns
+
+    s = to_legacy_ns(settings)
+    flow, volume, poes, pgas, pdi, ent, emg = load(file_path, s)
+    fs = s.input.format.samplingfrequency
+    tc = np.arange(len(flow)) / fs
+    (tcT, flowT, volT, poesT, pgasT, pdiT, _e, startix, endix) = compute.trim(
+        tc, flow, volume, poes, pgas, pdi,
+        np.array(emg) if len(emg) else np.array([]), s)
+    volc = (compute.correctdrift(compute.zero(volT), s)
+            if s.processing.mechanics.correctvolumedrift else compute.zero(volT))
+    breaths = compute.separateintobreaths(
+        s.processing.mechanics.separateby, os.path.basename(file_path), tcT, flowT,
+        volc, poesT, pgasT, pdiT, [], [], s)
+
+    t = np.arange(len(flowT)) / fs
+    series = {"flow": flowT, "volume": volc, "poes": poesT, "pgas": pgasT, "pdi": pdiT}
+    spans, cum = [], 0
+    for bno, b in breaths.items():
+        length = len(np.atleast_1d(b["poes"]))
+        spans.append((bno, cum / fs, (cum + length) / fs, bool(b["ignored"])))
+        cum += length
+    label_y = float(np.nanmax(series["flow"])) if len(series["flow"]) else 0.0
+    emg_arr = np.asarray(emg, dtype=float)
+    if emg_arr.ndim == 1:
+        emg_arr = emg_arr[:, None] if emg_arr.size else emg_arr.reshape(0, 0)
+    return {
+        "name": os.path.basename(file_path), "fs": fs, "t": t, "series": series,
+        "spans": spans, "label_y": label_y, "startix": startix, "endix": endix,
+        "nbreaths": len(breaths), "emg": emg_arr,
+    }
+
+
+class FnWorker(QObject):
+    """Generic off-thread wrapper: run ``fn(*args, **kwargs)`` and emit the
+    result. Same ``moveToThread`` seam as the other workers (never touches Qt);
+    used for the mechanics-preview staging. ``finished`` carries the return value
+    (or ``None`` on error)."""
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, fn, *args, **kwargs):
+        super().__init__()
+        self._fn = fn
+        self._args = args
+        self._kwargs = kwargs
+        self._cancelled = False
+
+    @Slot()
+    def cancel(self):
+        self._cancelled = True
+
+    @Slot()
+    def run(self):
+        if self._cancelled:
+            self.finished.emit(None)
+            return
+        try:
+            self.finished.emit(self._fn(*self._args, **self._kwargs))
         except Exception as e:  # noqa: BLE001
             self.failed.emit(f"{type(e).__name__}: {e}")
             self.finished.emit(None)

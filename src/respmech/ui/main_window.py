@@ -97,3 +97,10 @@ class MainWindow(QMainWindow):
 
     def _on_settings_changed(self):
         pass
+
+    def closeEvent(self, ev):
+        # join every reactive Preview worker so no thread outlives the window
+        try:
+            self.preview_screen.shutdown()
+        finally:
+            super().closeEvent(ev)
