@@ -54,17 +54,31 @@ class BatchWorker(QObject):
 
     @Slot()
     def run(self):
+        # Analysis and writing fail differently: a failed run has no result, but a
+        # failed WRITE still has a fully computed result worth showing.
         try:
             result = run_batch(self._settings, progress=self._on_event,
                                cancel_check=lambda: self._cancel,
                                only_files=self._only)
-            if self._write and not self._cancel:
-                write_batch(result, self._settings, self._settings.output.folder)
-            # Final result carries every file's table for the results view.
-            self.finished.emit(None if self._cancel else result)
-        except Exception as e:  # fatal (e.g. no files, invalid settings)
+        except Exception:  # fatal (e.g. no files, invalid settings)
             self.failed.emit(traceback.format_exc())
             self.finished.emit(None)
+            return
+        # Latch the cancel decision ONCE, when the analysis phase ends, so a Cancel
+        # click that lands during writing can't be reported as "no output written".
+        cancelled = self._cancel
+        if self._write and not cancelled:
+            try:
+                write_batch(result, self._settings, self._settings.output.folder)
+            except Exception:
+                self.failed.emit(
+                    "Analysis completed, but writing the output failed. Some files may be "
+                    f"partially written in:\n  {self._settings.output.folder}\n\n"
+                    + traceback.format_exc())
+                self.finished.emit(result)      # still deliver the computed result
+                return
+        # Final result carries every file's table for the results view.
+        self.finished.emit(None if cancelled else result)
 
 
 # --------------------------------------------------------------------------- #
@@ -104,28 +118,36 @@ def stage_emg_channel(settings: Settings, file_path: str, channel_index: int) ->
         raise ValueError("No EMG channels are configured for this file.")
     ch = max(0, min(int(channel_index), nch - 1))
     raw = emg[:, ch].astype(float)
+    cols = list(settings.input.channels.emg)
+    col = cols[ch] if ch < len(cols) else ch + 1
 
-    # -- stage 2: ECG removal (test-level detect params, applied to all channels) --
+    # -- stage 2: ECG removal (honours remove_ecg; test-level detect params) --
     ecg = raw
-    try:
-        detect = max(0, min(int(s.processing.emg.column_detect), nch - 1))
-        proc, _win, _peaks = emglib.remove_ecg(
-            emg, emg[:, detect], samplingfrequency=fs,
-            ecgminheight=s.processing.emg.minheight,
-            ecgmindistance=s.processing.emg.mindistance,
-            ecgminwidth=s.processing.emg.minwidth,
-            windowsize=s.processing.emg.windowsize)
-        proc = np.asarray(proc, dtype=float)
-        if proc.ndim == 1:
-            proc = proc[:, None]
-        ecg = proc[:, ch].astype(float)
-    except Exception:                                  # noqa: BLE001 — preview stays useful
-        ecg = raw
+    ecg_applied = False
+    ecg_error = None
+    if settings.processing.emg.remove_ecg:
+        try:
+            detect = max(0, min(int(s.processing.emg.column_detect), nch - 1))
+            proc, _win, _peaks = emglib.remove_ecg(
+                emg, emg[:, detect], samplingfrequency=fs,
+                ecgminheight=s.processing.emg.minheight,
+                ecgmindistance=s.processing.emg.mindistance,
+                ecgminwidth=s.processing.emg.minwidth,
+                windowsize=s.processing.emg.windowsize)
+            proc = np.asarray(proc, dtype=float)
+            if proc.ndim == 1:
+                proc = proc[:, None]
+            ecg = proc[:, ch].astype(float)
+            ecg_applied = True
+        except Exception:                              # noqa: BLE001 — preview stays useful
+            ecg = raw
+            ecg_error = traceback.format_exc()
 
     # -- stage 3: shared-profile spectral noise reduction on this channel --
     cfg = settings.processing.emg.noise
     noise_out = ecg
     noise_applied = False
+    noise_error = None
     if cfg.reference_file:
         try:
             clip = np.asarray(_reference_noise_clip(settings, s), dtype=float)
@@ -140,7 +162,7 @@ def stage_emg_channel(settings: Settings, file_path: str, channel_index: int) ->
             noise_applied = True
         except Exception:                              # noqa: BLE001 — e.g. clip too short
             noise_out = ecg
-            noise_applied = False
+            noise_error = traceback.format_exc()
 
     t = np.arange(len(raw), dtype=float) / fs
 
@@ -153,10 +175,11 @@ def stage_emg_channel(settings: Settings, file_path: str, channel_index: int) ->
     _, psd_ecg = _psd(ecg)
     _, psd_noise = _psd(noise_out)
     return {
-        "channel": ch, "fs": fs, "t": t,
+        "channel": ch, "col": col, "fs": fs, "t": t,
         "raw": raw, "ecg": ecg, "noise": noise_out,
         "freqs": freqs, "psd_raw": psd_raw, "psd_ecg": psd_ecg, "psd_noise": psd_noise,
         "band": noiselib.EMG_BAND, "noise_applied": noise_applied,
+        "ecg_applied": ecg_applied, "ecg_error": ecg_error, "noise_error": noise_error,
     }
 
 
@@ -215,6 +238,8 @@ def stage_emg_all_channels(settings: Settings, file_path: str) -> dict:
         raise ValueError("No EMG channels are configured for this file.")
 
     conditioned = np.array(emg, dtype=float)
+    ecg_applied = False
+    ecg_error = None
     if settings.processing.emg.remove_ecg:
         try:
             detect = max(0, min(int(s.processing.emg.column_detect), nch - 1))
@@ -227,10 +252,13 @@ def stage_emg_all_channels(settings: Settings, file_path: str) -> dict:
             conditioned = np.asarray(proc, dtype=float)
             if conditioned.ndim == 1:
                 conditioned = conditioned[:, None]
+            ecg_applied = True
         except Exception:                              # noqa: BLE001
             conditioned = np.array(emg, dtype=float)
+            ecg_error = traceback.format_exc()
 
     noise_applied = False
+    noise_error = None
     cfg = settings.processing.emg.noise
     if cfg.reference_file:
         try:
@@ -246,14 +274,15 @@ def stage_emg_all_channels(settings: Settings, file_path: str) -> dict:
                 conditioned[:, i] = prof.apply(conditioned[:, i], cfg.prop_decrease)
             noise_applied = True
         except Exception:                              # noqa: BLE001
-            noise_applied = False
+            noise_error = traceback.format_exc()
 
     t = np.arange(emg.shape[0], dtype=float) / fs
     return {
         "t": t, "fs": fs, "cols": cols,
         "raw": [emg[:, i].astype(float) for i in range(nch)],
         "conditioned": [conditioned[:, i].astype(float) for i in range(nch)],
-        "noise_applied": noise_applied,
+        "noise_applied": noise_applied, "noise_error": noise_error,
+        "ecg_applied": ecg_applied, "ecg_error": ecg_error,
     }
 
 

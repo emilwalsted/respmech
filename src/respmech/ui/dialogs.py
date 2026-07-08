@@ -46,8 +46,10 @@ class TextViewerDialog(QDialog):
         lay.addWidget(self.view, 1)
         row = QHBoxLayout()
         self.copy_btn = QPushButton("Copy to clipboard")
+        self.copy_btn.setAutoDefault(False)
         self.copy_btn.clicked.connect(self._copy)
         close_btn = QPushButton("Close")
+        close_btn.setDefault(True)                 # Enter dismisses; single emphasised action
         close_btn.clicked.connect(self.accept)
         if _theme is not None:
             _theme.make_primary(close_btn)
@@ -61,7 +63,25 @@ class TextViewerDialog(QDialog):
         if cb is not None:
             cb.setText(self.view.toPlainText())
         self.copy_btn.setText("Copied ✓")
-        QTimer.singleShot(1200, lambda: self.copy_btn.setText("Copy to clipboard"))
+        # bind the reset to the button's lifetime, so it never fires on a deleted widget
+        QTimer.singleShot(1200, self.copy_btn,
+                          lambda b=self.copy_btn: b.setText("Copy to clipboard"))
 
     def text(self) -> str:
         return self.view.toPlainText()
+
+
+def open_error_dialog(parent, title: str, detail: str, intro: str | None = None, prior=None):
+    """Show a copyable full-detail (traceback) dialog, replacing ``prior`` if given
+    so repeated errors don't accumulate windows. Returns the new dialog to keep a
+    reference on the caller."""
+    if prior is not None:
+        try:
+            prior.close()
+            prior.deleteLater()
+        except Exception:                          # pragma: no cover - prior already gone
+            pass
+    dlg = TextViewerDialog(title, detail, parent, intro=intro)
+    dlg.show()
+    dlg.raise_()
+    return dlg

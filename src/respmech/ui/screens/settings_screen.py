@@ -9,13 +9,16 @@ model is preserved on load/save round-trips.
 """
 from __future__ import annotations
 
+import traceback
+
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
                                QFormLayout, QFrame, QGroupBox, QHBoxLayout, QLabel,
-                               QLineEdit, QMessageBox, QPushButton, QScrollArea,
+                               QLineEdit, QPushButton, QScrollArea,
                                QSpinBox, QVBoxLayout, QWidget)
 from PySide6.QtCore import Signal
 
 from respmech.core.settings import SettingsError
+from respmech.ui.dialogs import open_error_dialog, short_error
 
 
 class SettingsScreen(QWidget):
@@ -28,6 +31,8 @@ class SettingsScreen(QWidget):
         self.state = state
         self.on_settings_changed = on_settings_changed
         self._loading = True          # suppress reactions during programmatic fills
+        self._err_dialog = None       # copyable error dialog (replace, don't accumulate)
+        self._report_dialog = None    # migration report dialog
         self._build()
         self.from_state()
         self._wire_reactivity()
@@ -392,42 +397,86 @@ class SettingsScreen(QWidget):
     def _on_emg_cols_changed(self, *_):
         if self._loading:
             return
+        # warn (non-blocking) if a typo silently dropped a non-numeric column token
+        raw = [p.strip() for p in self.cols_emg.text().replace(";", ",").split(",") if p.strip()]
+        dropped = [p for p in raw if not _is_int(p)]
         self._repopulate_ecg_detect()
         self._on_field_changed()
+        if dropped:
+            self._set_status(f"Ignored non-numeric EMG column(s): {', '.join(dropped)}")
 
     def _set_status(self, text):
         self.status.setText(text)
         self.status_changed.emit(text)
 
     # -- actions ------------------------------------------------------------
+    def _resync_form(self):
+        """Best-effort refill of the form from the (restored) settings after a
+        rolled-back load/import."""
+        try:
+            self.from_state()
+        except Exception:                       # noqa: BLE001
+            pass
+
+    def _report_error(self, operation, detail):
+        """Consistent failure surface: a short status line + a copyable full trace
+        (matches the Preview/Run screens)."""
+        self._set_status(f"{operation} failed — {short_error(detail)}")
+        self._err_dialog = open_error_dialog(
+            self, f"{operation} — error", detail,
+            intro=f"{operation} failed. The full detail below is copyable.",
+            prior=self._err_dialog)
+
     def _load(self):
         p, _ = QFileDialog.getOpenFileName(self, "Load settings TOML", ".", "TOML (*.toml)")
-        if p:
+        if not p:
+            return
+        prior, prior_path = self.state.settings, self.state.settings_path
+        try:
             self.state.load_toml(p)
             self.from_state()
-            self._set_status(f"Loaded {p}")
-            self.inputs_changed.emit()
-            self.settings_changed.emit()
+        except Exception:                       # noqa: BLE001 — roll back so nothing partially applies
+            detail = traceback.format_exc()
+            self.state.settings, self.state.settings_path = prior, prior_path
+            self._resync_form()
+            self._report_error("Load settings", detail)
+            return
+        self._set_status(f"Loaded {p}")
+        self.inputs_changed.emit()
+        self.settings_changed.emit()
 
     def _save(self):
         self.to_state()
         p, _ = QFileDialog.getSaveFileName(self, "Save settings TOML", "settings.toml", "TOML (*.toml)")
-        if p:
+        if not p:
+            return
+        try:
             self.state.save_toml(p)
-            self._set_status(f"Saved {p}")
+        except Exception:                       # noqa: BLE001
+            self._report_error("Save settings", traceback.format_exc())
+            return
+        self._set_status(f"Saved {p}")
 
     def _import(self):
         p, _ = QFileDialog.getOpenFileName(self, "Import legacy settings .py", ".", "Python (*.py)")
-        if p:
+        if not p:
+            return
+        prior, prior_path = self.state.settings, self.state.settings_path
+        try:
             report = self.state.import_legacy(p)
             self.from_state()
-            dlg = QMessageBox(self); dlg.setWindowTitle("Migration report")
-            dlg.setText("Legacy settings imported and converted.")
-            dlg.setDetailedText(report)
-            dlg.exec()
-            self._set_status(f"Imported {p}")
-            self.inputs_changed.emit()
-            self.settings_changed.emit()
+        except Exception:                       # noqa: BLE001 — roll back so nothing partially applies
+            detail = traceback.format_exc()
+            self.state.settings, self.state.settings_path = prior, prior_path
+            self._resync_form()
+            self._report_error("Import legacy settings", detail)
+            return
+        self._report_dialog = open_error_dialog(
+            self, "Migration report", report,
+            intro="Legacy settings imported and converted.", prior=self._report_dialog)
+        self._set_status(f"Imported {p}")
+        self.inputs_changed.emit()
+        self.settings_changed.emit()
 
     def _validate(self):
         self.to_state()
@@ -435,6 +484,9 @@ class SettingsScreen(QWidget):
             self.state.settings.validate()
         except SettingsError as e:
             self._set_status(f"Invalid: {e}")
+            return
+        except Exception:                       # noqa: BLE001 — unexpected: show a copyable trace
+            self._report_error("Validate settings", traceback.format_exc())
             return
         # path checks (the core validate() is filesystem-agnostic)
         problem = self._path_problem()
@@ -454,40 +506,24 @@ class SettingsScreen(QWidget):
             self._set_status("Settings valid ✓")
 
     def _path_problem(self):
-        """Return a human message for the first invalid path, or None if all OK."""
-        import glob
-        import os
-        s = self.state.settings
-        folder = (s.input.folder or "").strip()
-        if not folder or not os.path.isdir(folder):
-            return f"input folder does not exist: {folder or '(unset)'}"
-        matches = [f for f in glob.glob(os.path.join(folder, s.input.files or "*.*"))
-                   if os.path.isfile(f)]
-        if not matches:
-            return f"no files match '{s.input.files}' in the input folder"
-        out = (s.output.folder or "").strip()
-        if not out:
-            return "output folder is not set"
-        parent = out if os.path.isdir(out) else os.path.dirname(os.path.abspath(out))
-        if not os.path.isdir(parent):
-            return f"output folder's location does not exist: {out}"
-        n = s.processing.emg.noise
-        if n.enabled and n.reference_file:
-            ref = n.reference_file
-            if not os.path.isabs(ref):
-                ref = os.path.join(folder, ref)
-            if not os.path.isfile(ref):
-                return f"noise reference file not found: {n.reference_file}"
-        return None
+        """Return a human message for the first invalid path, or None if all OK.
+        Shared with the Run screen so both surface the same filesystem checks."""
+        from respmech.ui.validation import path_problem
+        return path_problem(self.state.settings)
+
+
+def _is_int(token):
+    try:
+        int(token)
+        return True
+    except ValueError:
+        return False
 
 
 def _parse_ints(text):
     out = []
     for part in text.replace(";", ",").split(","):
         part = part.strip()
-        if part:
-            try:
-                out.append(int(part))
-            except ValueError:
-                pass
+        if part and _is_int(part):
+            out.append(int(part))
     return out
