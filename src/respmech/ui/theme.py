@@ -328,6 +328,28 @@ QLabel[status="error"] {
     color: $st_error_fg; background-color: $st_error_bg;
     border: 1px solid $st_error_bd; border-radius: 6px; padding: 5px 10px;
 }
+
+/* ---- application header bar ------------------------------------------- */
+QFrame#appHeader {
+    background-color: $surface;
+    border: none;
+    border-bottom: 1px solid $border;
+}
+QLabel#appTitle { font-size: 17px; font-weight: 700; color: $accent; }
+QLabel#appSubtitle { color: $text_muted; font-size: 11px; }
+
+/* ---- compact icon-ish buttons (file pickers, small actions) ---------- */
+QPushButton[compact="true"] {
+    padding: 6px 12px;
+    min-width: 0;
+    font-weight: 600;
+}
+
+/* ---- numeric fields: keep them tidy, not full-width ------------------ */
+QAbstractSpinBox { max-width: 150px; }
+
+/* ---- inner (sub-)tab bars read a touch smaller ----------------------- */
+QTabBar::tab { min-width: 40px; }
 """)
 
 

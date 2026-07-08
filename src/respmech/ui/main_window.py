@@ -6,7 +6,8 @@ Qt dependencies. A status bar mirrors each screen's status line.
 """
 from __future__ import annotations
 
-from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
+                               QMainWindow, QTabWidget, QVBoxLayout, QWidget)
 
 from respmech import __version__
 from respmech.ui.state import AppState
@@ -30,7 +31,14 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.preview_screen, "2. Preview & tuning")
         self.tabs.addTab(self.run_screen, "3. Run")
         self.tabs.currentChanged.connect(self._on_tab_changed)
-        self.setCentralWidget(self.tabs)
+
+        central = QWidget()
+        col = QVBoxLayout(central)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(0)
+        col.addWidget(self._make_header())
+        col.addWidget(self.tabs, 1)
+        self.setCentralWidget(central)
 
         sc, pv, rn = self.settings_screen, self.preview_screen, self.run_screen
         sc.inputs_changed.connect(pv.refresh_files)
@@ -42,6 +50,25 @@ class MainWindow(QMainWindow):
         for scr in (sc, pv, rn):
             scr.status_changed.connect(lambda msg, b=bar: b.showMessage(msg))
         bar.showMessage("Ready.")
+
+    def _make_header(self) -> QFrame:
+        """A calm application header bar (title + subtitle) above the tabs."""
+        header = QFrame()
+        header.setObjectName("appHeader")
+        h = QHBoxLayout(header)
+        h.setContentsMargins(18, 10, 18, 10)
+        title = QLabel("RespMech")
+        title.setObjectName("appTitle")
+        sub = QLabel("Respiratory mechanics · work of breathing · diaphragm EMG")
+        sub.setObjectName("appSubtitle")
+        h.addWidget(title)
+        h.addSpacing(12)
+        h.addWidget(sub)
+        h.addStretch(1)
+        ver = QLabel(f"v{__version__}")
+        ver.setObjectName("appSubtitle")
+        h.addWidget(ver)
+        return header
 
     def _fit_to_screen(self, desired_w: int = 1180, desired_h: int = 820,
                        fraction: float = 0.92) -> None:

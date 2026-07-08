@@ -179,3 +179,88 @@ class EmgConditioningWorker(QObject):
         except Exception as e:  # noqa: BLE001
             self.failed.emit(f"{type(e).__name__}: {e}")
             self.finished.emit(None)
+
+
+def stage_emg_all_channels(settings: Settings, file_path: str) -> dict:
+    """Stage EVERY configured EMG channel of ``file_path`` (raw -> conditioned = ECG
+    removal + shared-profile noise reduction) for the "result" view where the user
+    picks which channels to see. ECG removal runs once for all channels; the noise
+    profile is built per channel from the shared reference clip. Pure compute, Qt-free,
+    no disk writes."""
+    from respmech.core.io.loaders import load
+    from respmech.core._legacy_ns import to_legacy_ns
+    from respmech.core import emg as emglib
+    from respmech.core import noise as noiselib
+    from respmech.core.pipeline import _reference_noise_clip
+
+    s = to_legacy_ns(settings)
+    fs = int(s.input.format.samplingfrequency)
+    cols = list(settings.input.channels.emg)
+    flow, vol, poes, pgas, pdi, ent, emg = load(file_path, s)
+    emg = np.asarray(emg, dtype=float)
+    if emg.ndim == 1:
+        emg = emg[:, None]
+    nch = emg.shape[1]
+    if nch == 0:
+        raise ValueError("No EMG channels are configured for this file.")
+
+    conditioned = np.array(emg, dtype=float)
+    if settings.processing.emg.remove_ecg:
+        try:
+            detect = max(0, min(int(s.processing.emg.column_detect), nch - 1))
+            proc, _w, _p = emglib.remove_ecg(
+                np.array(emg), emg[:, detect], samplingfrequency=fs,
+                ecgminheight=s.processing.emg.minheight,
+                ecgmindistance=s.processing.emg.mindistance,
+                ecgminwidth=s.processing.emg.minwidth,
+                windowsize=s.processing.emg.windowsize)
+            conditioned = np.asarray(proc, dtype=float)
+            if conditioned.ndim == 1:
+                conditioned = conditioned[:, None]
+        except Exception:                              # noqa: BLE001
+            conditioned = np.array(emg, dtype=float)
+
+    noise_applied = False
+    cfg = settings.processing.emg.noise
+    if cfg.reference_file:
+        try:
+            clip = np.asarray(_reference_noise_clip(settings, s), dtype=float)
+            if clip.ndim == 1:
+                clip = clip[:, None]
+            for i in range(nch):
+                prof = noiselib.NoiseProfile.from_clip(
+                    clip[:, min(i, clip.shape[1] - 1)], fs,
+                    n_fft=cfg.n_fft, hop_length=cfg.hop_length, win_length=cfg.win_length,
+                    n_std_thresh=cfg.n_std_thresh, n_grad_freq=cfg.n_grad_freq,
+                    n_grad_time=cfg.n_grad_time)
+                conditioned[:, i] = prof.apply(conditioned[:, i], cfg.prop_decrease)
+            noise_applied = True
+        except Exception:                              # noqa: BLE001
+            noise_applied = False
+
+    t = np.arange(emg.shape[0], dtype=float) / fs
+    return {
+        "t": t, "fs": fs, "cols": cols,
+        "raw": [emg[:, i].astype(float) for i in range(nch)],
+        "conditioned": [conditioned[:, i].astype(float) for i in range(nch)],
+        "noise_applied": noise_applied,
+    }
+
+
+class EmgAllChannelsWorker(QObject):
+    """Off-thread staging of all EMG channels for the result view."""
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, settings: Settings, file_path: str):
+        super().__init__()
+        self._settings = settings
+        self._path = file_path
+
+    @Slot()
+    def run(self):
+        try:
+            self.finished.emit(stage_emg_all_channels(self._settings, self._path))
+        except Exception as e:  # noqa: BLE001
+            self.failed.emit(f"{type(e).__name__}: {e}")
+            self.finished.emit(None)

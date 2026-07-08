@@ -165,3 +165,21 @@ def test_worker_cancellation(qapp, tmp_path):
     w.finished.connect(lambda r: out.setdefault("r", r))
     w.run()
     assert out["r"] is None  # cancelled -> None
+
+
+def test_validate_checks_paths(qapp, tmp_path):
+    """Validate reports filesystem problems the core (path-agnostic) validate misses."""
+    from respmech.ui.screens.settings_screen import SettingsScreen
+    sc = SettingsScreen(AppState(_settings(str(tmp_path))))
+    # a good configuration passes the path checks
+    assert sc._path_problem() is None
+    # a non-existent input folder is caught
+    sc.state.settings.input.folder = str(tmp_path / "nope")
+    msg = sc._path_problem()
+    assert msg and "input folder" in msg
+    # restore folder; a missing noise reference file is caught when noise is on
+    sc.state.settings.input.folder = INPUT
+    sc.state.settings.processing.emg.noise.enabled = True
+    sc.state.settings.processing.emg.noise.reference_file = "not_here.csv"
+    msg = sc._path_problem()
+    assert msg and "noise reference file" in msg

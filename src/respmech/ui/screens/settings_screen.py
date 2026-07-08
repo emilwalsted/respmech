@@ -175,28 +175,23 @@ class SettingsScreen(QWidget):
         # EMG — noise reduction (shared profile) ---------------------------
         gns = QGroupBox("EMG — noise reduction (shared profile)")
         gns.setToolTip("One shared noise profile + one parameter set are built from the "
-                       "rest reference and applied IDENTICALLY to every file in the test.")
+                       "reference and applied IDENTICALLY to every file in the test. "
+                       "Tune the noise window visually in Preview ▸ EMG processing.")
         fn = QFormLayout(gns)
         self.remove_noise = QCheckBox("Reduce EMG noise (shared profile)")
-        self.remove_noise.setToolTip("Enable spectral noise subtraction using the shared rest-reference profile.")
+        self.remove_noise.setToolTip("Enable spectral noise subtraction using the shared reference profile.")
         self.noise_ref = QLineEdit()
-        self.noise_ref.setToolTip("A rest/baseline recording whose EMG-free portion defines the noise profile.")
+        self.noise_ref.setToolTip("A rest/baseline recording whose EMG-free portion defines the noise profile. "
+                                  "You can also select a rest region on the EMG graph (Preview ▸ EMG processing).")
         self.noise_use_exp = QCheckBox("Use expiration of the reference (recommended)")
         self.noise_use_exp.setToolTip("Build the noise sample from the reference's expiration (many STFT frames = stable).")
-        self.noise_auto = QCheckBox("Auto-select suppression (keep worst channel ≥ fidelity target)")
-        self.noise_target = QDoubleSpinBox(); self.noise_target.setRange(0.50, 0.99); self.noise_target.setSingleStep(0.05)
-        self.noise_target.setToolTip("Minimum fraction of inspiratory EMG power to retain (over-subtraction guard).")
-        self.noise_prop = QDoubleSpinBox(); self.noise_prop.setRange(0.0, 1.0); self.noise_prop.setSingleStep(0.05)
-        self.noise_prop.setToolTip("Manual suppression strength (0 = none, 1 = full) when auto-select is off.")
-        self.noise_nstd = QDoubleSpinBox(); self.noise_nstd.setRange(0.0, 10.0); self.noise_nstd.setSingleStep(0.1)
-        self.noise_nstd.setToolTip("Gate threshold: mean + n_std·SD of the noise spectrum. Lower = gentler.")
         fn.addRow("", self.remove_noise)
-        fn.addRow("Rest reference file", self._with_browse(self.noise_ref, folder=False))
+        fn.addRow("Reference file", self._with_browse(self.noise_ref, folder=False))
         fn.addRow("", self.noise_use_exp)
-        fn.addRow("", self.noise_auto)
-        fn.addRow("Fidelity target (0–1)", self.noise_target)
-        fn.addRow("Manual suppression (prop_decrease)", self.noise_prop)
-        fn.addRow("n_std_thresh", self.noise_nstd)
+        hint = QLabel("Noise-window options (suppression, fidelity target) are in "
+                      "Preview ▸ EMG processing, active once a reference file is set.")
+        hint.setWordWrap(True); hint.setProperty("status", "muted")
+        fn.addRow("", hint)
         root.addWidget(gns)
 
         # Output -----------------------------------------------------------
@@ -219,9 +214,11 @@ class SettingsScreen(QWidget):
         s = QSpinBox(); s.setRange(0 if allow_zero else 1, 9999); return s
 
     def _with_browse(self, line: QLineEdit, folder=False):
-        w = QWidget(); h = QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
-        h.addWidget(line)
-        b = QPushButton("…"); b.setFixedWidth(30)
+        w = QWidget(); h = QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0); h.setSpacing(6)
+        h.addWidget(line, 1)
+        b = QPushButton("Browse…")
+        b.setProperty("compact", True)
+        b.setToolTip("Choose a folder…" if folder else "Choose a file…")
         b.clicked.connect(lambda: self._browse(line, folder))
         h.addWidget(b)
         return w
@@ -267,14 +264,10 @@ class SettingsScreen(QWidget):
             self.ecg_min_distance.setValue(emg.ecg_min_distance_s)
             self.ecg_min_width.setValue(emg.ecg_min_width_s)
             self.ecg_window.setValue(emg.ecg_window_s)
-            # Noise reduction
+            # Noise reduction (enable + reference file; tuning lives in the EMG tab)
             self.remove_noise.setChecked(n.enabled)               # rebind to the real gate
             self.noise_ref.setText(n.reference_file or "")
             self.noise_use_exp.setChecked(n.use_expiration)
-            self.noise_auto.setChecked(n.auto_prop)
-            self.noise_target.setValue(n.fidelity_target)
-            self.noise_prop.setValue(n.prop_decrease)
-            self.noise_nstd.setValue(n.n_std_thresh)
             self._repopulate_ecg_detect()
             if 0 <= emg.detect_channel < self.ecg_detect.count():
                 self.ecg_detect.setCurrentIndex(emg.detect_channel)
@@ -310,15 +303,11 @@ class SettingsScreen(QWidget):
         emg.ecg_min_distance_s = self.ecg_min_distance.value()
         emg.ecg_min_width_s = self.ecg_min_width.value()
         emg.ecg_window_s = self.ecg_window.value()
-        # Noise reduction
+        # Noise reduction (enable + reference file; tuning owned by the EMG tab)
         n.enabled = self.remove_noise.isChecked()
         emg.remove_noise = self.remove_noise.isChecked()      # keep legacy mirror so TOML round-trips
         n.reference_file = self.noise_ref.text().strip() or None
         n.use_expiration = self.noise_use_exp.isChecked()
-        n.auto_prop = self.noise_auto.isChecked()
-        n.fidelity_target = self.noise_target.value()
-        n.prop_decrease = self.noise_prop.value()
-        n.n_std_thresh = self.noise_nstd.value()
         emg.detect_channel = max(0, self.ecg_detect.currentIndex())
         s.output.folder = self.out_folder.text()
         if self.on_settings_changed:
@@ -358,11 +347,9 @@ class SettingsScreen(QWidget):
 
     def _sync_widgets(self):
         noise_on = self.remove_noise.isChecked()
-        for w in (self.noise_ref, self.noise_use_exp, self.noise_auto,
-                  self.noise_target, self.noise_prop, self.noise_nstd):
-            w.setEnabled(noise_on)
-        if noise_on:
-            self.noise_prop.setEnabled(not self.noise_auto.isChecked())
+        self.noise_ref.setEnabled(noise_on)
+        # "use expiration" only makes sense once a reference file is chosen
+        self.noise_use_exp.setEnabled(noise_on and bool(self.noise_ref.text().strip()))
         ecg_on = self.remove_ecg.isChecked()
         for w in (self.ecg_detect, self.ecg_min_height, self.ecg_min_distance,
                   self.ecg_min_width, self.ecg_window):
@@ -379,15 +366,13 @@ class SettingsScreen(QWidget):
         for sb in (self.samp_freq, self.col_flow, self.col_volume, self.col_poes,
                    self.col_pgas, self.col_pdi):
             sb.valueChanged.connect(self._on_field_changed)
-        for dsb in (self.noise_target, self.noise_prop, self.noise_nstd,
-                    self.emg_rms_window, self.emg_outlier_sd, self.ecg_min_height,
+        for dsb in (self.emg_rms_window, self.emg_outlier_sd, self.ecg_min_height,
                     self.ecg_min_distance, self.ecg_min_width, self.ecg_window):
             dsb.valueChanged.connect(self._on_field_changed)
         for cb in (self.seg_method, self.wob_from):
             cb.currentTextChanged.connect(self._on_field_changed)
         self.ecg_detect.currentIndexChanged.connect(self._on_field_changed)
-        for chk in (self.integrate, self.remove_ecg, self.remove_noise,
-                    self.noise_use_exp, self.noise_auto):
+        for chk in (self.integrate, self.remove_ecg, self.remove_noise, self.noise_use_exp):
             chk.toggled.connect(self._on_field_changed)
 
     def _on_field_changed(self, *_):
@@ -451,6 +436,11 @@ class SettingsScreen(QWidget):
         except SettingsError as e:
             self._set_status(f"Invalid: {e}")
             return
+        # path checks (the core validate() is filesystem-agnostic)
+        problem = self._path_problem()
+        if problem:
+            self._set_status(f"Invalid: {problem}")
+            return
         # non-fatal science guardrails
         s = self.state.settings
         ch = s.input.channels
@@ -462,6 +452,33 @@ class SettingsScreen(QWidget):
             self._set_status("Valid, but sampling frequency < 1000 Hz is low for EMG.")
         else:
             self._set_status("Settings valid ✓")
+
+    def _path_problem(self):
+        """Return a human message for the first invalid path, or None if all OK."""
+        import glob
+        import os
+        s = self.state.settings
+        folder = (s.input.folder or "").strip()
+        if not folder or not os.path.isdir(folder):
+            return f"input folder does not exist: {folder or '(unset)'}"
+        matches = [f for f in glob.glob(os.path.join(folder, s.input.files or "*.*"))
+                   if os.path.isfile(f)]
+        if not matches:
+            return f"no files match '{s.input.files}' in the input folder"
+        out = (s.output.folder or "").strip()
+        if not out:
+            return "output folder is not set"
+        parent = out if os.path.isdir(out) else os.path.dirname(os.path.abspath(out))
+        if not os.path.isdir(parent):
+            return f"output folder's location does not exist: {out}"
+        n = s.processing.emg.noise
+        if n.enabled and n.reference_file:
+            ref = n.reference_file
+            if not os.path.isabs(ref):
+                ref = os.path.join(folder, ref)
+            if not os.path.isfile(ref):
+                return f"noise reference file not found: {n.reference_file}"
+        return None
 
 
 def _parse_ints(text):
