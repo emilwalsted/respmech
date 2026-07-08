@@ -16,6 +16,8 @@ Usage (moveToThread pattern):
 """
 from __future__ import annotations
 
+import traceback
+
 import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
 
@@ -61,7 +63,7 @@ class BatchWorker(QObject):
             # Final result carries every file's table for the results view.
             self.finished.emit(None if self._cancel else result)
         except Exception as e:  # fatal (e.g. no files, invalid settings)
-            self.failed.emit(f"{type(e).__name__}: {e}")
+            self.failed.emit(traceback.format_exc())
             self.finished.emit(None)
 
 
@@ -185,7 +187,7 @@ class EmgConditioningWorker(QObject):
             data = stage_emg_channel(self._settings, self._path, self._ch)
             self.finished.emit(data)
         except Exception as e:  # noqa: BLE001
-            self.failed.emit(f"{type(e).__name__}: {e}")
+            self.failed.emit(traceback.format_exc())
             self.finished.emit(None)
 
 
@@ -278,7 +280,7 @@ class EmgAllChannelsWorker(QObject):
         try:
             self.finished.emit(stage_emg_all_channels(self._settings, self._path))
         except Exception as e:  # noqa: BLE001
-            self.failed.emit(f"{type(e).__name__}: {e}")
+            self.failed.emit(traceback.format_exc())
             self.finished.emit(None)
 
 
@@ -358,5 +360,5 @@ class FnWorker(QObject):
         try:
             self.finished.emit(self._fn(*self._args, **self._kwargs))
         except Exception as e:  # noqa: BLE001
-            self.failed.emit(f"{type(e).__name__}: {e}")
+            self.failed.emit(traceback.format_exc())
             self.finished.emit(None)

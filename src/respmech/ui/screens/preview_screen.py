@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import glob
 import os
+import traceback
 from dataclasses import dataclass
 
 import numpy as np
@@ -45,6 +46,7 @@ from respmech.core.io.loaders import load  # noqa: F401 (re-exported for tests/b
 from respmech.core.pipeline import run_batch
 from respmech.core._legacy_ns import to_legacy_ns  # noqa: F401 (back-compat import)
 from respmech.core.settings import ExcludeEntry
+from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
                                   stage_mechanics_preview)
@@ -71,6 +73,9 @@ _PANELS = {"mech": ["channels", "raw"], "batch": ["campbell", "fidelity"],
            "emg_all": ["result"], "emg_detail": ["detail"]}
 _SPIN_TEXT = {"mech": "Loading channels…", "batch": "Running test…",
               "emg_all": "Conditioning channels…", "emg_detail": "Staging detail…"}
+# human labels for status lines + panel error cards
+_KIND_LABEL = {"mech": "Channel preview", "batch": "Test run",
+               "emg_all": "EMG result", "emg_detail": "EMG detail"}
 
 
 def _pen(colour, width=1):
@@ -97,40 +102,86 @@ _ORPHANED_THREADS = []
 
 
 class BusyOverlay(QWidget):
-    """A translucent spinner overlay that covers one panel while its job runs.
+    """A translucent overlay that covers one panel — either a spinner while the
+    panel's job runs, or an error card (short message + a round info button that
+    opens the full, copyable trace) if the job failed.
 
-    State lives in plain attributes (``busy``/``message``), so it is inspectable
-    under a headless test without any pixels. It re-covers its parent on resize/
-    move (splitter drags) and is only ever shown/hidden from the GUI thread."""
+    State lives in plain attributes (``busy``/``error``/``message``), so it is
+    inspectable under a headless test without any pixels. It re-covers its parent
+    on resize/move (splitter drags) and is only ever shown/hidden from the GUI
+    thread."""
 
     def __init__(self, panel: QWidget):
         super().__init__(panel)
         self.busy = False
+        self.error = None
         self.message = ""
+        self._detail_dialog = None
         self.setObjectName("busyOverlay")
-        box = QWidget(self)
-        box.setObjectName("busyBox")
-        bl = QVBoxLayout(box)
+
+        # -- busy card: caption + indeterminate bar --
+        self._busy_box = QWidget(self)
+        self._busy_box.setObjectName("busyBox")
+        bl = QVBoxLayout(self._busy_box)
         bl.setContentsMargins(18, 14, 18, 14)
         bl.setSpacing(8)
-        self._label = QLabel("", box)
+        self._label = QLabel("", self._busy_box)
         self._label.setObjectName("busyLabel")
         self._label.setAlignment(Qt.AlignCenter)
-        self._bar = QProgressBar(box)
+        self._bar = QProgressBar(self._busy_box)
         self._bar.setObjectName("busyBar")
         self._bar.setRange(0, 0)          # indeterminate = animated spinner
         self._bar.setTextVisible(False)
         self._bar.setFixedWidth(150)
         bl.addWidget(self._label)
-        bl.addWidget(self._bar)
+        bl.addWidget(self._bar, 0, Qt.AlignCenter)
+
+        # -- error card: ⚠ + summary + round info button --
+        self._error_box = QWidget(self)
+        self._error_box.setObjectName("errorBox")
+        self._error_box.setMaximumWidth(360)
+        el = QVBoxLayout(self._error_box)
+        el.setContentsMargins(16, 14, 16, 14)
+        el.setSpacing(6)
+        head = QHBoxLayout()
+        head.setSpacing(9)
+        self._err_icon = QLabel("⚠")
+        self._err_icon.setObjectName("errIcon")
+        self._err_label = QLabel("")
+        self._err_label.setObjectName("errLabel")
+        self._err_label.setWordWrap(True)
+        self._info_btn = QPushButton("i")
+        self._info_btn.setObjectName("infoBtn")
+        self._info_btn.setFixedSize(24, 24)
+        self._info_btn.setToolTip("Show the full error detail (copyable)")
+        self._info_btn.setCursor(Qt.PointingHandCursor)
+        self._info_btn.clicked.connect(self._open_detail)
+        head.addWidget(self._err_icon, 0, Qt.AlignTop)
+        head.addWidget(self._err_label, 1)
+        head.addWidget(self._info_btn, 0, Qt.AlignTop)
+        el.addLayout(head)
+        hint = QLabel("Click the info button for the full trace.")
+        hint.setObjectName("errHint")
+        hint.setWordWrap(True)
+        el.addWidget(hint)
+
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(box, 0, Qt.AlignCenter)
+        lay.addWidget(self._busy_box, 0, Qt.AlignCenter)
+        lay.addWidget(self._error_box, 0, Qt.AlignCenter)
+        self._error_box.hide()
+
         self.setStyleSheet(
             "#busyOverlay { background-color: rgba(18, 22, 28, 0.42); }"
-            "#busyBox { background-color: palette(window);"
+            "#busyBox, #errorBox { background-color: palette(window);"
             " border: 1px solid rgba(128,128,128,0.35); border-radius: 10px; }"
-            "#busyLabel { color: palette(window-text); font-weight: 600; }")
+            "#errorBox { border-color: rgba(180,50,42,0.55); }"
+            "#busyLabel, #errLabel { color: palette(window-text); font-weight: 600; }"
+            "#errIcon { color: #E08A4F; font-size: 17px; font-weight: 700; }"
+            "#errHint { color: rgba(147,164,183,0.95); font-size: 11px; }"
+            "#infoBtn { background-color: #2C6E9B; color: white; border: none;"
+            " border-radius: 12px; font-weight: 700; font-style: italic; }"
+            "#infoBtn:hover { background-color: #3E8AC0; }")
         panel.installEventFilter(self)
         self.setGeometry(panel.rect())
         self.hide()
@@ -142,16 +193,46 @@ class BusyOverlay(QWidget):
 
     def start(self, message="Working…"):
         self.busy = True
+        self.error = None
         self.message = message
         self._label.setText(message)
+        self._error_box.hide()
+        self._busy_box.show()
         self.setGeometry(self.parent().rect())
         self.raise_()
         self.show()
 
     def stop(self):
         self.busy = False
+        self.error = None
         self.message = ""
         self.hide()
+
+    def show_error(self, summary, detail):
+        """Switch to the error card: a short summary + a round info button that
+        opens the full ``detail`` (traceback) in a copyable dialog."""
+        self.busy = False
+        self.error = detail or ""
+        self._err_label.setText(summary or "Something went wrong")
+        self._busy_box.hide()
+        self._error_box.show()
+        self.setGeometry(self.parent().rect())
+        self.raise_()
+        self.show()
+
+    def _open_detail(self):
+        if not self.error:
+            return
+        if self._detail_dialog is not None:   # replace, don't accumulate windows
+            self._detail_dialog.close()
+            self._detail_dialog.deleteLater()
+            self._detail_dialog = None
+        dlg = TextViewerDialog(
+            "Error detail", self.error, self,
+            intro="Full error trace — select the text or use Copy to clipboard.")
+        self._detail_dialog = dlg          # keep a reference so it isn't GC'd
+        dlg.show()
+        dlg.raise_()
 
     def is_busy(self):
         return self.busy
@@ -574,21 +655,34 @@ class PreviewScreen(QWidget):
             del self._jobs[job.kind]
         self._draining.discard(job)
         # superseded by a newer same-kind job: drop the payload silently, and
-        # only clear the spinner if no newer owner took over the panels
+        # only clear the spinner if no newer owner took over the panels — but
+        # never wipe an error card the current owner already painted (a stale
+        # draining job finishing late must not erase the live job's error).
         if job.token != self._tokens[job.kind]:
             if job.kind not in self._jobs:
                 for p in _PANELS[job.kind]:
-                    self._overlays[p].stop()
+                    if not self._overlays[p].error:
+                        self._overlays[p].stop()
             self._update_actions()
             return
+        label = _KIND_LABEL.get(job.kind, job.kind)
         err = job.error
         if err or result is None:
-            self._set_status(f"{job.kind.replace('_', ' ')} failed: {err or 'no data'}")
-        else:
-            try:
-                self._RENDER[job.kind](result)
-            except Exception as e:                     # noqa: BLE001
-                self._set_status(f"Could not render {job.kind}: {e}")
+            detail = err or "The computation returned no data."
+            self._set_status(f"{label} failed — {short_error(detail)}")
+            for p in _PANELS[job.kind]:
+                self._overlays[p].show_error(f"{label} failed", detail)
+            self._update_actions()
+            return
+        try:
+            self._RENDER[job.kind](result)
+        except Exception:                              # noqa: BLE001
+            detail = traceback.format_exc()
+            self._set_status(f"{label} — display error: {short_error(detail)}")
+            for p in _PANELS[job.kind]:
+                self._overlays[p].show_error(f"{label} — display error", detail)
+            self._update_actions()
+            return
         for p in _PANELS[job.kind]:
             self._overlays[p].stop()
         self._update_actions()
@@ -624,6 +718,20 @@ class PreviewScreen(QWidget):
     def busy_panels(self):
         return {k for k, o in self._overlays.items() if o.busy}
 
+    def panel_error(self, key):
+        """The full error detail shown in a panel's error card, or None."""
+        ov = self._overlays.get(key)
+        return ov.error if ov is not None else None
+
+    def _clear_panel_overlays(self, *keys):
+        """Dismiss any spinner/error card on these panels — called by the
+        synchronous render paths so a successful redraw never leaves a stale
+        error card raised over fresh content."""
+        for k in keys:
+            ov = self._overlays.get(k)
+            if ov is not None:
+                ov.stop()
+
     # -- channel preview (Mechanics), synchronous render -------------------
     def _preview(self):
         path = self._current_file()
@@ -644,6 +752,7 @@ class PreviewScreen(QWidget):
         series = data["series"]
         t = data["t"]
         spans = data["spans"]
+        self._clear_panel_overlays("channels", "raw")   # dismiss any stale error card
         self.plots.clear()
         self._channel_plots = []
         prev = None
@@ -907,6 +1016,7 @@ class PreviewScreen(QWidget):
             return
         self._fill_table(fr.breaths_table)
         self._draw_campbell(fr.breaths)
+        self._clear_panel_overlays("campbell", "fidelity")   # dismiss any stale error card
         n = len(fr.breaths_table)
         msg = f"Test run OK: {n} breaths (nothing written)"
         ecg = getattr(fr, "ecg", None)

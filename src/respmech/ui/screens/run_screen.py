@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QProgressBar, QPushButton,
                                QTableWidget, QTableWidgetItem, QPlainTextEdit,
                                QVBoxLayout, QWidget)
 
+from respmech.ui.dialogs import TextViewerDialog
 from respmech.ui.workers import BatchWorker
 
 try:
@@ -28,6 +29,8 @@ class RunScreen(QWidget):
         self.state = state
         self._thread = None
         self._worker = None
+        self._fatal_msg = None
+        self._error_dialog = None
         self._build()
         self.refresh_actions()
 
@@ -87,6 +90,7 @@ class RunScreen(QWidget):
             self._set_status(f"Cannot run: {why}")
             return
         self.log.clear(); self.progress.setRange(0, 0)  # busy until first file
+        self._fatal_msg = None
         self._set_running(True)
 
         self._thread = QThread()
@@ -95,9 +99,13 @@ class RunScreen(QWidget):
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_progress)
         self._worker.file_failed.connect(lambda f, e: self._append(f"  {f}: FAILED — {e}"))
-        self._worker.failed.connect(lambda msg: self._append(f"ERROR: {msg}"))
+        self._worker.failed.connect(self._on_fatal)
         self._worker.finished.connect(self._on_finished)
         self._thread.start()
+
+    def _on_fatal(self, msg):
+        self._fatal_msg = msg
+        self._append(f"ERROR: {msg}")
 
     def _cancel(self):
         if self._worker:
@@ -132,6 +140,36 @@ class RunScreen(QWidget):
             self._thread.quit(); self._thread.wait(2000)
         self._thread = None; self._worker = None
         self.refresh_actions()
+        # surface a copyable error-log window if anything failed
+        failed = getattr(result, "failed_files", {}) if result is not None else {}
+        if failed or self._fatal_msg:
+            self._show_error_window(self._error_report(result, failed or {}))
+
+    def _error_report(self, result, failed):
+        parts = []
+        if result is None:
+            parts.append("The batch run did not complete.\n")
+            if self._fatal_msg:
+                parts.append(self._fatal_msg)
+        else:
+            parts.append(f"{len(failed)} file(s) failed during the run:\n")
+            for fname, fr in failed.items():
+                parts.append(f"── {fname} ──\n{getattr(fr, 'error', '') or '(no detail)'}\n")
+            if self._fatal_msg:
+                parts.append("\nAdditional error:\n" + self._fatal_msg)
+        return "\n".join(parts).strip()
+
+    def _show_error_window(self, text):
+        if self._error_dialog is not None:   # replace, don't accumulate windows
+            self._error_dialog.close()
+            self._error_dialog.deleteLater()
+            self._error_dialog = None
+        dlg = TextViewerDialog(
+            "Batch run — error log", text, self,
+            intro="One or more files failed during the run. The full log is copyable.")
+        self._error_dialog = dlg          # keep a reference so it isn't GC'd
+        dlg.show()
+        dlg.raise_()
 
     def _append_summary(self, result):
         self._append(f"\nFinished: {len(result.ok_files)} ok, {len(result.failed_files)} failed")
