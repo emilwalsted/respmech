@@ -24,6 +24,10 @@ def main(argv=None) -> int:
     argv = list(sys.argv if argv is None else argv)
     app = QApplication(argv)
     theme.apply_theme(app)          # Fusion + palette + QSS + plot styling; import-safe
+    from respmech.ui.logo import app_icon
+    _icon = app_icon()
+    if _icon is not None:
+        app.setWindowIcon(_icon)
 
     t0 = time.monotonic()
     splash = make_splash(app)       # None if Qt SVG support is unavailable

@@ -76,10 +76,24 @@ def test_build_splash_svg_has_brand_and_version():
     assert "Human respiratory physiology analysis made easier" in svg   # site tagline
 
 
-def test_logo_asset_bundled_and_loads(qapp):
+def test_logo_builds_renders_and_ships(qapp):
+    import os
+    from respmech.ui import splash
+    from respmech.ui.logo import build_logo_svg, logo_pixmap, app_icon
+    svg = build_logo_svg(512)
+    assert svg.lstrip().startswith("<svg") and "FF9800" in svg.upper()   # orange EMG accent
+    assert not logo_pixmap(128).isNull() and not logo_pixmap(32).isNull()
+    icon = app_icon()
+    assert icon is not None and not icon.isNull()
+    # the shareable SVG asset ships in the package
+    asset = os.path.join(os.path.dirname(splash.__file__), "assets", "respmech_logo.svg")
+    assert os.path.isfile(asset)
+
+
+def test_splash_uses_generated_logo(qapp):
     from respmech.ui.splash import _load_logo_pixmap
     pm = _load_logo_pixmap()
-    assert pm is not None and not pm.isNull()   # the RM logo ships and loads
+    assert pm is not None and not pm.isNull()
 
 
 def test_make_splash_renders_a_pixmap(qapp):
