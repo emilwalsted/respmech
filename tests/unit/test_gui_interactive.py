@@ -211,3 +211,207 @@ def test_emg_result_view_selectable_channels(qapp, tmp_path):
     pv._render_emg_result()
     plotted = [it for it in pv.emg_result_plots.getPlotItem().listDataItems()]
     assert len(plotted) == 1
+
+
+# -- breath numbering carried onto the EMG views ----------------------------
+def _stage_mech(pv, s, name="synth_case_A.csv"):
+    """Refresh + select `name`, then stage its mechanics preview synchronously."""
+    from respmech.ui.workers import stage_mechanics_preview
+    pv._refresh_files()
+    pv.file_combo.setCurrentText(name)
+    return stage_mechanics_preview(s, os.path.join(INPUT, name))
+
+
+def _red_dominant(reg):
+    c = reg.brush.color()
+    return c.red() > c.blue()            # excluded brush is red, included is blue
+
+
+def test_emg_raw_view_numbers_breaths_at_trim_offset(qapp, tmp_path):
+    """Every mechanics breath is re-shaded + numbered on the raw EMG stack, shifted
+    by the trim offset (startix/fs) so the untrimmed EMG time base lines up."""
+    from respmech.ui.main_window import MainWindow
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    data = _stage_mech(pv, s)
+    pv._render_preview(data)                          # mechanics + raw EMG stack + numbers
+    off = data["startix"] / data["fs"]
+    assert pv._trim_offset_s == off and pv._breaths
+    raw = pv._bov["raw"]
+    for (num, t0, t1, _ig) in pv._breaths:
+        a, b = raw["regions"][num][0].getRegion()     # region on the first raw subplot
+        assert abs(a - (t0 + off)) < 1e-6 and abs(b - (t1 + off)) < 1e-6
+        assert num in raw["texts"]                    # a visible number label per breath
+    win.close()
+
+
+def test_toggle_recolours_every_emg_view_and_writes_exclusion(qapp, tmp_path):
+    """Toggling a breath recolours it in Mechanics AND every painted EMG view, and
+    records the 1-based number in settings so the preview analyses exclude it."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_emg_channel, stage_emg_all_channels
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    path = os.path.join(INPUT, "synth_case_A.csv")
+    pv._render_preview(_stage_mech(pv, s))            # raw view painted
+    pv._on_emg_detail_result(stage_emg_channel(s, path, 0))   # detail view painted
+    pv._on_emg_all_result(stage_emg_all_channels(s, path))    # result view painted
+    num = pv._breaths[0][0]
+    for view in ("raw", "detail", "result"):
+        assert num in pv._bov[view]["regions"], f"{view} missing breath {num}"
+    assert pv._toggle_breath(num) is True             # now excluded
+    excl = {b for e in s.processing.exclude_breaths
+            if e.file == "synth_case_A.csv" for b in e.breaths}
+    assert num in excl                                # excluded from the preview analyses
+    assert _red_dominant(pv._breath_regions[num][0])  # Mechanics recoloured
+    for view in ("raw", "detail", "result"):
+        assert _red_dominant(pv._bov[view]["regions"][num][0]), f"{view} not recoloured"
+    win.close()
+
+
+def test_emg_detail_overlay_is_idempotent(qapp, tmp_path):
+    """Re-rendering the EMG detail (e.g. a second staging job) must not accumulate
+    overlay items — the per-view paint removes its previous items first."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_emg_channel
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    path = os.path.join(INPUT, "synth_case_A.csv")
+    pv._render_preview(_stage_mech(pv, s))
+    d = stage_emg_channel(s, path, 0)
+    pv._on_emg_detail_result(d)
+    items, regions = len(pv._bov["detail"]["items"]), len(pv._bov["detail"]["regions"])
+    pv._on_emg_detail_result(d)                       # re-render
+    assert items > 0
+    assert len(pv._bov["detail"]["items"]) == items
+    assert len(pv._bov["detail"]["regions"]) == regions
+
+
+def test_file_change_resets_breath_overlays(qapp, tmp_path):
+    """Selecting a different file drops the previous file's breath overlays + spans
+    so a new-file EMG job never numbers against the old breaths."""
+    from respmech.ui.main_window import MainWindow
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
+    assert pv._bov.get("raw", {}).get("regions")      # overlays present for A
+    pv.file_combo.setCurrentText("synth_case_B.csv")  # -> _on_file_selected -> reset
+    assert pv._bov == {} and pv._breaths == []
+    win.close()
+
+
+# -- review follow-ups: stale-state / wrong-file hardening ------------------
+def test_file_change_clears_emg_all_cache(qapp, tmp_path):
+    """A file switch must drop the previous file's cached all-channel result, so an
+    always-live result-checkbox toggle can't re-plot the old curves and re-arm the
+    result sentinel (which would paint the new file's numbers over old curves)."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_emg_all_channels
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    path = os.path.join(INPUT, "synth_case_A.csv")
+    pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
+    pv._on_emg_all_result(stage_emg_all_channels(s, path))
+    assert pv._emg_all is not None                    # A's conditioned result cached
+    pv.file_combo.setCurrentText("synth_case_B.csv")  # -> reset drops the cache
+    assert pv._emg_all is None
+    pv._render_emg_result()                           # a checkbox re-render now no-ops
+    assert pv._result_label_y is None
+    assert pv._bov.get("result", {}).get("regions", {}) == {}
+    win.close()
+
+
+def test_file_change_clears_previewed_file(qapp, tmp_path):
+    """_previewed_file must reset on a switch so flipping back to the last-rendered
+    file (while its jobs are still in flight) is treated as a real change, not a no-op."""
+    from respmech.ui.main_window import MainWindow
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
+    assert pv._previewed_file == "synth_case_A.csv"
+    pv.file_combo.setCurrentText("synth_case_B.csv")
+    assert pv._previewed_file is None
+    win.close()
+
+
+def test_file_switch_invalidates_inflight_tokens(qapp, tmp_path):
+    """Every kind's token bumps synchronously on a switch, so an old-file job that
+    finishes in the same event-loop iteration is dropped by the acceptance check."""
+    from respmech.ui.main_window import MainWindow
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
+    before = dict(pv._tokens)
+    pv.file_combo.setCurrentText("synth_case_B.csv")  # -> _begin_file_switch
+    assert all(pv._tokens[k] > before[k] for k in before)
+    win.close()
+
+
+def test_refresh_files_prev_vanished_resets_overlays(qapp, tmp_path):
+    """refresh_files switches the current file silently (signals blocked) when the
+    previous file no longer matches; that must still run the switch cleanup so stale
+    overlays never linger clickable against the wrong file."""
+    from respmech.ui.main_window import MainWindow
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
+    assert pv._bov.get("raw", {}).get("regions")
+    s.input.files = "synth_case_B.csv"                # narrow the glob: A no longer matches
+    pv.refresh_files()
+    assert pv.file_combo.currentText() == "synth_case_B.csv"
+    assert pv._bov == {} and pv._breaths == [] and pv._previewed_file is None
+    win.close()
+
+
+def test_legend_click_does_not_toggle_breath(qapp, tmp_path):
+    """A click landing on a plot's legend (which pyqtgraph leaves unaccepted) must
+    not fall through and toggle the breath beneath it; a click that misses the legend
+    still toggles. Fakes keep the guard branch deterministic without scene geometry."""
+    from PySide6.QtCore import QPointF
+    from respmech.ui.main_window import MainWindow
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
+    num, t0, t1, _ig = pv._breaths[0]
+    off = pv._trim_offset_s
+    xc = (t0 + t1) / 2.0 + off                        # absolute-time centre of breath `num`
+
+    class _Rect:
+        def __init__(self, hit): self._hit = hit
+        def contains(self, _p): return self._hit
+
+    class _Legend:
+        def __init__(self, hit): self._hit = hit
+        def isVisible(self): return True
+        def sceneBoundingRect(self): return _Rect(self._hit)
+
+    class _View:
+        def sceneBoundingRect(self): return _Rect(True)
+        def mapSceneToView(self, _pos): return QPointF(xc, 0.0)
+
+    class _Plot:
+        def __init__(self, legend_hit): self.legend = _Legend(legend_hit)
+        def getViewBox(self): return _View()
+
+    class _Ev:
+        def isAccepted(self): return False
+        def scenePos(self): return QPointF(0.0, 0.0)
+
+    def excluded():
+        return {b for e in s.processing.exclude_breaths
+                if e.file == "synth_case_A.csv" for b in e.breaths}
+
+    pv._toggle_from_emg_click(_Ev(), [_Plot(legend_hit=True)], off)   # on the legend
+    assert num not in excluded()                                     # -> not toggled
+    pv._toggle_from_emg_click(_Ev(), [_Plot(legend_hit=False)], off)  # misses the legend
+    assert num in excluded()                                         # -> toggled
+    win.close()
