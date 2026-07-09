@@ -456,6 +456,22 @@ def test_detail_and_result_panels_swapped_with_inline_controls(qapp, tmp_path):
     win.close()
 
 
+def test_noise_controls_are_one_compact_chip_strip(qapp, tmp_path):
+    from PySide6.QtWidgets import QFrame
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    # the noise-reduction params live in a single rounded 'chip' (still the gated unit)
+    assert isinstance(pv.noise_opts, QFrame) and pv.noise_opts.objectName() == "noiseChip"
+    # the button and the chip are siblings on one strip (the EMG-tab content widget)
+    assert pv.btn_set_noise.parent() is pv.noise_opts.parent()
+    # the button height matches the chip band once the chip has a laid-out height
+    pv.noise_opts.resize(420, 46)
+    pv._align_noise_strip()
+    assert pv.btn_set_noise.minimumHeight() == 46
+    win.close()
+
+
 def test_result_picker_check_is_inside_the_coloured_box(qapp, tmp_path):
     from PySide6.QtWidgets import QCheckBox
     from respmech.ui.main_window import MainWindow
