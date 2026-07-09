@@ -27,6 +27,40 @@ _DATA = "#8FB6D6"        # faint data-texture ink
 _FONT = "Mulish, Muli, Avenir Next, Segoe UI, Helvetica Neue, Arial, sans-serif"
 _MONO = "SFMono-Regular, Menlo, Consolas, monospace"
 
+_fonts_resolved = False
+
+
+def _resolve_svg_fonts():
+    """Rebind ``_FONT``/``_MONO`` to a single *installed* family.
+
+    Qt's SVG renderer treats an SVG ``font-family`` value as one family name rather
+    than a CSS-style fallback list, so the comma-separated stacks above make it hunt
+    for a family literally called "SFMono-Regular, Menlo, …" — which triggers the
+    noisy ``qt.qpa.fonts: Populating font family aliases … Replace uses of missing
+    font family`` warning. Resolving each stack to the first family that actually
+    exists (falling back to the system general/fixed font) avoids the lookup entirely.
+    Runs once, and needs a live QApplication (so it is called from make_splash)."""
+    global _FONT, _MONO, _fonts_resolved
+    if _fonts_resolved:
+        return
+    try:
+        from PySide6.QtGui import QFontDatabase
+        installed = set(QFontDatabase.families())
+
+        def pick(stack, fixed):
+            for cand in stack.split(","):
+                cand = cand.strip()
+                if cand in installed:
+                    return cand
+            role = QFontDatabase.FixedFont if fixed else QFontDatabase.GeneralFont
+            return QFontDatabase.systemFont(role).family()
+
+        _FONT = pick(_FONT, fixed=False)
+        _MONO = pick(_MONO, fixed=True)
+        _fonts_resolved = True
+    except Exception:                                    # pragma: no cover — cosmetic only
+        pass
+
 _TAGLINE = "Human respiratory physiology analysis made easier"
 _SUBTAGLINE = "Respiratory mechanics · work of breathing · diaphragm EMG"
 
@@ -187,6 +221,8 @@ def make_splash(app=None, width: int = 780, height: int = 460):
         from PySide6.QtWidgets import QSplashScreen
     except Exception:                                    # pragma: no cover
         return None
+
+    _resolve_svg_fonts()     # use installed families so Qt's SVG renderer never warns
 
     dpr = 2.0
     try:

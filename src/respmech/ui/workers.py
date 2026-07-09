@@ -286,6 +286,24 @@ def stage_emg_all_channels(settings: Settings, file_path: str) -> dict:
     }
 
 
+def stage_raw_emg(settings: Settings, file_path: str) -> dict:
+    """Load just the RAW EMG channels of ``file_path`` (no ECG/noise processing) for
+    the noise-profile picker. Pure compute, Qt-free, no disk writes."""
+    from respmech.core.io.loaders import load
+    from respmech.core._legacy_ns import to_legacy_ns
+
+    s = to_legacy_ns(settings)
+    fs = int(s.input.format.samplingfrequency)
+    cols = list(settings.input.channels.emg)
+    _flow, _vol, _poes, _pgas, _pdi, _ent, emg = load(file_path, s)
+    emg = np.asarray(emg, dtype=float)
+    if emg.ndim == 1:
+        emg = emg[:, None]
+    t = np.arange(emg.shape[0], dtype=float) / fs
+    return {"t": t, "fs": fs, "cols": cols,
+            "raw": [emg[:, i].astype(float) for i in range(emg.shape[1])]}
+
+
 def stage_noise_fidelity(settings: Settings) -> dict:
     """Build the shared noise profile for the WHOLE test and measure the EMG fidelity
     frontier + the auto-selected suppression strength — the per-test noise summary the

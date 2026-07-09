@@ -109,6 +109,18 @@ def test_preview_noise_fidelity_render(qapp, tmp_path):
     assert len(win.preview_screen.fidelity_canvas.figure.axes) == 1
 
 
+def test_splash_resolves_fonts_to_installed_families(qapp):
+    """The splash used CSS-style font stacks as SVG font-family, which Qt cannot
+    resolve (the 'Populating font family aliases … missing font family' warning).
+    make_splash must resolve them to a single installed family."""
+    from PySide6.QtGui import QFontDatabase
+    from respmech.ui import splash
+    splash.make_splash(qapp)
+    installed = set(QFontDatabase.families())
+    assert splash._MONO in installed and splash._FONT in installed
+    assert "," not in splash._MONO and "," not in splash._FONT   # single families, not stacks
+
+
 def test_theme_applies_light_and_dark(qapp, monkeypatch):
     from respmech.ui import theme
     assert theme.apply_theme(qapp) in ("light", "dark")

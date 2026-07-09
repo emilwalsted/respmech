@@ -148,7 +148,7 @@ def test_emg_controls_disabled_without_emg_channels(qapp, tmp_path):
     pv.file_combo.setCurrentIndex(0)
     pv._update_actions()
     assert pv.emg_channel.isEnabled() is False        # EMG-gated controls are off
-    assert pv.btn_use_region.isEnabled() is False
+    assert pv.btn_set_noise.isEnabled() is False
     assert pv.emg_channel.count() == 0
 
 
@@ -481,10 +481,104 @@ def test_breath_labels_are_prefixed(qapp, tmp_path):
     pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
     pv._on_emg_detail_result(stage_emg_channel(s, path, 0))
     n0 = pv._breaths[0][0]
-    assert pv._breath_texts[n0].textItem.toPlainText() == f"Breath #{n0}"      # mechanics
-    assert pv._bov["raw"]["texts"][n0].textItem.toPlainText() == f"Breath #{n0}"    # raw EMG
-    assert pv._bov["detail"]["texts"][n0].textItem.toPlainText() == f"Breath #{n0}"  # processed
+    # every view labels the breath — full 'Breath #N' or the compact '#N' when dense
+    for texts in (pv._breath_texts, pv._bov["raw"]["texts"], pv._bov["detail"]["texts"]):
+        assert texts[n0].textItem.toPlainText() in (f"Breath #{n0}", f"#{n0}")
     win.close()
+
+
+def test_stage_raw_emg_returns_raw_channels(qapp, tmp_path):
+    from respmech.ui.workers import stage_raw_emg
+    s = _settings(str(tmp_path))
+    d = stage_raw_emg(s, os.path.join(INPUT, "synth_case_A.csv"))
+    assert d["cols"] == [2, 3, 4] and len(d["raw"]) == 3
+    assert d["fs"] == 1000 and len(d["t"]) == len(d["raw"][0])
+
+
+def test_set_noise_profile_dialog_applies_selection(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui import noise_profile_dialog as npd
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+
+    class _FakeDialog:                                   # stub: accept with a chosen span
+        def __init__(self, *a, **k): pass
+        def exec(self): return QDialog.Accepted
+        def selected_region(self): return (0.4, 0.7)
+
+    monkeypatch.setattr(npd, "NoiseProfileDialog", _FakeDialog)
+    pv._open_noise_profile_dialog()
+    n = s.processing.emg.noise
+    assert n.reference_file == "synth_case_A.csv"
+    assert n.reference_intervals == [[0.4, 0.7]]
+    assert n.use_expiration is False
+    win.close()
+
+
+def test_set_noise_profile_dialog_cancel_leaves_settings(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui import noise_profile_dialog as npd
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    before = s.processing.emg.noise.reference_file
+
+    class _FakeDialog:
+        def __init__(self, *a, **k): pass
+        def exec(self): return QDialog.Rejected
+        def selected_region(self): return (0.4, 0.7)
+
+    monkeypatch.setattr(npd, "NoiseProfileDialog", _FakeDialog)
+    pv._open_noise_profile_dialog()
+    assert s.processing.emg.noise.reference_file == before   # Annullér changed nothing
+    win.close()
+
+
+def test_noise_without_reference_hint_points_to_the_modal(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    s = _settings(str(tmp_path))
+    s.processing.emg.noise.enabled = True
+    s.processing.emg.noise.reference_file = ""
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._update_actions()
+    txt = pv.status.text()
+    assert "Set noise profile" in txt                    # points at the new modal…
+    assert "Use selection as noise profile" not in txt   # …not the removed button
+    win.close()
+
+
+def test_breath_labels_flush_autorange_for_fresh_plot(qapp, tmp_path):
+    import numpy as _np
+    import pyqtgraph as pg
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    glw = pg.GraphicsLayoutWidget()
+    p = glw.addPlot(row=0, col=0)
+    x = _np.arange(0, 300, 0.01)
+    p.plot(x, _np.sin(x))                                 # a fresh, unpainted single plot
+    centers = list(_np.arange(3.0, 297.0, 3.0))          # dense breaths ~3 s apart
+    pv._breath_labels_short(p, centers)                  # must flush the deferred auto-range
+    assert p.getViewBox().viewRange()[0][1] > 100        # range expanded to the data (~300 s)
+    win.close()
+
+
+def test_breath_label_abbreviation_decision():
+    from respmech.ui.screens.preview_screen import PreviewScreen as P
+    # spread-out breaths (10 s apart) at 0.02 s/px -> full labels fit
+    assert P._labels_would_overlap([0.0, 10.0, 20.0], 0.02) is False
+    # tightly packed breaths (0.3 s apart) at the same scale -> would overlap -> abbreviate
+    assert P._labels_would_overlap([0.0, 0.3, 0.6], 0.02) is True
+    assert P._labels_would_overlap([0.0], 0.02) is False      # a single breath never overlaps
+    assert P._breath_label(7, short=True) == "#7"
+    assert P._breath_label(7, short=False) == "Breath #7"
 
 
 def test_file_switch_clears_all_panels_and_shows_cta(qapp, tmp_path):

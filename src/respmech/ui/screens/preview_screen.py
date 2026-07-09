@@ -33,9 +33,9 @@ import traceback
 from dataclasses import dataclass
 
 import numpy as np
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QHBoxLayout,
-                               QLabel, QProgressBar, QPushButton, QSplitter,
-                               QTableWidget, QTableWidgetItem, QTabWidget,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
+                               QHBoxLayout, QLabel, QProgressBar, QPushButton,
+                               QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
                                QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt, QEvent, QThread, QTimer, Signal
 
@@ -415,12 +415,13 @@ class PreviewScreen(QWidget):
         self.result_checks_layout.setContentsMargins(0, 0, 0, 0)
         self.result_checks_layout.setSpacing(12)
 
-        # controls: set the shared noise reference from the on-graph rest selection
+        # controls: open the noise-profile picker (a modal over the raw EMG channels)
         row = QHBoxLayout()
-        self.btn_use_region = QPushButton("Use selection as noise profile")
-        self.btn_use_region.setToolTip("Set the shaded rest span as the noise reference for this file.")
-        self.btn_use_region.clicked.connect(self._use_region_as_noise)
-        row.addWidget(self.btn_use_region); row.addStretch(1)
+        self.btn_set_noise = QPushButton("Set noise profile")
+        self.btn_set_noise.setToolTip("Open a picker to mark a rest span across the raw EMG "
+                                      "channels as the shared noise reference for this test.")
+        self.btn_set_noise.clicked.connect(self._open_noise_profile_dialog)
+        row.addWidget(self.btn_set_noise); row.addStretch(1)
         v.addLayout(row)
 
         # noise-window options (active once a reference file is set)
@@ -644,7 +645,7 @@ class PreviewScreen(QWidget):
         if cta is not None:
             cta.button.setEnabled(self.btn_test.isEnabled())
         self.emg_channel.setEnabled(has_emg)
-        self.btn_use_region.setEnabled(has_file and has_emg)
+        self.btn_set_noise.setEnabled(has_file and has_emg)
         # noise-window options only active with a reference file (Emil's requirement)
         self.noise_opts.setEnabled(bool(has_emg and noise_on and ref))
         if noise_on:
@@ -653,7 +654,7 @@ class PreviewScreen(QWidget):
             return
         if noise_on and not ref:
             self._set_status("Noise reduction is on — pick a reference file (Settings) or "
-                             "select a rest region below and 'Use selection as noise profile'.")
+                             "click 'Set noise profile' to mark a rest span in this file.")
         elif has_file and not ok:
             self._set_status(f"Settings incomplete: {why}")
 
@@ -1023,10 +1024,49 @@ class PreviewScreen(QWidget):
     def _breath_label_color(ignored):
         return pg.mkColor(180, 50, 42) if ignored else pg.mkColor(90, 107, 122)
 
+    @staticmethod
+    def _breath_label(num, short):
+        """The breath label: full 'Breath #N', or the compact '#N' when full labels
+        would overlap (dense breaths)."""
+        return f"#{num}" if short else f"Breath #{num}"
+
+    @staticmethod
+    def _labels_would_overlap(centers, seconds_per_pixel, label_px=72.0):
+        """True if full 'Breath #N' labels placed at these x-centres would collide at
+        the given seconds-per-pixel scale (``label_px`` ≈ a full label's pixel width)."""
+        if len(centers) < 2 or not seconds_per_pixel or seconds_per_pixel <= 0:
+            return False
+        cs = sorted(centers)
+        min_gap = min(b - a for a, b in zip(cs, cs[1:]))
+        return min_gap < label_px * seconds_per_pixel
+
+    def _breath_labels_short(self, plot, centers):
+        """Decide whether ``plot`` should use the compact '#N' breath label — yes when
+        the full labels would overlap at the plot's current x scale."""
+        try:
+            vb = plot.getViewBox()
+            if vb is None:
+                return False
+            # a freshly-created plot still sits at the default [0,1] range until its first
+            # paint; flush the pending auto-range so the scale reflects the real data
+            if any(ax is not False for ax in vb.autoRangeEnabled()):
+                vb.updateAutoRange()
+            px = vb.viewPixelSize()[0]
+            if px and np.isfinite(px) and px > 0:
+                spp = float(px)
+            else:                                # not laid out yet -> assume a ~600px plot
+                xr = vb.viewRange()[0]
+                spp = abs((xr[1] - xr[0]) or 1.0) / 600.0
+        except Exception:                        # noqa: BLE001 — labels are cosmetic
+            return False
+        return self._labels_would_overlap(centers, spp)
+
     def _draw_breath_overlays(self, spans, label_y=0.0):
         self._breath_spans = {n: (t0, t1) for (n, t0, t1, _ig) in spans}
         self._breath_regions = {n: [] for (n, _0, _1, _ig) in spans}
         self._breath_texts = {}
+        centers = [(t0 + t1) / 2.0 for (_n, t0, t1, _ig) in spans]
+        short = bool(self._channel_plots) and self._breath_labels_short(self._channel_plots[0], centers)
         for n, t0, t1, ignored in spans:
             for plot in self._channel_plots:
                 reg = pg.LinearRegionItem(values=(t0, t1), movable=False,
@@ -1036,7 +1076,8 @@ class PreviewScreen(QWidget):
                 self._breath_regions[n].append(reg)
                 plot.addLine(x=t0, pen=pg.mkPen((150, 165, 180), width=1, style=Qt.DashLine))
             if self._channel_plots:
-                txt = pg.TextItem(f"Breath #{n}", color=self._breath_label_color(ignored), anchor=(0.5, 1.0))
+                txt = pg.TextItem(self._breath_label(n, short),
+                                  color=self._breath_label_color(ignored), anchor=(0.5, 1.0))
                 txt.setPos((t0 + t1) / 2.0, label_y)
                 self._channel_plots[0].addItem(txt)
                 self._breath_texts[n] = txt
@@ -1146,6 +1187,8 @@ class PreviewScreen(QWidget):
         excl = self._excluded_now()
         reg_map = self._bov[view]["regions"]; txt_map = self._bov[view]["texts"]
         items = self._bov[view]["items"]
+        centers = [(t0 + t1) / 2.0 + offset for (_n, t0, t1, _ig) in self._breaths]
+        short = self._breath_labels_short(plot_items[0], centers)
         for (num, t0, t1, _ig) in self._breaths:
             ignored = num in excl
             a, b = t0 + offset, t1 + offset
@@ -1157,7 +1200,8 @@ class PreviewScreen(QWidget):
                 items.append((p, reg)); reg_map.setdefault(num, []).append(reg)
                 line = p.addLine(x=a, pen=pg.mkPen((150, 165, 180), width=1, style=Qt.DashLine))
                 items.append((p, line))
-            txt = pg.TextItem(f"Breath #{num}", color=self._breath_label_color(ignored), anchor=(0.5, 1.0))
+            txt = pg.TextItem(self._breath_label(num, short),
+                              color=self._breath_label_color(ignored), anchor=(0.5, 1.0))
             txt.setPos((a + b) / 2.0, label_y)
             plot_items[0].addItem(txt)
             items.append((plot_items[0], txt)); txt_map[num] = txt
@@ -1249,19 +1293,21 @@ class PreviewScreen(QWidget):
                 t0, t1 = (float(ivals[0][0]), float(ivals[0][1])) if ivals else (0.0, 1.0)
             except Exception:                        # noqa: BLE001 — any bad shape -> cosmetic default
                 t0, t1 = 0.0, 1.0
-            reg = pg.LinearRegionItem(values=(t0, t1), movable=True, brush=pg.mkBrush(44, 110, 155, 45))
+            # a read-only indicator of the current noise reference span; selection now
+            # happens in the 'Set noise profile' modal, so this no longer needs dragging
+            reg = pg.LinearRegionItem(values=(t0, t1), movable=False, brush=pg.mkBrush(44, 110, 155, 45))
             reg.setZValue(10)
             self._noise_region = reg
         if reg.scene() is None:
             self.emg_plots.addItem(reg)
 
-    def _use_region_as_noise(self):
+    def _apply_noise_reference(self, t0, t1):
+        """Apply [t0, t1] s of the current file as the shared noise reference: write it
+        into settings, mirror it (signal + the inline detail-plot indicator), and
+        re-condition. Shared by the noise-profile modal and the legacy inline region."""
         name = self.file_combo.currentText()
-        reg = self._noise_region
-        if not name or reg is None:
-            self._set_status("Draw a rest region on the detail plot, then apply.")
+        if not name:
             return None
-        t0, t1 = reg.getRegion()
         t0, t1 = float(min(t0, t1)), float(max(t0, t1))
         if t1 - t0 <= 0:
             self._set_status("The selected noise region has zero width.")
@@ -1273,6 +1319,11 @@ class PreviewScreen(QWidget):
         fs = self.state.settings.input.format.sampling_frequency or 0
         span = int(round((t1 - t0) * fs))
         nframes = 1 + max(0, span - n.win_length) // max(1, n.hop_length)
+        self._ensure_noise_region()                  # reflect the choice on the detail plot
+        try:
+            self._noise_region.setRegion((t0, t1))
+        except Exception:                            # noqa: BLE001 — indicator is cosmetic
+            pass
         self.noise_reference_changed.emit(name, [[t0, t1]], False)
         self._set_status(
             f"Noise profile ← {name} [{t0:.2f}–{t1:.2f} s]: {span} samples ≈ {nframes} STFT frames "
@@ -1281,6 +1332,37 @@ class PreviewScreen(QWidget):
         self._update_actions()
         self._request_autorun()          # re-condition against the new reference
         return (t0, t1)
+
+    def _use_region_as_noise(self):
+        reg = self._noise_region
+        if reg is None or not self.file_combo.currentText():
+            self._set_status("Draw a rest region on the detail plot, then apply.")
+            return None
+        t0, t1 = reg.getRegion()
+        return self._apply_noise_reference(t0, t1)
+
+    def _open_noise_profile_dialog(self):
+        """Open the modal noise-profile picker over the current file's raw EMG channels;
+        on accept, apply the marked span as the shared noise reference."""
+        path = self._current_file()
+        if not path:
+            return
+        from respmech.ui.noise_profile_dialog import NoiseProfileDialog
+        from respmech.ui.workers import stage_raw_emg
+        try:
+            data = stage_raw_emg(self.state.settings, path)
+        except Exception:                            # noqa: BLE001 — copyable status
+            self._set_status(f"Could not load EMG for the noise picker — {short_error(traceback.format_exc())}")
+            return
+        if not data["raw"]:
+            self._set_status("This file has no EMG channels to pick a noise profile from.")
+            return
+        dlg = NoiseProfileDialog(data["raw"], data["t"], data["fs"], data["cols"],
+                                 parent=self, file_name=self.file_combo.currentText())
+        if dlg.exec() == QDialog.Accepted:
+            sel = dlg.selected_region()
+            if sel is not None:
+                self._apply_noise_reference(sel[0], sel[1])
 
     # -- EMG detail / result / test triggers (manual re-runs) --------------
     def _on_emg_channel_changed(self, *_):
