@@ -34,7 +34,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
-                               QHBoxLayout, QLabel, QProgressBar, QPushButton,
+                               QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton,
                                QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
                                QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt, QEvent, QThread, QTimer, Signal
@@ -364,6 +364,9 @@ class PreviewScreen(QWidget):
         self._update_emg_tab_visibility()
 
         self.file_combo.currentTextChanged.connect(self._on_file_selected)
+        # the chip's themed height isn't known until the EMG sub-tab is first laid out;
+        # match the 'Set noise profile' button to it then, so the strip is one band.
+        self.subtabs.currentChanged.connect(lambda *_: QTimer.singleShot(0, self._align_noise_strip))
         self.refresh_files()
 
     def _build_mech_tab(self):
@@ -399,19 +402,15 @@ class PreviewScreen(QWidget):
         self.result_checks_layout.setContentsMargins(0, 0, 0, 0)
         self.result_checks_layout.setSpacing(24)      # generous gap between channels
 
-        # controls: open the noise-profile picker (a modal over the raw EMG channels)
-        row = QHBoxLayout()
+        # -- one compact controls strip above the plots ----------------------
+        # the 'Set noise profile' button + the noise-reduction params (in a subtle
+        # rounded chip) on a single row, instead of two full-width rows.
         self.btn_set_noise = QPushButton("Set noise profile")
         self.btn_set_noise.setToolTip("Open a picker to mark a rest span across the raw EMG "
                                       "channels as the shared noise reference for this test.")
         self.btn_set_noise.clicked.connect(self._open_noise_profile_dialog)
-        row.addWidget(self.btn_set_noise); row.addStretch(1)
-        v.addLayout(row)
 
-        # noise-window options (active once a reference file is set)
-        self.noise_opts = QWidget()
-        nrow = QHBoxLayout(self.noise_opts); nrow.setContentsMargins(0, 0, 0, 0)
-        self.noise_auto = QCheckBox("Auto-set suppression strength")
+        self.noise_auto = QCheckBox("Auto")
         self.noise_auto.setToolTip(_help_tip(
             "processing.emg.noise.auto_prop",
             "Automatically picks the strongest suppression that still keeps every channel at or "
@@ -434,14 +433,32 @@ class PreviewScreen(QWidget):
             "and removed; default 1.0."))
         self.noise_nstd.valueChanged.connect(self._on_noise_param_changed)
 
-        def _lbl(text, tip):        # a captioned label that shares its field's tooltip
-            la = QLabel(text); la.setToolTip(tip); return la
-        nrow.addWidget(QLabel("Noise window:")); nrow.addWidget(self.noise_auto)
-        nrow.addWidget(_lbl("Manual strength", self.noise_prop.toolTip())); nrow.addWidget(self.noise_prop)
-        nrow.addWidget(_lbl("Min. EMG to keep", self.noise_target.toolTip())); nrow.addWidget(self.noise_target)
-        nrow.addWidget(_lbl("Noise gate", self.noise_nstd.toolTip())); nrow.addWidget(self.noise_nstd)
-        nrow.addStretch(1)
-        v.addWidget(self.noise_opts)
+        def _cap(text, tip=""):        # a compact muted caption; full text lives in the tooltip
+            la = QLabel(text); la.setProperty("status", "muted")
+            if tip:
+                la.setToolTip(tip)
+            return la
+
+        # noise-reduction params grouped in a subtle rounded chip (active once a
+        # reference file is set — _update_actions enables/disables the whole chip)
+        self.noise_opts = QFrame()
+        self.noise_opts.setObjectName("noiseChip")
+        self.noise_opts.setStyleSheet(
+            "#noiseChip { border: 1px solid rgba(128, 128, 128, 0.30); border-radius: 8px; }")
+        # tight caption→field pairing (4 px) with a wider gap (10 px) BETWEEN groups so
+        # 'Strength [ ]', 'Keep ≥ [ ]', 'Gate [ ]' read as clusters, not an even bead line
+        nrow = QHBoxLayout(self.noise_opts); nrow.setContentsMargins(11, 3, 11, 3); nrow.setSpacing(4)
+        nrow.addWidget(_cap("Noise reduction"))
+        nrow.addSpacing(8); nrow.addWidget(self.noise_auto)
+        nrow.addSpacing(10); nrow.addWidget(_cap("Strength", self.noise_prop.toolTip())); nrow.addWidget(self.noise_prop)
+        nrow.addSpacing(10); nrow.addWidget(_cap("Keep ≥", self.noise_target.toolTip())); nrow.addWidget(self.noise_target)
+        nrow.addSpacing(10); nrow.addWidget(_cap("Gate", self.noise_nstd.toolTip())); nrow.addWidget(self.noise_nstd)
+
+        strip = QHBoxLayout(); strip.setSpacing(10)
+        strip.addWidget(self.btn_set_noise)
+        strip.addWidget(self.noise_opts)
+        strip.addStretch(1)
+        v.addLayout(strip)
 
         # plots — LEFT column: all-channel views (raw stack, conditioned result);
         #         RIGHT column: single detail-channel views (time detail, its PSD).
@@ -487,6 +504,14 @@ class PreviewScreen(QWidget):
             header.addWidget(corner, 0, Qt.AlignRight | Qt.AlignVCenter)
         lay.addLayout(header); lay.addWidget(widget, 1)
         return box
+
+    def _align_noise_strip(self):
+        """Match the 'Set noise profile' button to the noise chip's height so the strip
+        reads as one aligned band. The chip's themed height is only known once the EMG
+        sub-tab is laid out, so this is deferred to the sub-tab's first show."""
+        h = self.noise_opts.height()
+        if h > 1 and self.btn_set_noise.minimumHeight() != h:
+            self.btn_set_noise.setMinimumHeight(h)
 
     # -- EMG tab visibility / channels -------------------------------------
     def _update_emg_tab_visibility(self):

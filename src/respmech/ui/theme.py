@@ -312,6 +312,8 @@ QMenu::separator { height: 1px; background: $border; margin: 4px 6px; }
 QLabel { background: transparent; color: $text; }
 QLabel[role="heading"] { font-size: 15px; font-weight: 600; color: $text; }
 QLabel[status="muted"] { color: $text_muted; }
+/* a disabled label (e.g. a caption inside a disabled group) greys with its controls */
+QLabel:disabled, QLabel[status="muted"]:disabled { color: $disabled_fg; }
 QLabel[status="info"] {
     color: $st_info_fg; background-color: $st_info_bg;
     border: 1px solid $st_info_bd; border-radius: 6px; padding: 5px 10px;
