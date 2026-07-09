@@ -30,10 +30,15 @@ def _fatal_startup(tb: str) -> None:
 
 def main(argv=None) -> int:
     from PySide6.QtWidgets import QApplication, QMessageBox
-    from PySide6.QtCore import QTimer
+    from PySide6.QtCore import QTimer, QLoggingCategory
     from respmech.ui import theme
     from respmech.ui.dialogs import short_error
     from respmech.ui.splash import make_splash
+
+    # Qt's font-database chatter ("Populating font family aliases … missing font
+    # family …") is cosmetic and non-actionable for an end-user app; keep it out of
+    # the console. (The splash's font stacks are also resolved to installed families.)
+    QLoggingCategory.setFilterRules("qt.qpa.fonts.warning=false")
 
     argv = list(sys.argv if argv is None else argv)
     app = QApplication(argv)
