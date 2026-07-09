@@ -63,8 +63,9 @@ def test_mainwindow_constructs(qapp, tmp_path):
     assert win.state.settings.input.folder == INPUT
 
 
-def test_preview_and_test_run(qapp, tmp_path):
+def test_preview_and_batch_render(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
     pv._refresh_files()
@@ -72,9 +73,9 @@ def test_preview_and_test_run(qapp, tmp_path):
     pv.file_combo.setCurrentIndex(0)
     pv._preview()
     assert "breaths" in pv.status.text()
-    pv._test_run()
+    # the mechanics test run is automatic (async); its handler fills the table + Campbell
+    pv._on_batch_result(run_batch(win.state.settings, only_files=["synth_case_A.csv"]))
     assert pv.table.rowCount() > 0 and pv.table.columnCount() > 0
-    assert "Test run OK" in pv.status.text()
 
 
 def test_worker_runs_and_writes(qapp, tmp_path):

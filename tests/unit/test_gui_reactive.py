@@ -91,8 +91,8 @@ def test_selecting_a_file_autoruns_all_panels(qapp, tmp_path):
     assert len(pv._channel_plots) == 5
     assert pv._emg_all is not None and len(pv._emg_all["conditioned"]) == 3
     assert len(pv.fidelity_canvas.figure.axes) == 1     # fidelity frontier drawn by the noise job
-    # the test run is MANUAL now -> its table stays empty until the button is clicked
-    assert pv.table.rowCount() == 0
+    # the mechanics test run is automatic now -> the table + Campbell fill on their own
+    assert pv.table.rowCount() > 0
     assert "failed" not in pv.status.text().lower()     # ended on a success message
     win.close()
 
@@ -107,7 +107,7 @@ def test_autorun_without_noise_skips_fidelity_but_runs_the_rest(qapp, tmp_path):
     assert pv.busy_panels() == set()
     assert len(pv._channel_plots) == 5
     assert pv._emg_all is not None            # EMG staged (ECG-removed, no noise)
-    assert pv.table.rowCount() == 0          # test run is manual
+    assert pv.table.rowCount() > 0           # mechanics test run is automatic
     assert len(pv.fidelity_canvas.figure.axes) == 0   # no noise reference -> no fidelity job
     win.close()
 
@@ -171,8 +171,7 @@ def test_gated_out_reschedule_does_not_supersede_running_job(qapp, tmp_path):
     pv = win.preview_screen
     pv._refresh_files()
     pv.file_combo.setCurrentIndex(1)
-    qapp.processEvents()                           # let the auto-run dispatch its jobs
-    pv._schedule("batch")                          # the test run is manual -> start it explicitly
+    qapp.processEvents()                           # auto-run dispatches jobs (incl. the batch)
     assert _pump_until(qapp, lambda: "batch" in pv._jobs, 10)
     tok = pv._tokens["batch"]
     pv._settings_ok = lambda: (False, "invalid")   # force the batch gate to fail
@@ -220,8 +219,9 @@ def test_settings_change_cancels_inflight_jobs(qapp, tmp_path):
     win.close()
 
 
-def test_refresh_recomputes_auto_panels_but_not_the_test_run(qapp, tmp_path):
-    """The 'Refresh' button re-dispatches only the auto kinds — never the test run."""
+def test_refresh_recomputes_all_auto_panels(qapp, tmp_path):
+    """The 'Refresh' button re-dispatches every auto kind — including the (now
+    automatic, mechanics-only) test run."""
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path), noise=True)))
     pv = win.preview_screen
@@ -236,8 +236,7 @@ def test_refresh_recomputes_auto_panels_but_not_the_test_run(qapp, tmp_path):
         qapp.processEvents()                                # fire the deferred auto-run
     finally:
         pv._schedule = orig
-    assert "batch" not in launched                          # never the test run
-    assert {"mech", "emg_all", "emg_detail", "noise"} & set(launched)
+    assert {"mech", "batch", "emg_all", "emg_detail", "noise"} <= set(launched)
     assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60)
     win.close()
 

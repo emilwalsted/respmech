@@ -372,13 +372,36 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
     flow, volume, poes, pgas, pdi, ent, emg = load(file_path, s)
     fs = s.input.format.samplingfrequency
     tc = np.arange(len(flow)) / fs
-    (tcT, flowT, volT, poesT, pgasT, pdiT, _e, startix, endix) = compute.trim(
-        tc, flow, volume, poes, pgas, pdi,
-        np.array(emg) if len(emg) else np.array([]), s)
+    name = os.path.basename(file_path)
+
+    def _emg2d(a):
+        a = np.asarray(a, dtype=float)
+        if a.ndim == 1:
+            return a[:, None] if a.size else a.reshape(0, 0)
+        return a
+
+    try:
+        (tcT, flowT, volT, poesT, pgasT, pdiT, _e, startix, endix) = compute.trim(
+            tc, flow, volume, poes, pgas, pdi,
+            np.array(emg) if len(emg) else np.array([]), s)
+    except compute.TrimError as e:
+        # Breath detection needs a trimmable flow signal; when it fails (e.g. wrong flow
+        # channel / inverseflow), still return the RAW channels so the preview can show
+        # the signal and the user can fix it — instead of a blank 'failed' error card.
+        series = {"flow": np.asarray(flow, float), "volume": np.asarray(volume, float),
+                  "poes": np.asarray(poes, float), "pgas": np.asarray(pgas, float),
+                  "pdi": np.asarray(pdi, float)}
+        return {
+            "name": name, "fs": fs, "t": tc, "series": series, "spans": [],
+            "label_y": float(np.nanmax(series["flow"])) if series["flow"].size else 0.0,
+            "startix": 0, "endix": len(flow), "nbreaths": 0, "emg": _emg2d(emg),
+            "trim_error": str(e),
+        }
+
     volc = (compute.correctdrift(compute.zero(volT), s)
             if s.processing.mechanics.correctvolumedrift else compute.zero(volT))
     breaths = compute.separateintobreaths(
-        s.processing.mechanics.separateby, os.path.basename(file_path), tcT, flowT,
+        s.processing.mechanics.separateby, name, tcT, flowT,
         volc, poesT, pgasT, pdiT, [], [], s)
 
     t = np.arange(len(flowT)) / fs
@@ -389,13 +412,10 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
         spans.append((bno, cum / fs, (cum + length) / fs, bool(b["ignored"])))
         cum += length
     label_y = float(np.nanmax(series["flow"])) if len(series["flow"]) else 0.0
-    emg_arr = np.asarray(emg, dtype=float)
-    if emg_arr.ndim == 1:
-        emg_arr = emg_arr[:, None] if emg_arr.size else emg_arr.reshape(0, 0)
     return {
-        "name": os.path.basename(file_path), "fs": fs, "t": t, "series": series,
+        "name": name, "fs": fs, "t": t, "series": series,
         "spans": spans, "label_y": label_y, "startix": startix, "endix": endix,
-        "nbreaths": len(breaths), "emg": emg_arr,
+        "nbreaths": len(breaths), "emg": _emg2d(emg), "trim_error": None,
     }
 
 
