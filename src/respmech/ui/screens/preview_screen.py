@@ -91,6 +91,34 @@ def _pen(colour, width=1):
     return pg.mkPen(colour, width=width)
 
 
+# Fallback plot palette used only if the theme module failed to import (it never
+# raises in practice); mirrors theme._PLOT_LIGHT so light behaviour is unchanged.
+_FALLBACK_PAL = {
+    "bg": "#FCFDFE", "fg": "#33404D", "grid_alpha": 0.15,
+    "channels": {k: c for k, _l, c in _CHANNELS},
+    "emg_cycle": list(_EMG_PENS),
+    "breath_incl_brush": (44, 110, 155, 32), "breath_excl_brush": (180, 50, 42, 70),
+    "breath_incl_label": (90, 107, 122), "breath_excl_label": (180, 50, 42),
+    "separator": (150, 165, 180), "noise_region": (44, 110, 155, 45),
+    "raw_trace": (150, 165, 180), "noise_trace": (90, 150, 200),
+    "legend_bg": (255, 255, 255, 0),
+    "mpl_bg": "#FFFFFF",
+    "mpl_accent": "#2C6E9B", "mpl_ok": "#1F7A4D", "mpl_warn": "#B7791F",
+    "mpl_error": "#B4322A", "mpl_muted": "0.6",
+    "mpl_loop": "0.55", "mpl_zeroline": "0.85", "mpl_target": "0.35",
+}
+
+
+def _plot_pal():
+    """The active theme's plot colour table (light before any theme is applied)."""
+    if _theme is not None:
+        try:
+            return _theme.plot_palette()
+        except Exception:  # pragma: no cover - defensive
+            pass
+    return _FALLBACK_PAL
+
+
 _CHECK_ICON_PATH = None
 
 
@@ -209,6 +237,13 @@ class BusyOverlay(QWidget):
         lay.addWidget(self._error_box, 0, Qt.AlignCenter)
         self._error_box.hide()
 
+        # the round info button tracks the active theme's accent (so it is the dark
+        # accent in dark mode, not the light-mode steel-blue) — everything else on the
+        # overlay already sits on a translucent dark scrim and works in both themes.
+        t = _theme.active_theme() if _theme is not None else {}
+        acc = t.get("accent", "#2C6E9B")
+        acc_fg = t.get("accent_fg", "white")
+        acc_hover = t.get("accent_hover", "#3E8AC0")
         self.setStyleSheet(
             "#busyOverlay { background-color: rgba(18, 22, 28, 0.42); }"
             "#busyBox, #errorBox { background-color: palette(window);"
@@ -217,9 +252,9 @@ class BusyOverlay(QWidget):
             "#busyLabel, #errLabel { color: palette(window-text); font-weight: 600; }"
             "#errIcon { color: #E08A4F; font-size: 17px; font-weight: 700; }"
             "#errHint { color: rgba(147,164,183,0.95); font-size: 11px; }"
-            "#infoBtn { background-color: #2C6E9B; color: white; border: none;"
+            "#infoBtn { background-color: " + acc + "; color: " + acc_fg + "; border: none;"
             " border-radius: 12px; font-weight: 700; font-style: italic; }"
-            "#infoBtn:hover { background-color: #3E8AC0; }")
+            "#infoBtn:hover { background-color: " + acc_hover + "; }")
         panel.installEventFilter(self)
         self.setGeometry(panel.rect())
         self.hide()
@@ -373,6 +408,7 @@ class PreviewScreen(QWidget):
         w = QWidget(); v = QVBoxLayout(w); v.setContentsMargins(0, 6, 0, 0)
         split = QSplitter(Qt.Vertical)
         self.plots = pg.GraphicsLayoutWidget()
+        self.plots.setBackground(_plot_pal()["bg"])
         self.plots.scene().sigMouseClicked.connect(self._on_plot_clicked)
         split.addWidget(self.plots)
         lower = QSplitter(Qt.Horizontal)
@@ -463,11 +499,17 @@ class PreviewScreen(QWidget):
         # plots — LEFT column: all-channel views (raw stack, conditioned result);
         #         RIGHT column: single detail-channel views (time detail, its PSD).
         # (Detail and Conditioned result are swapped vs. the old layout.)
+        _bg = _plot_pal()["bg"]
         self.emg_raw_plots = pg.GraphicsLayoutWidget()
-        self.emg_result_plots = pg.PlotWidget(); self.emg_result_plots.addLegend()
+        self.emg_raw_plots.setBackground(_bg)
+        self.emg_result_plots = pg.PlotWidget()
+        self._style_legend(self.emg_result_plots.addLegend())
+        self.emg_result_plots.setBackground(_bg)
         self.emg_result_plots.setLabel("bottom", "Time (s)")
         self.emg_result_plots.setLabel("left", "Conditioned EMG (a.u.)")
-        self.emg_plots = pg.PlotWidget(); self.emg_plots.addLegend()
+        self.emg_plots = pg.PlotWidget()
+        self._style_legend(self.emg_plots.addLegend())
+        self.emg_plots.setBackground(_bg)
         self.emg_plots.setLabel("bottom", "Time (s)"); self.emg_plots.setLabel("left", "EMG (a.u.)")
         self.emg_psd_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 3)))
 
@@ -491,6 +533,23 @@ class PreviewScreen(QWidget):
         self.emg_plots.scene().sigMouseClicked.connect(self._on_emg_detail_clicked)
         self.emg_result_plots.scene().sigMouseClicked.connect(self._on_emg_result_clicked)
         return w
+
+    @staticmethod
+    def _style_legend(leg):
+        """In DARK mode only, give a pyqtgraph legend a near-opaque dark backing and
+        light text so entries stay legible where they float over bright trace fills
+        (e.g. 'noise-reduced' over the green conditioned EMG). Light mode is left
+        untouched so its legends render exactly as before. Never raises."""
+        if leg is None or _theme is None or not _theme.is_dark():
+            return
+        pal = _plot_pal()
+        try:
+            leg.setBrush(pg.mkBrush(*pal["legend_bg"]))
+            leg.setLabelTextColor(pg.mkColor(*pal["fg"]) if isinstance(pal["fg"], tuple)
+                                  else pg.mkColor(pal["fg"]))
+            leg.setPen(pg.mkPen(*pal["separator"]))
+        except Exception:                            # noqa: BLE001 — legend chrome is cosmetic
+            pass
 
     @staticmethod
     def _titled(title, widget, corner=None):
@@ -542,8 +601,9 @@ class PreviewScreen(QWidget):
                 wdg.setParent(None)
         self.result_checks = []
         check = _check_icon_url()
+        cycle = _plot_pal()["emg_cycle"]
         for i, c in enumerate(cols):
-            r, g, b = _EMG_PENS[i % len(_EMG_PENS)][:3]
+            r, g, b = cycle[i % len(cycle)][:3]
             cb = QCheckBox(f"col {c}")
             cb.setChecked(i < 3)
             cb.setStyleSheet(
@@ -958,12 +1018,13 @@ class PreviewScreen(QWidget):
         self._channel_plots = []
         prev = None
         n = len(_CHANNELS)
+        pal = _plot_pal()
         for i, (key, label, colour) in enumerate(_CHANNELS):
             p = self.plots.addPlot(row=i, col=0)
-            p.showGrid(x=True, y=True, alpha=0.15)
+            p.showGrid(x=True, y=True, alpha=pal["grid_alpha"])
             p.setLabel("left", label)
             y = series[key]
-            p.plot(t[:len(y)], y, pen=_pen(colour))
+            p.plot(t[:len(y)], y, pen=_pen(pal["channels"].get(key, colour)))
             if i == n - 1:
                 p.setLabel("bottom", "Time (s)")
             if prev is not None:
@@ -1004,11 +1065,12 @@ class PreviewScreen(QWidget):
         cols = list(self.state.settings.input.channels.emg)
         t = np.arange(emg.shape[0]) / fs
         prev = None
+        cycle = _plot_pal()["emg_cycle"]
         for i in range(emg.shape[1]):
             p = self.emg_raw_plots.addPlot(row=i, col=0)
             p.showGrid(x=True, y=True, alpha=0.12)
             p.setLabel("left", f"col {cols[i]}" if i < len(cols) else f"EMG {i + 1}")
-            p.plot(t, emg[:, i], pen=_pen(_EMG_PENS[i % len(_EMG_PENS)]))
+            p.plot(t, emg[:, i], pen=_pen(cycle[i % len(cycle)]))
             if i == emg.shape[1] - 1:
                 p.setLabel("bottom", "Time (s)")
             if prev is not None:
@@ -1023,11 +1085,13 @@ class PreviewScreen(QWidget):
     # -- feature A: breath overlays + include/exclude ----------------------
     @staticmethod
     def _breath_brush(ignored):
-        return pg.mkBrush(180, 50, 42, 70) if ignored else pg.mkBrush(44, 110, 155, 32)
+        pal = _plot_pal()
+        return pg.mkBrush(*(pal["breath_excl_brush"] if ignored else pal["breath_incl_brush"]))
 
     @staticmethod
     def _breath_label_color(ignored):
-        return pg.mkColor(180, 50, 42) if ignored else pg.mkColor(90, 107, 122)
+        pal = _plot_pal()
+        return pg.mkColor(*(pal["breath_excl_label"] if ignored else pal["breath_incl_label"]))
 
     @staticmethod
     def _limit_x(plot, t):
@@ -1105,6 +1169,7 @@ class PreviewScreen(QWidget):
         self._breath_texts = {}
         centers = [(t0 + t1) / 2.0 for (_n, t0, t1, _ig) in spans]
         short = bool(self._channel_plots) and self._breath_labels_short(self._channel_plots[0], centers)
+        sep = _plot_pal()["separator"]
         for n, t0, t1, ignored in spans:
             for plot in self._channel_plots:
                 reg = pg.LinearRegionItem(values=(t0, t1), movable=False,
@@ -1112,7 +1177,7 @@ class PreviewScreen(QWidget):
                 reg.setZValue(-10)
                 plot.addItem(reg)
                 self._breath_regions[n].append(reg)
-                plot.addLine(x=t0, pen=pg.mkPen((150, 165, 180), width=1, style=Qt.DashLine))
+                plot.addLine(x=t0, pen=pg.mkPen(sep, width=1, style=Qt.DashLine))
             if self._channel_plots:
                 txt = pg.TextItem(self._breath_label(n, short),
                                   color=self._breath_label_color(ignored), anchor=(0.5, 1.0))
@@ -1229,6 +1294,7 @@ class PreviewScreen(QWidget):
         items = self._bov[view]["items"]
         centers = [(t0 + t1) / 2.0 + offset for (_n, t0, t1, _ig) in self._breaths]
         short = self._breath_labels_short(plot_items[0], centers)
+        sep = _plot_pal()["separator"]
         for (num, t0, t1, _ig) in self._breaths:
             ignored = num in excl
             a, b = t0 + offset, t1 + offset
@@ -1238,7 +1304,7 @@ class PreviewScreen(QWidget):
                 reg.setZValue(-10)
                 p.addItem(reg)
                 items.append((p, reg)); reg_map.setdefault(num, []).append(reg)
-                line = p.addLine(x=a, pen=pg.mkPen((150, 165, 180), width=1, style=Qt.DashLine))
+                line = p.addLine(x=a, pen=pg.mkPen(sep, width=1, style=Qt.DashLine))
                 items.append((p, line))
             txt = pg.TextItem(self._breath_label(num, short),
                               color=self._breath_label_color(ignored), anchor=(0.5, 1.0))
@@ -1336,7 +1402,8 @@ class PreviewScreen(QWidget):
                 t0, t1 = 0.0, 1.0
             # a read-only indicator of the current noise reference span; selection now
             # happens in the 'Set noise profile' modal, so this no longer needs dragging
-            reg = pg.LinearRegionItem(values=(t0, t1), movable=False, brush=pg.mkBrush(44, 110, 155, 45))
+            reg = pg.LinearRegionItem(values=(t0, t1), movable=False,
+                                      brush=pg.mkBrush(*_plot_pal()["noise_region"]))
             reg.setZValue(10)
             self._noise_region = reg
         if reg.scene() is None:
@@ -1426,11 +1493,13 @@ class PreviewScreen(QWidget):
 
     def render_emg_time(self, data):
         t = np.asarray(data["t"])
+        pal = _plot_pal()
+        ch = pal["channels"]
         self.emg_plots.clear()
-        self.emg_plots.plot(t, np.asarray(data["raw"]), pen=_pen((150, 165, 180)), name="raw")
-        self.emg_plots.plot(t, np.asarray(data["ecg"]), pen=_pen((44, 110, 155)), name="ECG-removed")
+        self.emg_plots.plot(t, np.asarray(data["raw"]), pen=_pen(pal["raw_trace"]), name="raw")
+        self.emg_plots.plot(t, np.asarray(data["ecg"]), pen=_pen(ch["flow"]), name="ECG-removed")
         if data.get("noise_applied"):
-            self.emg_plots.plot(t, np.asarray(data["noise"]), pen=_pen((31, 122, 77)), name="noise-reduced")
+            self.emg_plots.plot(t, np.asarray(data["noise"]), pen=_pen(ch["volume"]), name="noise-reduced")
         self.emg_plots.setLabel("bottom", "Time (s)"); self.emg_plots.setLabel("left", "EMG (a.u.)")
         self._limit_x(self.emg_plots.getPlotItem(), t)
         self._ensure_noise_region()
@@ -1442,18 +1511,21 @@ class PreviewScreen(QWidget):
     def render_emg_psd(self, data):
         freqs = np.asarray(data["freqs"], dtype=float)
         band = data.get("band", (20.0, 250.0))
+        pal = _plot_pal()
         fig = self.emg_psd_canvas.figure
         fig.clear()
+        fig.set_facecolor(pal["mpl_bg"])
         ax = fig.add_subplot(111)
+        ax.set_facecolor(pal["mpl_bg"])
 
         def _db(p):
             return 10.0 * np.log10(np.maximum(np.asarray(p, dtype=float), 1e-30))
 
-        ax.plot(freqs, _db(data["psd_raw"]), color="0.6", lw=1.0, label="raw")
-        ax.plot(freqs, _db(data["psd_ecg"]), color="#2C6E9B", lw=1.2, label="ECG-removed")
+        ax.plot(freqs, _db(data["psd_raw"]), color=pal["mpl_muted"], lw=1.0, label="raw")
+        ax.plot(freqs, _db(data["psd_ecg"]), color=pal["mpl_accent"], lw=1.2, label="ECG-removed")
         if data.get("noise_applied"):
-            ax.plot(freqs, _db(data["psd_noise"]), color="#1F7A4D", lw=1.2, label="noise-reduced")
-        ax.axvspan(band[0], band[1], color="#B7791F", alpha=0.12, label="EMG band 20–250 Hz")
+            ax.plot(freqs, _db(data["psd_noise"]), color=pal["mpl_ok"], lw=1.2, label="noise-reduced")
+        ax.axvspan(band[0], band[1], color=pal["mpl_warn"], alpha=0.12, label="EMG band 20–250 Hz")
         ax.set_xlim(0, min(500.0, float(freqs[-1]) if len(freqs) else 500.0))
         ax.set_xlabel("Frequency (Hz)"); ax.set_ylabel("Power (dB)")
         ax.set_title(f"EMG PSD — col {data.get('col', int(data.get('channel', 0)) + 1)}")
@@ -1489,12 +1561,13 @@ class PreviewScreen(QWidget):
             return
         t = np.asarray(data["t"])
         cols = data.get("cols", [])
+        cycle = _plot_pal()["emg_cycle"]
         checked = {c for c, cb in self.result_checks if cb.isChecked()}
         for i, c in enumerate(cols):
             if c not in checked or i >= len(data["conditioned"]):
                 continue
             self.emg_result_plots.plot(t, np.asarray(data["conditioned"][i]),
-                                       pen=_pen(_EMG_PENS[i % len(_EMG_PENS)]), name=f"col {c}")
+                                       pen=_pen(cycle[i % len(cycle)]), name=f"col {c}")
         self._limit_x(self.emg_result_plots.getPlotItem(), t)
         self._result_label_y = self._safe_top(*[np.asarray(c) for c in data.get("conditioned", [])])
         self._repaint_view_breaths("result")
@@ -1550,14 +1623,17 @@ class PreviewScreen(QWidget):
                 self.table.setItem(r, c, QTableWidgetItem(str(df.iloc[r, c])))
 
     def _draw_campbell(self, breaths):
+        pal = _plot_pal()
         fig = self.campbell.figure
         fig.clear()
+        fig.set_facecolor(pal["mpl_bg"])
         ax = fig.add_subplot(111)
+        ax.set_facecolor(pal["mpl_bg"])
         for b in breaths.values():
             if b["ignored"]:
                 continue
-            ax.plot(b["poes"], b["volume"], color="0.55", lw=0.9, zorder=1)
-        ax.axvline(0, color="0.85", lw=0.8, zorder=0)
+            ax.plot(b["poes"], b["volume"], color=pal["mpl_loop"], lw=0.9, zorder=1)
+        ax.axvline(0, color=pal["mpl_zeroline"], lw=0.8, zorder=0)
         ax.set_xlabel("Oesophageal pressure  Poes (cmH₂O)")
         ax.set_ylabel("Lung volume above end-expiration (L)")
         ax.set_title("Campbell diagram")
@@ -1572,18 +1648,21 @@ class PreviewScreen(QWidget):
         chosen = nr.get("prop_decrease")
         target = nr.get("fidelity_target", 0.8)
         emg_cols = list(self.state.settings.input.channels.emg)
+        pal = _plot_pal()
         fig = self.fidelity_canvas.figure
         fig.clear()
+        fig.set_facecolor(pal["mpl_bg"])
         ax = fig.add_subplot(111)
+        ax.set_facecolor(pal["mpl_bg"])
         if frontier:
             props = sorted(frontier)
             nch = len(next(iter(frontier.values())))
             for ch in range(nch):
                 lbl = f"EMGdi col {emg_cols[ch]}" if ch < len(emg_cols) else f"EMG ch {ch + 1}"
                 ax.plot(props, [frontier[p][ch] for p in props], marker="o", ms=3, label=lbl)
-            ax.axhline(target, color="0.35", ls=":", lw=1)
+            ax.axhline(target, color=pal["mpl_target"], ls=":", lw=1)
             if chosen is not None:
-                ax.axvline(chosen, color="#B4322A", ls="--", lw=1.2, label=f"chosen = {chosen}")
+                ax.axvline(chosen, color=pal["mpl_error"], ls="--", lw=1.2, label=f"chosen = {chosen}")
             ax.set_xlabel("Noise-suppression strength (prop_decrease, 0–1)")
             ax.set_ylabel("EMG fidelity retained (1 = untouched)")
             ax.set_ylim(0, 1.02)

@@ -51,14 +51,84 @@ PALETTE = {
     "info": INFO,
 }
 
-# Backgrounds/foregrounds for the plotting stacks (kept light on purpose so the
-# figures read like journal paper panels regardless of the app's light/dark UI).
-PG_BACKGROUND = "#FCFDFE"
-PG_FOREGROUND = "#33404D"
-
 # A calm, colour-blind-friendly cycle used by matplotlib and available to plots.
 CYCLE = [ACCENT, "#B4322A", "#1F7A4D", "#B7791F", "#7D5BA6",
          "#0E7C7B", "#B4507A", "#5C6B7A"]
+
+# --------------------------------------------------------------------------- #
+# Plot palettes. Neither plotting stack inherits Qt's QSS/palette, so each needs
+# its own light/dark colour table. The dark values are deliberately brightened so
+# traces, breath shading and figure text stay legible on a near-black plot ground
+# — a dark app whose plots stayed white would not read as dark at all. Screens
+# pull the active table via ``plot_palette()`` at render time. The light table
+# reproduces the historical hard-coded colours exactly, so light mode is unchanged.
+# --------------------------------------------------------------------------- #
+_PLOT_LIGHT = {
+    "bg": "#FCFDFE", "fg": "#33404D", "grid_alpha": 0.15,
+    # channel traces keyed by physiological meaning (mechanics stack)
+    "channels": {"flow": (44, 110, 155), "volume": (31, 122, 77),
+                 "poes": (180, 50, 42), "pgas": (183, 121, 31),
+                 "pdi": (125, 91, 166)},
+    # distinct pens cycled for the EMG raw/result/picker views
+    "emg_cycle": [(44, 110, 155), (180, 50, 42), (31, 122, 77), (183, 121, 31),
+                  (125, 91, 166), (14, 124, 123), (180, 80, 122), (92, 107, 122)],
+    "breath_incl_brush": (44, 110, 155, 32), "breath_excl_brush": (180, 50, 42, 70),
+    "breath_incl_label": (90, 107, 122), "breath_excl_label": (180, 50, 42),
+    "separator": (150, 165, 180), "noise_region": (44, 110, 155, 45),
+    "raw_trace": (150, 165, 180), "noise_trace": (90, 150, 200),
+    # legend backing is only painted in dark mode (see _style_legend); the light
+    # value is transparent+unused so light-mode legends stay exactly as before.
+    "legend_bg": (255, 255, 255, 0),
+    # matplotlib semantic line/figure colours (light values are the exact historical
+    # ones so light-mode figures stay byte-identical: pure-white ground, grey lines)
+    "mpl_bg": "#FFFFFF",
+    "mpl_accent": "#2C6E9B", "mpl_ok": "#1F7A4D", "mpl_warn": "#B7791F",
+    "mpl_error": "#B4322A", "mpl_muted": "0.6",
+    "mpl_loop": "0.55", "mpl_zeroline": "0.85", "mpl_target": "0.35",
+    "mpl_edge": "#B5BEC8", "mpl_grid": "#DCE2E8", "mpl_tick": "#5C6B7A",
+    "mpl_cycle": list(CYCLE),
+}
+_PLOT_DARK = {
+    "bg": "#14181D", "fg": "#B4BFCB", "grid_alpha": 0.18,
+    "channels": {"flow": (96, 172, 226), "volume": (94, 200, 142),
+                 "poes": (232, 118, 106), "pgas": (226, 178, 92),
+                 "pdi": (180, 152, 226)},
+    "emg_cycle": [(96, 172, 226), (232, 118, 106), (94, 200, 142), (226, 178, 92),
+                  (180, 152, 226), (74, 200, 198), (230, 140, 182), (150, 166, 182)],
+    "breath_incl_brush": (110, 172, 224, 42), "breath_excl_brush": (214, 92, 82, 62),
+    "breath_incl_label": (150, 166, 182), "breath_excl_label": (234, 122, 112),
+    "separator": (98, 112, 128), "noise_region": (110, 172, 224, 55),
+    "raw_trace": (128, 140, 156), "noise_trace": (118, 176, 224),
+    "legend_bg": (22, 27, 33, 220),   # near-opaque dark backing so legend text stays legible over fills
+    "mpl_bg": "#14181D",
+    "mpl_accent": "#5CA9DD", "mpl_ok": "#5FBE88", "mpl_warn": "#E0B357",
+    "mpl_error": "#E8897F", "mpl_muted": "#7E8A97",
+    "mpl_loop": "#9AA6B2", "mpl_zeroline": "#333B45", "mpl_target": "#8A97A4",
+    "mpl_edge": "#3B4550", "mpl_grid": "#2A323C", "mpl_tick": "#8A97A4",
+    "mpl_cycle": ["#5CA9DD", "#E8897F", "#5FBE88", "#E0B357", "#B39DE0",
+                  "#54C8C6", "#E68CB6", "#9AA6B2"],
+}
+
+# Whether the most-recently-applied theme is the dark variant (drives the plots).
+_IS_DARK = False
+
+# Back-compat aliases (historical constants) — the light plot ground/foreground.
+PG_BACKGROUND = _PLOT_LIGHT["bg"]
+PG_FOREGROUND = _PLOT_LIGHT["fg"]
+
+
+def plot_palette() -> dict:
+    """Return the plot colour table for the currently-applied theme (a copy).
+    Never raises; defaults to the light table before any theme is applied."""
+    try:
+        return dict(_PLOT_DARK if _IS_DARK else _PLOT_LIGHT)
+    except Exception:
+        return dict(_PLOT_LIGHT)
+
+
+def is_dark() -> bool:
+    """Whether the most-recently-applied theme is the dark variant. Never raises."""
+    return bool(_IS_DARK)
 
 # --------------------------------------------------------------------------- #
 # Full theme token tables. The QSS template and QPalette are built from these.
@@ -411,9 +481,10 @@ def apply_theme(app) -> str:
     the given ``QApplication``. Also configures the plotting stacks. Chooses the
     dark variant when the OS reports a dark colour scheme, else light. Robust:
     logs nothing and raises nothing on failure. Returns "light"/"dark"."""
-    global _ACTIVE
+    global _ACTIVE, _IS_DARK
     try:
         dark = _prefers_dark(app)
+        _IS_DARK = dark
         tokens = _DARK if dark else _LIGHT
         _ACTIVE = dict(tokens)
 
@@ -457,23 +528,20 @@ def apply_theme(app) -> str:
 # Plot styling
 # --------------------------------------------------------------------------- #
 def style_pyqtgraph() -> None:
-    """Set global pyqtgraph config for a scientific look: near-white background,
-    dark foreground, antialiasing. No-op if pyqtgraph is unavailable."""
+    """Set global pyqtgraph config to match the active theme: a light near-white
+    ground with dark traces in light mode, a near-black ground with brightened
+    traces in dark mode, antialiasing throughout. No-op if pyqtgraph is absent."""
     try:
         import pyqtgraph as pg  # noqa: PLC0415
     except Exception:
         return
+    pal = _PLOT_DARK if _IS_DARK else _PLOT_LIGHT
+    bg, fg = pal["bg"], pal["fg"]
     try:
-        pg.setConfigOptions(
-            antialias=True,
-            background=PG_BACKGROUND,
-            foreground=PG_FOREGROUND,
-        )
+        pg.setConfigOptions(antialias=True, background=bg, foreground=fg)
     except Exception:
         # Fall back to setting options one at a time.
-        for key, val in (("antialias", True),
-                         ("background", PG_BACKGROUND),
-                         ("foreground", PG_FOREGROUND)):
+        for key, val in (("antialias", True), ("background", bg), ("foreground", fg)):
             try:
                 pg.setConfigOption(key, val)
             except Exception:
@@ -483,14 +551,15 @@ def style_pyqtgraph() -> None:
 def apply_plot_style(plot_item, grid_alpha: float = 0.12) -> None:
     """Optional helper: give a pyqtgraph ``PlotItem`` a subtle grid and quiet
     axes consistent with the theme. Screens may call this per plot. Never raises."""
+    fg = (_PLOT_DARK if _IS_DARK else _PLOT_LIGHT)["fg"]
     try:
         plot_item.showGrid(x=True, y=True, alpha=grid_alpha)
         for edge in ("left", "bottom", "right", "top"):
             try:
                 ax = plot_item.getAxis(edge)
                 if ax is not None:
-                    ax.setPen(PG_FOREGROUND)
-                    ax.setTextPen(PG_FOREGROUND)
+                    ax.setPen(fg)
+                    ax.setTextPen(fg)
             except Exception:
                 pass
     except Exception:
@@ -508,22 +577,24 @@ def plot_pen(width: int = 1):
 
 
 def style_matplotlib() -> None:
-    """Apply clean, whitegrid-ish scientific ``rcParams`` for the Campbell and
-    fidelity figures: modest type, top/right spines off, a soft grid, tight
-    layout, and a colour-blind-friendly cycle. Figures stay light on purpose so
-    they read like journal panels. No-op if matplotlib is unavailable."""
+    """Apply clean scientific ``rcParams`` matched to the active theme for the
+    Campbell/PSD/fidelity figures: modest type, top/right spines off, a soft grid,
+    tight layout, a colour-blind-friendly cycle — light figures in light mode, a
+    near-black ground with light type in dark mode. No-op if matplotlib is absent."""
     try:
         import matplotlib as mpl  # noqa: PLC0415
     except Exception:
         return
+    pal = _PLOT_DARK if _IS_DARK else _PLOT_LIGHT
+    bg = pal.get("mpl_bg", pal["bg"])
     try:
         rc = {
-            "figure.facecolor": "#FFFFFF",
-            "figure.edgecolor": "#FFFFFF",
-            "savefig.facecolor": "#FFFFFF",
+            "figure.facecolor": bg,
+            "figure.edgecolor": bg,
+            "savefig.facecolor": bg,
             "figure.autolayout": True,
-            "axes.facecolor": "#FFFFFF",
-            "axes.edgecolor": "#B5BEC8",
+            "axes.facecolor": bg,
+            "axes.edgecolor": pal["mpl_edge"],
             "axes.linewidth": 0.8,
             "axes.grid": True,
             "axes.axisbelow": True,
@@ -531,16 +602,16 @@ def style_matplotlib() -> None:
             "axes.titleweight": "600",
             "axes.titlepad": 8.0,
             "axes.labelsize": 10,
-            "axes.labelcolor": "#33404D",
+            "axes.labelcolor": pal["fg"],
             "axes.spines.top": False,
             "axes.spines.right": False,
-            "grid.color": "#DCE2E8",
+            "grid.color": pal["mpl_grid"],
             "grid.alpha": 0.7,
             "grid.linewidth": 0.6,
             "font.size": 10,
-            "text.color": "#33404D",
-            "xtick.color": "#5C6B7A",
-            "ytick.color": "#5C6B7A",
+            "text.color": pal["fg"],
+            "xtick.color": pal["mpl_tick"],
+            "ytick.color": pal["mpl_tick"],
             "xtick.labelsize": 9,
             "ytick.labelsize": 9,
             "xtick.direction": "out",
@@ -556,7 +627,7 @@ def style_matplotlib() -> None:
             except Exception:
                 pass
         try:
-            mpl.rcParams["axes.prop_cycle"] = mpl.cycler(color=CYCLE)
+            mpl.rcParams["axes.prop_cycle"] = mpl.cycler(color=pal["mpl_cycle"])
         except Exception:
             pass
     except Exception:

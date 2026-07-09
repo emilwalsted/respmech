@@ -130,6 +130,34 @@ def test_theme_applies_light_and_dark(qapp, monkeypatch):
     assert len(qapp.styleSheet()) > 1000
 
 
+def test_plot_palette_tracks_theme_and_has_a_complete_contract(qapp, monkeypatch):
+    """The plot palettes drive the two plotting stacks (which don't inherit QSS).
+    Dark mode must yield a genuinely dark plot ground, light must reproduce the
+    historical near-white ground, and both tables must expose the SAME keys so no
+    render path can KeyError depending on the theme."""
+    from respmech.ui import theme
+
+    monkeypatch.setenv("RESPMECH_THEME", "light")
+    assert theme.apply_theme(qapp) == "light"
+    light = theme.plot_palette()
+    assert light["bg"] == "#FCFDFE" and light["mpl_bg"] == "#FFFFFF"   # unchanged light ground
+
+    monkeypatch.setenv("RESPMECH_THEME", "dark")
+    assert theme.apply_theme(qapp) == "dark"
+    dark = theme.plot_palette()
+    # a near-black plot ground for BOTH stacks -> the app actually reads as dark
+    assert dark["bg"] != light["bg"] and dark["mpl_bg"] == dark["bg"]
+    assert int(dark["bg"][1:3], 16) < 0x40                            # red channel < 64 -> very dark
+
+    # identical key sets: every colour a render path may look up exists in both
+    assert set(light) == set(dark)
+    assert set(light["channels"]) == set(dark["channels"]) == {
+        "flow", "volume", "poes", "pgas", "pdi"}
+    assert len(light["emg_cycle"]) == len(dark["emg_cycle"]) >= 8
+
+    monkeypatch.delenv("RESPMECH_THEME", raising=False)
+
+
 def test_reactive_file_list_and_noise_gating(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path))))

@@ -20,9 +20,24 @@ from PySide6.QtWidgets import (QApplication, QDialog, QHBoxLayout, QLabel,
 
 import pyqtgraph as pg
 
+try:
+    from respmech.ui import theme as _theme
+except Exception:  # pragma: no cover
+    _theme = None
+
 _WARN_SECONDS = 0.5
 _REGION_BRUSH = (255, 152, 0, 60)      # brand orange, semi-transparent
 _ACCENT = (255, 152, 0)
+
+
+def _plot_pal():
+    """Active-theme plot colours (light table if the theme module is unavailable)."""
+    if _theme is not None:
+        try:
+            return _theme.plot_palette()
+        except Exception:  # pragma: no cover - defensive
+            pass
+    return {"bg": "#FCFDFE", "fg": (51, 64, 77), "noise_trace": (90, 150, 200)}
 
 
 class NoiseProfileDialog(QDialog):
@@ -48,7 +63,10 @@ class NoiseProfileDialog(QDialog):
         hint.setProperty("status", "muted"); hint.setWordWrap(True)
         v.addWidget(hint)
 
+        pal = _plot_pal()
+        trace_pen = pal.get("noise_trace", (90, 150, 200))
         self.glw = pg.GraphicsLayoutWidget()
+        self.glw.setBackground(pal["bg"])
         v.addWidget(self.glw, 1)
         self._plots, self._vlines, self._regions = [], [], []
         tmin = float(self._t[0]) if self._t.size else 0.0
@@ -58,7 +76,7 @@ class NoiseProfileDialog(QDialog):
             p = self.glw.addPlot(row=i, col=0)
             p.showGrid(x=True, y=True, alpha=0.12)
             p.setLabel("left", f"col {cols[i]}" if i < len(cols) else f"EMG {i + 1}")
-            p.plot(self._t[:len(y)], np.asarray(y, dtype=float), pen=pg.mkPen((90, 150, 200)))
+            p.plot(self._t[:len(y)], np.asarray(y, dtype=float), pen=pg.mkPen(trace_pen))
             if i == n - 1:
                 p.setLabel("bottom", "Time (s)")
             vb = p.getViewBox()
@@ -73,7 +91,7 @@ class NoiseProfileDialog(QDialog):
                                       brush=pg.mkBrush(*_REGION_BRUSH), pen=pg.mkPen(_ACCENT, width=1))
             reg.setZValue(-5); reg.setVisible(False); p.addItem(reg)
             self._plots.append(p); self._vlines.append(vl); self._regions.append(reg)
-        self._label = pg.TextItem("", color=(240, 246, 251), anchor=(0, 1))
+        self._label = pg.TextItem("", color=pal["fg"], anchor=(0, 1))
         self._label.setZValue(50)
 
         self.warn = QLabel(""); self.warn.setObjectName("noiseWarn")
