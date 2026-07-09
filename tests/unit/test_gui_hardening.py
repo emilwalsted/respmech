@@ -160,6 +160,44 @@ def test_batch_file_error_uses_failed_label_not_display_error(qapp, tmp_path):
     win.close()
 
 
+# -- settings labels + variable-path/description tooltips ----------------------
+def test_settings_widgets_expose_varpath_and_description_on_hover(qapp, tmp_path):
+    from PySide6.QtWidgets import QLabel
+    from respmech.ui.screens.settings_screen import SettingsScreen
+    sc = SettingsScreen(AppState(_settings(str(tmp_path))))
+    checks = {
+        sc.samp_freq: "input.format.sampling_frequency",
+        sc.col_flow: "input.channels.flow",
+        sc.cols_emg: "input.channels.emg",
+        sc.emg_rms_window: "processing.emg.rms_window_s",
+        sc.ecg_min_distance: "processing.emg.ecg_min_distance_s",
+        sc.remove_ecg: "processing.emg.remove_ecg",
+        sc.remove_noise: "processing.emg.noise.enabled",
+        sc.noise_ref: "processing.emg.noise.reference_file",
+        sc.out_folder: "output.folder",
+        sc.integrate: "processing.volume.integrate_from_flow",
+    }
+    for w, var in checks.items():
+        tip = w.toolTip()
+        assert var in tip, f"{var} missing from tooltip: {tip!r}"
+        assert len(tip) > len(var) + 15, f"no description for {var}: {tip!r}"
+    # visible labels are human, never the raw variable name
+    labels = {la.text() for la in sc.findChildren(QLabel)}
+    assert "Sampling frequency" in labels
+    assert "input.format.sampling_frequency" not in labels
+
+
+def test_preview_noise_params_expose_varpath_on_hover(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    assert "processing.emg.noise.auto_prop" in pv.noise_auto.toolTip()
+    assert "processing.emg.noise.prop_decrease" in pv.noise_prop.toolTip()
+    assert "processing.emg.noise.fidelity_target" in pv.noise_target.toolTip()
+    assert "processing.emg.noise.n_std_thresh" in pv.noise_nstd.toolTip()
+    win.close()
+
+
 # -- graceful failure: a malformed settings file must not abort startup --------
 def test_malformed_reference_intervals_does_not_abort_construction(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow

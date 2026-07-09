@@ -19,6 +19,7 @@ from PySide6.QtCore import Signal
 
 from respmech.core.settings import SettingsError
 from respmech.ui.dialogs import open_error_dialog, short_error
+from respmech.ui.help_text import tooltip as _tip
 
 
 class SettingsScreen(QWidget):
@@ -67,14 +68,14 @@ class SettingsScreen(QWidget):
         gin = QGroupBox("Input")
         f = QFormLayout(gin)
         self.in_folder = QLineEdit()
-        self.in_folder.setToolTip("Folder containing the recordings to analyse.")
         self.in_files = QLineEdit()
-        self.in_files.setToolTip("Filename or glob mask, e.g. *.txt, RIU_H5_*.txt")
         self.samp_freq = QSpinBox(); self.samp_freq.setRange(1, 1_000_000); self.samp_freq.setSuffix(" Hz")
-        self.samp_freq.setToolTip("Samples per second of the recording.")
-        f.addRow("Input folder", self._with_browse(self.in_folder, folder=True))
-        f.addRow("File mask", self.in_files)
-        f.addRow("Sampling frequency", self.samp_freq)
+        self._browse_row(f, "Recordings folder", self.in_folder, "input.folder",
+                         "Folder containing the recording files to analyse; defaults to 'input'.", folder=True)
+        self._row(f, "Files to analyse", self.in_files, "input.files",
+                  "Filename or wildcard mask picking which recordings to load, e.g. *.txt; defaults to *.* (all files).")
+        self._row(f, "Sampling frequency", self.samp_freq, "input.format.sampling_frequency",
+                  "Samples recorded per second, in hertz (Hz); required, and must match the acquisition system (e.g. 2000).")
         root.addWidget(gin)
 
         # Channels ---------------------------------------------------------
@@ -83,33 +84,34 @@ class SettingsScreen(QWidget):
         self.col_flow = self._spin(); self.col_volume = self._spin(allow_zero=True)
         self.col_poes = self._spin(); self.col_pgas = self._spin(); self.col_pdi = self._spin()
         self.cols_emg = QLineEdit(); self.cols_entropy = QLineEdit()
-        self.col_flow.setToolTip("Flow (L/s); negative on inspiration.")
-        self.col_volume.setToolTip("Inspired volume (L). 0 = integrate volume from flow.")
-        self.col_poes.setToolTip("Oesophageal pressure Poes (cmH₂O).")
-        self.col_pgas.setToolTip("Gastric pressure Pgas (cmH₂O).")
-        self.col_pdi.setToolTip("Transdiaphragmatic pressure Pdi (cmH₂O).")
-        self.cols_emg.setToolTip("Comma-separated 1-based columns of the EMG channels, e.g. 2,3,4,5,6")
-        self.cols_entropy.setToolTip("Comma-separated columns for sample-entropy (may be empty).")
-        for label, w in (("Flow", self.col_flow), ("Volume (0 = integrate from flow)", self.col_volume),
-                        ("Oesophageal pressure (Poes)", self.col_poes),
-                        ("Gastric pressure (Pgas)", self.col_pgas),
-                        ("Transdiaphragmatic (Pdi)", self.col_pdi),
-                        ("EMG columns (comma list)", self.cols_emg),
-                        ("Entropy columns (comma list)", self.cols_entropy)):
-            fc.addRow(label, w)
+        self._row(fc, "Flow signal column", self.col_flow, "input.channels.flow",
+                  "Column number (counting from 1) holding the airflow signal, which reads negative during inspiration.")
+        self._row(fc, "Volume signal column", self.col_volume, "input.channels.volume",
+                  "Column number (counting from 1) holding the volume signal; enter 0 to integrate volume from flow instead.")
+        self._row(fc, "Oesophageal pressure (Poes) column", self.col_poes, "input.channels.poes",
+                  "Column number (counting from 1) holding the oesophageal pressure signal, in cmH2O.")
+        self._row(fc, "Gastric pressure (Pgas) column", self.col_pgas, "input.channels.pgas",
+                  "Column number (counting from 1) holding the gastric pressure signal, in cmH2O.")
+        self._row(fc, "Transdiaphragmatic pressure (Pdi) column", self.col_pdi, "input.channels.pdi",
+                  "Column number (counting from 1) holding the transdiaphragmatic pressure signal, in cmH2O.")
+        self._row(fc, "EMG channel columns", self.cols_emg, "input.channels.emg",
+                  "Column numbers (counting from 1) of the diaphragm EMG channels to analyse; enter one or more.")
+        self._row(fc, "Sample entropy columns", self.cols_entropy, "input.channels.entropy",
+                  "Column numbers (counting from 1) of the channels used for sample-entropy analysis; leave empty to skip.")
         root.addWidget(gch)
 
         # Processing — breath mechanics ------------------------------------
         gpr = QGroupBox("Processing")
         fp = QFormLayout(gpr)
         self.seg_method = QComboBox(); self.seg_method.addItems(["flow", "volume"])
-        self.seg_method.setToolTip("Signal used to split the recording into breaths.")
         self.wob_from = QComboBox(); self.wob_from.addItems(["average", "individual"])
-        self.wob_from.setToolTip("Compute work of breathing from an averaged breath, or per breath then average.")
-        self.integrate = QCheckBox("Integrate volume from flow")
-        fp.addRow("Breath separation", self.seg_method)
-        fp.addRow("WOB from", self.wob_from)
-        fp.addRow("", self.integrate)
+        self.integrate = QCheckBox("Calculate volume from flow")
+        self._row(fp, "Signal used to split breaths", self.seg_method, "processing.segmentation.method",
+                  "Which signal marks where each breath begins and ends — flow (the default) or volume.")
+        self._row(fp, "Work of breathing calculation", self.wob_from, "processing.wob.calc_from",
+                  "Compute work of breathing from one averaged breath (the default), or from each breath separately and then average.")
+        self._check_row(fp, self.integrate, "processing.volume.integrate_from_flow",
+                        "Derive volume by integrating the flow signal instead of reading a separate volume channel; off by default.")
         root.addWidget(gpr)
 
         # EMG — RMS envelope -----------------------------------------------
@@ -119,20 +121,14 @@ class SettingsScreen(QWidget):
         self.emg_rms_window = QDoubleSpinBox()
         self.emg_rms_window.setRange(0.01, 0.5); self.emg_rms_window.setSingleStep(0.01)
         self.emg_rms_window.setDecimals(3); self.emg_rms_window.setSuffix(" s")
-        self.emg_rms_window.setToolTip(
-            "Sliding-window length for the EMG root-mean-square (RMS) envelope; the "
-            "breath value is the maximum windowed RMS. Longer = smoother but less "
-            "temporal detail. Typical 0.05 s.")
         self.emg_outlier_sd = QDoubleSpinBox()
         self.emg_outlier_sd.setRange(0.0, 10.0); self.emg_outlier_sd.setSingleStep(0.5)
         self.emg_outlier_sd.setDecimals(1); self.emg_outlier_sd.setSuffix(" SD")
         self.emg_outlier_sd.setSpecialValueText("off (0)")   # minimum (0.0) reads as disabled
-        self.emg_outlier_sd.setToolTip(
-            "Replace per-breath RMS values lying more than this many standard "
-            "deviations from the across-breath mean (0 = disabled). Guards against "
-            "motion/artefact spikes distorting the average.")
-        fe.addRow("RMS window", self.emg_rms_window)
-        fe.addRow("RMS outlier limit", self.emg_outlier_sd)
+        self._row(fe, "EMG RMS window length", self.emg_rms_window, "processing.emg.rms_window_s",
+                  "Sliding-window length for the EMG RMS envelope, in seconds; each breath takes its largest windowed value (default 0.05).")
+        self._row(fe, "EMG RMS outlier limit", self.emg_outlier_sd, "processing.emg.outlier_rms_sd_limit",
+                  "Replace any breath's EMG RMS value lying more than this many standard deviations from the across-breath mean; 0 = off (default).")
         root.addWidget(gemg)
 
         # EMG — ECG removal ------------------------------------------------
@@ -140,41 +136,32 @@ class SettingsScreen(QWidget):
         gecg.setToolTip("Detect R-waves on one EMG channel and subtract an averaged "
                         "ECG template from every EMG channel.")
         fg = QFormLayout(gecg)
-        self.remove_ecg = QCheckBox("Remove ECG from EMG")
-        self.remove_ecg.setToolTip("Enable averaged-template ECG subtraction on the EMG channels.")
+        self.remove_ecg = QCheckBox("Remove ECG artefact from EMG")
         self.ecg_detect = QComboBox()
-        self.ecg_detect.setToolTip("Which EMG channel to detect R-waves on (use where the ECG is most prominent).")
         self.ecg_min_height = QDoubleSpinBox()
         self.ecg_min_height.setRange(0.0, 1_000_000.0); self.ecg_min_height.setDecimals(6)
         self.ecg_min_height.setSingleStep(0.0001)
-        self.ecg_min_height.setToolTip(
-            "Minimum R-wave peak amplitude for detection, in the SAME units as the "
-            "raw EMG signal. Raise to ignore small peaks; lower if beats are missed.")
         self.ecg_min_distance = QDoubleSpinBox()
         self.ecg_min_distance.setRange(0.05, 2.0); self.ecg_min_distance.setSingleStep(0.05)
         self.ecg_min_distance.setDecimals(3); self.ecg_min_distance.setSuffix(" s")
-        self.ecg_min_distance.setToolTip(
-            "Minimum time between successive detected R-waves (refractory). Caps the "
-            "detectable heart rate: 0.5 s ≈ 120 bpm ceiling — lower for tachycardia.")
         self.ecg_min_width = QDoubleSpinBox()
         self.ecg_min_width.setRange(0.0, 0.1); self.ecg_min_width.setSingleStep(0.001)
         self.ecg_min_width.setDecimals(4); self.ecg_min_width.setSuffix(" s")
-        self.ecg_min_width.setToolTip(
-            "Minimum width of an accepted R-wave peak. Rejects narrow "
-            "spikes/artefacts. Typical ~0.001 s.")
         self.ecg_window = QDoubleSpinBox()
         self.ecg_window.setRange(0.05, 1.0); self.ecg_window.setSingleStep(0.05)
         self.ecg_window.setDecimals(3); self.ecg_window.setSuffix(" s")
-        self.ecg_window.setToolTip(
-            "Total width of the template window centred on each R-wave (half each "
-            "side) that is averaged and subtracted from the EMG. Should span the "
-            "QRS-T complex. Typical 0.4 s.")
-        fg.addRow("", self.remove_ecg)
-        fg.addRow("Detection channel", self.ecg_detect)
-        fg.addRow("R-wave min height", self.ecg_min_height)
-        fg.addRow("Min beat spacing", self.ecg_min_distance)
-        fg.addRow("Min R-wave width", self.ecg_min_width)
-        fg.addRow("Template window", self.ecg_window)
+        self._check_row(fg, self.remove_ecg, "processing.emg.remove_ecg",
+                        "Subtracts an averaged ECG template from each EMG channel to cancel cardiac contamination; off by default.")
+        self._row(fg, "EMG channel for heartbeat detection", self.ecg_detect, "processing.emg.detect_channel",
+                  "Index of the EMG channel used to detect R-wave (heartbeat) peaks when building the ECG template; defaults to the first channel (0).")
+        self._row(fg, "Minimum heartbeat peak height", self.ecg_min_height, "processing.emg.ecg_min_height",
+                  "Smallest peak amplitude, in raw EMG units, accepted as a heartbeat during R-wave detection; default 0.0005.")
+        self._row(fg, "Minimum time between heartbeats", self.ecg_min_distance, "processing.emg.ecg_min_distance_s",
+                  "Shortest interval allowed between detected heartbeats, in seconds; a refractory period that caps the maximum heart rate (default 0.5).")
+        self._row(fg, "Minimum heartbeat peak width", self.ecg_min_width, "processing.emg.ecg_min_width_s",
+                  "Narrowest peak accepted as a heartbeat, in seconds; rejects thin spikes that aren't true R-waves (default 0.001).")
+        self._row(fg, "ECG template window length", self.ecg_window, "processing.emg.ecg_window_s",
+                  "Total width, in seconds, of the ECG template averaged and subtracted around each beat, spanning the QRS-T complex (default 0.4).")
         root.addWidget(gecg)
 
         # EMG — noise reduction (shared profile) ---------------------------
@@ -183,16 +170,16 @@ class SettingsScreen(QWidget):
                        "reference and applied IDENTICALLY to every file in the test. "
                        "Tune the noise window visually in Preview ▸ EMG processing.")
         fn = QFormLayout(gns)
-        self.remove_noise = QCheckBox("Reduce EMG noise (shared profile)")
-        self.remove_noise.setToolTip("Enable spectral noise subtraction using the shared reference profile.")
+        self.remove_noise = QCheckBox("Reduce EMG background noise")
         self.noise_ref = QLineEdit()
-        self.noise_ref.setToolTip("A rest/baseline recording whose EMG-free portion defines the noise profile. "
-                                  "You can also select a rest region on the EMG graph (Preview ▸ EMG processing).")
-        self.noise_use_exp = QCheckBox("Use expiration of the reference (recommended)")
-        self.noise_use_exp.setToolTip("Build the noise sample from the reference's expiration (many STFT frames = stable).")
-        fn.addRow("", self.remove_noise)
-        fn.addRow("Reference file", self._with_browse(self.noise_ref, folder=False))
-        fn.addRow("", self.noise_use_exp)
+        self.noise_use_exp = QCheckBox("Build noise profile from expiration (recommended)")
+        self._check_row(fn, self.remove_noise, "processing.emg.noise.enabled",
+                        "Subtracts a shared spectral noise profile, built from a rest reference, from every EMG channel; off by default.")
+        self._browse_row(fn, "Noise reference recording", self.noise_ref, "processing.emg.noise.reference_file",
+                         "Rest or baseline recording whose EMG-free portion defines the noise profile applied to every file in the test.",
+                         folder=False)
+        self._check_row(fn, self.noise_use_exp, "processing.emg.noise.use_expiration",
+                        "Samples the noise profile from the reference's expiratory phase, which is EMG-free and more stable; on by default.")
         hint = QLabel("Noise-window options (suppression, fidelity target) are in "
                       "Preview ▸ EMG processing, active once a reference file is set.")
         hint.setWordWrap(True); hint.setProperty("status", "muted")
@@ -203,8 +190,8 @@ class SettingsScreen(QWidget):
         gout = QGroupBox("Output")
         fo = QFormLayout(gout)
         self.out_folder = QLineEdit()
-        self.out_folder.setToolTip("Results are written to <output>/data/.")
-        fo.addRow("Output folder", self._with_browse(self.out_folder, folder=True))
+        self._browse_row(fo, "Output folder", self.out_folder, "output.folder",
+                         "Where results are saved; files are written to a 'data' subfolder inside it; defaults to 'output'.", folder=True)
         root.addWidget(gout)
 
         self.status = QLabel("")
@@ -214,6 +201,30 @@ class SettingsScreen(QWidget):
 
         scroll.setWidget(content)
         outer.addWidget(scroll, 1)
+
+    def _row(self, form, label, widget, var, desc):
+        """A labelled form row whose LABEL and FIELD both carry the same tooltip:
+        the settings variable path (bold) + a one-line description."""
+        tip = _tip(var, desc)
+        lab = QLabel(label); lab.setToolTip(tip)
+        widget.setToolTip(tip)
+        form.addRow(lab, widget)
+
+    def _check_row(self, form, checkbox, var, desc):
+        """A checkbox row (the checkbox text is the label); the tooltip carries the
+        variable path + description."""
+        checkbox.setToolTip(_tip(var, desc))
+        form.addRow("", checkbox)
+
+    def _browse_row(self, form, label, line, var, desc, folder):
+        """A labelled 'line edit + Browse…' row; the label, the field and its inner
+        line edit all carry the variable path + description tooltip."""
+        tip = _tip(var, desc)
+        lab = QLabel(label); lab.setToolTip(tip)
+        line.setToolTip(tip)
+        wrapper = self._with_browse(line, folder=folder)
+        wrapper.setToolTip(tip)
+        form.addRow(lab, wrapper)
 
     def _spin(self, allow_zero=False):
         s = QSpinBox(); s.setRange(0 if allow_zero else 1, 9999); return s
