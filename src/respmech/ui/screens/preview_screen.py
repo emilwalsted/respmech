@@ -272,6 +272,14 @@ class PreviewScreen(QWidget):
         # staged all-channel EMG (result view)
         self._emg_all = None
         self.result_checks = []          # list of (col:int, QCheckBox)
+        # breath overlays in the EMG views (Mechanics keeps its own _breath_* state)
+        self._breaths = []               # last mech spans [(num, t0, t1, ignored), ...] (TRIMMED s)
+        self._trim_offset_s = 0.0        # startix/fs — maps a trimmed span to absolute EMG time
+        self._bov = {}                   # view -> {'items':[(plot,item)], 'regions':{num:[reg]}, 'texts':{num:txt}}
+        self._emg_raw_subplots = []      # per-channel PlotItems of the raw stack (hit-testing)
+        self._raw_label_y = None
+        self._detail_label_y = None
+        self._result_label_y = None
         self._build()
         # render dispatch by job kind (built after _build so the methods exist)
         self._RENDER = {
@@ -431,6 +439,10 @@ class PreviewScreen(QWidget):
         self.fidelity_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 3)))
         split.addWidget(self._titled("Noise fidelity frontier", self.fidelity_canvas))
         v.addWidget(split, 1)
+        # clicking a numbered breath in any EMG plot toggles its exclusion too
+        self.emg_raw_plots.scene().sigMouseClicked.connect(self._on_emg_raw_clicked)
+        self.emg_plots.scene().sigMouseClicked.connect(self._on_emg_detail_clicked)
+        self.emg_result_plots.scene().sigMouseClicked.connect(self._on_emg_result_clicked)
         return w
 
     @staticmethod
@@ -512,6 +524,12 @@ class PreviewScreen(QWidget):
         self.file_combo.blockSignals(False)
         if prev in files:
             self.file_combo.setCurrentText(prev)
+        elif prev:
+            # the current file changed silently while signals were blocked (prev is
+            # gone from the list -> the combo auto-selected files[0], or emptied):
+            # take the same cleanup path an interactive switch would, so stale breath
+            # overlays never linger clickable against the wrong (or no) file
+            self._begin_file_switch()
         if not folder:
             self._set_status("Set an input folder in Settings.")
         elif not os.path.isdir(folder):
@@ -576,10 +594,29 @@ class PreviewScreen(QWidget):
         elif has_file and not ok:
             self._set_status(f"Settings incomplete: {why}")
 
+    def _invalidate_inflight(self):
+        """Bump every kind's token so any in-flight job for the *previous* file is
+        dropped by the acceptance check in _on_job_done when it lands — even if it
+        finished in the same event-loop iteration as the switch, before the deferred
+        autorun bumps tokens. A superseded job still clears its own spinner. Safe
+        against _schedule's bump-last invariant: after a file change EVERY in-flight
+        job is known-stale (wrong file), so none of them must survive."""
+        for k in self._tokens:
+            self._tokens[k] += 1
+
+    def _begin_file_switch(self):
+        """Shared cleanup when the current file changes: drop the old file's breath
+        overlays/state, invalidate its in-flight jobs, and re-dispatch for the new
+        file. Reached both from an interactive combo change and from refresh_files
+        silently switching the current file when the previous one vanished."""
+        self._reset_breath_state()   # drop the previous file's breath overlays
+        self._invalidate_inflight()  # so an old-file job finishing in the gap is dropped
+        self._request_autorun()
+
     def _on_file_selected(self, name):
         self._update_actions()
         if name and name != self._previewed_file:
-            self._request_autorun()
+            self._begin_file_switch()
 
     # -- reactive scheduling ------------------------------------------------
     def _request_autorun(self):
@@ -792,6 +829,8 @@ class PreviewScreen(QWidget):
         series = data["series"]
         t = data["t"]
         spans = data["spans"]
+        self._trim_offset_s = data["startix"] / fs      # trimmed span -> absolute EMG time
+        self._breaths = list(spans)
         self._clear_panel_overlays("channels", "raw")   # dismiss any stale error card
         self.plots.clear()
         self._channel_plots = []
@@ -811,6 +850,9 @@ class PreviewScreen(QWidget):
             self._channel_plots.append(p)
         self._draw_breath_overlays(spans, data["label_y"])
         self._render_raw_stack(data["emg"], fs)
+        # breaths are now known -> (re)number any EMG detail/result already rendered
+        self._repaint_view_breaths("detail")
+        self._repaint_view_breaths("result")
 
         nign = sum(1 for _n, _a, _b, ig in spans if ig)
         self._previewed_file = data["name"]
@@ -825,8 +867,11 @@ class PreviewScreen(QWidget):
         emg = np.asarray(emg, dtype=float)
         if emg.ndim == 1:
             emg = emg[:, None]
+        self._emg_raw_subplots = []
+        self._raw_label_y = None
         self.emg_raw_plots.clear()
         if emg.size == 0 or emg.ndim != 2 or emg.shape[1] == 0:
+            self._paint_breaths("raw", [], self._trim_offset_s, 0.0)   # drop stale overlays
             self._ensure_noise_region()
             return
         cols = list(self.state.settings.input.channels.emg)
@@ -842,7 +887,10 @@ class PreviewScreen(QWidget):
             if prev is not None:
                 p.setXLink(prev)
             prev = p
+            self._emg_raw_subplots.append(p)
         self._ensure_noise_region()
+        self._raw_label_y = self._safe_top(emg[:, 0])
+        self._repaint_view_breaths("raw")
 
     # -- feature A: breath overlays + include/exclude ----------------------
     @staticmethod
@@ -913,6 +961,22 @@ class PreviewScreen(QWidget):
         txt = self._breath_texts.get(breath_no)
         if txt is not None:
             txt.setColor(self._breath_label_color(now_excluded))
+        # recolour the same breath in every EMG view that has it painted
+        for view in ("raw", "detail", "result"):
+            rec = self._bov.get(view)
+            if not rec:
+                continue
+            for reg in rec["regions"].get(breath_no, []):
+                try:
+                    reg.setBrush(self._breath_brush(now_excluded)); reg.update()
+                except Exception:                      # noqa: BLE001
+                    pass
+            t = rec["texts"].get(breath_no)
+            if t is not None:
+                try:
+                    t.setColor(self._breath_label_color(now_excluded))
+                except Exception:                      # noqa: BLE001
+                    pass
         nexcl = len({b for e in excl if e.file == name for b in e.breaths} & set(self._breath_spans))
         self._set_status(
             f"{name}: breath {breath_no} {'excluded' if now_excluded else 'included'} "
@@ -920,6 +984,139 @@ class PreviewScreen(QWidget):
         # excluding a breath changes the test result -> re-run it
         QTimer.singleShot(0, lambda: self._schedule("batch"))
         return now_excluded
+
+    # -- breath overlays on the EMG views ----------------------------------
+    def _excluded_now(self):
+        """Live set of excluded 1-based breath numbers for the current file — the
+        single source of truth for overlay colour (matches what the core ignores)."""
+        name = self.file_combo.currentText()
+        entry = next((e for e in self.state.settings.processing.exclude_breaths if e.file == name), None)
+        return set(entry.breaths) if entry else set()
+
+    def _safe_top(self, *arrays, default=1.0):
+        """A finite, headless-safe top-of-signal value for placing the number label."""
+        best = None
+        for a in arrays:
+            if a is None:
+                continue
+            a = np.asarray(a, dtype=float)
+            finite = a[np.isfinite(a)] if a.size else a
+            if finite.size == 0:
+                continue
+            m = float(finite.max())
+            best = m if best is None else max(best, m)
+        return best if best is not None else default
+
+    def _paint_breaths(self, view, plot_items, offset, label_y):
+        """Idempotent per-view overlay: remove the view's previous items (guarded),
+        then shade every breath + a boundary line on each plot and a number on the
+        first plot. Colour is taken from the LIVE exclusion set."""
+        rec = self._bov.get(view)
+        if rec:
+            for plot, item in rec.get("items", []):
+                try:
+                    plot.removeItem(item)
+                except Exception:                      # noqa: BLE001
+                    pass
+        self._bov[view] = {"items": [], "regions": {}, "texts": {}}
+        if not plot_items or not self._breaths:
+            return
+        excl = self._excluded_now()
+        reg_map = self._bov[view]["regions"]; txt_map = self._bov[view]["texts"]
+        items = self._bov[view]["items"]
+        for (num, t0, t1, _ig) in self._breaths:
+            ignored = num in excl
+            a, b = t0 + offset, t1 + offset
+            for p in plot_items:
+                reg = pg.LinearRegionItem(values=(a, b), movable=False,
+                                          brush=self._breath_brush(ignored), pen=pg.mkPen(None))
+                reg.setZValue(-10)
+                p.addItem(reg)
+                items.append((p, reg)); reg_map.setdefault(num, []).append(reg)
+                line = p.addLine(x=a, pen=pg.mkPen((150, 165, 180), width=1, style=Qt.DashLine))
+                items.append((p, line))
+            txt = pg.TextItem(str(num), color=self._breath_label_color(ignored), anchor=(0.5, 1.0))
+            txt.setPos((a + b) / 2.0, label_y)
+            plot_items[0].addItem(txt)
+            items.append((plot_items[0], txt)); txt_map[num] = txt
+
+    def _repaint_view_breaths(self, view):
+        """Repaint one EMG view IF it has rendered real data (label_y sentinel set)."""
+        if view == "raw":
+            plot_items, label_y = self._emg_raw_subplots, self._raw_label_y
+        elif view == "detail":
+            plot_items, label_y = [self.emg_plots.getPlotItem()], self._detail_label_y
+        elif view == "result":
+            plot_items, label_y = [self.emg_result_plots.getPlotItem()], self._result_label_y
+        else:
+            return
+        if label_y is None or not plot_items:
+            return
+        try:
+            self._paint_breaths(view, plot_items, self._trim_offset_s, label_y)
+        except Exception:                              # noqa: BLE001 — overlay is cosmetic
+            pass
+
+    def _reset_breath_state(self):
+        """On a file change, drop stale overlays + spans so a new-file EMG job that
+        finishes before the new mech never shows the previous file's numbers."""
+        for rec in self._bov.values():
+            for plot, item in rec.get("items", []):
+                try:
+                    plot.removeItem(item)
+                except Exception:                      # noqa: BLE001
+                    pass
+        self._bov = {}
+        self._breaths = []
+        self._breath_spans = {}
+        self._breath_regions = {}
+        self._breath_texts = {}
+        self._emg_raw_subplots = []
+        self._raw_label_y = self._detail_label_y = self._result_label_y = None
+        self._trim_offset_s = 0.0
+        # a result-checkbox toggle re-renders self._emg_all synchronously (no token
+        # gate); drop the previous file's staged result so it can't repaint the old
+        # curves and re-arm the result sentinel with them
+        self._emg_all = None
+        self.emg_result_plots.clear()
+        # _previewed_file only advances on a COMPLETED mech render, so leaving it set
+        # here would make a flip back to the last-rendered file look like "no change"
+        # and skip this very reset while the new file's jobs are still in flight
+        self._previewed_file = None
+
+    def _toggle_from_emg_click(self, ev, plot_items, offset):
+        if not self._breath_spans:
+            return
+        try:
+            if ev.isAccepted():
+                return
+            pos = ev.scenePos()
+        except Exception:                              # noqa: BLE001
+            return
+        for p in plot_items:
+            # a click on the plot's legend (text/frame) is unaccepted by pyqtgraph
+            # and would otherwise fall through to the breath underneath it — the
+            # legend sits top-left over breath 1 on the detail/result plots
+            leg = getattr(p, "legend", None)
+            if leg is not None and leg.isVisible() and leg.sceneBoundingRect().contains(pos):
+                return
+            vb = p.getViewBox()
+            if vb is not None and vb.sceneBoundingRect().contains(pos):
+                bno = self._breath_at(vb.mapSceneToView(pos).x() - offset)
+                if bno is not None:
+                    self._toggle_breath(bno)
+                return
+
+    def _on_emg_raw_clicked(self, ev):
+        self._toggle_from_emg_click(ev, self._emg_raw_subplots, self._trim_offset_s)
+
+    def _on_emg_detail_clicked(self, ev):
+        if getattr(self._noise_region, "mouseHovering", False):
+            return                                     # let the movable noise region own the click
+        self._toggle_from_emg_click(ev, [self.emg_plots.getPlotItem()], self._trim_offset_s)
+
+    def _on_emg_result_clicked(self, ev):
+        self._toggle_from_emg_click(ev, [self.emg_result_plots.getPlotItem()], self._trim_offset_s)
 
     # -- feature B: noise-profile region -----------------------------------
     def _ensure_noise_region(self):
@@ -1000,6 +1197,10 @@ class PreviewScreen(QWidget):
             self.emg_plots.plot(t, np.asarray(data["noise"]), pen=_pen((31, 122, 77)), name="noise-reduced")
         self.emg_plots.setLabel("bottom", "Time (s)"); self.emg_plots.setLabel("left", "EMG (a.u.)")
         self._ensure_noise_region()
+        self._detail_label_y = self._safe_top(
+            np.asarray(data["raw"]), np.asarray(data["ecg"]),
+            np.asarray(data["noise"]) if data.get("noise_applied") else None)
+        self._repaint_view_breaths("detail")
 
     def render_emg_psd(self, data):
         freqs = np.asarray(data["freqs"], dtype=float)
@@ -1046,6 +1247,8 @@ class PreviewScreen(QWidget):
         data = self._emg_all
         self.emg_result_plots.clear()
         if not data:
+            self._result_label_y = None
+            self._bov["result"] = {"items": [], "regions": {}, "texts": {}}
             return
         t = np.asarray(data["t"])
         cols = data.get("cols", [])
@@ -1055,6 +1258,8 @@ class PreviewScreen(QWidget):
                 continue
             self.emg_result_plots.plot(t, np.asarray(data["conditioned"][i]),
                                        pen=_pen(_EMG_PENS[i % len(_EMG_PENS)]), name=f"col {c}")
+        self._result_label_y = self._safe_top(*[np.asarray(c) for c in data.get("conditioned", [])])
+        self._repaint_view_breaths("result")
 
     # -- test run (Mechanics), synchronous ---------------------------------
     def _test_run(self):
