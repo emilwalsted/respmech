@@ -48,6 +48,7 @@ from respmech.core.pipeline import run_batch
 from respmech.core._legacy_ns import to_legacy_ns  # noqa: F401 (back-compat import)
 from respmech.core.settings import ExcludeEntry
 from respmech.ui.dialogs import TextViewerDialog, short_error
+from respmech.ui.help_text import tooltip as _help_tip
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
                                   stage_mechanics_preview)
@@ -366,22 +367,35 @@ class PreviewScreen(QWidget):
         # noise-window options (active once a reference file is set)
         self.noise_opts = QWidget()
         nrow = QHBoxLayout(self.noise_opts); nrow.setContentsMargins(0, 0, 0, 0)
-        self.noise_auto = QCheckBox("Auto-select suppression")
-        self.noise_auto.setToolTip("Pick the strongest suppression keeping every channel ≥ the fidelity target.")
+        self.noise_auto = QCheckBox("Auto-set suppression strength")
+        self.noise_auto.setToolTip(_help_tip(
+            "processing.emg.noise.auto_prop",
+            "Automatically picks the strongest suppression that still keeps every channel at or "
+            "above the fidelity target; on by default."))
         self.noise_auto.toggled.connect(self._on_noise_param_changed)
         self.noise_prop = QDoubleSpinBox(); self.noise_prop.setRange(0.0, 1.0); self.noise_prop.setSingleStep(0.05); self.noise_prop.setDecimals(2)
-        self.noise_prop.setToolTip("Manual suppression strength (0 = none, 1 = full) when auto is off.")
+        self.noise_prop.setToolTip(_help_tip(
+            "processing.emg.noise.prop_decrease",
+            "How aggressively to remove noise when auto is off, from 0 (none) to 1 (maximum); default 0.6."))
         self.noise_prop.valueChanged.connect(self._on_noise_param_changed)
         self.noise_target = QDoubleSpinBox(); self.noise_target.setRange(0.50, 0.99); self.noise_target.setSingleStep(0.05); self.noise_target.setDecimals(2)
-        self.noise_target.setToolTip("Minimum fraction of inspiratory EMG power to retain.")
+        self.noise_target.setToolTip(_help_tip(
+            "processing.emg.noise.fidelity_target",
+            "Smallest fraction of inspiratory EMG power that must survive noise removal, from 0 to 1; default 0.8."))
         self.noise_target.valueChanged.connect(self._on_noise_param_changed)
         self.noise_nstd = QDoubleSpinBox(); self.noise_nstd.setRange(0.0, 10.0); self.noise_nstd.setSingleStep(0.1); self.noise_nstd.setDecimals(1)
-        self.noise_nstd.setToolTip("Gate threshold: mean + n_std·SD of the noise spectrum. Lower = gentler.")
+        self.noise_nstd.setToolTip(_help_tip(
+            "processing.emg.noise.n_std_thresh",
+            "Signal below the mean noise level plus this many standard deviations is treated as noise "
+            "and removed; default 1.0."))
         self.noise_nstd.valueChanged.connect(self._on_noise_param_changed)
+
+        def _lbl(text, tip):        # a captioned label that shares its field's tooltip
+            la = QLabel(text); la.setToolTip(tip); return la
         nrow.addWidget(QLabel("Noise window:")); nrow.addWidget(self.noise_auto)
-        nrow.addWidget(QLabel("suppression")); nrow.addWidget(self.noise_prop)
-        nrow.addWidget(QLabel("fidelity target")); nrow.addWidget(self.noise_target)
-        nrow.addWidget(QLabel("n_std")); nrow.addWidget(self.noise_nstd)
+        nrow.addWidget(_lbl("Manual strength", self.noise_prop.toolTip())); nrow.addWidget(self.noise_prop)
+        nrow.addWidget(_lbl("Min. EMG to keep", self.noise_target.toolTip())); nrow.addWidget(self.noise_target)
+        nrow.addWidget(_lbl("Noise gate", self.noise_nstd.toolTip())); nrow.addWidget(self.noise_nstd)
         nrow.addStretch(1)
         v.addWidget(self.noise_opts)
 

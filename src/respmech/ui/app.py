@@ -10,7 +10,7 @@ import time
 import traceback
 
 # minimum time (ms) the splash stays visible before the window is revealed
-_MIN_SPLASH_MS = 5000
+_MIN_SPLASH_MS = 3000
 
 
 def _fatal_startup(tb: str) -> None:
