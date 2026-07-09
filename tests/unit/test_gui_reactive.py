@@ -87,11 +87,12 @@ def test_selecting_a_file_autoruns_all_panels(qapp, tmp_path):
     assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60), \
         "reactive jobs did not all finish"
     assert pv.busy_panels() == set(), "a spinner was left running"
-    # all panels are populated: mechanics channels + table + Campbell, EMG result, fidelity
+    # the auto panels are populated: mechanics channels, EMG result, and (auto) fidelity
     assert len(pv._channel_plots) == 5
-    assert pv.table.rowCount() > 0
     assert pv._emg_all is not None and len(pv._emg_all["conditioned"]) == 3
-    assert len(pv.fidelity_canvas.figure.axes) == 1     # fidelity frontier was drawn
+    assert len(pv.fidelity_canvas.figure.axes) == 1     # fidelity frontier drawn by the noise job
+    # the test run is MANUAL now -> its table stays empty until the button is clicked
+    assert pv.table.rowCount() == 0
     assert "failed" not in pv.status.text().lower()     # ended on a success message
     win.close()
 
@@ -105,8 +106,9 @@ def test_autorun_without_noise_skips_fidelity_but_runs_the_rest(qapp, tmp_path):
     assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining and pv._previewed_file, 60)
     assert pv.busy_panels() == set()
     assert len(pv._channel_plots) == 5
-    assert pv.table.rowCount() > 0            # batch still fills the table + Campbell
     assert pv._emg_all is not None            # EMG staged (ECG-removed, no noise)
+    assert pv.table.rowCount() == 0          # test run is manual
+    assert len(pv.fidelity_canvas.figure.axes) == 0   # no noise reference -> no fidelity job
     win.close()
 
 
@@ -169,6 +171,8 @@ def test_gated_out_reschedule_does_not_supersede_running_job(qapp, tmp_path):
     pv = win.preview_screen
     pv._refresh_files()
     pv.file_combo.setCurrentIndex(1)
+    qapp.processEvents()                           # let the auto-run dispatch its jobs
+    pv._schedule("batch")                          # the test run is manual -> start it explicitly
     assert _pump_until(qapp, lambda: "batch" in pv._jobs, 10)
     tok = pv._tokens["batch"]
     pv._settings_ok = lambda: (False, "invalid")   # force the batch gate to fail
@@ -193,6 +197,64 @@ def test_autoprop_writes_chosen_prop_back_to_settings(qapp, tmp_path):
     result = run_batch(s, only_files=["synth_case_B.csv"])
     chosen = float(result.noise_report["prop_decrease"])
     pv._on_batch_result(result)                    # writes chosen prop, re-dispatches EMG jobs
+    assert abs(s.processing.emg.noise.prop_decrease - chosen) < 1e-9
+    assert abs(pv.noise_prop.value() - chosen) < 1e-9
+    pv.shutdown()
+
+
+def test_settings_change_cancels_inflight_jobs(qapp, tmp_path):
+    """A settings change aborts every in-flight panel-refresh job (cancel + token
+    invalidation), then re-dispatches — nothing is left running or leaked."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path), noise=True)))
+    pv = win.preview_screen
+    pv._refresh_files()
+    pv.file_combo.setCurrentIndex(1)
+    assert _pump_until(qapp, lambda: bool(pv._jobs), 10)     # jobs in flight
+    toks = dict(pv._tokens)
+    pv.sync_from_settings()                                  # settings changed
+    assert not pv._jobs                                      # current jobs were aborted...
+    assert all(pv._tokens[k] == toks[k] + 1 for k in toks)  # ...and their tokens invalidated
+    assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60)
+    assert pv.busy_panels() == set()
+    win.close()
+
+
+def test_refresh_recomputes_auto_panels_but_not_the_test_run(qapp, tmp_path):
+    """The 'Refresh' button re-dispatches only the auto kinds — never the test run."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path), noise=True)))
+    pv = win.preview_screen
+    pv._refresh_files()
+    pv.file_combo.setCurrentIndex(1)
+    assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining and pv._previewed_file, 60)
+    launched = []
+    orig = pv._schedule
+    pv._schedule = lambda k: (launched.append(k), orig(k))[1]
+    try:
+        pv._refresh_all()
+        qapp.processEvents()                                # fire the deferred auto-run
+    finally:
+        pv._schedule = orig
+    assert "batch" not in launched                          # never the test run
+    assert {"mech", "emg_all", "emg_detail", "noise"} & set(launched)
+    assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60)
+    win.close()
+
+
+def test_noise_job_draws_fidelity_and_adopts_prop(qapp, tmp_path):
+    """The auto noise job (decoupled from the test run) produces the fidelity frontier
+    and writes the auto-selected suppression back into settings + the spinbox."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_noise_fidelity
+    s = _settings(str(tmp_path), noise=True)
+    s.processing.emg.noise.prop_decrease = 0.05        # deliberately-not-chosen default
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    report = stage_noise_fidelity(s)                   # what the noise worker returns
+    chosen = float(report["prop_decrease"])
+    pv._on_noise_result(report)
+    assert len(pv.fidelity_canvas.figure.axes) == 1    # frontier drawn (no test run needed)
     assert abs(s.processing.emg.noise.prop_decrease - chosen) < 1e-9
     assert abs(pv.noise_prop.value() - chosen) < 1e-9
     pv.shutdown()

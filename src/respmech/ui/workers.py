@@ -286,6 +286,25 @@ def stage_emg_all_channels(settings: Settings, file_path: str) -> dict:
     }
 
 
+def stage_noise_fidelity(settings: Settings) -> dict:
+    """Build the shared noise profile for the WHOLE test and measure the EMG fidelity
+    frontier + the auto-selected suppression strength — the per-test noise summary the
+    Preview screen shows, decoupled from the full mechanics test run. Pure compute,
+    Qt-free, no disk writes. Returns the noise ``report`` dict (``frontier`` /
+    ``prop_decrease`` / ``fidelity_target`` / ``channels``)."""
+    import glob
+    import os
+    from respmech.core._legacy_ns import to_legacy_ns
+    from respmech.core.pipeline import _build_noise_set
+
+    s = to_legacy_ns(settings)
+    allfiles = sorted(glob.glob(os.path.join(s.input.inputfolder, s.input.files)))
+    if not allfiles:
+        raise FileNotFoundError(f"No input files found for '{s.input.files}'.")
+    _noise_set, report = _build_noise_set(settings, s, allfiles)   # full test defines the profile
+    return report
+
+
 class EmgAllChannelsWorker(QObject):
     """Off-thread staging of all EMG channels for the result view."""
     finished = Signal(object)
