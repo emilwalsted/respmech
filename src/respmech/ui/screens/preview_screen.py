@@ -51,7 +51,7 @@ from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
-                                  stage_mechanics_preview)
+                                  stage_mechanics_preview, stage_noise_fidelity)
 
 try:
     from respmech.ui import theme as _theme
@@ -70,14 +70,20 @@ _CHANNELS = [
 _EMG_PENS = [(44, 110, 155), (180, 50, 42), (31, 122, 77), (183, 121, 31),
              (125, 91, 166), (14, 124, 123), (180, 80, 122), (92, 107, 122)]
 
-# reactive job kinds -> which panel overlays they own, and the spinner caption
-_PANELS = {"mech": ["channels", "raw"], "batch": ["campbell", "fidelity"],
-           "emg_all": ["result"], "emg_detail": ["detail"]}
+# reactive job kinds -> which panel overlays they own, and the spinner caption.
+# 'batch' (the test run: table + Campbell) is NOT auto-run — only the button triggers
+# it. 'noise' auto-computes the fidelity frontier + suppression, decoupled from batch.
+_PANELS = {"mech": ["channels", "raw"], "batch": ["campbell"],
+           "emg_all": ["result"], "emg_detail": ["detail", "detail_psd"], "noise": ["fidelity"]}
 _SPIN_TEXT = {"mech": "Loading channels…", "batch": "Running test…",
-              "emg_all": "Conditioning channels…", "emg_detail": "Staging detail…"}
+              "emg_all": "Conditioning channels…", "emg_detail": "Staging detail…",
+              "noise": "Measuring fidelity…"}
 # human labels for status lines + panel error cards
 _KIND_LABEL = {"mech": "Channel preview", "batch": "Test run",
-               "emg_all": "EMG result", "emg_detail": "EMG detail"}
+               "emg_all": "EMG result", "emg_detail": "EMG detail",
+               "noise": "Noise fidelity"}
+# the kinds that run automatically (on file select / settings change / Refresh)
+_AUTO_KINDS = ("mech", "emg_all", "emg_detail", "noise")
 
 
 def _pen(colour, width=1):
@@ -246,6 +252,42 @@ class BusyOverlay(QWidget):
         return self.busy
 
 
+class CenteredButtonOverlay(QWidget):
+    """A translucent empty-state overlay with a single centered button. Used to prompt
+    the (blank) test-run area with a 'Test run this file' call-to-action until results
+    replace it. Follows its parent's geometry like BusyOverlay."""
+
+    def __init__(self, panel: QWidget, text: str, on_click):
+        super().__init__(panel)
+        self.setObjectName("ctaOverlay")
+        self.button = QPushButton(text, self)
+        self.button.setObjectName("ctaButton")
+        self.button.setCursor(Qt.PointingHandCursor)
+        self.button.clicked.connect(on_click)
+        if _theme is not None:
+            try:
+                _theme.make_primary(self.button)
+            except Exception:                          # noqa: BLE001 — styling is cosmetic
+                pass
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self.button, 0, Qt.AlignCenter)
+        self.setStyleSheet("#ctaOverlay { background-color: rgba(18, 22, 28, 0.28); }")
+        panel.installEventFilter(self)
+        self.setGeometry(panel.rect())
+        self.hide()
+
+    def eventFilter(self, obj, ev):
+        if obj is self.parent() and ev.type() in (QEvent.Resize, QEvent.Move):
+            self.setGeometry(self.parent().rect())
+        return False
+
+    def reveal(self):
+        self.setGeometry(self.parent().rect())
+        self.raise_()
+        self.show()
+
+
 class PreviewScreen(QWidget):
     status_changed = Signal(str)
     # emitted when a noise reference is chosen on the graph (feature B)
@@ -257,7 +299,7 @@ class PreviewScreen(QWidget):
         # reactive-job bookkeeping (replaces the old single self._thread/_worker)
         self._jobs = {}                  # kind -> _Job (the current owner)
         self._draining = set()           # superseded jobs, kept alive until self-cleanup
-        self._tokens = {"mech": 0, "batch": 0, "emg_all": 0, "emg_detail": 0}
+        self._tokens = {"mech": 0, "batch": 0, "emg_all": 0, "emg_detail": 0, "noise": 0}
         self._overlays = {}              # panel key -> BusyOverlay
         self._autorun_pending = False
         self._previewed_file = None
@@ -287,6 +329,7 @@ class PreviewScreen(QWidget):
             "batch": self._on_batch_result,
             "emg_all": self._on_emg_all_result,
             "emg_detail": self._on_emg_detail_result,
+            "noise": self._on_noise_result,
         }
 
     # -- construction -------------------------------------------------------
@@ -294,17 +337,24 @@ class PreviewScreen(QWidget):
         root = QVBoxLayout(self)
         bar = QHBoxLayout()
         self.file_combo = QComboBox()
-        self.btn_refresh = QPushButton("Refresh files"); self.btn_refresh.clicked.connect(self.refresh_files)
-        self.btn_preview = QPushButton("Preview channels"); self.btn_preview.clicked.connect(self._preview)
+        # 'Refresh' recomputes every auto panel (not the test run); the file list itself
+        # refreshes automatically when file-related settings change.
+        self.btn_refresh_all = QPushButton("Refresh")
+        self.btn_refresh_all.setToolTip("Recompute all preview panels (except the test run) for the current file.")
+        self.btn_refresh_all.clicked.connect(self._refresh_all)
         self.btn_test = QPushButton("Test run this file"); self.btn_test.clicked.connect(self._test_run)
         if _theme is not None:
             _theme.make_primary(self.btn_test)
         bar.addWidget(QLabel("File:")); bar.addWidget(self.file_combo, 1)
-        bar.addWidget(self.btn_refresh); bar.addWidget(self.btn_preview); bar.addWidget(self.btn_test)
+        bar.addWidget(self.btn_refresh_all); bar.addWidget(self.btn_test)
         root.addLayout(bar)
+        # Status is shown ONLY in the main-window bottom status bar (via status_changed).
+        # Keep the label object (state holder + tests read pv.status) but never place it
+        # under the file selector.
         self.status = QLabel("Pick a file — everything runs automatically.")
         self.status.setWordWrap(True)
-        root.addWidget(self.status)
+        self.status.setParent(self)
+        self.status.hide()
 
         self.subtabs = QTabWidget()
         self._mech_tab = self._build_mech_tab()
@@ -318,9 +368,13 @@ class PreviewScreen(QWidget):
             "campbell": BusyOverlay(self._mech_lower),
             "raw": BusyOverlay(self.emg_raw_plots),
             "result": BusyOverlay(self.emg_result_plots),
-            "detail": BusyOverlay(self._emg_mid),
+            "detail": BusyOverlay(self.emg_plots),
+            "detail_psd": BusyOverlay(self.emg_psd_canvas),   # the detail job also renders the PSD
             "fidelity": BusyOverlay(self.fidelity_canvas),
         }
+        # empty-state call-to-action: a centered 'Test run this file' button shown over
+        # the (blank) table + Campbell area until a test run has produced results
+        self._test_cta = CenteredButtonOverlay(self._mech_lower, "Test run this file", self._test_run)
 
         self._refresh_emg_channels()
         self._load_noise_params()
@@ -329,6 +383,7 @@ class PreviewScreen(QWidget):
 
         self.file_combo.currentTextChanged.connect(self._on_file_selected)
         self.refresh_files()
+        self._show_test_cta()
 
     def _build_mech_tab(self):
         w = QWidget(); v = QVBoxLayout(w); v.setContentsMargins(0, 6, 0, 0)
@@ -350,26 +405,22 @@ class PreviewScreen(QWidget):
     def _build_emg_tab(self):
         w = QWidget(); v = QVBoxLayout(w); v.setContentsMargins(0, 6, 0, 0)
 
-        # controls
-        row = QHBoxLayout()
-        self.emg_channel = QComboBox(); self.emg_channel.setToolTip("EMG channel for the single-channel detail below.")
+        # detail-channel dropdown (pinned into the Detail panel title, top-right) and the
+        # result-channel picker (pinned into the Conditioned-result panel title, top-right)
+        self.emg_channel = QComboBox()
+        self.emg_channel.setToolTip("EMG channel shown in the single-channel Detail panel.")
         self.emg_channel.currentIndexChanged.connect(self._on_emg_channel_changed)
-        self.btn_emg_preview = QPushButton("Preview conditioning")
-        self.btn_emg_preview.setToolTip("Re-stage the selected channel raw ▸ ECG-removed ▸ noise-reduced.")
-        self.btn_emg_preview.clicked.connect(self._start_emg_preview)
-        self.btn_emg_result = QPushButton("Show result (all channels)")
-        self.btn_emg_result.setToolTip("Re-condition every EMG channel; tick channels below to show them.")
-        self.btn_emg_result.clicked.connect(self._show_emg_result)
+        self.result_checks_holder = QWidget()
+        self.result_checks_layout = QHBoxLayout(self.result_checks_holder)
+        self.result_checks_layout.setContentsMargins(0, 0, 0, 0)
+        self.result_checks_layout.setSpacing(12)
+
+        # controls: set the shared noise reference from the on-graph rest selection
+        row = QHBoxLayout()
         self.btn_use_region = QPushButton("Use selection as noise profile")
         self.btn_use_region.setToolTip("Set the shaded rest span as the noise reference for this file.")
         self.btn_use_region.clicked.connect(self._use_region_as_noise)
-        self.btn_noise = QPushButton("Noise & fidelity preview")
-        self.btn_noise.setToolTip("Re-run the test to rebuild the noise profile and fidelity frontier.")
-        self.btn_noise.clicked.connect(self._start_noise_preview)
-        row.addWidget(QLabel("Detail channel:")); row.addWidget(self.emg_channel)
-        row.addWidget(self.btn_emg_preview); row.addWidget(self.btn_emg_result)
-        row.addStretch(1)
-        row.addWidget(self.btn_use_region); row.addWidget(self.btn_noise)
+        row.addWidget(self.btn_use_region); row.addStretch(1)
         v.addLayout(row)
 
         # noise-window options (active once a reference file is set)
@@ -407,32 +458,26 @@ class PreviewScreen(QWidget):
         nrow.addStretch(1)
         v.addWidget(self.noise_opts)
 
-        # result-channel picker
-        rrow = QHBoxLayout()
-        rrow.addWidget(QLabel("Result channels:"))
-        self.result_checks_holder = QWidget()
-        self.result_checks_layout = QHBoxLayout(self.result_checks_holder)
-        self.result_checks_layout.setContentsMargins(0, 0, 0, 0)
-        rrow.addWidget(self.result_checks_holder); rrow.addStretch(1)
-        v.addLayout(rrow)
-
-        # plots
-        split = QSplitter(Qt.Vertical)
-        top = QSplitter(Qt.Horizontal)
+        # plots — LEFT column: all-channel views (raw stack, conditioned result);
+        #         RIGHT column: single detail-channel views (time detail, its PSD).
+        # (Detail and Conditioned result are swapped vs. the old layout.)
         self.emg_raw_plots = pg.GraphicsLayoutWidget()
-        self.emg_result_plots = pg.PlotWidget()
-        self.emg_result_plots.addLegend()
+        self.emg_result_plots = pg.PlotWidget(); self.emg_result_plots.addLegend()
         self.emg_result_plots.setLabel("bottom", "Time (s)")
         self.emg_result_plots.setLabel("left", "Conditioned EMG (a.u.)")
-        top.addWidget(self._titled("Raw EMG channels", self.emg_raw_plots))
-        top.addWidget(self._titled("Conditioned result (selected channels)", self.emg_result_plots))
-        split.addWidget(top)
-        mid = QSplitter(Qt.Horizontal)
-        self.emg_plots = pg.PlotWidget()
-        self.emg_plots.addLegend()
+        self.emg_plots = pg.PlotWidget(); self.emg_plots.addLegend()
         self.emg_plots.setLabel("bottom", "Time (s)"); self.emg_plots.setLabel("left", "EMG (a.u.)")
         self.emg_psd_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 3)))
-        mid.addWidget(self._titled("Detail channel — raw ▸ ECG-removed ▸ noise-reduced", self.emg_plots))
+
+        split = QSplitter(Qt.Vertical)
+        top = QSplitter(Qt.Horizontal)
+        top.addWidget(self._titled("Raw EMG channels", self.emg_raw_plots))
+        top.addWidget(self._titled("Detail channel — raw ▸ ECG-removed ▸ noise-reduced",
+                                   self.emg_plots, corner=self.emg_channel))
+        split.addWidget(top)
+        mid = QSplitter(Qt.Horizontal)
+        mid.addWidget(self._titled("Conditioned result (selected channels)",
+                                   self.emg_result_plots, corner=self.result_checks_holder))
         mid.addWidget(self._titled("Detail PSD", self.emg_psd_canvas))
         self._emg_mid = mid
         split.addWidget(mid)
@@ -446,10 +491,16 @@ class PreviewScreen(QWidget):
         return w
 
     @staticmethod
-    def _titled(title, widget):
+    def _titled(title, widget, corner=None):
+        """A titled panel. ``corner`` is an optional widget pinned to the top-right of
+        the title row (e.g. the detail-channel dropdown or the result-channel picker)."""
         box = QWidget(); lay = QVBoxLayout(box); lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(2)
+        header = QHBoxLayout(); header.setContentsMargins(0, 0, 0, 0); header.setSpacing(8)
         lab = QLabel(title); lab.setProperty("status", "muted")
-        lay.addWidget(lab); lay.addWidget(widget, 1)
+        header.addWidget(lab); header.addStretch(1)
+        if corner is not None:
+            header.addWidget(corner, 0, Qt.AlignRight | Qt.AlignVCenter)
+        lay.addLayout(header); lay.addWidget(widget, 1)
         return box
 
     # -- EMG tab visibility / channels -------------------------------------
@@ -471,15 +522,26 @@ class PreviewScreen(QWidget):
         if 0 <= cur < self.emg_channel.count():
             self.emg_channel.setCurrentIndex(cur)
         self.emg_channel.blockSignals(False)
-        # rebuild result-channel checkboxes
-        for _c, cb in self.result_checks:
-            cb.setParent(None)
+        # rebuild the result-channel picker: one compact cell per channel — a colour
+        # swatch (matching the plot pen) tight against its checkbox, so it is obvious
+        # which channel each checkmark belongs to.
+        while self.result_checks_layout.count():
+            item = self.result_checks_layout.takeAt(0)
+            wdg = item.widget()
+            if wdg is not None:
+                wdg.setParent(None)
         self.result_checks = []
         for i, c in enumerate(cols):
+            cell = QWidget()
+            cl = QHBoxLayout(cell); cl.setContentsMargins(0, 0, 0, 0); cl.setSpacing(4)
+            col = _EMG_PENS[i % len(_EMG_PENS)]
+            swatch = QLabel(); swatch.setFixedSize(11, 11)
+            swatch.setStyleSheet(f"background: rgb({col[0]}, {col[1]}, {col[2]}); border-radius: 2px;")
             cb = QCheckBox(f"col {c}")
             cb.setChecked(i < 3)
             cb.toggled.connect(self._render_emg_result)
-            self.result_checks_layout.addWidget(cb)
+            cl.addWidget(swatch); cl.addWidget(cb)
+            self.result_checks_layout.addWidget(cell)
             self.result_checks.append((c, cb))
 
     # -- noise-window options (owned here, gated on reference file) ---------
@@ -548,6 +610,7 @@ class PreviewScreen(QWidget):
         self._load_noise_params()
         self._update_emg_tab_visibility()
         self._update_actions()
+        self._cancel_inflight()      # settings changed -> abort the now-stale panel jobs
         self._request_autorun()
 
     def _current_file(self):
@@ -575,13 +638,13 @@ class PreviewScreen(QWidget):
         noise_on, ref = emg.noise.enabled, emg.noise.reference_file
         has_emg = bool(self.state.settings.input.channels.emg)
         jr = self._job_running
-        self.btn_preview.setEnabled(has_file and not jr("mech"))
+        self.btn_refresh_all.setEnabled(has_file)
         self.btn_test.setEnabled(has_file and ok and not jr("batch"))
-        self.btn_noise.setEnabled(has_file and ok and noise_on and bool(ref) and not jr("batch"))
+        cta = getattr(self, "_test_cta", None)   # the empty-state CTA is a 2nd trigger for _test_run
+        if cta is not None:
+            cta.button.setEnabled(self.btn_test.isEnabled())
         self.emg_channel.setEnabled(has_emg)
         self.btn_use_region.setEnabled(has_file and has_emg)
-        self.btn_emg_preview.setEnabled(has_file and has_emg and not jr("emg_detail"))
-        self.btn_emg_result.setEnabled(has_file and has_emg and not jr("emg_all"))
         # noise-window options only active with a reference file (Emil's requirement)
         self.noise_opts.setEnabled(bool(has_emg and noise_on and ref))
         if noise_on:
@@ -604,14 +667,65 @@ class PreviewScreen(QWidget):
         for k in self._tokens:
             self._tokens[k] += 1
 
+    def _cancel_inflight(self):
+        """Abort every in-flight job: cancel its worker (cooperative), invalidate its
+        token so a late result is dropped, and move it to draining so its thread is
+        still joined on completion. Used on a settings change / file switch / Refresh."""
+        for job in list(self._jobs.values()):
+            if hasattr(job.worker, "cancel"):
+                try:
+                    job.worker.cancel()
+                except Exception:                      # noqa: BLE001
+                    pass
+            self._draining.add(job)
+        self._jobs.clear()
+        self._invalidate_inflight()
+
     def _begin_file_switch(self):
-        """Shared cleanup when the current file changes: drop the old file's breath
-        overlays/state, invalidate its in-flight jobs, and re-dispatch for the new
-        file. Reached both from an interactive combo change and from refresh_files
-        silently switching the current file when the previous one vanished."""
-        self._reset_breath_state()   # drop the previous file's breath overlays
-        self._invalidate_inflight()  # so an old-file job finishing in the gap is dropped
+        """Shared cleanup when the current file changes: clear every panel to its
+        start/blank state, abort the old file's in-flight jobs, and re-dispatch the
+        auto panels for the new file. Reached both from an interactive combo change and
+        from refresh_files silently switching the current file when the prev vanished."""
+        self._clear_all_panels()     # blank every panel + show the test-run CTA (as at start)
+        self._cancel_inflight()      # abort the old file's in-flight jobs
         self._request_autorun()
+
+    def _refresh_all(self):
+        """The 'Refresh' button: recompute every auto panel (NOT the test run) for the
+        current file. Aborts any in-flight auto jobs first, then re-dispatches."""
+        if not self._current_file():
+            return
+        self._cancel_inflight()
+        self._request_autorun()
+
+    def _clear_all_panels(self):
+        """Blank every panel to its start/empty state (as when the screen first opens):
+        mechanics channels, the test-run table + Campbell (with the CTA restored), the
+        raw EMG stack, the conditioned result, the detail time + PSD, and the fidelity
+        frontier. _reset_breath_state additionally drops breath overlays + staged EMG."""
+        self.plots.clear(); self._channel_plots = []
+        self.table.setRowCount(0); self.table.setColumnCount(0)
+        self.campbell.figure.clear(); self.campbell.draw()
+        self.emg_raw_plots.clear()
+        self.emg_plots.clear()
+        self.emg_psd_canvas.figure.clear(); self.emg_psd_canvas.draw()
+        self.fidelity_canvas.figure.clear(); self.fidelity_canvas.draw()
+        self._reset_breath_state()   # clears _bov/_breaths/_emg_all/result plot/_previewed_file
+        self._ensure_noise_region()  # re-attach the rest-region selector to the cleared detail plot
+        # dismiss stale spinners / error cards (e.g. a failed test run's 'campbell' card):
+        # 'batch' is manual now, so no auto job relaunches to reset that overlay on a switch
+        self._clear_panel_overlays(*self._overlays)
+        self._show_test_cta()
+
+    def _show_test_cta(self):
+        cta = getattr(self, "_test_cta", None)
+        if cta is not None:
+            cta.reveal()
+
+    def _hide_test_cta(self):
+        cta = getattr(self, "_test_cta", None)
+        if cta is not None:
+            cta.hide()
 
     def _on_file_selected(self, name):
         self._update_actions()
@@ -633,7 +747,7 @@ class PreviewScreen(QWidget):
         self._schedule_all()
 
     def _schedule_all(self):
-        for k in ("mech", "batch", "emg_all", "emg_detail"):
+        for k in _AUTO_KINDS:          # NOT 'batch' — the test run is manual only
             self._schedule(k)
 
     def _schedule(self, kind):
@@ -658,13 +772,21 @@ class PreviewScreen(QWidget):
             worker = BatchWorker(snap, write=False, only_files=[os.path.basename(path)])
         elif kind == "emg_all":
             if not has_emg:
+                self._clear_panel_overlays(*_PANELS[kind])   # gated out -> drop a stale spinner/card
                 return
             worker = EmgAllChannelsWorker(snap, path)
         elif kind == "emg_detail":
             if not has_emg:
+                self._clear_panel_overlays(*_PANELS[kind])
                 return
             ch = max(0, self.emg_channel.currentIndex())
             worker = EmgConditioningWorker(snap, path, ch)
+        elif kind == "noise":
+            ncfg = self.state.settings.processing.emg.noise
+            if not has_emg or not ncfg.enabled or not ncfg.reference_file:
+                self._clear_panel_overlays(*_PANELS[kind])   # no reference -> no fidelity panel
+                return                                 # no fidelity without a noise reference
+            worker = FnWorker(stage_noise_fidelity, snap)
         if worker is None:
             return
         self._tokens[kind] += 1
@@ -914,7 +1036,7 @@ class PreviewScreen(QWidget):
                 self._breath_regions[n].append(reg)
                 plot.addLine(x=t0, pen=pg.mkPen((150, 165, 180), width=1, style=Qt.DashLine))
             if self._channel_plots:
-                txt = pg.TextItem(str(n), color=self._breath_label_color(ignored), anchor=(0.5, 1.0))
+                txt = pg.TextItem(f"Breath #{n}", color=self._breath_label_color(ignored), anchor=(0.5, 1.0))
                 txt.setPos((t0 + t1) / 2.0, label_y)
                 self._channel_plots[0].addItem(txt)
                 self._breath_texts[n] = txt
@@ -978,11 +1100,11 @@ class PreviewScreen(QWidget):
                 except Exception:                      # noqa: BLE001
                     pass
         nexcl = len({b for e in excl if e.file == name for b in e.breaths} & set(self._breath_spans))
+        # the test run is manual, so the exclusion is recorded now and applied the next
+        # time the user runs 'Test run this file' (no automatic re-run).
         self._set_status(
             f"{name}: breath {breath_no} {'excluded' if now_excluded else 'included'} "
-            f"({nexcl}/{len(self._breath_spans)} excluded). Re-running the test…")
-        # excluding a breath changes the test result -> re-run it
-        QTimer.singleShot(0, lambda: self._schedule("batch"))
+            f"({nexcl}/{len(self._breath_spans)} excluded). Runs on the next test run.")
         return now_excluded
 
     # -- breath overlays on the EMG views ----------------------------------
@@ -1035,7 +1157,7 @@ class PreviewScreen(QWidget):
                 items.append((p, reg)); reg_map.setdefault(num, []).append(reg)
                 line = p.addLine(x=a, pen=pg.mkPen((150, 165, 180), width=1, style=Qt.DashLine))
                 items.append((p, line))
-            txt = pg.TextItem(str(num), color=self._breath_label_color(ignored), anchor=(0.5, 1.0))
+            txt = pg.TextItem(f"Breath #{num}", color=self._breath_label_color(ignored), anchor=(0.5, 1.0))
             txt.setPos((a + b) / 2.0, label_y)
             plot_items[0].addItem(txt)
             items.append((plot_items[0], txt)); txt_map[num] = txt
@@ -1165,15 +1287,6 @@ class PreviewScreen(QWidget):
         if self._current_file():
             QTimer.singleShot(0, lambda: self._schedule("emg_detail"))
 
-    def _start_emg_preview(self):
-        self._schedule("emg_detail")
-
-    def _show_emg_result(self):
-        self._schedule("emg_all")
-
-    def _start_noise_preview(self):
-        self._schedule("batch")
-
     # -- EMG detail render (single channel) --------------------------------
     def _on_emg_detail_result(self, data):
         self.render_emg_time(data)
@@ -1267,6 +1380,7 @@ class PreviewScreen(QWidget):
         if not path:
             return
         name = os.path.basename(path)
+        self._hide_test_cta()    # the run replaces the empty-state prompt
         self._preview()          # show breaths on the graph for the test run
         try:
             self.state.settings.validate()
@@ -1279,10 +1393,9 @@ class PreviewScreen(QWidget):
         except Exception:              # noqa: BLE001 — surface a copyable error card
             detail = traceback.format_exc()
             self._set_status(f"Test run failed — {short_error(detail)}")
-            for p in ("campbell", "fidelity"):
-                self._overlays[p].show_error("Test run failed", detail)
+            self._overlays["campbell"].show_error("Test run failed", detail)
             return
-        self._clear_panel_overlays("campbell", "fidelity")   # dismiss any stale error card
+        self._clear_panel_overlays("campbell")   # dismiss any stale error card
         n = len(fr.breaths_table)
         msg = f"Test run OK: {n} breaths (nothing written)"
         ecg = getattr(fr, "ecg", None)
@@ -1305,6 +1418,7 @@ class PreviewScreen(QWidget):
                                 or "The run produced no result for this file.")
         self._fill_table(fr.breaths_table)
         self._draw_campbell(fr.breaths)
+        self._hide_test_cta()                         # results now fill the panel
         nr = getattr(result, "noise_report", None)
         if nr:
             self.render_noise_report(result)         # sets its own status incl. prop_decrease
@@ -1353,8 +1467,9 @@ class PreviewScreen(QWidget):
         self.campbell.draw()
 
     # -- fidelity render ----------------------------------------------------
-    def render_noise_report(self, result):
-        nr = result.noise_report
+    def _draw_fidelity(self, nr):
+        """Draw the EMG noise fidelity frontier from a noise ``report`` dict onto the
+        fidelity canvas. Shared by the auto noise job and the manual test run."""
         frontier = nr.get("frontier", {})
         chosen = nr.get("prop_decrease")
         target = nr.get("fidelity_target", 0.8)
@@ -1378,6 +1493,14 @@ class PreviewScreen(QWidget):
             ax.legend(fontsize=7)
         fig.tight_layout()
         self.fidelity_canvas.draw()
+
+    def render_noise_report(self, result):
+        """Draw the fidelity frontier + status from a full batch result (with ECG
+        suppression from its ok_files). Used by the manual test run."""
+        nr = result.noise_report
+        self._draw_fidelity(nr)
+        chosen = nr.get("prop_decrease")
+        target = nr.get("fidelity_target", 0.8)
         worst = min((r["fidelity"] for r in nr.get("channels", [])), default=float("nan"))
         msg = (f"Noise: prop_decrease {chosen} chosen "
                f"(worst-channel fidelity {worst:.2f} vs target {target:.2f})")
@@ -1386,3 +1509,26 @@ class PreviewScreen(QWidget):
                 msg += f" · ECG suppression {fr.ecg.get('suppression', float('nan')):.0%}"
                 break
         self._set_status(msg)
+
+    # -- auto noise/fidelity job (decoupled from the test run) --------------
+    def _on_noise_result(self, report):
+        self._apply_noise_report(report)
+
+    def _apply_noise_report(self, nr):
+        """Render the fidelity frontier, adopt the auto-selected suppression (so the
+        spinbox + re-conditioned EMG use the value the sweep chose — the core never
+        mutates settings), and re-dispatch the EMG conditioning views with it."""
+        self._draw_fidelity(nr)
+        chosen = nr.get("prop_decrease")
+        noise = self.state.settings.processing.emg.noise
+        if chosen is not None and noise.auto_prop:
+            noise.prop_decrease = float(chosen)
+        self._load_noise_params()                    # reflect the chosen prop in the spinbox
+        if nr.get("frontier"):
+            target = nr.get("fidelity_target", 0.8)
+            worst = min((r["fidelity"] for r in nr.get("channels", [])), default=float("nan"))
+            self._set_status(f"Noise: prop_decrease {chosen} chosen "
+                             f"(worst-channel fidelity {worst:.2f} vs target {target:.2f}).")
+        if noise.enabled and noise.auto_prop and self.state.settings.input.channels.emg:
+            self._schedule("emg_all")                # re-condition with the chosen suppression
+            self._schedule("emg_detail")

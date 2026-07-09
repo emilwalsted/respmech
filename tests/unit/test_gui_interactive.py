@@ -138,7 +138,7 @@ def test_emg_worker_runs_synchronously(qapp, tmp_path):
     assert out["d"]["channel"] == 1
 
 
-def test_emg_preview_disabled_without_emg_channels(qapp, tmp_path):
+def test_emg_controls_disabled_without_emg_channels(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     s = _settings(str(tmp_path))
     s.input.channels.emg = []
@@ -147,7 +147,8 @@ def test_emg_preview_disabled_without_emg_channels(qapp, tmp_path):
     pv._refresh_files()
     pv.file_combo.setCurrentIndex(0)
     pv._update_actions()
-    assert pv.btn_emg_preview.isEnabled() is False
+    assert pv.emg_channel.isEnabled() is False        # EMG-gated controls are off
+    assert pv.btn_use_region.isEnabled() is False
     assert pv.emg_channel.count() == 0
 
 
@@ -414,4 +415,140 @@ def test_legend_click_does_not_toggle_breath(qapp, tmp_path):
     assert num not in excluded()                                     # -> not toggled
     pv._toggle_from_emg_click(_Ev(), [_Plot(legend_hit=False)], off)  # misses the legend
     assert num in excluded()                                         # -> toggled
+    win.close()
+
+
+# -- UI rework: toolbar, panel layout, breath labels, clearing --------------
+def _under(widget, ancestor):
+    w = widget
+    while w is not None:
+        if w is ancestor:
+            return True
+        w = w.parent()
+    return False
+
+
+def test_toolbar_slimmed_and_status_moved_to_bottom(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    # the obsolete buttons are gone; only Refresh + Test run remain in the top bar
+    for gone in ("btn_refresh", "btn_preview", "btn_noise", "btn_emg_preview", "btn_emg_result"):
+        assert not hasattr(pv, gone), f"{gone} should be removed"
+    assert pv.btn_refresh_all.text() == "Refresh"
+    assert pv.btn_test.text() == "Test run this file"
+    # the status label is not shown under the file selector (bottom bar only)
+    assert pv.status.isHidden() is True
+    win.close()
+
+
+def test_detail_and_result_panels_swapped_with_inline_controls(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    # after the swap the mid splitter holds the Conditioned-result panel (not the detail)
+    assert _under(pv.emg_result_plots, pv._emg_mid)
+    assert not _under(pv.emg_plots, pv._emg_mid)     # detail moved up to the top row
+    # the detail dropdown and the result picker live inside their panels (not a toolbar)
+    assert _under(pv.emg_channel, pv._emg_tab)
+    assert _under(pv.result_checks_holder, pv._emg_mid)   # picker sits in the result panel
+    win.close()
+
+
+def test_result_picker_has_colour_swatches(qapp, tmp_path):
+    from PySide6.QtWidgets import QLabel
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    assert len(pv.result_checks) == 3
+    # each channel cell pairs a coloured swatch with its checkbox (tight grouping)
+    cells = [pv.result_checks_layout.itemAt(i).widget()
+             for i in range(pv.result_checks_layout.count())]
+    assert len(cells) == 3
+    for cell in cells:
+        swatches = [c for c in cell.findChildren(QLabel) if "background" in (c.styleSheet() or "")]
+        assert len(swatches) == 1
+    win.close()
+
+
+def test_breath_labels_are_prefixed(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_emg_channel
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    path = os.path.join(INPUT, "synth_case_A.csv")
+    pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
+    pv._on_emg_detail_result(stage_emg_channel(s, path, 0))
+    n0 = pv._breaths[0][0]
+    assert pv._breath_texts[n0].textItem.toPlainText() == f"Breath #{n0}"      # mechanics
+    assert pv._bov["raw"]["texts"][n0].textItem.toPlainText() == f"Breath #{n0}"    # raw EMG
+    assert pv._bov["detail"]["texts"][n0].textItem.toPlainText() == f"Breath #{n0}"  # processed
+    win.close()
+
+
+def test_file_switch_clears_all_panels_and_shows_cta(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
+    pv._test_run()                                   # populate table + Campbell (hides CTA)
+    assert pv.table.rowCount() > 0 and pv._channel_plots
+    assert pv._test_cta.isHidden() is True
+    pv.file_combo.setCurrentText("synth_case_B.csv") # -> clears every panel as at start
+    assert pv.table.rowCount() == 0 and pv._channel_plots == []
+    assert pv._bov == {} and pv._breaths == []
+    assert pv._test_cta.isHidden() is False          # empty-state CTA restored
+    win.close()
+
+
+# -- review follow-ups: overlay lifecycle + CTA gating ----------------------
+def test_failed_test_run_error_card_cleared_on_file_switch(qapp, tmp_path, monkeypatch):
+    """A failed test run paints the 'campbell' error card; since batch is manual, no
+    auto job resets it — so a file switch must dismiss it (req 3: back to start state)."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.screens import preview_screen as ps
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    monkeypatch.setattr(ps, "run_batch",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    pv._test_run()
+    assert pv.panel_error("campbell") is not None            # error card shown
+    pv.file_combo.setCurrentText("synth_case_B.csv")         # -> _clear_all_panels dismisses it
+    assert pv.panel_error("campbell") is None
+    assert pv._overlays["campbell"].isHidden() is True
+    win.close()
+
+
+def test_detail_job_covers_both_time_and_psd_panels(qapp, tmp_path):
+    """The emg_detail job renders the time plot AND the PSD, so both must carry the
+    spinner/error overlay (the panel swap must not leave the PSD uncovered)."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.screens.preview_screen import _PANELS
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    assert _PANELS["emg_detail"] == ["detail", "detail_psd"]
+    assert pv._overlays["detail_psd"].parent() is pv.emg_psd_canvas
+    for p in _PANELS["emg_detail"]:
+        pv._overlays[p].start("Staging detail…")
+    assert {"detail", "detail_psd"} <= pv.busy_panels()
+    win.close()
+
+
+def test_cta_button_enablement_tracks_the_test_run_gate(qapp, tmp_path):
+    """The empty-state CTA is a second trigger for the test run; it must be gated the
+    same as the toolbar button so it can't bypass settings validation or dead-click."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv"); pv._update_actions()
+    assert pv.btn_test.isEnabled() and pv._test_cta.button.isEnabled()
+    pv._settings_ok = lambda: (False, "bad")                 # invalid settings disable the run
+    pv._update_actions()
+    assert pv.btn_test.isEnabled() is False
+    assert pv._test_cta.button.isEnabled() is False          # CTA gated in lockstep
     win.close()

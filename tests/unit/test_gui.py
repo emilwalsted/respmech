@@ -127,14 +127,14 @@ def test_reactive_file_list_and_noise_gating(qapp, tmp_path):
     assert pv.file_combo.count() == 1
     sc.in_files.setText("synth_case_*.csv"); sc._on_inputs_changed()
     assert pv.file_combo.count() == 2
-    # noise on but no reference -> noise preview button disabled + hint
+    # noise on but no reference -> the noise-window options are disabled + a hint
     sc.remove_noise.setChecked(True); sc.noise_ref.setText(""); sc._on_field_changed()
     pv.file_combo.setCurrentIndex(0); pv._update_actions()
-    assert pv.btn_noise.isEnabled() is False
+    assert pv.noise_opts.isEnabled() is False
     assert "reference" in pv.status.text().lower()
-    # setting a reference enables it
+    # setting a reference enables them
     sc.noise_ref.setText("synth_case_A.csv"); sc._on_field_changed(); pv._update_actions()
-    assert pv.btn_noise.isEnabled() is True
+    assert pv.noise_opts.isEnabled() is True
 
 
 def test_remove_noise_checkbox_binds_noise_enabled(qapp, tmp_path):
