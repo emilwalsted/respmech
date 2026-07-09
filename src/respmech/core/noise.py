@@ -24,7 +24,7 @@ import scipy as sp
 from scipy import signal as _sig
 
 from respmech.core.emg import _amp_to_db, _db_to_amp, _stft, _istft
-from respmech.core._compat import trapezoid
+from respmech.core._compat import complex_sign_v1, trapezoid
 
 # Default fixed STFT parameters (decoupled from the noise-clip length — the bug fix).
 DEFAULT_N_FFT = 256
@@ -98,7 +98,7 @@ class NoiseProfile:
         mask = _sig.fftconvolve(mask, smooth, mode="same") * prop_decrease
         sig_db_masked = sig_db * (1 - mask) + np.ones(np.shape(mask_gain_db)) * mask_gain_db * mask
         sig_imag_masked = np.imag(sig_stft) * (1 - mask)
-        sig_amp = (_db_to_amp(sig_db_masked) * np.sign(sig_stft)) + 1j * sig_imag_masked
+        sig_amp = (_db_to_amp(sig_db_masked) * complex_sign_v1(sig_stft)) + 1j * sig_imag_masked
         rec = np.asarray(_istft(sig_amp, self.n_fft, self.hop_length, self.win_length))
         if len(rec) < n:
             rec = np.pad(rec, (0, n - len(rec)))

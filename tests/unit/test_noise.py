@@ -25,6 +25,33 @@ def test_trapezoid_compat_numpy2():
     assert float(trapezoid(y, x)) == pytest.approx(manual)
 
 
+def test_complex_sign_v1_matches_numpy1_semantics():
+    """NumPy 2.0 changed np.sign(complex) from sign(real) to the unit phasor z/|z|.
+    The canonical spectral-gating reconstruction (noise.apply / emg.removeNoise) and
+    the EMG golden were validated against the NumPy<2 behaviour; complex_sign_v1 pins
+    it on every NumPy version (real-valued: sign of the real part, tie-broken by the
+    imaginary part when the real part is exactly 0)."""
+    from respmech.core._compat import complex_sign_v1
+    z = np.array([1 + 1j, -2 + 9j, 3 - 4j, 0 + 5j, 0 - 7j, 0 + 0j], dtype=complex)
+    got = complex_sign_v1(z)
+    assert np.allclose(got, [1.0, -1.0, 1.0, 1.0, -1.0, 0.0])
+    assert not np.iscomplexobj(got)                 # real, as the reconstruction expects
+    # it must NOT equal NumPy 2.x's phasor for off-real-axis values
+    assert not np.allclose(got, z / np.abs(np.where(z == 0, 1, z)))
+    # real input passes through unchanged
+    assert np.allclose(complex_sign_v1(np.array([-3.0, 0.0, 2.0])), [-1.0, 0.0, 1.0])
+
+
+def test_noise_reduction_retains_fraction_not_amplifies():
+    """Regression guard for the NumPy-2 np.sign(complex) break: genuine noise
+    reduction must never *amplify* the reference clip's own energy. Under the broken
+    phasor reconstruction this round-trip inflated power well above 1.0."""
+    x = _clip(3, 6000)
+    prof = N.NoiseProfile.from_clip(x, 2000)
+    proc = prof.apply(x, prop_decrease=1.0)
+    assert np.sum(proc ** 2) <= np.sum(x ** 2) * 1.02   # ≤ input energy (small tolerance)
+
+
 def test_from_clip_determinism_and_serialisation():
     prof = N.NoiseProfile.from_clip(_clip(), 2000)
     x = _clip(1, 6000)

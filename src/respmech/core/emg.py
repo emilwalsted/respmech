@@ -20,6 +20,8 @@ import numpy as np
 import scipy as sp
 from scipy import signal
 
+from respmech.core._compat import complex_sign_v1 as _complex_sign_v1
+
 # librosa is only needed when noise reduction is used; import lazily inside
 # reducenoise so ECG removal / RMS work without it.
 np.float = float  # compat shim for older third-party code paths
@@ -217,7 +219,7 @@ def removeNoise(audio_clip, noise_clip, n_grad_freq=0, n_grad_time=4, n_fft=2048
         + np.ones(np.shape(mask_gain_dB)) * mask_gain_dB * sig_mask
     )
     sig_imag_masked = np.imag(sig_stft) * (1 - sig_mask)
-    sig_stft_amp = (_db_to_amp(sig_stft_db_masked) * np.sign(sig_stft)) + (1j * sig_imag_masked)
+    sig_stft_amp = (_db_to_amp(sig_stft_db_masked) * _complex_sign_v1(sig_stft)) + (1j * sig_imag_masked)
     recovered_signal = _istft(sig_stft_amp, n_fft, hop_length, win_length)
     return recovered_signal
 
