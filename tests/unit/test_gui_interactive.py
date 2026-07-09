@@ -432,11 +432,12 @@ def test_toolbar_slimmed_and_status_moved_to_bottom(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
-    # the obsolete buttons are gone; only Refresh + Test run remain in the top bar
-    for gone in ("btn_refresh", "btn_preview", "btn_noise", "btn_emg_preview", "btn_emg_result"):
+    # the obsolete buttons are gone; only 'Refresh' remains in the top bar (the test
+    # run is automatic now, so its button + the empty-state CTA are gone too)
+    for gone in ("btn_refresh", "btn_preview", "btn_noise", "btn_emg_preview",
+                 "btn_emg_result", "btn_test", "_test_cta"):
         assert not hasattr(pv, gone), f"{gone} should be removed"
     assert pv.btn_refresh_all.text() == "Refresh"
-    assert pv.btn_test.text() == "Test run this file"
     # the status label is not shown under the file selector (bottom bar only)
     assert pv.status.isHidden() is True
     win.close()
@@ -455,19 +456,22 @@ def test_detail_and_result_panels_swapped_with_inline_controls(qapp, tmp_path):
     win.close()
 
 
-def test_result_picker_has_colour_swatches(qapp, tmp_path):
-    from PySide6.QtWidgets import QLabel
+def test_result_picker_check_is_inside_the_coloured_box(qapp, tmp_path):
+    from PySide6.QtWidgets import QCheckBox
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
     assert len(pv.result_checks) == 3
-    # each channel cell pairs a coloured swatch with its checkbox (tight grouping)
-    cells = [pv.result_checks_layout.itemAt(i).widget()
+    # each channel is a QCheckBox whose indicator is the channel-coloured box with the
+    # tick image inside it (no separate swatch); layout has generous spacing
+    boxes = [pv.result_checks_layout.itemAt(i).widget()
              for i in range(pv.result_checks_layout.count())]
-    assert len(cells) == 3
-    for cell in cells:
-        swatches = [c for c in cell.findChildren(QLabel) if "background" in (c.styleSheet() or "")]
-        assert len(swatches) == 1
+    assert len(boxes) == 3 and all(isinstance(b, QCheckBox) for b in boxes)
+    for _c, cb in pv.result_checks:
+        qss = cb.styleSheet()
+        assert "::indicator" in qss and "background" in qss   # indicator IS the coloured box
+        assert "respmech_check.png" in qss and "image:" in qss.replace(" ", "")  # tick inside it
+    assert pv.result_checks_layout.spacing() >= 20            # more air between channels
     win.close()
 
 
@@ -570,6 +574,105 @@ def test_breath_labels_flush_autorange_for_fresh_plot(qapp, tmp_path):
     win.close()
 
 
+def test_trim_error_returns_raw_channels(qapp, tmp_path, monkeypatch):
+    from respmech.ui import workers
+    from respmech.core import compute
+    s = _settings(str(tmp_path))
+    monkeypatch.setattr(compute, "trim",
+                        lambda *a, **k: (_ for _ in ()).throw(compute.TrimError("flow never crosses zero")))
+    d = workers.stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv"))
+    assert d["trim_error"] and "crosses zero" in d["trim_error"]
+    assert d["spans"] == [] and d["nbreaths"] == 0
+    assert d["series"]["flow"].size > 0            # the raw channels are still returned
+
+
+def test_render_preview_trim_error_shows_channels_not_error_card(qapp, tmp_path, monkeypatch):
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui import workers
+    from respmech.core import compute
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    monkeypatch.setattr(compute, "trim",
+                        lambda *a, **k: (_ for _ in ()).throw(compute.TrimError("flow never crosses zero")))
+    pv._render_preview(workers.stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv")))
+    assert len(pv._channel_plots) == 5             # raw channels still drawn
+    assert pv._breaths == []                       # no breaths detected
+    assert pv.panel_error("channels") is None      # a soft status, NOT a hard error card
+    assert "could not detect breaths" in pv.status.text().lower()
+    win.close()
+
+
+def test_batch_trim_error_is_soft_not_a_hard_card(qapp, tmp_path):
+    """The now-automatic mechanics batch must treat a TrimError the SAME soft way the
+    mech preview does — no hard 'Test run failed' card — since the raw channels + a
+    'could not detect breaths' status already explain it."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import BatchResult, FileResult
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    result = BatchResult(files={"synth_case_A.csv": FileResult(
+        file="synth_case_A.csv", error="TrimError: the flow signal never crosses zero")})
+    pv._on_batch_result(result)                      # returns normally (no _FileRunError)
+    assert pv.panel_error("campbell") is None        # no hard error card
+    assert pv.table.rowCount() == 0                  # table left blank
+    # a genuine (non-TrimError) analysis error still raises -> hard card
+    bad = BatchResult(files={"synth_case_A.csv": FileResult(
+        file="synth_case_A.csv", error="ValueError: bad column 7")})
+    with pytest.raises(RuntimeError):
+        pv._on_batch_result(bad)
+    win.close()
+
+
+def test_view_limits_bound_x_to_the_data(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
+    vb = pv._channel_plots[0].getViewBox()
+    xmin, xmax = vb.state["limits"]["xLimits"]
+    assert xmin is not None and xmax is not None and xmax > xmin   # bounded to the data
+    (x0, x1), _yr = vb.viewRange()
+    assert x0 >= xmin - 1e-6 and x1 <= xmax + 1e-6                 # view sits within the limits
+    win.close()
+
+
+def test_breath_label_headroom_above_the_signal(qapp, tmp_path):
+    import numpy as _np
+    from respmech.ui.main_window import MainWindow
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    data = _stage_mech(pv, s, "synth_case_A.csv")
+    pv._render_preview(data)
+    flow_max = float(_np.nanmax(data["series"]["flow"]))
+    _xr, (y0, y1) = pv._channel_plots[0].getViewBox().viewRange()
+    assert y1 > flow_max                           # room above the signal for the breath labels
+    win.close()
+
+
+def test_label_headroom_does_not_compound_across_repaints(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_emg_channel
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    path = os.path.join(INPUT, "synth_case_A.csv")
+    pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
+    pv._on_emg_detail_result(stage_emg_channel(s, path, 0))
+    vb = pv.emg_plots.getPlotItem().getViewBox()
+    top0 = vb.viewRange()[1][1]
+    for _ in range(4):
+        pv._repaint_view_breaths("detail")         # repeated repaints, no re-plot
+    assert abs(vb.viewRange()[1][1] - top0) < 1e-6  # headroom stays fixed (no compounding)
+    win.close()
+
+
 def test_breath_label_abbreviation_decision():
     from respmech.ui.screens.preview_screen import PreviewScreen as P
     # spread-out breaths (10 s apart) at 0.02 s/px -> full labels fit
@@ -581,38 +684,35 @@ def test_breath_label_abbreviation_decision():
     assert P._breath_label(7, short=False) == "Breath #7"
 
 
-def test_file_switch_clears_all_panels_and_shows_cta(qapp, tmp_path):
+def test_file_switch_clears_all_panels(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
+    pv._on_batch_result(run_batch(s, only_files=["synth_case_A.csv"]))   # fills table + Campbell
+    assert pv.table.rowCount() > 0 and pv._channel_plots
+    pv.file_combo.setCurrentText("synth_case_B.csv")   # -> clears every panel as at start
+    assert pv.table.rowCount() == 0 and pv._channel_plots == []
+    assert pv._bov == {} and pv._breaths == []
+    win.close()
+
+
+# -- review follow-ups: overlay lifecycle -----------------------------------
+def test_stale_error_card_cleared_on_file_switch(qapp, tmp_path):
+    """A stale panel error card (e.g. from a failed run) must be dismissed on a file
+    switch, since _clear_all_panels blanks the screen to its start state."""
     from respmech.ui.main_window import MainWindow
     s = _settings(str(tmp_path))
     win = MainWindow(AppState(s))
     pv = win.preview_screen
     pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
     pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
-    pv._test_run()                                   # populate table + Campbell (hides CTA)
-    assert pv.table.rowCount() > 0 and pv._channel_plots
-    assert pv._test_cta.isHidden() is True
-    pv.file_combo.setCurrentText("synth_case_B.csv") # -> clears every panel as at start
-    assert pv.table.rowCount() == 0 and pv._channel_plots == []
-    assert pv._bov == {} and pv._breaths == []
-    assert pv._test_cta.isHidden() is False          # empty-state CTA restored
-    win.close()
-
-
-# -- review follow-ups: overlay lifecycle + CTA gating ----------------------
-def test_failed_test_run_error_card_cleared_on_file_switch(qapp, tmp_path, monkeypatch):
-    """A failed test run paints the 'campbell' error card; since batch is manual, no
-    auto job resets it — so a file switch must dismiss it (req 3: back to start state)."""
-    from respmech.ui.main_window import MainWindow
-    from respmech.ui.screens import preview_screen as ps
-    s = _settings(str(tmp_path))
-    win = MainWindow(AppState(s))
-    pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
-    monkeypatch.setattr(ps, "run_batch",
-                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
-    pv._test_run()
-    assert pv.panel_error("campbell") is not None            # error card shown
-    pv.file_combo.setCurrentText("synth_case_B.csv")         # -> _clear_all_panels dismisses it
+    pv._overlays["campbell"].show_error("Test run failed", "boom")
+    assert pv.panel_error("campbell") is not None
+    pv.file_combo.setCurrentText("synth_case_B.csv")   # -> _clear_all_panels dismisses it
     assert pv.panel_error("campbell") is None
     assert pv._overlays["campbell"].isHidden() is True
     win.close()
@@ -633,16 +733,21 @@ def test_detail_job_covers_both_time_and_psd_panels(qapp, tmp_path):
     win.close()
 
 
-def test_cta_button_enablement_tracks_the_test_run_gate(qapp, tmp_path):
-    """The empty-state CTA is a second trigger for the test run; it must be gated the
-    same as the toolbar button so it can't bypass settings validation or dead-click."""
+def test_mechanics_batch_snapshot_is_mechanics_only(qapp, tmp_path, monkeypatch):
+    """The automatic mechanics test run must NOT do EMG/ECG/noise work: the batch worker
+    is built from a snapshot with the EMG channels dropped."""
     from respmech.ui.main_window import MainWindow
-    win = MainWindow(AppState(_settings(str(tmp_path))))
+    s = _settings(str(tmp_path))                     # has EMG cols [2,3,4] + remove_ecg
+    s.processing.emg.noise.enabled = True
+    win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv"); pv._update_actions()
-    assert pv.btn_test.isEnabled() and pv._test_cta.button.isEnabled()
-    pv._settings_ok = lambda: (False, "bad")                 # invalid settings disable the run
-    pv._update_actions()
-    assert pv.btn_test.isEnabled() is False
-    assert pv._test_cta.button.isEnabled() is False          # CTA gated in lockstep
+    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    captured = {}
+    monkeypatch.setattr(pv, "_launch", lambda kind, token, worker: captured.setdefault("w", worker))
+    pv._schedule("batch")
+    snap = captured["w"]._settings                   # the snapshot handed to BatchWorker
+    assert list(snap.input.channels.emg) == []       # EMG dropped -> run_batch skips ECG/EMG/noise
+    assert snap.processing.emg.remove_ecg is False
+    assert snap.processing.emg.noise.enabled is False
+    assert list(s.input.channels.emg) == [2, 3, 4]   # the real settings are untouched
     win.close()
