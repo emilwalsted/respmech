@@ -34,9 +34,10 @@ class MainWindow(QMainWindow):
         self.settings_screen = SettingsScreen(self.state, on_settings_changed=self._on_settings_changed)
         self.preview_screen = PreviewScreen(self.state)
         self.run_screen = RunScreen(self.state)
-        self.tabs.addTab(self.settings_screen, "1. Settings / batch setup")
-        self.tabs.addTab(self.preview_screen, "2. Preview & tuning")
-        self.tabs.addTab(self.run_screen, "3. Run")
+        self._i_settings = self.tabs.addTab(self.settings_screen, "1. Settings / batch setup")
+        # "&&" renders as a literal "&" (a lone "&" would be swallowed as a tab mnemonic)
+        self._i_preview = self.tabs.addTab(self.preview_screen, "2. Preview && tuning")
+        self._i_run = self.tabs.addTab(self.run_screen, "3. Run")
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
         central = QWidget()
@@ -51,6 +52,8 @@ class MainWindow(QMainWindow):
         sc.inputs_changed.connect(pv.refresh_files)
         sc.settings_changed.connect(pv.sync_from_settings)
         sc.settings_changed.connect(rn.refresh_actions)
+        # the guided "new analysis" flow hides Preview/Run until every setting is valid
+        sc.flow_ready_changed.connect(self._set_downstream_visible)
         # a noise reference chosen on the Preview graph (feature B) mirrors into Settings
         pv.noise_reference_changed.connect(sc.set_noise_reference)
         # while a batch runs, lock the Settings screen so its state can't be swapped
@@ -61,6 +64,28 @@ class MainWindow(QMainWindow):
         for scr in (sc, pv, rn):
             scr.status_changed.connect(lambda msg, b=bar: b.showMessage(msg))
         bar.showMessage("Ready.")
+
+    def begin_session(self, cli_path: str | None = None):
+        """Run the startup flow once the window is on screen: if an analysis file was
+        passed on the command line it is already loaded, so open it (all cards + tabs);
+        otherwise ask the user to start a New analysis (guided) or Open an existing one.
+        Not called from ``__init__`` so headless/test construction keeps full access."""
+        if cli_path:
+            self.settings_screen.enter_open_mode()
+            return
+        from respmech.ui.startup_dialog import StartupDialog
+        dlg = StartupDialog(self)
+        dlg.exec()
+        # a failed open (corrupt file) falls through to the guided New flow rather than
+        # leaving the user in full mode over rolled-back defaults
+        if dlg.mode == "open" and dlg.path and self.settings_screen.open_analysis(dlg.path):
+            return
+        self.settings_screen.enter_new_mode()
+
+    def _set_downstream_visible(self, ready: bool):
+        """Show/hide the Preview & Run tabs together (they both need valid settings)."""
+        self.tabs.setTabVisible(self._i_preview, bool(ready))
+        self.tabs.setTabVisible(self._i_run, bool(ready))
 
     def _on_run_started(self):
         self.settings_screen.setEnabled(False)
