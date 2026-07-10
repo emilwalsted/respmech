@@ -13,11 +13,11 @@ import glob
 import os
 import traceback
 
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
-                               QFormLayout, QFrame, QGroupBox, QHBoxLayout, QLabel,
-                               QLineEdit, QMessageBox, QPushButton, QScrollArea,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
+                               QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
+                               QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea,
                                QSpinBox, QVBoxLayout, QWidget)
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Signal, QTimer
 
 from respmech.core.settings import Settings, SettingsError
 from respmech.ui.dialogs import open_error_dialog, short_error
@@ -98,6 +98,11 @@ class SettingsScreen(QWidget):
         # Channels ---------------------------------------------------------
         gch = QGroupBox("Channels — 1-based column numbers in the data file")
         fc = QFormLayout(gch)
+        self.btn_assign_channels = QPushButton("Assign channels from data…")
+        self.btn_assign_channels.setToolTip(
+            "Open a visual picker: plot every column of your data and pick what each one is.")
+        self.btn_assign_channels.clicked.connect(lambda: self._open_channel_setup())
+        fc.addRow("", self.btn_assign_channels)
         self.col_flow = self._spin(); self.col_volume = self._spin(allow_zero=True)
         self.col_poes = self._spin(); self.col_pgas = self._spin(); self.col_pdi = self._spin()
         self.cols_emg = QLineEdit(); self.cols_entropy = QLineEdit()
@@ -230,6 +235,11 @@ class SettingsScreen(QWidget):
         self._mode = "full"          # "full" = every card+tab visible (default/open); "new" = guided
         self._revealed = len(self._stage_cards)
         self._flow_ready = True
+        # the visual channel-assignment modal sits between Output and the rest of the
+        # cards in the guided flow (see _update_disclosure); these track its one-shot
+        # auto-open so it fires once per new-analysis session.
+        self._channel_modal_done = False
+        self._channel_modal_pending = False
 
     def _row(self, form, label, widget, var, desc):
         """A labelled form row whose LABEL and FIELD both carry the same tooltip:
@@ -460,6 +470,8 @@ class SettingsScreen(QWidget):
         self._mode = "new"
         self._revealed = 1
         self._flow_ready = None          # force the next _set_flow_ready() to emit
+        self._channel_modal_done = False     # re-arm the channel-assignment modal
+        self._channel_modal_pending = False
         # A fresh analysis starts with the gating folders empty, so each stage is a real
         # step: the relative "input"/"output" defaults would otherwise auto-satisfy their
         # gate (an "output" folder's parent — the cwd — always exists) and reveal the
@@ -516,6 +528,81 @@ class SettingsScreen(QWidget):
         if p:
             self.open_analysis(p)
 
+    # -- visual channel assignment ------------------------------------------
+    def _open_channel_setup_for_flow(self):
+        """Deferred one-shot auto-open of the channel modal in the guided flow, once
+        Output is valid. Marks the step done first (so it never re-opens), then reveals
+        the remaining cards whether the user assigns channels or cancels."""
+        self._channel_modal_pending = False
+        if self._channel_modal_done:
+            return
+        self._channel_modal_done = True
+        self._open_channel_setup(initial={})     # fresh analysis -> no pre-selection
+        self._update_disclosure()                # reveal the rest (OK applied, or cancelled)
+
+    def _open_channel_setup(self, initial=None):
+        """Load the first matching data file, show the visual channel-assignment modal,
+        and on OK write the channel columns into the form. Returns True iff a mapping was
+        applied. ``initial`` pre-selects the dropdowns (None -> the current settings)."""
+        path = self._first_input_file()
+        if not path:
+            self._set_status("No data file found to assign channels — set them in the Channels card.")
+            return False
+        try:
+            from respmech.ui.workers import load_raw_matrix
+            matrix, names = load_raw_matrix(self.state.settings, path)
+        except Exception:                        # noqa: BLE001 — copyable error, don't trap the flow
+            self._report_error("Channel setup", traceback.format_exc())
+            return False
+        from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+        fs = self.state.settings.input.format.sampling_frequency or 1000
+        if initial is None:
+            initial = self._current_channel_mapping()
+        dlg = ChannelSetupDialog(matrix, fs, initial, os.path.basename(path),
+                                 parent=self, col_names=names)
+        if dlg.exec() != QDialog.Accepted:
+            return False
+        self._apply_channel_mapping(dlg.selected_mapping())
+        return True
+
+    def _first_input_file(self):
+        s = self.state.settings
+        folder = (s.input.folder or "").strip()
+        if not folder or not os.path.isdir(folder):
+            return None
+        matches = sorted(f for f in glob.glob(os.path.join(folder, s.input.files or "*.*"))
+                         if os.path.isfile(f))
+        return matches[0] if matches else None
+
+    def _current_channel_mapping(self):
+        ch = self.state.settings.input.channels
+        return {"flow": ch.flow, "volume": ch.volume, "poes": ch.poes, "pgas": ch.pgas,
+                "pdi": ch.pdi, "emg": list(ch.emg), "entropy": list(ch.entropy)}
+
+    def _apply_channel_mapping(self, m):
+        """Write a role->column mapping from the modal into the channel widgets, then run
+        the normal reactive commit (which advances the guided disclosure)."""
+        prev, self._loading = self._loading, True
+        try:
+            if m.get("flow"):
+                self.col_flow.setValue(int(m["flow"]))
+            self.col_volume.setValue(int(m.get("volume") or 0))
+            if m.get("poes"):
+                self.col_poes.setValue(int(m["poes"]))
+            if m.get("pgas"):
+                self.col_pgas.setValue(int(m["pgas"]))
+            if m.get("pdi"):
+                self.col_pdi.setValue(int(m["pdi"]))
+            self.cols_emg.setText(",".join(str(c) for c in m.get("emg", [])))
+            self.cols_entropy.setText(",".join(str(c) for c in m.get("entropy", [])))
+            self._repopulate_ecg_detect()
+        finally:
+            self._loading = prev
+        self._on_field_changed()
+        n_emg = len(m.get("emg", []))
+        self._set_status(f"Channels assigned from data ({n_emg} EMG channel"
+                         f"{'s' if n_emg != 1 else ''}).")
+
     def _update_disclosure(self):
         """Recompute which cards are revealed and whether the downstream tabs are ready.
         In 'new' mode the reveal is a monotonic high-water mark (a card never retracts
@@ -532,6 +619,14 @@ class SettingsScreen(QWidget):
                 n_visible += 1
             else:
                 break
+        # the visual channel-assignment modal sits between Output (stage 1) and the rest
+        # (stage 2): once Output is valid, hold the remaining cards until the modal has
+        # been dealt with, auto-opening it once
+        if n_visible >= 3 and not self._channel_modal_done:
+            n_visible = 2
+            if not self._channel_modal_pending:
+                self._channel_modal_pending = True
+                QTimer.singleShot(0, self._open_channel_setup_for_flow)
         self._revealed = max(self._revealed, n_visible)      # monotonic
         self._apply_card_visibility()
         ready = self._all_ok()
@@ -555,6 +650,8 @@ class SettingsScreen(QWidget):
             return "New analysis — fill in the Input card to begin."
         if not self._output_stage_ok():
             return "Input set — now choose an Output folder."
+        if not self._channel_modal_done:
+            return "Output set — assign your data channels to continue."
         blocker = self._first_blocker()
         return f"Almost done — {blocker}." if blocker else \
             "Almost done — complete the remaining settings to unlock Preview."

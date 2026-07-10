@@ -304,6 +304,80 @@ def stage_raw_emg(settings: Settings, file_path: str) -> dict:
             "raw": [emg[:, i].astype(float) for i in range(emg.shape[1])]}
 
 
+def load_raw_matrix(settings: Settings, file_path: str):
+    """Read EVERY column of a raw data file for the visual channel-assignment dialog.
+
+    Returns ``(matrix, names)``: ``matrix`` is a ``(samples, columns)`` float array with NO
+    channel mapping applied (non-numeric cells -> NaN); ``names`` are the source column
+    headers (or "" when a format has none). Mirrors the core loaders' file reading on the
+    UI side so ``core`` stays untouched — crucially, the columns are 1-based-aligned with
+    what ``core.load`` will index at run time. Raises ``ValueError`` for an unsupported
+    file type."""
+    import os
+
+    import pandas as pd  # noqa: PLC0415
+
+    ext = os.path.splitext(file_path)[1].lower()
+    fmt = settings.input.format
+
+    def _from_df(df):
+        names = [str(c) for c in df.columns]
+        arr = df.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        return arr, names
+
+    if ext in (".csv",):
+        arr, names = _from_df(pd.read_csv(file_path))
+    elif ext in (".txt",):
+        dec = getattr(fmt, "decimal", ".") or "."
+        arr, names = _from_df(pd.read_csv(file_path, sep="\t", decimal=dec))
+    elif ext in (".xls", ".xlsx"):
+        arr, names = _from_df(pd.read_excel(file_path))
+    elif ext in (".mat",):
+        import scipy.io as sio  # noqa: PLC0415
+        from collections import OrderedDict  # noqa: PLC0415
+        try:
+            data = OrderedDict(sio.loadmat(file_path))
+            if getattr(fmt, "matlab_variant", "mac") == "mac":
+                # legacy format 2: core indexes list(data.items()) 1-based, metadata
+                # (__header__/__version__/__globals__) INCLUDED — keep them as placeholder
+                # columns so the dialog's column N lines up with core.load's column N.
+                items = list(data.items())
+                names = [str(k) for k, _v in items]
+                raw = [v for _k, v in items]
+            else:                              # windows/format 1: a single data_block1
+                raw = list(data["data_block1"])
+                names = ["" for _ in raw]
+        except Exception as e:                 # match core's actionable guidance
+            raise ValueError("Cannot read MATLAB file — verify the MATLAB file format "
+                             "setting (windows/mac); otherwise export to CSV.") from e
+        nrows = 0
+        parsed = []
+        for v in raw:
+            try:
+                col = np.asarray(v, dtype=float).ravel()
+            except Exception:                  # metadata / non-numeric -> placeholder
+                col = None
+            parsed.append(col)
+            if col is not None:
+                nrows = max(nrows, col.size)
+        cols = []
+        for col in parsed:
+            if col is None or col.size != nrows:
+                cols.append(np.full(nrows, np.nan))
+            else:
+                cols.append(col)
+        arr = np.column_stack(cols) if cols else np.empty((0, 0))
+    else:
+        raise ValueError(f"Unsupported input file type: {ext}")
+
+    arr = np.asarray(arr, dtype=float)
+    if arr.ndim == 1:
+        arr = arr[:, None]
+    if len(names) != arr.shape[1]:             # keep names aligned even if a format lied
+        names = (list(names) + [""] * arr.shape[1])[:arr.shape[1]]
+    return arr, names
+
+
 def stage_noise_fidelity(settings: Settings) -> dict:
     """Build the shared noise profile for the WHOLE test and measure the EMG fidelity
     frontier + the auto-selected suppression strength — the per-test noise summary the
