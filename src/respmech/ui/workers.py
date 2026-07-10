@@ -378,6 +378,32 @@ def load_raw_matrix(settings: Settings, file_path: str):
     return arr, names
 
 
+def probe_data_columns(settings: Settings, file_path: str):
+    """Cheaply determine a file's column count for listing valid data files — reads only
+    the header/one row (a full load happens only when a file is actually selected). Returns
+    the column count, or ``None`` if the file is not a loadable data file."""
+    import os
+
+    import pandas as pd  # noqa: PLC0415
+
+    ext = os.path.splitext(file_path)[1].lower()
+    fmt = settings.input.format
+    try:
+        if ext == ".csv":
+            return len(pd.read_csv(file_path, nrows=1).columns)
+        if ext == ".txt":
+            dec = getattr(fmt, "decimal", ".") or "."
+            return len(pd.read_csv(file_path, sep="\t", decimal=dec, nrows=1).columns)
+        if ext in (".xls", ".xlsx"):
+            return len(pd.read_excel(file_path, nrows=1).columns)
+        if ext == ".mat":                       # no cheap header probe for MATLAB
+            matrix, _names = load_raw_matrix(settings, file_path)
+            return int(matrix.shape[1])
+    except Exception:
+        return None
+    return None
+
+
 def stage_noise_fidelity(settings: Settings) -> dict:
     """Build the shared noise profile for the WHOLE test and measure the EMG fidelity
     frontier + the auto-selected suppression strength — the per-test noise summary the

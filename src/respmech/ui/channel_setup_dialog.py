@@ -1,20 +1,23 @@
 """Visual channel-assignment modal.
 
-Shows every column of a raw data file stacked on a shared time axis; above each column
-is a dropdown that designates its role (Flow, Volume, Poes, Pgas, Pdi, EMG, Entropy, or
-unused). Single-signal roles (flow/volume/poes/pgas/pdi) are mutually exclusive — picking
-one for a column clears it from any other. Each trace is drawn in its role's colour so the
-mapping reads at a glance. On OK the caller reads ``selected_mapping()`` and writes the
-channel columns into settings; the dialog itself is Qt-only and headless-testable.
+A dropdown at the top picks which (valid) data file to look at; below it every column of
+that file is plotted stacked on a shared time axis, with a dropdown above each column that
+designates its role (Flow, Volume, Poes, Pgas, Pdi, EMG, Entropy, or unused). Single-signal
+roles (flow/volume/poes/pgas/pdi) are mutually exclusive — picking one for a column clears
+it from any other. Each trace is drawn in its role's colour so the mapping reads at a
+glance. Role assignments are per COLUMN, so they persist when you switch files (the files of
+a batch share the same channel layout). On OK the caller reads ``selected_mapping()`` and
+writes the channel columns into settings; the dialog is Qt-only and headless-testable.
 
 Dark-mode aware: the plot backgrounds and trace colours come from ``theme.plot_palette()``
 exactly like the other RespMech plots.
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QComboBox, QDialog, QHBoxLayout, QLabel,
+from PySide6.QtWidgets import (QComboBox, QDialog, QFrame, QHBoxLayout, QLabel,
                                QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
 import pyqtgraph as pg
@@ -58,6 +61,14 @@ def _plot_pal():
             "separator": (150, 165, 180)}
 
 
+def _as_2d(matrix):
+    """A raw matrix as a 2-D ``(samples, columns)`` float array (a lone column -> one col)."""
+    arr = np.asarray(matrix, dtype=float)
+    if arr.ndim == 1:
+        arr = arr[:, None]
+    return arr
+
+
 def _role_color(pal, role):
     """The trace colour for a role: its channel colour, a distinct hue for EMG/entropy,
     or a muted grey for unused."""
@@ -72,28 +83,46 @@ def _role_color(pal, role):
 
 
 class ChannelSetupDialog(QDialog):
-    """Assign each raw data column to a physiological role.
+    """Assign each raw data column to a physiological role, across a batch of files.
 
-    ``matrix`` is ``(samples, columns)``; ``initial`` is an optional current mapping
-    ({'flow': col1based or None, ..., 'emg': [cols], 'entropy': [cols]}) used to
-    pre-select the dropdowns. After ``exec()``, ``selected_mapping()`` returns the chosen
-    mapping in the same shape."""
+    ``files`` is a non-empty list of data-file paths (all sharing the same column count);
+    ``loader`` is ``loader(path) -> (matrix, names)`` (matrix is samples x columns). A
+    dropdown at the top switches which file's raw data is shown; the first file is the
+    default. Role assignments are per column and persist across file switches. ``initial``
+    pre-selects the dropdowns. After ``exec()``, ``selected_mapping()`` returns
+    {'flow': col1based or None, ..., 'emg': [cols], 'entropy': [cols]}."""
 
-    def __init__(self, matrix, fs, initial=None, file_name="", parent=None, col_names=None):
+    def __init__(self, files, fs, initial=None, loader=None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Assign channels" + (f" — {file_name}" if file_name else ""))
         self.setModal(True)
-        self.resize(920, 640)
-        matrix = np.asarray(matrix, dtype=float)
-        if matrix.ndim == 1:
-            matrix = matrix[:, None]
-        self._matrix = matrix
-        self._ncols = matrix.shape[1]
-        self._names = list(col_names or [])
+        self.resize(940, 660)
+        self._files = list(files)
+        self._loader = loader or (lambda p: (np.empty((0, 0)), []))
         self._fs = fs or 1.0
+        self._cache = {}
+        self._file_idx = 0
         pal = _plot_pal()
         self._pal = pal
-        t = np.arange(matrix.shape[0], dtype=float) / self._fs
+
+        # The first file is the default, but a file can pass the cheap column probe and
+        # still fail a full read (e.g. a ragged row) — fall forward to the first file that
+        # actually loads, so one bad default never kills the whole modal (switching to a
+        # later bad file is handled gracefully by _on_file_changed's revert).
+        matrix0 = names0 = None
+        start = 0
+        for start in range(len(self._files)):
+            try:
+                matrix0, names0 = self._get(self._files[start])
+                break
+            except Exception:                              # try the next file
+                continue
+        if matrix0 is None:
+            raise ValueError("None of the matching data files could be read.")
+        matrix0 = _as_2d(matrix0)
+        self._file_idx = start
+        self._ncols = matrix0.shape[1]
+        self._names = list(names0)
+        self.setWindowTitle("Assign channels — " + os.path.basename(self._files[start]))
 
         initial = initial or {}
         preselect = self._roles_from_mapping(initial)      # column index -> role key
@@ -101,19 +130,31 @@ class ChannelSetupDialog(QDialog):
         v = QVBoxLayout(self)
         v.setContentsMargins(18, 14, 18, 12)
         v.setSpacing(6)
+
+        # -- file selector (only valid data files; switching keeps the assignments) --
+        frow = QHBoxLayout(); frow.setSpacing(8)
+        flab = QLabel("Data file"); flab.setProperty("status", "muted")
+        self.file_combo = QComboBox()
+        for f in self._files:
+            self.file_combo.addItem(os.path.basename(f))
+        self.file_combo.setCurrentIndex(start)          # default to the first loadable file
+        self.file_combo.currentIndexChanged.connect(self._on_file_changed)
+        frow.addWidget(flab); frow.addWidget(self.file_combo, 1)
+        v.addLayout(frow)
+
         hint = QLabel("Pick what each column is. Flow, Volume, Poes, Pgas and Pdi take one "
-                      "column each; EMG and Entropy can take several. Unassigned columns are ignored.")
+                      "column each; EMG and Entropy can take several. Assignments are kept "
+                      "when you switch files.")
         hint.setProperty("status", "muted"); hint.setWordWrap(True)
         v.addWidget(hint)
 
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
-        from PySide6.QtWidgets import QFrame
         scroll.setFrameShape(QFrame.NoFrame)
         content = QWidget(); rows = QVBoxLayout(content)
         rows.setContentsMargins(0, 0, 0, 0); rows.setSpacing(10)
 
-        self._combos = []
-        self._plots = []
+        t = np.arange(matrix0.shape[0], dtype=float) / self._fs
+        self._combos, self._plots, self._curves, self._headers = [], [], [], []
         prev = None
         for i in range(self._ncols):
             col = QWidget(); cv = QVBoxLayout(col)
@@ -133,9 +174,9 @@ class ChannelSetupDialog(QDialog):
             plot.setFixedHeight(74)
             plot.setMenuEnabled(False)
             plot.getAxis("bottom").setStyle(showValues=(i == self._ncols - 1))
-            y = matrix[:, i]
-            plot.plot(t[:len(y)], y, pen=pg.mkPen(_role_color(pal, preselect.get(i, "")),
-                                                  width=1), connect="finite")
+            y = matrix0[:, i]
+            curve = plot.plot(t[:len(y)], y, pen=pg.mkPen(_role_color(pal, preselect.get(i, "")),
+                                                          width=1), connect="finite")
             if i == self._ncols - 1:
                 plot.setLabel("bottom", "Time (s)")
             if prev is not None:
@@ -143,8 +184,8 @@ class ChannelSetupDialog(QDialog):
             prev = plot
             cv.addWidget(plot)
             rows.addWidget(col)
-            self._combos.append(combo)
-            self._plots.append(plot)
+            self._combos.append(combo); self._plots.append(plot)
+            self._curves.append(curve); self._headers.append(lab)
 
         scroll.setWidget(content)
         v.addWidget(scroll, 1)
@@ -165,6 +206,35 @@ class ChannelSetupDialog(QDialog):
         v.addLayout(foot)
         self._refresh_info()
 
+    # -- file loading / switching -------------------------------------------
+    def _get(self, path):
+        if path not in self._cache:
+            self._cache[path] = self._loader(path)
+        return self._cache[path]
+
+    def _on_file_changed(self, idx):
+        """Re-plot the newly-selected file's columns; the role dropdowns (assignments) are
+        untouched, so they persist across files."""
+        if not (0 <= idx < len(self._files)):
+            return
+        try:
+            matrix, names = self._get(self._files[idx])
+            matrix = _as_2d(matrix)
+        except Exception:                           # probed OK but full read failed -> revert
+            self.file_combo.blockSignals(True)
+            self.file_combo.setCurrentIndex(self._file_idx)
+            self.file_combo.blockSignals(False)
+            self.info.setText("Could not read that file.")
+            return
+        self._file_idx = idx
+        self._names = list(names)
+        t = np.arange(matrix.shape[0], dtype=float) / self._fs
+        for i in range(self._ncols):
+            y = matrix[:, i] if i < matrix.shape[1] else np.full(matrix.shape[0], np.nan)
+            self._curves[i].setData(t[:len(y)], y)
+            self._plots[i].enableAutoRange()
+            self._headers[i].setText(f"Column {i + 1}" + self._name_suffix(i))
+
     def _name_suffix(self, i):
         """The source header for column i, shown after the generic index (e.g. ' · flow'),
         or '' when the file had no usable name for it."""
@@ -176,16 +246,18 @@ class ChannelSetupDialog(QDialog):
     # -- mapping <-> dropdown state -----------------------------------------
     def _roles_from_mapping(self, m):
         """Turn a {'flow': col, ..., 'emg': [cols]} mapping into a {col_index: role} dict
-        (columns are 1-based in settings, 0-based here)."""
+        (columns are 1-based in settings, 0-based here). A single role wins over emg/entropy
+        if a column is reused, so a colliding pre-selection never silently drops the pressure
+        channel."""
         out = {}
-        for role in ("flow", "volume", "poes", "pgas", "pdi"):
-            c = m.get(role)
-            if c and 1 <= int(c) <= self._ncols:
-                out[int(c) - 1] = role
-        for role in ("emg", "entropy"):
+        for role in ("emg", "entropy"):             # write multi roles first...
             for c in (m.get(role) or []):
                 if c and 1 <= int(c) <= self._ncols:
                     out[int(c) - 1] = role
+        for role in ("flow", "volume", "poes", "pgas", "pdi"):   # ...single roles win
+            c = m.get(role)
+            if c and 1 <= int(c) <= self._ncols:
+                out[int(c) - 1] = role
         return out
 
     @staticmethod
@@ -212,9 +284,7 @@ class ChannelSetupDialog(QDialog):
 
     def _recolor(self, col_index):
         role = self._role_of(col_index)
-        pen = pg.mkPen(_role_color(self._pal, role), width=1)
-        for item in self._plots[col_index].listDataItems():
-            item.setPen(pen)
+        self._curves[col_index].setPen(pg.mkPen(_role_color(self._pal, role), width=1))
 
     def _missing_required(self):
         """Required single roles (flow/poes/pgas/pdi) not yet assigned to any column."""
@@ -244,7 +314,7 @@ class ChannelSetupDialog(QDialog):
             if not role:
                 continue
             if role in _SINGLE:
-                m[role] = i + 1                     # last one wins (mutual exclusion keeps it unique)
+                m[role] = i + 1                     # mutual exclusion keeps it unique
             else:
                 m[role].append(i + 1)
         m["emg"] = sorted(m["emg"])
