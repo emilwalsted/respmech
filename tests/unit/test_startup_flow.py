@@ -58,6 +58,16 @@ def _fill_valid_channels(sc):
     sc._on_field_changed()
 
 
+def _pass_channel_step(sc, mapping=None):
+    """Simulate the channel-assignment modal completing with a mapping (the real modal
+    execs and can't run headless), mirroring _open_channel_setup_for_flow: mark the step
+    done, apply the mapping, then let the disclosure reveal the rest of the cards."""
+    sc._channel_modal_done = True
+    sc._apply_channel_mapping(mapping or {"flow": 5, "volume": 6, "poes": 7, "pgas": 8,
+                                          "pdi": 9, "emg": [2, 3, 4], "entropy": []})
+    sc._update_disclosure()
+
+
 def _shown(card):
     """The card's own visibility flag, independent of whether the (test) window is
     actually on screen — isVisible() would be False for every widget of an unshown
@@ -155,11 +165,13 @@ def test_progressive_reveal_then_unlock_downstream(qapp, tmp_path):
     assert _shown(out) and not _shown(rest)
     assert not win.tabs.isTabVisible(win._i_preview)
 
-    _fill_valid_output(sc, tmp_path)          # Output valid -> the rest appears
-    assert _shown(rest)
+    _fill_valid_output(sc, tmp_path)          # Output valid -> the channel modal gates the rest
+    assert not _shown(rest)
+    assert "assign your data channels" in sc.status.text().lower()
     assert not win.tabs.isTabVisible(win._i_preview)
 
-    _fill_valid_channels(sc)                  # everything valid -> Preview/Run unlock
+    _pass_channel_step(sc)                    # modal OK -> channels applied -> rest + unlock
+    assert _shown(rest)
     assert sc._all_ok()
     assert win.tabs.isTabVisible(win._i_preview)
     assert win.tabs.isTabVisible(win._i_run)
@@ -172,7 +184,7 @@ def test_reveal_is_monotonic_but_downstream_relocks(qapp, tmp_path):
     sc = win.settings_screen
     out, rest = sc._stage_cards[1][0], sc._stage_cards[2][0]
     sc.enter_new_mode()
-    _fill_valid_input(sc); _fill_valid_output(sc, tmp_path); _fill_valid_channels(sc)
+    _fill_valid_input(sc); _fill_valid_output(sc, tmp_path); _pass_channel_step(sc)
     assert win.tabs.isTabVisible(win._i_preview)
 
     sc.in_folder.setText("/nonexistent-xyz-123"); sc._on_inputs_changed()
@@ -280,6 +292,76 @@ def test_begin_session_open_loads_and_reveals(qapp, monkeypatch, tmp_path):
     win.close()
 
 
+class _StubChannelDialog:
+    """Stand-in for the real (exec-blocking) ChannelSetupDialog."""
+    calls = 0
+
+    def __init__(self, *a, accept=False, mapping=None, **k):
+        self._accept = accept
+        self._mapping = mapping or {"flow": 5, "volume": 6, "poes": 7, "pgas": 8,
+                                    "pdi": 9, "emg": [2, 3, 4], "entropy": []}
+
+    def exec(self):
+        from PySide6.QtWidgets import QDialog
+        type(self).calls += 1
+        return QDialog.Accepted if self._accept else QDialog.Rejected
+
+    def selected_mapping(self):
+        return dict(self._mapping)
+
+
+def test_channel_modal_auto_opens_exactly_once_after_output(qapp, tmp_path, monkeypatch):
+    import respmech.ui.channel_setup_dialog as csd
+    from respmech.ui.main_window import MainWindow
+    _StubChannelDialog.calls = 0
+    monkeypatch.setattr(csd, "ChannelSetupDialog",
+                        lambda *a, **k: _StubChannelDialog(*a, accept=False, **k))
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.enter_new_mode()
+    _fill_valid_input(sc)
+    _fill_valid_output(sc, tmp_path)               # Output valid -> schedule the one-shot
+    assert sc._channel_modal_pending is True
+    qapp.processEvents()                           # fire the QTimer.singleShot -> real open path
+    assert _StubChannelDialog.calls == 1
+    assert sc._channel_modal_done is True and sc._channel_modal_pending is False
+    sc._update_disclosure(); qapp.processEvents()  # a further update must NOT re-open it
+    assert _StubChannelDialog.calls == 1
+    win.close()
+
+
+def test_channel_modal_cancel_reveals_rest_but_keeps_downstream_locked(qapp, tmp_path, monkeypatch):
+    import respmech.ui.channel_setup_dialog as csd
+    from respmech.ui.main_window import MainWindow
+    monkeypatch.setattr(csd, "ChannelSetupDialog",
+                        lambda *a, **k: _StubChannelDialog(*a, accept=False, **k))
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    rest = sc._stage_cards[2][0]
+    sc.enter_new_mode()
+    _fill_valid_input(sc); _fill_valid_output(sc, tmp_path)
+    qapp.processEvents()                           # auto-open -> cancelled
+    assert _shown(rest)                            # the rest reveals (non-trapping)...
+    assert not win.tabs.isTabVisible(win._i_preview)   # ...but stays locked (channels unset)
+    assert not win.tabs.isTabVisible(win._i_run)
+    win.close()
+
+
+def test_reentry_rearms_the_channel_gate(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.enter_new_mode()
+    _fill_valid_input(sc); _fill_valid_output(sc, tmp_path); _pass_channel_step(sc)
+    assert sc._channel_modal_done is True
+    sc.enter_new_mode()                            # start over -> gate must re-arm
+    assert sc._channel_modal_done is False and sc._channel_modal_pending is False
+    _fill_valid_input(sc); _fill_valid_output(sc, tmp_path)
+    assert not _shown(sc._stage_cards[2][0])       # rest re-held for a fresh modal
+    assert sc._channel_modal_pending is True
+    win.close()
+
+
 def test_begin_session_with_cli_path_opens_directly(qapp):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState())
@@ -313,17 +395,16 @@ def test_integrate_from_flow_unlocks_without_a_volume_column(qapp, tmp_path):
     sc = win.settings_screen
     sc.enter_new_mode()
     _fill_valid_input(sc); _fill_valid_output(sc, tmp_path)
-    sc.col_flow.setValue(5); sc.col_volume.setValue(0); sc.col_poes.setValue(7)
-    sc.col_pgas.setValue(8); sc.col_pdi.setValue(9); sc.cols_emg.setText("2,3,4")
-    sc.integrate.setChecked(True)          # derive volume from flow -> volume col optional
-    sc._on_field_changed()
-    assert sc._all_ok()
-    assert win.tabs.isTabVisible(win._i_preview)
-    # and the inverse: volume 0 with integrate off stays locked, with a helpful blocker
-    sc.integrate.setChecked(False); sc._on_field_changed()
-    assert not sc._all_ok()
+    # complete the channel step with NO volume column assigned...
+    _pass_channel_step(sc, {"flow": 5, "volume": None, "poes": 7, "pgas": 8,
+                            "pdi": 9, "emg": [2, 3, 4], "entropy": []})
+    assert not sc._all_ok()                # volume missing + integrate off -> not valid
     assert not win.tabs.isTabVisible(win._i_preview)
     assert "volume" in sc.status.text().lower()
+    # ...ticking 'Calculate volume from flow' makes the volume column optional -> unlock
+    sc.integrate.setChecked(True); sc._on_field_changed()
+    assert sc._all_ok()
+    assert win.tabs.isTabVisible(win._i_preview)
     win.close()
 
 
@@ -339,8 +420,8 @@ def test_guided_status_messages_per_stage(qapp, tmp_path):
     _fill_valid_input(sc)
     assert sc.status.text() == "Input set — now choose an Output folder."
     _fill_valid_output(sc, tmp_path)
-    assert sc.status.text().startswith("Almost done")     # names the real blocker
-    _fill_valid_channels(sc)
+    assert sc.status.text() == "Output set — assign your data channels to continue."
+    _pass_channel_step(sc)
     assert sc.status.text() == "Settings complete — Preview and Run are now available."
     win.close()
 
@@ -353,7 +434,7 @@ def test_reenter_new_mode_after_completing_collapses_and_blanks(qapp, tmp_path):
     win = MainWindow(AppState())
     sc = win.settings_screen
     sc.enter_new_mode()
-    _fill_valid_input(sc); _fill_valid_output(sc, tmp_path); _fill_valid_channels(sc)
+    _fill_valid_input(sc); _fill_valid_output(sc, tmp_path); _pass_channel_step(sc)
     assert win.tabs.isTabVisible(win._i_preview)          # completed once
     sc.enter_new_mode()                                   # start over
     assert _shown(sc._stage_cards[0][0])                  # Input shown again
