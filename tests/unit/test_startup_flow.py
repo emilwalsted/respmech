@@ -153,6 +153,28 @@ def test_output_card_reordered_second(qapp):
     win.close()
 
 
+def test_new_analysis_defaults_the_file_mask_to_txt(qapp):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.enter_new_mode()
+    assert sc.in_files.text() == "*.txt"
+    assert sc.state.settings.input.files == "*.txt"
+    win.close()
+
+
+def test_guided_status_points_at_mask_when_it_matches_nothing(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.enter_new_mode()                            # sets the *.txt default
+    sc.in_folder.setText(str(tmp_path))            # a real folder with NO .txt files
+    sc.samp_freq.setValue(1000)
+    sc._on_inputs_changed()
+    assert "no files match" in sc.status.text().lower()   # not the generic prompt
+    win.close()
+
+
 def test_progressive_reveal_then_unlock_downstream(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState())

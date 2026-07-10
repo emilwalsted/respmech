@@ -480,8 +480,10 @@ class SettingsScreen(QWidget):
         try:
             self.state.settings.input.folder = ""
             self.state.settings.output.folder = ""
+            self.state.settings.input.files = "*.txt"    # the guided-flow default file mask
             self.in_folder.setText("")
             self.out_folder.setText("")
+            self.in_files.setText("*.txt")
         finally:
             self._loading = prev
         # let the downstream screens react to the blanked settings FIRST, so the guided
@@ -541,38 +543,50 @@ class SettingsScreen(QWidget):
         self._update_disclosure()                # reveal the rest (OK applied, or cancelled)
 
     def _open_channel_setup(self, initial=None):
-        """Load the first matching data file, show the visual channel-assignment modal,
-        and on OK write the channel columns into the form. Returns True iff a mapping was
-        applied. ``initial`` pre-selects the dropdowns (None -> the current settings)."""
-        path = self._first_input_file()
-        if not path:
-            self._set_status("No data file found to assign channels — set them in the Channels card.")
+        """Show the visual channel-assignment modal over the valid data files matching the
+        input mask, and on OK write the channel columns into the form. Returns True iff a
+        mapping was applied. ``initial`` pre-selects the dropdowns (None -> current settings)."""
+        files = self._valid_input_files()
+        if not files:
+            self._set_status("No valid data files found to assign channels — set them in the Channels card.")
             return False
+        from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+        from respmech.ui.workers import load_raw_matrix
+        s = self.state.settings
+        fs = s.input.format.sampling_frequency or 1000
+        if initial is None:
+            initial = self._current_channel_mapping()
         try:
-            from respmech.ui.workers import load_raw_matrix
-            matrix, names = load_raw_matrix(self.state.settings, path)
+            dlg = ChannelSetupDialog(files, fs, initial,
+                                     loader=lambda p: load_raw_matrix(s, p), parent=self)
         except Exception:                        # noqa: BLE001 — copyable error, don't trap the flow
             self._report_error("Channel setup", traceback.format_exc())
             return False
-        from respmech.ui.channel_setup_dialog import ChannelSetupDialog
-        fs = self.state.settings.input.format.sampling_frequency or 1000
-        if initial is None:
-            initial = self._current_channel_mapping()
-        dlg = ChannelSetupDialog(matrix, fs, initial, os.path.basename(path),
-                                 parent=self, col_names=names)
         if dlg.exec() != QDialog.Accepted:
             return False
         self._apply_channel_mapping(dlg.selected_mapping())
         return True
 
-    def _first_input_file(self):
+    def _valid_input_files(self):
+        """Sorted paths of files matching the input mask that are loadable data files with a
+        consistent column count (the most common one) — so a stray non-data file that
+        matches the mask is excluded and channel assignments carry across every listed file."""
         s = self.state.settings
         folder = (s.input.folder or "").strip()
         if not folder or not os.path.isdir(folder):
-            return None
+            return []
+        from collections import Counter
+        from respmech.ui.workers import probe_data_columns
         matches = sorted(f for f in glob.glob(os.path.join(folder, s.input.files or "*.*"))
                          if os.path.isfile(f))
-        return matches[0] if matches else None
+        probed = [(f, probe_data_columns(s, f)) for f in matches]
+        probed = [(f, n) for f, n in probed if n and n >= 2]
+        if not probed:
+            return []
+        counts = Counter(n for _f, n in probed)
+        top = max(counts.values())
+        ref = max(n for n, c in counts.items() if c == top)   # tie -> the widest layout
+        return [f for f, n in probed if n == ref]
 
     def _current_channel_mapping(self):
         ch = self.state.settings.input.channels
@@ -647,6 +661,18 @@ class SettingsScreen(QWidget):
         if ready:
             return "Settings complete — Preview and Run are now available."
         if not self._input_stage_ok():
+            # if the folder + frequency are fine, the only thing wrong is that the mask
+            # matches nothing (easy to hit given the *.txt default) — say so instead of the
+            # generic prompt, so the user knows to edit 'Files to analyse'
+            s = self.state.settings
+            folder = (s.input.folder or "").strip()
+            fq = s.input.format.sampling_frequency
+            if folder and os.path.isdir(folder) and isinstance(fq, int) and fq >= 1:
+                matches = [f for f in glob.glob(os.path.join(folder, s.input.files or "*.*"))
+                           if os.path.isfile(f)]
+                if not matches:
+                    return (f"No files match '{s.input.files}' in this folder — "
+                            "edit 'Files to analyse'.")
             return "New analysis — fill in the Input card to begin."
         if not self._output_stage_ok():
             return "Input set — now choose an Output folder."
