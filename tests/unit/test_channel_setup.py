@@ -120,6 +120,23 @@ def test_dialog_switching_file_replots_but_keeps_assignments(qapp):
     assert dlg.selected_mapping() == before          # assignments persist across files
 
 
+def test_dialog_first_column_is_time_without_a_dropdown(qapp):
+    dlg = _dialog()
+    assert dlg._combos[0] is None                    # time column: shown but not assignable
+    assert dlg._role_of(0) == ""
+    assert dlg._headers[0].text().endswith("time")
+    _set_role(dlg, 4, "flow"); _set_role(dlg, 6, "poes")
+    _set_role(dlg, 7, "pgas"); _set_role(dlg, 8, "pdi")
+    assert dlg._ok_btn.isEnabled()                   # required gate ignores the time column
+    m = dlg.selected_mapping()
+    assert 1 not in (m["flow"], m["poes"], m["pgas"], m["pdi"])   # col 1 is never a role
+
+
+def test_dialog_file_selector_is_not_full_width(qapp):
+    dlg = _dialog()
+    assert 0 < dlg.file_combo.maximumWidth() <= 500  # bounded, not stretched to the edge
+
+
 def test_dialog_loads_files_lazily_and_caches(qapp):
     import numpy as np
     from respmech.ui.channel_setup_dialog import ChannelSetupDialog
@@ -332,6 +349,117 @@ def test_probe_data_columns(qapp, tmp_path):
     p.write_text("a,b,c,d\n1,2,3,4\n5,6,7,8\n")
     assert probe_data_columns(Settings(), str(p)) == 4
     assert probe_data_columns(Settings(), str(tmp_path / "missing.csv")) is None
+
+
+def test_matching_files_handles_multi_pattern_mask(qapp, tmp_path):
+    from respmech.ui.validation import matching_files
+    (tmp_path / "a.csv").write_text("x\n")
+    (tmp_path / "b.txt").write_text("x\n")
+    (tmp_path / "c.md").write_text("x\n")            # doesn't match either pattern
+    got = sorted(os.path.basename(f) for f in matching_files(str(tmp_path), "*.csv; *.txt"))
+    assert got == ["a.csv", "b.txt"]
+    assert matching_files(str(tmp_path), "*.csv") == [str(tmp_path / "a.csv")]
+
+
+def test_detect_decimal(qapp, tmp_path):
+    from respmech.ui.workers import detect_decimal
+    (tmp_path / "eu.txt").write_text("a\tb\n1,5\t2,7\n3,1\t4,9\n")
+    (tmp_path / "us.txt").write_text("a\tb\n1.5\t2.7\n3.1\t4.9\n")
+    assert detect_decimal(str(tmp_path / "eu.txt")) == ","
+    assert detect_decimal(str(tmp_path / "us.txt")) == "."
+
+
+def test_probe_narrows_multi_mask_and_detects_decimal(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    for name in ("r1.txt", "r2.txt"):                # tab-separated, comma-decimal, 5 cols
+        (tmp_path / name).write_text("t\tf\tp\tg\td\n0\t1,0\t2,0\t3,0\t4,0\n0,1\t1,1\t2,1\t3,1\t4,1\n")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.enter_new_mode()                              # mask = *.csv; *.txt
+    sc.in_folder.setText(str(tmp_path)); sc.samp_freq.setValue(1000); sc._on_inputs_changed()
+    assert sc.state.settings.input.files == "*.txt"          # multi-mask narrowed on input change
+    note = sc._probe_and_apply_file_settings(sc._valid_input_files())
+    assert sc.state.settings.input.format.decimal == ","     # comma decimal auto-detected
+    assert "decimal" in note                                 # probe reports the detected format
+    win.close()
+
+
+def test_detect_decimal_ignores_thousands_separators(qapp, tmp_path):
+    from respmech.ui.workers import detect_decimal
+    (tmp_path / "us.txt").write_text("a\tb\n1,024\t2,048\n3,096\t4,000\n1,111\t2,222\n")
+    (tmp_path / "eu.txt").write_text("a\tb\n1,5\t2,7\n3,1\t4,9\n12,34\t5,6\n")
+    assert detect_decimal(str(tmp_path / "us.txt")) == "."   # comma-thousands, not comma-decimal
+    assert detect_decimal(str(tmp_path / "eu.txt")) == ","   # genuine comma-decimal
+
+
+def test_detect_sampling_frequency(qapp):
+    import numpy as np
+    from respmech.ui.workers import detect_sampling_frequency
+    assert detect_sampling_frequency(np.arange(5000) / 1000.0) == 1000     # 1 kHz seconds
+    assert detect_sampling_frequency(np.arange(5000, dtype=float)) is None  # a sample index
+    assert detect_sampling_frequency(np.array([0.0, 0.1, 0.5, 0.51])) is None  # too few / irregular
+
+
+def test_normalize_mask_narrows_multi_pattern_to_the_extension_present(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    (tmp_path / "a.csv").write_text("t,f\n0,1\n1,2\n")
+    (tmp_path / "b.csv").write_text("t,f\n0,1\n1,2\n")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.enter_new_mode()                              # *.csv; *.txt
+    sc.in_folder.setText(str(tmp_path)); sc.samp_freq.setValue(1000); sc._on_inputs_changed()
+    assert sc.state.settings.input.files == "*.csv"  # narrowed so the single-glob core runner works
+    win.close()
+
+
+def test_all_ok_rejects_a_multi_pattern_mask(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    (tmp_path / "a.csv").write_text("t,f,p,g,d\n0,1,2,3,4\n1,1,2,3,4\n")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.samp_freq.setValue(1000)
+    sc.col_flow.setValue(2); sc.col_poes.setValue(3); sc.col_pgas.setValue(4); sc.col_pdi.setValue(5)
+    sc.col_volume.setValue(0); sc.integrate.setChecked(True)
+    sc.out_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv"); sc._on_field_changed()
+    assert sc._all_ok()                              # a single, valid mask is ready
+    sc.state.settings.input.files = "*.csv, *.txt"   # a mask the core runner cannot glob
+    assert not sc._all_ok()
+    win.close()
+
+
+def test_probe_detects_sampling_frequency_from_the_time_column(qapp, tmp_path):
+    import numpy as np
+    from respmech.ui.main_window import MainWindow
+    n = 400; t = np.arange(n) / 500.0               # a real 500 Hz seconds time axis
+    rows = "\n".join(f"{t[i]:.6f},1,2,3,4" for i in range(n))
+    (tmp_path / "rec.csv").write_text("time,f,p,g,d\n" + rows + "\n")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv"); sc.samp_freq.setValue(2000)
+    sc._on_inputs_changed()
+    sc._probe_and_apply_file_settings(sc._valid_input_files())
+    assert sc.samp_freq.value() == 500              # auto-detected, correcting the 2000 default
+    win.close()
+
+
+def test_probe_leaves_csv_decimal_untouched(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    (tmp_path / "r.csv").write_text("t,f,p,g,d\n0,1,2,3,4\n1,1,2,3,4\n")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.enter_new_mode()
+    sc.in_folder.setText(str(tmp_path)); sc.samp_freq.setValue(1000); sc._on_inputs_changed()
+    assert sc.state.settings.input.files == "*.csv"
+    before = sc.state.settings.input.format.decimal
+    sc._probe_and_apply_file_settings(sc._valid_input_files())
+    assert sc.state.settings.input.format.decimal == before   # decimal is a .txt-only concern
+    win.close()
+
+
+def test_probe_keeps_a_specific_single_mask(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    (tmp_path / "case_a.csv").write_text("t,f,p,g,d\n0,1,2,3,4\n1,1,2,3,4\n")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("case_*.csv")
+    sc.samp_freq.setValue(1000); sc._on_inputs_changed()
+    sc._probe_and_apply_file_settings(sc._valid_input_files())
+    assert sc.state.settings.input.files == "case_*.csv"     # a specific single mask is kept
+    win.close()
 
 
 def test_valid_input_files_tie_break_prefers_widest_and_missing_folder(qapp, tmp_path):

@@ -23,6 +23,11 @@ from respmech.core.settings import Settings, SettingsError
 from respmech.ui.dialogs import open_error_dialog, short_error
 from respmech.ui.help_text import tooltip as _tip
 from respmech.ui.startup_dialog import OPEN_FILTER
+from respmech.ui.validation import matching_files
+
+# the guided-flow default file mask (multi-pattern; narrowed to the found extension on the
+# channel-setup OK so the single-pattern core batch runner still finds the files)
+_DEFAULT_MASK = "*.csv; *.txt"
 
 
 class SettingsScreen(QWidget):
@@ -443,6 +448,7 @@ class SettingsScreen(QWidget):
         if self._loading:
             return
         self.to_state()
+        self._normalize_mask()      # keep the mask a single pattern the core runner can glob
         self.inputs_changed.emit()
         self.settings_changed.emit()
         self._update_disclosure()   # last, so guided-flow status wins (see above)
@@ -480,10 +486,10 @@ class SettingsScreen(QWidget):
         try:
             self.state.settings.input.folder = ""
             self.state.settings.output.folder = ""
-            self.state.settings.input.files = "*.txt"    # the guided-flow default file mask
+            self.state.settings.input.files = _DEFAULT_MASK
             self.in_folder.setText("")
             self.out_folder.setText("")
-            self.in_files.setText("*.txt")
+            self.in_files.setText(_DEFAULT_MASK)
         finally:
             self._loading = prev
         # let the downstream screens react to the blanked settings FIRST, so the guided
@@ -498,6 +504,7 @@ class SettingsScreen(QWidget):
         so any problem in the opened analysis is surfaced right away."""
         self._mode = "full"
         self._revealed = len(self._stage_cards)
+        self._normalize_mask()      # a saved analysis may carry a multi-pattern mask
         self._apply_card_visibility()
         self._flow_ready = None
         self._set_flow_ready(True)
@@ -564,8 +571,70 @@ class SettingsScreen(QWidget):
             return False
         if dlg.exec() != QDialog.Accepted:
             return False
-        self._apply_channel_mapping(dlg.selected_mapping())
+        fmt_note = self._probe_and_apply_file_settings(files)
+        self._apply_channel_mapping(dlg.selected_mapping(), fmt_note=fmt_note)
         return True
+
+    def _normalize_mask(self):
+        """Keep ``input.files`` a SINGLE glob pattern, because the core batch runner globs one
+        pattern: a multi-pattern mask (the '*.csv; *.txt' default, or any ';'/','-separated
+        mask) is narrowed to the dominant extension of the files it currently matches. A
+        specific single mask the user chose is left untouched; a no-op when nothing matches
+        yet (or no folder). Never raises."""
+        s = self.state.settings
+        mask = s.input.files or ""
+        if ";" not in mask and "," not in mask:
+            return
+        folder = (s.input.folder or "").strip()
+        if not folder or not os.path.isdir(folder):
+            return
+        from collections import Counter
+        exts = [os.path.splitext(f)[1].lower() for f in matching_files(folder, mask)]
+        if not exts:
+            return
+        counts = Counter(exts)
+        top = max(counts.values())
+        ext = sorted(e for e, c in counts.items() if c == top)[0]   # deterministic on a tie
+        narrowed = f"*{ext}"
+        if narrowed != mask:
+            prev, self._loading = self._loading, True
+            try:
+                s.input.files = narrowed
+                self.in_files.setText(narrowed)
+            finally:
+                self._loading = prev
+
+    def _probe_and_apply_file_settings(self, files):
+        """On channel-setup OK, intelligently read the actual data to fill format fields the
+        user would otherwise set by hand: the decimal separator (for .txt) and the sampling
+        frequency (from the time column). The file mask is kept single-pattern separately by
+        _normalize_mask. Returns a short human summary of what was set."""
+        import os as _os
+        from respmech.ui.workers import (detect_decimal, detect_sampling_frequency,
+                                         load_raw_matrix)
+        if not files:
+            return ""
+        ref = files[0]
+        ext = _os.path.splitext(ref)[1].lower()
+        parts = []
+        prev, self._loading = self._loading, True
+        try:
+            if ext == ".txt":                        # decimal is the only format field the loader honours
+                dec = detect_decimal(ref, self.state.settings.input.format.decimal)
+                self.state.settings.input.format.decimal = dec
+                parts.append(f"decimal '{dec}'")
+            try:                                     # sampling frequency from the (col 0) time axis
+                matrix, _names = load_raw_matrix(self.state.settings, ref)
+                fs = detect_sampling_frequency(matrix[:, 0]) if matrix.shape[1] else None
+            except Exception:                        # noqa: BLE001 — detection is best-effort
+                fs = None
+            if fs:
+                self.state.settings.input.format.sampling_frequency = fs
+                self.samp_freq.setValue(fs)
+                parts.append(f"{fs} Hz")
+        finally:
+            self._loading = prev
+        return ", ".join(parts)
 
     def _valid_input_files(self):
         """Sorted paths of files matching the input mask that are loadable data files with a
@@ -577,8 +646,7 @@ class SettingsScreen(QWidget):
             return []
         from collections import Counter
         from respmech.ui.workers import probe_data_columns
-        matches = sorted(f for f in glob.glob(os.path.join(folder, s.input.files or "*.*"))
-                         if os.path.isfile(f))
+        matches = matching_files(folder, s.input.files)
         probed = [(f, probe_data_columns(s, f)) for f in matches]
         probed = [(f, n) for f, n in probed if n and n >= 2]
         if not probed:
@@ -593,9 +661,10 @@ class SettingsScreen(QWidget):
         return {"flow": ch.flow, "volume": ch.volume, "poes": ch.poes, "pgas": ch.pgas,
                 "pdi": ch.pdi, "emg": list(ch.emg), "entropy": list(ch.entropy)}
 
-    def _apply_channel_mapping(self, m):
+    def _apply_channel_mapping(self, m, fmt_note=""):
         """Write a role->column mapping from the modal into the channel widgets, then run
-        the normal reactive commit (which advances the guided disclosure)."""
+        the normal reactive commit (which advances the guided disclosure). ``fmt_note`` is
+        an optional summary of any auto-detected file settings to mention in the status."""
         prev, self._loading = self._loading, True
         try:
             if m.get("flow"):
@@ -612,10 +681,14 @@ class SettingsScreen(QWidget):
             self._repopulate_ecg_detect()
         finally:
             self._loading = prev
-        self._on_field_changed()
+        self._sync_widgets()
+        self._on_inputs_changed()   # a narrowed mask means the file list may have changed
         n_emg = len(m.get("emg", []))
-        self._set_status(f"Channels assigned from data ({n_emg} EMG channel"
-                         f"{'s' if n_emg != 1 else ''}).")
+        msg = (f"Channels assigned from data ({n_emg} EMG channel"
+               f"{'s' if n_emg != 1 else ''}).")
+        if fmt_note:
+            msg += f" Detected file settings: {fmt_note}."
+        self._set_status(msg)
 
     def _update_disclosure(self):
         """Recompute which cards are revealed and whether the downstream tabs are ready.
@@ -659,7 +732,9 @@ class SettingsScreen(QWidget):
         once both pass, every card is revealed, so it is safe — and far more helpful —
         to name the actual remaining blocker rather than a vague 'almost done'."""
         if ready:
-            return "Settings complete — Preview and Run are now available."
+            base = "Settings complete — Preview and Run are now available."
+            note = self._science_note()
+            return f"{base} Note: {note}." if note else base
         if not self._input_stage_ok():
             # if the folder + frequency are fine, the only thing wrong is that the mask
             # matches nothing (easy to hit given the *.txt default) — say so instead of the
@@ -668,9 +743,7 @@ class SettingsScreen(QWidget):
             folder = (s.input.folder or "").strip()
             fq = s.input.format.sampling_frequency
             if folder and os.path.isdir(folder) and isinstance(fq, int) and fq >= 1:
-                matches = [f for f in glob.glob(os.path.join(folder, s.input.files or "*.*"))
-                           if os.path.isfile(f)]
-                if not matches:
+                if not matching_files(folder, s.input.files):
                     return (f"No files match '{s.input.files}' in this folder — "
                             "edit 'Files to analyse'.")
             return "New analysis — fill in the Input card to begin."
@@ -707,9 +780,7 @@ class SettingsScreen(QWidget):
         folder = (s.input.folder or "").strip()
         if not folder or not os.path.isdir(folder):
             return False
-        matches = [f for f in glob.glob(os.path.join(folder, s.input.files or "*.*"))
-                   if os.path.isfile(f)]
-        if not matches:
+        if not matching_files(folder, s.input.files):
             return False
         fq = s.input.format.sampling_frequency
         return isinstance(fq, int) and fq >= 1
@@ -729,7 +800,24 @@ class SettingsScreen(QWidget):
             self.state.settings.validate()
         except Exception:                           # noqa: BLE001 — any invalidity -> not ready
             return False
+        mask = self.state.settings.input.files or ""
+        if ";" in mask or "," in mask:              # a multi-pattern mask the core runner
+            return False                            # can't glob -> not runnable (defensive)
         return self._path_problem() is None
+
+    def _science_note(self):
+        """A non-fatal science caution about the current settings, or '' — surfaced both by
+        Validate and at the end of the guided flow so a first-timer sees it without clicking
+        Validate. Covers EMG columns overlapping a pressure channel and a low EMG sample rate."""
+        s = self.state.settings
+        ch = s.input.channels
+        clash = [n for n, c in (("flow", ch.flow), ("poes", ch.poes),
+                                ("pgas", ch.pgas), ("pdi", ch.pdi)) if c and c in ch.emg]
+        if clash:
+            return f"EMG columns overlap {', '.join(clash)}"
+        if ch.emg and (s.input.format.sampling_frequency or 0) < 1000:
+            return "sampling frequency < 1000 Hz is low for EMG"
+        return ""
 
     def _show_validation_status(self):
         """Run validation for its status line (used on open); never raises."""
@@ -828,17 +916,9 @@ class SettingsScreen(QWidget):
         if problem:
             self._set_status(f"Invalid: {problem}")
             return
-        # non-fatal science guardrails
-        s = self.state.settings
-        ch = s.input.channels
-        mono = [("flow", ch.flow), ("poes", ch.poes), ("pgas", ch.pgas), ("pdi", ch.pdi)]
-        clash = [name for name, col in mono if col and col in ch.emg]
-        if clash:
-            self._set_status(f"Valid, but check: EMG columns overlap {', '.join(clash)}.")
-        elif ch.emg and (s.input.format.sampling_frequency or 0) < 1000:
-            self._set_status("Valid, but sampling frequency < 1000 Hz is low for EMG.")
-        else:
-            self._set_status("Settings valid ✓")
+        # non-fatal science guardrails (shared with the guided-flow completion status)
+        note = self._science_note()
+        self._set_status(f"Valid, but check: {note}." if note else "Settings valid ✓")
 
     def _path_problem(self):
         """Return a human message for the first invalid path, or None if all OK.

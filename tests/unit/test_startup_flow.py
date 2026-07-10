@@ -153,13 +153,13 @@ def test_output_card_reordered_second(qapp):
     win.close()
 
 
-def test_new_analysis_defaults_the_file_mask_to_txt(qapp):
+def test_new_analysis_defaults_the_file_mask_to_csv_and_txt(qapp):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState())
     sc = win.settings_screen
     sc.enter_new_mode()
-    assert sc.in_files.text() == "*.txt"
-    assert sc.state.settings.input.files == "*.txt"
+    assert sc.in_files.text() == "*.csv; *.txt"
+    assert sc.state.settings.input.files == "*.csv; *.txt"
     win.close()
 
 
@@ -366,6 +366,21 @@ def test_channel_modal_cancel_reveals_rest_but_keeps_downstream_locked(qapp, tmp
     assert _shown(rest)                            # the rest reveals (non-trapping)...
     assert not win.tabs.isTabVisible(win._i_preview)   # ...but stays locked (channels unset)
     assert not win.tabs.isTabVisible(win._i_run)
+    win.close()
+
+
+def test_completion_status_surfaces_a_science_note(qapp, tmp_path):
+    """The soft science guardrails (EMG/pressure column overlap; low fs) should appear at the
+    end of the guided flow, not only when the user clicks Validate."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.enter_new_mode()
+    _fill_valid_input(sc); _fill_valid_output(sc, tmp_path)
+    _pass_channel_step(sc, {"flow": 5, "volume": 6, "poes": 7, "pgas": 8, "pdi": 9,
+                            "emg": [5], "entropy": []})     # EMG column 5 == the flow column
+    assert sc._all_ok()
+    assert "overlap" in sc.status.text().lower()            # surfaced without clicking Validate
     win.close()
 
 

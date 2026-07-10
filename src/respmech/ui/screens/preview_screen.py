@@ -652,8 +652,8 @@ class PreviewScreen(QWidget):
         self.file_combo.clear()
         files = []
         if folder and os.path.isdir(folder):
-            pattern = os.path.join(folder, s.input.files or "*.*")
-            files = [os.path.basename(f) for f in sorted(glob.glob(pattern)) if os.path.isfile(f)]
+            from respmech.ui.validation import matching_files
+            files = [os.path.basename(f) for f in matching_files(folder, s.input.files)]
             self.file_combo.addItems(files)
         self.file_combo.blockSignals(False)
         if prev in files:

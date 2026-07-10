@@ -404,6 +404,72 @@ def probe_data_columns(settings: Settings, file_path: str):
     return None
 
 
+def detect_decimal(file_path: str, fallback: str = ".") -> str:
+    """Best-effort decimal-separator detection for a tab-delimited .txt file. Defaults to
+    '.' and only switches to ',' when '.' genuinely fails to parse the numbers (a comma-
+    decimal European export reads mostly as NaN under '.') AND ',' is clearly better — so a
+    US file with occasional comma-THOUSANDS integers ('1,024'), which '.' still parses fine
+    on most cells, is not mis-detected as comma-decimal. Returns ``fallback`` on doubt."""
+    import pandas as pd  # noqa: PLC0415
+
+    frac = {}
+    for dec in (".", ","):
+        try:
+            df = pd.read_csv(file_path, sep="\t", decimal=dec, nrows=300)
+            num = df.apply(pd.to_numeric, errors="coerce")
+            total = int(num.size) or 1
+            frac[dec] = int(num.notna().to_numpy().sum()) / total
+        except Exception:
+            frac[dec] = 0.0
+    if frac.get(".", 0.0) >= 0.9:                # '.' parses almost everything -> trust it
+        return "."
+    if frac.get(",", 0.0) > frac.get(".", 0.0) + 0.2 and not _commas_look_like_thousands(file_path):
+        return ","                              # ',' clearly better and not a thousands separator
+    return fallback
+
+
+def _commas_look_like_thousands(file_path: str) -> bool:
+    """True when every comma in the sampled numbers is followed by exactly three digits
+    ('1,024') — the thousands-separator pattern, which must NOT be read as a decimal comma.
+    A real comma-decimal export has varying trailing-digit counts ('1,5', '12,34')."""
+    import re  # noqa: PLC0415
+
+    try:
+        with open(file_path, "r", errors="ignore") as fh:
+            head = fh.read(20000)
+    except Exception:
+        return False
+    groups = re.findall(r"\d,(\d+)", head)
+    return len(groups) >= 3 and all(len(g) == 3 for g in groups)
+
+
+def detect_sampling_frequency(time_column):
+    """Infer the sampling frequency (Hz) from a time column given in SECONDS: 1 / median(dt),
+    but only when the column looks like real, regularly-sampled time — monotonic, positive,
+    with a uniform, non-integer step and a physiologically plausible rate. Returns an int or
+    ``None`` when it does not look like seconds (e.g. a sample-index column, or irregular
+    timestamps), so the caller can fall back to the user-entered value."""
+    t = np.asarray(time_column, dtype=float)
+    t = t[np.isfinite(t)]
+    if t.size < 20:
+        return None
+    dt = np.diff(t)
+    dt = dt[dt > 0]
+    if dt.size < 10:
+        return None
+    med = float(np.median(dt))
+    if med <= 0:
+        return None
+    if med >= 1.0 and abs(med - round(med)) < 1e-6:     # integer steps -> a sample index, not seconds
+        return None
+    if float(np.std(dt)) > 0.25 * med:                  # irregular spacing -> not a clean sample clock
+        return None
+    fs = 1.0 / med
+    if not (10.0 <= fs <= 200000.0):                    # implausible -> don't trust it
+        return None
+    return int(round(fs))
+
+
 def stage_noise_fidelity(settings: Settings) -> dict:
     """Build the shared noise profile for the WHOLE test and measure the EMG fidelity
     frontier + the auto-selected suppression strength — the per-test noise summary the

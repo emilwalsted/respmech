@@ -135,11 +135,14 @@ class ChannelSetupDialog(QDialog):
         frow = QHBoxLayout(); frow.setSpacing(8)
         flab = QLabel("Data file"); flab.setProperty("status", "muted")
         self.file_combo = QComboBox()
+        self.file_combo.setMinimumWidth(240)
+        self.file_combo.setMaximumWidth(440)             # a sensible size, not full-width
+        self.file_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         for f in self._files:
             self.file_combo.addItem(os.path.basename(f))
         self.file_combo.setCurrentIndex(start)          # default to the first loadable file
         self.file_combo.currentIndexChanged.connect(self._on_file_changed)
-        frow.addWidget(flab); frow.addWidget(self.file_combo, 1)
+        frow.addWidget(flab); frow.addWidget(self.file_combo); frow.addStretch(1)
         v.addLayout(frow)
 
         hint = QLabel("Pick what each column is. Flow, Volume, Poes, Pgas and Pdi take one "
@@ -161,12 +164,23 @@ class ChannelSetupDialog(QDialog):
             cv.setContentsMargins(0, 0, 0, 0); cv.setSpacing(2)
             head = QHBoxLayout(); head.setContentsMargins(2, 0, 2, 0); head.setSpacing(8)
             lab = QLabel(f"Column {i + 1}" + self._name_suffix(i))
-            combo = QComboBox()
-            for _key, label in _ROLES:
-                combo.addItem(label)
-            combo.setCurrentIndex(self._index_of_role(preselect.get(i, "")))
-            combo.currentIndexChanged.connect(lambda _idx, ci=i: self._on_role_changed(ci))
-            head.addWidget(lab); head.addWidget(combo); head.addStretch(1)
+            head.addWidget(lab)
+            if i == 0:
+                # the first column is always the time axis — shown for reference but not
+                # assignable (the analysis derives time from the sampling frequency)
+                combo = None
+                role0 = ""
+                note = QLabel("time axis — not assignable"); note.setProperty("status", "muted")
+                head.addWidget(note)
+            else:
+                combo = QComboBox()
+                for _key, label in _ROLES:
+                    combo.addItem(label)
+                role0 = preselect.get(i, "")
+                combo.setCurrentIndex(self._index_of_role(role0))
+                combo.currentIndexChanged.connect(lambda _idx, ci=i: self._on_role_changed(ci))
+                head.addWidget(combo)
+            head.addStretch(1)
             cv.addLayout(head)
 
             plot = pg.PlotWidget()
@@ -175,7 +189,7 @@ class ChannelSetupDialog(QDialog):
             plot.setMenuEnabled(False)
             plot.getAxis("bottom").setStyle(showValues=(i == self._ncols - 1))
             y = matrix0[:, i]
-            curve = plot.plot(t[:len(y)], y, pen=pg.mkPen(_role_color(pal, preselect.get(i, "")),
+            curve = plot.plot(t[:len(y)], y, pen=pg.mkPen(_role_color(pal, role0),
                                                           width=1), connect="finite")
             if i == self._ncols - 1:
                 plot.setLabel("bottom", "Time (s)")
@@ -268,13 +282,14 @@ class ChannelSetupDialog(QDialog):
         return 0
 
     def _role_of(self, col_index):
-        return _ROLES[self._combos[col_index].currentIndex()][0]
+        combo = self._combos[col_index]
+        return "" if combo is None else _ROLES[combo.currentIndex()][0]   # None == the time column
 
     def _on_role_changed(self, col_index):
         role = self._role_of(col_index)
         if role in _SINGLE:                         # enforce one-column-per single role
             for j, combo in enumerate(self._combos):
-                if j != col_index and self._role_of(j) == role:
+                if combo is not None and j != col_index and self._role_of(j) == role:
                     combo.blockSignals(True)
                     combo.setCurrentIndex(0)        # (unused)
                     combo.blockSignals(False)
@@ -300,7 +315,7 @@ class ChannelSetupDialog(QDialog):
             self.info.setText(f"Assign {names} to continue")
         else:
             assigned = sum(1 for i in range(self._ncols) if self._role_of(i))
-            self.info.setText(f"Ready — {assigned} of {self._ncols} columns assigned")
+            self.info.setText(f"Ready — {assigned} column{'s' if assigned != 1 else ''} assigned")
         if getattr(self, "_ok_btn", None) is not None:
             self._ok_btn.setEnabled(not missing)
 
