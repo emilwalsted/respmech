@@ -9,23 +9,27 @@ model is preserved on load/save round-trips.
 """
 from __future__ import annotations
 
+import glob
+import os
 import traceback
 
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
                                QFormLayout, QFrame, QGroupBox, QHBoxLayout, QLabel,
-                               QLineEdit, QPushButton, QScrollArea,
+                               QLineEdit, QMessageBox, QPushButton, QScrollArea,
                                QSpinBox, QVBoxLayout, QWidget)
 from PySide6.QtCore import Signal
 
-from respmech.core.settings import SettingsError
+from respmech.core.settings import Settings, SettingsError
 from respmech.ui.dialogs import open_error_dialog, short_error
 from respmech.ui.help_text import tooltip as _tip
+from respmech.ui.startup_dialog import OPEN_FILTER
 
 
 class SettingsScreen(QWidget):
     settings_changed = Signal()     # any field edited -> shared state is current
     inputs_changed = Signal()       # input folder/mask edited -> file list is stale
     status_changed = Signal(str)
+    flow_ready_changed = Signal(bool)   # downstream (Preview/Run) tabs should be shown
 
     def __init__(self, state, on_settings_changed=None):
         super().__init__()
@@ -45,9 +49,14 @@ class SettingsScreen(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
 
         # Action bar stays pinned above the scroll area so it is always reachable.
+        # "Analysis" is the user-facing name for a settings file (never "TOML"); "Open
+        # analysis…" accepts both a saved .toml analysis and a legacy .py setup, routed
+        # by file extension.
         bar = QHBoxLayout()
-        for label, slot in (("Load TOML…", self._load), ("Save TOML…", self._save),
-                            ("Import legacy .py…", self._import), ("Validate", self._validate)):
+        for label, slot in (("New analysis", self._new_analysis),
+                            ("Open analysis…", self._open_analysis_dialog),
+                            ("Save analysis…", self._save),
+                            ("Validate", self._validate)):
             b = QPushButton(label)
             b.clicked.connect(slot)
             bar.addWidget(b)
@@ -78,6 +87,14 @@ class SettingsScreen(QWidget):
                   "Samples recorded per second, in hertz (Hz); required, and must match the acquisition system (e.g. 2000).")
         root.addWidget(gin)
 
+        # Output (second in the flow: an analysis reads as Input -> Output -> rest) --
+        gout = QGroupBox("Output")
+        fo = QFormLayout(gout)
+        self.out_folder = QLineEdit()
+        self._browse_row(fo, "Output folder", self.out_folder, "output.folder",
+                         "Where results are saved; files are written to a 'data' subfolder inside it; defaults to 'output'.", folder=True)
+        root.addWidget(gout)
+
         # Channels ---------------------------------------------------------
         gch = QGroupBox("Channels — 1-based column numbers in the data file")
         fc = QFormLayout(gch)
@@ -87,7 +104,8 @@ class SettingsScreen(QWidget):
         self._row(fc, "Flow signal column", self.col_flow, "input.channels.flow",
                   "Column number (counting from 1) holding the airflow signal, which reads negative during inspiration.")
         self._row(fc, "Volume signal column", self.col_volume, "input.channels.volume",
-                  "Column number (counting from 1) holding the volume signal; enter 0 to integrate volume from flow instead.")
+                  "Column number (counting from 1) holding the volume signal; or tick 'Calculate volume "
+                  "from flow' in Processing to derive it from flow instead (this column is then ignored).")
         self._row(fc, "Oesophageal pressure (Poes) column", self.col_poes, "input.channels.poes",
                   "Column number (counting from 1) holding the oesophageal pressure signal, in cmH2O.")
         self._row(fc, "Gastric pressure (Pgas) column", self.col_pgas, "input.channels.pgas",
@@ -186,21 +204,32 @@ class SettingsScreen(QWidget):
         fn.addRow("", hint)
         root.addWidget(gns)
 
-        # Output -----------------------------------------------------------
-        gout = QGroupBox("Output")
-        fo = QFormLayout(gout)
-        self.out_folder = QLineEdit()
-        self._browse_row(fo, "Output folder", self.out_folder, "output.folder",
-                         "Where results are saved; files are written to a 'data' subfolder inside it; defaults to 'output'.", folder=True)
-        root.addWidget(gout)
-
+        # Status text is shown in the window's bottom status bar (see main_window). This
+        # label is kept only as a hidden text holder mirroring that message — showing it
+        # inline too would duplicate the same sentence on screen.
         self.status = QLabel("")
         self.status.setWordWrap(True)
         root.addWidget(self.status)
+        self.status.hide()
         root.addStretch(1)
 
         scroll.setWidget(content)
         outer.addWidget(scroll, 1)
+
+        # --- progressive-disclosure stages (used only in guided "new analysis" mode) -
+        # Ordered reveal groups. Placement-agnostic: reordering or moving a card only
+        # changes this registry, not the reveal logic. Stage 0 shows immediately; each
+        # later stage's cards appear once the PRECEDING stage's semantic gate passes,
+        # and the Preview/Run tabs unlock once everything validates (_all_ok).
+        self._stage_cards = [
+            [gin],                                   # 0: Input (always shown)
+            [gout],                                  # 1: Output (after Input is valid)
+            [gch, gpr, gemg, gecg, gns],             # 2: the rest (after Output is valid)
+        ]
+        self._stage_gate = [self._input_stage_ok, self._output_stage_ok]
+        self._mode = "full"          # "full" = every card+tab visible (default/open); "new" = guided
+        self._revealed = len(self._stage_cards)
+        self._flow_ready = True
 
     def _row(self, form, label, widget, var, desc):
         """A labelled form row whose LABEL and FIELD both carry the same tooltip:
@@ -397,6 +426,8 @@ class SettingsScreen(QWidget):
         self._sync_widgets()
         self.to_state()
         self.settings_changed.emit()
+        self._update_disclosure()   # last, so guided-flow status wins over downstream
+                                    # screens' technical validation messages
 
     def _on_inputs_changed(self, *_):
         if self._loading:
@@ -404,6 +435,7 @@ class SettingsScreen(QWidget):
         self.to_state()
         self.inputs_changed.emit()
         self.settings_changed.emit()
+        self._update_disclosure()   # last, so guided-flow status wins (see above)
 
     def _on_emg_cols_changed(self, *_):
         if self._loading:
@@ -419,6 +451,169 @@ class SettingsScreen(QWidget):
     def _set_status(self, text):
         self.status.setText(text)
         self.status_changed.emit(text)
+
+    # -- guided flow / progressive disclosure -------------------------------
+    def enter_new_mode(self):
+        """Enter the guided 'new analysis' flow: collapse the reveal back to just the
+        Input card and keep the downstream (Preview/Run) tabs hidden until every setting
+        validates. Cards then appear stage by stage as each is completed."""
+        self._mode = "new"
+        self._revealed = 1
+        self._flow_ready = None          # force the next _set_flow_ready() to emit
+        # A fresh analysis starts with the gating folders empty, so each stage is a real
+        # step: the relative "input"/"output" defaults would otherwise auto-satisfy their
+        # gate (an "output" folder's parent — the cwd — always exists) and reveal the
+        # later cards before the user has actually chosen anything.
+        prev, self._loading = self._loading, True
+        try:
+            self.state.settings.input.folder = ""
+            self.state.settings.output.folder = ""
+            self.in_folder.setText("")
+            self.out_folder.setText("")
+        finally:
+            self._loading = prev
+        # let the downstream screens react to the blanked settings FIRST, so the guided
+        # status set by _update_disclosure below lands last and is not clobbered by their
+        # technical validation messages in the shared status bar
+        self.inputs_changed.emit()
+        self.settings_changed.emit()
+        self._update_disclosure()   # sets the stage-appropriate guidance status (last word)
+
+    def enter_open_mode(self):
+        """Enter 'open' mode: reveal every card and every downstream tab, then validate
+        so any problem in the opened analysis is surfaced right away."""
+        self._mode = "full"
+        self._revealed = len(self._stage_cards)
+        self._apply_card_visibility()
+        self._flow_ready = None
+        self._set_flow_ready(True)
+        self._show_validation_status()
+
+    def open_analysis(self, path):
+        """Open an existing analysis from a saved .toml or a legacy .py (routed by file
+        extension). On success reveal everything and validate; on a failed/rolled-back
+        open leave the current mode untouched (the error is already surfaced by the
+        Open/Import action). Returns True iff the open succeeded."""
+        ok = self._import(path) if str(path).lower().endswith(".py") else self._load(path)
+        if ok:
+            self.enter_open_mode()
+        return ok
+
+    def _new_analysis(self):
+        """Action-bar 'New analysis': discard the current settings for a fresh set and
+        re-enter the guided flow (confirmed first, since unsaved edits would be lost)."""
+        if QMessageBox.question(
+                self, "New analysis",
+                "Start a new analysis? Any unsaved changes will be lost.") != QMessageBox.Yes:
+            return
+        self.state.settings = Settings()
+        self.state.settings_path = None
+        self.from_state()
+        self.enter_new_mode()       # emits inputs/settings_changed then sets guided status
+
+    def _open_analysis_dialog(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Open analysis", ".", OPEN_FILTER)
+        if p:
+            self.open_analysis(p)
+
+    def _update_disclosure(self):
+        """Recompute which cards are revealed and whether the downstream tabs are ready.
+        In 'new' mode the reveal is a monotonic high-water mark (a card never retracts
+        once shown, so editing one can't yank another away), while the downstream gate is
+        live (it re-locks if the settings become invalid). In any other mode everything
+        is visible and the downstream tabs are always available."""
+        if self._mode != "new":
+            self._apply_card_visibility()
+            self._set_flow_ready(True)
+            return
+        n_visible = 1
+        for gate in self._stage_gate:
+            if gate():
+                n_visible += 1
+            else:
+                break
+        self._revealed = max(self._revealed, n_visible)      # monotonic
+        self._apply_card_visibility()
+        ready = self._all_ok()
+        self._set_flow_ready(ready)
+        self._set_status(self._new_mode_status(ready))       # friendly stage guidance
+
+    def _apply_card_visibility(self):
+        for i, cards in enumerate(self._stage_cards):
+            visible = (self._mode != "new") or (i < self._revealed)
+            for c in cards:
+                c.setVisible(visible)
+
+    def _new_mode_status(self, ready):
+        """The guided-flow status line for the stage the user is on. The Input/Output
+        stages stay card-friendly (their gate fields are the only thing that matters);
+        once both pass, every card is revealed, so it is safe — and far more helpful —
+        to name the actual remaining blocker rather than a vague 'almost done'."""
+        if ready:
+            return "Settings complete — Preview and Run are now available."
+        if not self._input_stage_ok():
+            return "New analysis — fill in the Input card to begin."
+        if not self._output_stage_ok():
+            return "Input set — now choose an Output folder."
+        blocker = self._first_blocker()
+        return f"Almost done — {blocker}." if blocker else \
+            "Almost done — complete the remaining settings to unlock Preview."
+
+    def _first_blocker(self):
+        """A short, human reason the analysis is not yet valid, for the final guided
+        stage (core validation message, else the first filesystem problem). None if OK."""
+        try:
+            self.state.settings.validate()
+        except SettingsError as e:
+            return str(e)
+        except Exception:                           # noqa: BLE001 — unexpected -> no hint
+            return None
+        return self._path_problem()
+
+    def _set_flow_ready(self, ready):
+        ready = bool(ready)
+        if ready != self._flow_ready:
+            self._flow_ready = ready
+            self.flow_ready_changed.emit(ready)
+
+    # -- stage validity (semantic, so it survives future card re-placement) --
+    def _input_stage_ok(self):
+        """Input card complete: a real recordings folder with matching files, and a
+        sampling frequency."""
+        s = self.state.settings
+        folder = (s.input.folder or "").strip()
+        if not folder or not os.path.isdir(folder):
+            return False
+        matches = [f for f in glob.glob(os.path.join(folder, s.input.files or "*.*"))
+                   if os.path.isfile(f)]
+        if not matches:
+            return False
+        fq = s.input.format.sampling_frequency
+        return isinstance(fq, int) and fq >= 1
+
+    def _output_stage_ok(self):
+        """Output card complete: an output folder whose location exists on disk."""
+        out = (self.state.settings.output.folder or "").strip()
+        if not out:
+            return False
+        parent = out if os.path.isdir(out) else os.path.dirname(os.path.abspath(out))
+        return os.path.isdir(parent)
+
+    def _all_ok(self):
+        """Every setting is valid (core validation + filesystem paths) — the gate that
+        reveals the Preview/Run tabs."""
+        try:
+            self.state.settings.validate()
+        except Exception:                           # noqa: BLE001 — any invalidity -> not ready
+            return False
+        return self._path_problem() is None
+
+    def _show_validation_status(self):
+        """Run validation for its status line (used on open); never raises."""
+        try:
+            self._validate()
+        except Exception:                           # noqa: BLE001 — status is cosmetic
+            pass
 
     # -- actions ------------------------------------------------------------
     def _resync_form(self):
@@ -438,10 +633,12 @@ class SettingsScreen(QWidget):
             intro=f"{operation} failed. The full detail below is copyable.",
             prior=self._err_dialog)
 
-    def _load(self):
-        p, _ = QFileDialog.getOpenFileName(self, "Load settings TOML", ".", "TOML (*.toml)")
+    def _load(self, path=None):
+        """Load a saved .toml analysis. Returns True on success, False if cancelled or
+        rolled back, so the caller (open_analysis) can gate the mode transition."""
+        p = path or QFileDialog.getOpenFileName(self, "Open analysis", ".", "Saved analysis (*.toml)")[0]
         if not p:
-            return
+            return False
         prior, prior_path = self.state.settings, self.state.settings_path
         try:
             self.state.load_toml(p)
@@ -450,28 +647,31 @@ class SettingsScreen(QWidget):
             detail = traceback.format_exc()
             self.state.settings, self.state.settings_path = prior, prior_path
             self._resync_form()
-            self._report_error("Load settings", detail)
-            return
-        self._set_status(f"Loaded {p}")
+            self._report_error("Open analysis", detail)
+            return False
+        self._set_status(f"Opened {p}")
         self.inputs_changed.emit()
         self.settings_changed.emit()
+        return True
 
     def _save(self):
         self.to_state()
-        p, _ = QFileDialog.getSaveFileName(self, "Save settings TOML", "settings.toml", "TOML (*.toml)")
+        p, _ = QFileDialog.getSaveFileName(self, "Save analysis", "analysis.toml", "Saved analysis (*.toml)")
         if not p:
             return
         try:
             self.state.save_toml(p)
         except Exception:                       # noqa: BLE001
-            self._report_error("Save settings", traceback.format_exc())
+            self._report_error("Save analysis", traceback.format_exc())
             return
         self._set_status(f"Saved {p}")
 
-    def _import(self):
-        p, _ = QFileDialog.getOpenFileName(self, "Import legacy settings .py", ".", "Python (*.py)")
+    def _import(self, path=None):
+        """Import a legacy .py setup (runs the migrator). Returns True on success, False
+        if cancelled or rolled back, so open_analysis can gate the mode transition."""
+        p = path or QFileDialog.getOpenFileName(self, "Open legacy analysis (.py)", ".", "Legacy setup (*.py)")[0]
         if not p:
-            return
+            return False
         prior, prior_path = self.state.settings, self.state.settings_path
         try:
             report = self.state.import_legacy(p)
@@ -480,14 +680,15 @@ class SettingsScreen(QWidget):
             detail = traceback.format_exc()
             self.state.settings, self.state.settings_path = prior, prior_path
             self._resync_form()
-            self._report_error("Import legacy settings", detail)
-            return
+            self._report_error("Open legacy analysis", detail)
+            return False
         self._report_dialog = open_error_dialog(
             self, "Migration report", report,
-            intro="Legacy settings imported and converted.", prior=self._report_dialog)
+            intro="Legacy analysis imported and converted.", prior=self._report_dialog)
         self._set_status(f"Imported {p}")
         self.inputs_changed.emit()
         self.settings_changed.emit()
+        return True
 
     def _validate(self):
         self.to_state()

@@ -115,10 +115,16 @@ def main(argv=None) -> int:
             fn, tb = startup_error
             box = QMessageBox(win)
             box.setIcon(QMessageBox.Warning)
-            box.setWindowTitle("Could not load settings")
-            box.setText(f"Could not load '{fn}'. Starting with default settings.\n\n{short_error(tb)}")
+            box.setWindowTitle("Could not load analysis")
+            box.setText(f"Could not open '{fn}'. Starting fresh.\n\n{short_error(tb)}")
             box.setDetailedText(tb)
             box.show()
+        # start the New/Open chooser flow; a successfully-loaded CLI file skips it and
+        # opens directly, while a failed one falls through to the chooser.
+        try:
+            win.begin_session(cli_path=toml_arg if startup_error is None else None)
+        except Exception:               # noqa: BLE001 — never let the chooser break startup
+            traceback.print_exc()
 
     delay = (max(0, _MIN_SPLASH_MS - int((time.monotonic() - t0) * 1000))
              if splash is not None else 0)
