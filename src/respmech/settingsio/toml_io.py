@@ -40,9 +40,37 @@ def dumps_toml(settings: Settings) -> str:
     return tomli_w.dumps(_toml_clean(settings.to_dict()))
 
 
+def _relativize_folder(folder: str, base: str) -> str:
+    """Inverse of :func:`_rebase_folders`: an absolute folder that lives at/under ``base``
+    (the analysis file's own directory) is written back as a path relative to it, so a
+    shared analysis stays portable. Folders outside ``base`` (an explicit external
+    location) and different-drive paths are left absolute."""
+    if not folder or not os.path.isabs(folder):
+        return folder
+    try:
+        rel = os.path.relpath(folder, base)
+    except ValueError:                    # different drive on Windows -> not relativizable
+        return folder
+    if rel == os.curdir or (rel != os.pardir and not rel.startswith(os.pardir + os.sep)):
+        return rel
+    return folder
+
+
 def save_toml(settings: Settings, path: str | Path) -> None:
+    # Re-relativize input/output folders against the file's own directory — the inverse of
+    # load_toml's rebase — so an Open→edit→Save cycle preserves a portable relative-path
+    # analysis instead of silently baking in machine-absolute paths (which would break the
+    # shared/moved-study workflow the rebase exists to enable). The run manifest
+    # (dumps_toml, written into the output folder) deliberately keeps absolute paths for
+    # reproducibility, so it is not routed through here.
+    base = os.path.dirname(os.path.abspath(str(path)))
+    data = _toml_clean(settings.to_dict())
+    for section in ("input", "output"):
+        sec = data.get(section)
+        if isinstance(sec, dict) and sec.get("folder"):
+            sec["folder"] = _relativize_folder(sec["folder"], base)
     with open(path, "wb") as f:
-        f.write(dumps_toml(settings).encode("utf-8"))
+        f.write(tomli_w.dumps(data).encode("utf-8"))
 
 
 def _toml_clean(obj):
