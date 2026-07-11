@@ -187,6 +187,39 @@ def active_theme() -> dict:
     return dict(_ACTIVE)
 
 
+_CHECK_ICON_PATH = None
+
+
+def _check_icon_path() -> str:
+    """A white checkmark PNG (generated once, cached) for the ``:checked`` state of the
+    checkbox indicator — Qt QSS ``url()`` needs a real file, not a data URI. Returns "" if
+    it cannot be generated (the indicator then just fills with the accent colour)."""
+    global _CHECK_ICON_PATH
+    if _CHECK_ICON_PATH is None:
+        try:
+            import os as _os
+            import tempfile
+            from PySide6.QtGui import QImage, QPainter, QPen, QColor
+            from PySide6.QtCore import QPointF, Qt as _Qt
+            img = QImage(28, 28, QImage.Format_ARGB32)
+            img.fill(_Qt.transparent)
+            p = QPainter(img)
+            p.setRenderHint(QPainter.Antialiasing)
+            pen = QPen(QColor("white"))
+            pen.setWidth(3)
+            pen.setCapStyle(_Qt.RoundCap)
+            pen.setJoinStyle(_Qt.RoundJoin)
+            p.setPen(pen)
+            p.drawPolyline([QPointF(6, 14), QPointF(12, 21), QPointF(22, 8)])
+            p.end()
+            path = _os.path.join(tempfile.gettempdir(), "respmech_qss_check.png")
+            img.save(path)
+            _CHECK_ICON_PATH = path.replace("\\", "/")
+        except Exception:                       # pragma: no cover - cosmetic
+            _CHECK_ICON_PATH = ""
+    return _CHECK_ICON_PATH
+
+
 # --------------------------------------------------------------------------- #
 # Style sheet template. Only ``$token`` placeholders are special (``string.
 # Template``); the many literal ``{ }`` of QSS pass through untouched. All
@@ -314,9 +347,23 @@ QComboBox QAbstractItemView {
     padding: 2px;
 }
 
-/* ---- check boxes / radios (native indicator, tidy spacing) ----------- */
+/* ---- check boxes / radios: ALWAYS draw the box, so a deselected option reads
+       as an empty checkbox, not plain text ----------------------------- */
 QCheckBox, QRadioButton { spacing: 8px; background: transparent; color: $text; }
 QCheckBox:disabled, QRadioButton:disabled { color: $disabled_fg; }
+QCheckBox::indicator, QRadioButton::indicator {
+    width: 16px; height: 16px; border: 1px solid $border_strong; background: $base;
+}
+QCheckBox::indicator { border-radius: 4px; }
+QRadioButton::indicator { border-radius: 9px; }
+QCheckBox::indicator:hover, QRadioButton::indicator:hover { border: 1px solid $accent; }
+QCheckBox::indicator:checked {
+    border: 1px solid $accent; background: $accent; image: url("$check_icon");
+}
+QRadioButton::indicator:checked { border: 1px solid $accent; background: $accent; }
+QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {
+    border: 1px solid $border; background: $disabled_bg;
+}
 
 /* ---- tables: light header, zebra rows, quiet grid -------------------- */
 QTableView, QTableWidget {
@@ -528,7 +575,7 @@ def apply_theme(app) -> str:
             pass
 
         try:
-            app.setStyleSheet(_QSS.safe_substitute(tokens))
+            app.setStyleSheet(_QSS.safe_substitute(dict(tokens, check_icon=_check_icon_path())))
         except Exception:
             pass
 
