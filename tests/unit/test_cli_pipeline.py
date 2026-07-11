@@ -45,8 +45,10 @@ def test_run_batch_and_write(tmp_path):
     assert any(e.kind == "finished" for e in events)
 
     written = write_batch(result, settings, str(tmp_path))
-    # 2 breathdata + 2 processed + 1 average
-    assert len(written) == 5
+    # 2 breathdata + 2 processed + 1 average + 2 provenance (analysis-used.toml + run-report.txt)
+    assert len(written) == 7
+    assert os.path.isfile(os.path.join(tmp_path, "analysis-used.toml"))
+    assert os.path.isfile(os.path.join(tmp_path, "run-report.txt"))
     avg = pd.read_excel(os.path.join(tmp_path, "data", "Average breathdata.xlsx"), sheet_name="Data")
     assert list(avg["file"]) == ["synth_case_A.csv", "synth_case_B.csv"]
     assert "wobtotal" in avg.columns

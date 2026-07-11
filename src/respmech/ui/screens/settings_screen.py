@@ -142,6 +142,34 @@ class SettingsScreen(QWidget):
                   "Compute work of breathing from one averaged breath (the default), or from each breath separately and then average.")
         self._check_row(fp, self.integrate, "processing.volume.integrate_from_flow",
                         "Derive volume by integrating the flow signal instead of reading a separate volume channel; off by default.")
+
+        # -- Volume & drift transforms. These CHANGE the volume trace, the Campbell loop
+        #    area and therefore WOB, so they are surfaced (not left to hidden model defaults);
+        #    correct_drift in particular defaults ON. --
+        _vsub = QLabel("Volume and drift corrections"); _vsub.setProperty("status", "muted")
+        fp.addRow(_vsub)
+        self.correct_drift = QCheckBox("Correct volume drift")
+        self.correct_trend = QCheckBox("Correct end-expiratory trend")
+        self.trend_method = QComboBox()
+        self.trend_method.addItems(["linear", "nearest", "cubic", "quadratic", "previous", "next"])
+        self.inverse_flow = QCheckBox("Invert the flow signal")
+        self.inverse_volume = QCheckBox("Invert the volume signal")
+        self.resample = QCheckBox("Resample before analysis")
+        self.resample_hz = QSpinBox(); self.resample_hz.setRange(1, 1_000_000); self.resample_hz.setSuffix(" Hz")
+        self._check_row(fp, self.correct_drift, "processing.volume.correct_drift",
+                        "Remove slow baseline drift from the volume trace before analysis; ON by default.")
+        self._check_row(fp, self.correct_trend, "processing.volume.correct_trend",
+                        "Remove a between-breath trend in end-expiratory lung volume; off by default.")
+        self._row(fp, "Trend interpolation", self.trend_method, "processing.volume.trend_method",
+                  "How the end-expiratory trend is interpolated between breaths (a scipy interp1d kind).")
+        self._check_row(fp, self.inverse_flow, "processing.volume.inverse_flow",
+                        "Flip the sign of the flow signal, if inspiration reads positive in your recordings.")
+        self._check_row(fp, self.inverse_volume, "processing.volume.inverse_volume",
+                        "Flip the sign of the volume signal.")
+        self._check_row(fp, self.resample, "processing.sampling.resample",
+                        "Resample every recording to a common frequency before analysis; off by default.")
+        self._row(fp, "Resample to", self.resample_hz, "processing.sampling.resample_to_frequency",
+                  "Target sampling frequency (Hz) used when 'Resample before analysis' is on.")
         root.addWidget(gpr)
 
         # EMG — RMS envelope -----------------------------------------------
@@ -216,6 +244,42 @@ class SettingsScreen(QWidget):
         fn.addRow("", hint)
         root.addWidget(gns)
 
+        # Output — what to save. The deliverable set was previously governed by hidden model
+        # defaults (only the folder was surfaced); this makes every workbook/CSV/figure an
+        # explicit, per-run choice. Lives in the 'rest' stage so the guided Output step stays
+        # to just the folder.
+        gsave = QGroupBox("Output — what to save")
+        fsv = QFormLayout(gsave)
+        self.save_average = QCheckBox("Average breath-data workbook")
+        self.save_bbb = QCheckBox("Breath-by-breath workbook (per file)")
+        self.save_processed = QCheckBox("Processed-signal CSV (per file)")
+        self.include_ignored = QCheckBox("Include excluded breaths in the averages")
+        self.save_pv_avg = QCheckBox("Campbell / PV diagram — averaged")
+        self.save_pv_ind = QCheckBox("Campbell / PV diagram — individual breaths")
+        self.save_raw_fig = QCheckBox("Raw-signal figures")
+        self.save_trimmed_fig = QCheckBox("Trimmed-signal figures")
+        self.save_drift_fig = QCheckBox("Drift-correction figures")
+        _lt = QLabel("Tables"); _lt.setProperty("status", "muted"); fsv.addRow(_lt)
+        for cb, var, tip in (
+                (self.save_average, "output.data.save_average", "The across-breath average workbook."),
+                (self.save_bbb, "output.data.save_breath_by_breath", "A per-file breath-by-breath workbook."),
+                (self.save_processed, "output.data.save_processed", "The processed signal as a CSV per file."),
+                (self.include_ignored, "output.data.include_ignored_breaths",
+                 "Include excluded breaths when computing the exported averages (materially changes them).")):
+            self._check_row(fsv, cb, var, tip)
+        _lf = QLabel("Diagnostic figures"); _lf.setProperty("status", "muted"); fsv.addRow(_lf)
+        for cb, var, tip in (
+                (self.save_pv_avg, "output.diagnostics.save_pv_average", "The averaged Campbell (pressure–volume) diagram."),
+                (self.save_pv_ind, "output.diagnostics.save_pv_individual", "A Campbell diagram per individual breath."),
+                (self.save_raw_fig, "output.diagnostics.save_raw", "Raw-signal diagnostic figures."),
+                (self.save_trimmed_fig, "output.diagnostics.save_trimmed", "Trimmed-signal diagnostic figures."),
+                (self.save_drift_fig, "output.diagnostics.save_drift", "Drift-correction diagnostic figures.")):
+            self._check_row(fsv, cb, var, tip)
+        self.save_preview = QLabel(""); self.save_preview.setWordWrap(True)
+        self.save_preview.setProperty("status", "info")
+        fsv.addRow("You will get", self.save_preview)
+        root.addWidget(gsave)
+
         # Status text is shown in the window's bottom status bar (see main_window). This
         # label is kept only as a hidden text holder mirroring that message — showing it
         # inline too would duplicate the same sentence on screen.
@@ -243,7 +307,7 @@ class SettingsScreen(QWidget):
         self._stage_cards = [
             [gin],                                   # 0: Input (always shown)
             [gout],                                  # 1: Output (after Input is valid)
-            [gch, gpr, gemg, gecg, gns],             # 2: the rest (after Output is valid)
+            [gch, gpr, gemg, gecg, gns, gsave],      # 2: the rest (after Output is valid)
         ]
         self._stage_gate = [self._input_stage_ok, self._output_stage_ok]
         self._mode = "full"          # "full" = every card+tab visible (default/open); "new" = guided
@@ -322,6 +386,23 @@ class SettingsScreen(QWidget):
             self.seg_method.setCurrentText(s.processing.segmentation.method)
             self.wob_from.setCurrentText(s.processing.wob.calc_from)
             self.integrate.setChecked(s.processing.volume.integrate_from_flow)
+            self.correct_drift.setChecked(s.processing.volume.correct_drift)
+            self.correct_trend.setChecked(s.processing.volume.correct_trend)
+            self.trend_method.setCurrentText(s.processing.volume.trend_method)
+            self.inverse_flow.setChecked(s.processing.volume.inverse_flow)
+            self.inverse_volume.setChecked(s.processing.volume.inverse_volume)
+            self.resample.setChecked(s.processing.sampling.resample)
+            self.resample_hz.setValue(s.processing.sampling.resample_to_frequency or 200)
+            d, dg = s.output.data, s.output.diagnostics
+            self.save_average.setChecked(d.save_average)
+            self.save_bbb.setChecked(d.save_breath_by_breath)
+            self.save_processed.setChecked(d.save_processed)
+            self.include_ignored.setChecked(d.include_ignored_breaths)
+            self.save_pv_avg.setChecked(dg.save_pv_average)
+            self.save_pv_ind.setChecked(dg.save_pv_individual)
+            self.save_raw_fig.setChecked(dg.save_raw)
+            self.save_trimmed_fig.setChecked(dg.save_trimmed)
+            self.save_drift_fig.setChecked(dg.save_drift)
 
             emg, n = s.processing.emg, s.processing.emg.noise
             # EMG RMS envelope
@@ -362,6 +443,23 @@ class SettingsScreen(QWidget):
         s.processing.segmentation.method = self.seg_method.currentText()
         s.processing.wob.calc_from = self.wob_from.currentText()
         s.processing.volume.integrate_from_flow = self.integrate.isChecked()
+        s.processing.volume.correct_drift = self.correct_drift.isChecked()
+        s.processing.volume.correct_trend = self.correct_trend.isChecked()
+        s.processing.volume.trend_method = self.trend_method.currentText()
+        s.processing.volume.inverse_flow = self.inverse_flow.isChecked()
+        s.processing.volume.inverse_volume = self.inverse_volume.isChecked()
+        s.processing.sampling.resample = self.resample.isChecked()
+        s.processing.sampling.resample_to_frequency = self.resample_hz.value()
+        d, dg = s.output.data, s.output.diagnostics
+        d.save_average = self.save_average.isChecked()
+        d.save_breath_by_breath = self.save_bbb.isChecked()
+        d.save_processed = self.save_processed.isChecked()
+        d.include_ignored_breaths = self.include_ignored.isChecked()
+        dg.save_pv_average = self.save_pv_avg.isChecked()
+        dg.save_pv_individual = self.save_pv_ind.isChecked()
+        dg.save_raw = self.save_raw_fig.isChecked()
+        dg.save_trimmed = self.save_trimmed_fig.isChecked()
+        dg.save_drift = self.save_drift_fig.isChecked()
 
         emg, n = s.processing.emg, s.processing.emg.noise
         # EMG RMS envelope
@@ -425,6 +523,27 @@ class SettingsScreen(QWidget):
                   self.ecg_min_width, self.ecg_window):
             w.setEnabled(ecg_on)
         self.col_volume.setEnabled(not self.integrate.isChecked())
+        self.trend_method.setEnabled(self.correct_trend.isChecked())
+        self.resample_hz.setEnabled(self.resample.isChecked())
+        self._update_save_preview()
+
+    def _update_save_preview(self):
+        """The 'You will get' line under the output checklist — the deliverables the current
+        ticks will actually write, so the output is explicit before Run."""
+        if getattr(self, "save_preview", None) is None:
+            return
+        got = []
+        if self.save_average.isChecked():
+            got.append("average workbook")
+        if self.save_bbb.isChecked():
+            got.append("breath-by-breath workbook")
+        if self.save_processed.isChecked():
+            got.append("processed CSV")
+        figs = sum(cb.isChecked() for cb in (self.save_pv_avg, self.save_pv_ind,
+                   self.save_raw_fig, self.save_trimmed_fig, self.save_drift_fig))
+        if figs:
+            got.append(f"{figs} diagnostic-figure set{'s' if figs != 1 else ''}")
+        self.save_preview.setText(", ".join(got) if got else "nothing — tick at least one output.")
 
     # -- reactivity ---------------------------------------------------------
     def _wire_reactivity(self):
@@ -434,15 +553,19 @@ class SettingsScreen(QWidget):
         for le in (self.cols_entropy, self.out_folder, self.noise_ref):
             le.editingFinished.connect(self._on_field_changed)
         for sb in (self.samp_freq, self.col_flow, self.col_volume, self.col_poes,
-                   self.col_pgas, self.col_pdi):
+                   self.col_pgas, self.col_pdi, self.resample_hz):
             sb.valueChanged.connect(self._on_field_changed)
         for dsb in (self.emg_rms_window, self.emg_outlier_sd, self.ecg_min_height,
                     self.ecg_min_distance, self.ecg_min_width, self.ecg_window):
             dsb.valueChanged.connect(self._on_field_changed)
-        for cb in (self.seg_method, self.wob_from):
+        for cb in (self.seg_method, self.wob_from, self.trend_method):
             cb.currentTextChanged.connect(self._on_field_changed)
         self.ecg_detect.currentIndexChanged.connect(self._on_field_changed)
-        for chk in (self.integrate, self.remove_ecg, self.remove_noise, self.noise_use_exp):
+        for chk in (self.integrate, self.remove_ecg, self.remove_noise, self.noise_use_exp,
+                    self.correct_drift, self.correct_trend, self.inverse_flow, self.inverse_volume,
+                    self.resample, self.save_average, self.save_bbb, self.save_processed,
+                    self.include_ignored, self.save_pv_avg, self.save_pv_ind, self.save_raw_fig,
+                    self.save_trimmed_fig, self.save_drift_fig):
             chk.toggled.connect(self._on_field_changed)
 
     def _on_field_changed(self, *_):

@@ -10,13 +10,14 @@ from __future__ import annotations
 import copy
 import os
 
-from PySide6.QtCore import Signal, QThread
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QProgressBar, QPushButton,
-                               QTableWidget, QTableWidgetItem, QPlainTextEdit,
-                               QVBoxLayout, QWidget)
+from PySide6.QtCore import Signal, QThread, QUrl
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMessageBox, QProgressBar,
+                               QPushButton, QTableWidget, QTableWidgetItem,
+                               QPlainTextEdit, QVBoxLayout, QWidget)
 
 from respmech.ui.dialogs import TextViewerDialog, short_error
-from respmech.ui.validation import path_problem
+from respmech.ui.validation import matching_files, path_problem
 from respmech.ui.workers import BatchWorker
 
 try:
@@ -42,6 +43,7 @@ class RunScreen(QWidget):
         self._fatal_msg = None
         self._error_dialog = None
         self._incomplete_shown = False
+        self._last_write = False        # did the most recent completed run write files?
         self._build()
         self.refresh_actions()
 
@@ -51,13 +53,17 @@ class RunScreen(QWidget):
         self.btn_run = QPushButton("Run batch")
         self.btn_dry = QPushButton("Dry run (no files written)")
         self.btn_cancel = QPushButton("Cancel"); self.btn_cancel.setEnabled(False)
+        self.btn_open = QPushButton("Open output folder")
+        self.btn_open.setEnabled(False)     # enabled once a run has written results
         if _theme is not None:
             _theme.make_primary(self.btn_run)
         self.btn_run.clicked.connect(lambda: self._start(write=True))
         self.btn_dry.clicked.connect(lambda: self._start(write=False))
         self.btn_cancel.clicked.connect(self._cancel)
+        self.btn_open.clicked.connect(self._open_output_folder)
         bar.addWidget(self.btn_run); bar.addWidget(self.btn_dry)
         bar.addWidget(self.btn_cancel); bar.addStretch(1)
+        bar.addWidget(self.btn_open)
         root.addLayout(bar)
 
         self.progress = QProgressBar()
@@ -108,6 +114,75 @@ class RunScreen(QWidget):
         self.status.setText(text)
         self.status_changed.emit(text)
 
+    # -- pre-flight & output (P5/P7) ---------------------------------------
+    def _planned_outputs(self, files):
+        """The output files a real run WOULD write, given the current save flags."""
+        d = self.state.settings.output.data
+        names = []
+        if d.save_breath_by_breath:
+            names += [f"data/{os.path.basename(f)}.breathdata.xlsx" for f in files]
+        if d.save_processed:
+            names += [f"data/{os.path.basename(f)} – Processed data.csv" for f in files]
+        if d.save_average:
+            names.append("data/Average breathdata.xlsx")
+        names += ["analysis-used.toml", "run-report.txt"]      # always emitted
+        return names
+
+    def _append_plan(self, write: bool):
+        """Log a pre-flight plan so a run is never a black box: what is read, and
+        (for a real run) exactly what will be written — or, for a dry run, would be."""
+        s = self.state.settings
+        files = matching_files(s.input.folder, s.input.files)
+        head = "DRY RUN — nothing will be written." if not write else "RUN — writing output."
+        self._append(f"── {head} ──")
+        self._append(f"Input:  {len(files)} file(s) matching '{s.input.files}' in {s.input.folder}")
+        for f in files:
+            self._append(f"    • {os.path.basename(f)}")
+        planned = self._planned_outputs(files)
+        verb = "Would write" if not write else "Will write"
+        self._append(f"Output: {verb} {len(planned)} file(s) into {s.output.folder}")
+        for n in planned:
+            self._append(f"    • {n}")
+        self._append("")     # blank line before the live run log
+
+    def _existing_output(self):
+        """(newest_mtime, count) of results already in the output folder, or None."""
+        out = (self.state.settings.output.folder or "").strip()
+        if not out or not os.path.isdir(out):
+            return None
+        hits = []
+        for p in (os.path.join(out, "analysis-used.toml"),
+                  os.path.join(out, "run-report.txt")):
+            if os.path.isfile(p):
+                hits.append(p)
+        datadir = os.path.join(out, "data")
+        if os.path.isdir(datadir):
+            hits += [os.path.join(datadir, n) for n in os.listdir(datadir)
+                     if os.path.isfile(os.path.join(datadir, n))]
+        if not hits:
+            return None
+        newest = max(os.path.getmtime(p) for p in hits)
+        return newest, len(hits)
+
+    def _confirm_overwrite(self, existing) -> bool:
+        from datetime import datetime
+        newest, count = existing
+        when = datetime.fromtimestamp(newest).strftime("%Y-%m-%d %H:%M")
+        out = self.state.settings.output.folder
+        ans = QMessageBox.question(
+            self, "Output folder already has results",
+            f"{out}\n\nalready contains {count} result file(s) from a run on {when}.\n\n"
+            "Running now will overwrite them. Continue?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        return ans == QMessageBox.Yes
+
+    def _open_output_folder(self):
+        out = (self.state.settings.output.folder or "").strip()
+        if out and os.path.isdir(out):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.abspath(out)))
+        else:
+            self._set_status("Output folder does not exist yet.")
+
     # -- run lifecycle ------------------------------------------------------
     def _start(self, write: bool):
         if self._thread is not None:
@@ -120,8 +195,16 @@ class RunScreen(QWidget):
         if problem:
             self._set_status(f"Cannot run: {problem}")
             return
+        # overwrite guard: a real run into a folder that already holds results asks first
+        if write:
+            existing = self._existing_output()
+            if existing and not self._confirm_overwrite(existing):
+                self._set_status("Run cancelled — existing results kept.")
+                return
         self.log.clear(); self.progress.setRange(0, 0)  # busy until first file
         self._fatal_msg = None
+        self._last_write = write
+        self._append_plan(write)                        # pre-flight: what will be read/written
         self._set_running(True)
         self.run_started.emit()
 
@@ -210,6 +293,9 @@ class RunScreen(QWidget):
             self._set_status(f"Run failed — {short_error(self._fatal_msg)}")
         else:
             self.progress.setValue(1)
+        # a clean real-write run leaves results on disk — offer to open them
+        if self._last_write and result is not None and not fatal and not cancelled:
+            self.btn_open.setEnabled(True)
         self.run_finished.emit()
         # surface a copyable error-log window if anything failed
         failed = getattr(result, "failed_files", {}) if result is not None else {}
