@@ -76,6 +76,8 @@ class NoiseProfileDialog(QDialog):
             p = self.glw.addPlot(row=i, col=0)
             p.showGrid(x=True, y=True, alpha=0.12)
             p.setLabel("left", f"col {cols[i]}" if i < len(cols) else f"EMG {i + 1}")
+            if _theme is not None:
+                _theme.align_left_axis(p)          # keep the stacked channels x-aligned
             p.plot(self._t[:len(y)], np.asarray(y, dtype=float), pen=pg.mkPen(trace_pen))
             if i == n - 1:
                 p.setLabel("bottom", "Time (s)")

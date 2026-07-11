@@ -192,6 +192,8 @@ class ChannelSetupDialog(QDialog):
             plot.setBackground(pal["bg"])
             plot.setFixedHeight(74)
             plot.setMenuEnabled(False)
+            if _theme is not None:
+                _theme.align_left_axis(plot)       # stacked column previews share one left margin
             plot.getAxis("bottom").setStyle(showValues=(i == self._ncols - 1))
             y = matrix0[:, i]
             curve = plot.plot(t[:len(y)], y, pen=pg.mkPen(_role_color(pal, role0),
