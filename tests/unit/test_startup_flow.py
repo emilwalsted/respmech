@@ -627,3 +627,69 @@ def test_new_analysis_confirm_declined_is_noop_accepted_resets(qapp, tmp_path, m
     assert sc.in_folder.text() == "" and sc.out_folder.text() == ""
     assert not win.tabs.isTabEnabled(win._i_preview)
     win.close()
+
+
+# ---------------------------------------------------------------------------
+# Startup doors + guided-flow gating (P23/P24/P25) — waves 1, 6
+# ---------------------------------------------------------------------------
+def test_cancelled_channel_modal_leaves_flow_gated(qapp, tmp_path, monkeypatch):
+    """The cancel trap: cancelling the auto-opened modal must NOT unlock Preview/Run with
+    every pressure defaulting to the time column."""
+    import respmech.ui.channel_setup_dialog as csd
+    from PySide6.QtWidgets import QDialog
+    from respmech.ui.main_window import MainWindow
+
+    class _Cancel:
+        def __init__(self, *a, **k): pass
+        def exec(self): return QDialog.Rejected
+        def selected_mapping(self): return {}
+    monkeypatch.setattr(csd, "ChannelSetupDialog", lambda *a, **k: _Cancel())
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.enter_new_mode()
+    sc.in_folder.setText(INPUT); sc.in_files.setText("synth_case_*.csv")
+    sc.samp_freq.setValue(1000); sc._on_inputs_changed()
+    sc.out_folder.setText(str(tmp_path)); sc._on_field_changed()
+    qapp.processEvents()                                 # auto-open -> cancelled
+    assert not sc._all_ok()                              # channels default to col 1 -> gated
+    assert not win.tabs.isTabEnabled(win._i_preview)
+    win.close()
+
+
+def test_startup_sample_and_cancel(qapp, isolated_prefs):
+    from respmech.ui.startup_dialog import StartupDialog
+    dlg = StartupDialog()
+    assert hasattr(dlg, "sample_btn")                    # the explore door (P23)
+    dlg._choose_sample()
+    assert dlg.mode == "sample"
+    dlg2 = StartupDialog()
+    dlg2.reject()                                        # Cancel leaves the safe default
+    assert dlg2.mode == "new"
+
+
+def test_downstream_tabs_locked_not_hidden(qapp):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.enter_new_mode()
+    assert win.tabs.isTabVisible(win._i_preview)          # still VISIBLE (a stepper)…
+    assert not win.tabs.isTabEnabled(win._i_preview)      # …but LOCKED until valid
+    assert win.tabs.tabToolTip(win._i_preview)            # explains why
+    assert sc.open_sample_analysis()
+    assert win.tabs.isTabEnabled(win._i_preview) and win.tabs.isTabEnabled(win._i_run)
+    win.close()
+
+
+def test_new_from_last_rig(qapp, isolated_prefs):
+    from respmech.core.settings import Settings
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.startup_dialog import StartupDialog
+    s = Settings(); s.input.channels.poes = 7; s.input.channels.pdi = 9
+    s.input.channels.emg = [2, 3, 4]; s.input.format.sampling_frequency = 800
+    isolated_prefs.save_rig(s)
+    dlg = StartupDialog()
+    assert hasattr(dlg, "rig_btn")                        # offered because a rig exists
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.enter_new_mode(use_last_rig=True)
+    assert sc.col_poes.value() == 7 and sc.cols_emg.text() == "2,3,4"
+    assert sc.samp_freq.value() == 800
+    assert not win.tabs.isTabEnabled(win._i_preview)      # still guided (folders blank)
+    win.close()

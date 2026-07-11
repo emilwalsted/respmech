@@ -4,23 +4,7 @@ The mouse interaction itself needs a real event loop; the selection STATE
 (_set_selection / _clear_selection / _maybe_warn / selected_region) is factored out
 of the handlers so it is exercised headless here.
 """
-import os
-
-import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-pytest.importorskip("PySide6")
-pytest.importorskip("pyqtgraph")
-
-import numpy as np  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    app = QApplication.instance() or QApplication([])
-    yield app
+import numpy as np  # qapp fixture comes from conftest
 
 
 def _data(nch=3, n=2000, fs=1000):
