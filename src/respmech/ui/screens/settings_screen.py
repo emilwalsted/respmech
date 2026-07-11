@@ -754,7 +754,7 @@ class SettingsScreen(QWidget):
         success. The sample lives in a temp folder (throwaway)."""
         import tempfile  # noqa: PLC0415
         from respmech.core.sample import write_sample_recording  # noqa: PLC0415
-        from respmech.core.settings import Settings, ExcludeEntry  # noqa: PLC0415
+        from respmech.core.settings import Settings  # noqa: PLC0415
         try:
             base = os.path.join(tempfile.gettempdir(), "respmech_sample")
             desc = write_sample_recording(os.path.join(base, "input"))
@@ -767,10 +767,6 @@ class SettingsScreen(QWidget):
             ch.poes, ch.pgas, ch.pdi = m["poes"], m["pgas"], m["pdi"]
             ch.emg, ch.entropy = list(m["emg"]), list(m["entropy"])
             s.processing.segmentation.buffer = 200
-            # the recording opens mid-cycle, so breath #1 is a partial boundary breath —
-            # exclude it (as a clinician would) so the averaged Campbell loop is clean and
-            # the sample models good QC practice out of the box.
-            s.processing.exclude_breaths = [ExcludeEntry(file=desc["filename"], breaths=[1])]
             s.output.folder = os.path.join(base, "output")
             self.state.settings, self.state.settings_path = s, None
             self.from_state()
