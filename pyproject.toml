@@ -8,7 +8,10 @@ version = "2.0.0-dev"
 description = "Respiratory mechanics, work of breathing and diaphragm EMG entropy analysis"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "GPL-3.0-or-later" }
+# PEP 639: SPDX expression + the license file(s). briefcase's Windows template requires
+# `license-files` to install a licence into the MSI (the macOS template does not enforce it).
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE*"]
 authors = [{ name = "Emil Schwarz Walsted", email = "emilwalsted@gmail.com" }]
 keywords = ["respiratory", "mechanics", "work-of-breathing", "EMG", "physiology"]
 dependencies = [
