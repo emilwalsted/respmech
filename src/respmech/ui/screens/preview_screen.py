@@ -91,6 +91,19 @@ def _pen(colour, width=1):
     return pg.mkPen(colour, width=width)
 
 
+def _rms_envelope(x, win):
+    """Sliding-window RMS envelope of a 1-D signal (the quantity each breath's EMG
+    amplitude is taken from), same length as ``x``. Front-padded so it aligns in time."""
+    x = np.asarray(x, dtype=float)
+    win = max(1, int(win))
+    if x.size == 0 or win >= x.size:
+        return np.sqrt(np.maximum(np.mean(x * x) if x.size else 0.0, 0.0)) * np.ones_like(x)
+    c = np.cumsum(np.insert(x * x, 0, 0.0))
+    ma = (c[win:] - c[:-win]) / win
+    env = np.sqrt(np.maximum(ma, 0.0))
+    return np.concatenate([np.full(x.size - env.size, env[0]), env])
+
+
 # Fallback plot palette used only if the theme module failed to import (it never
 # raises in practice); mirrors theme._PLOT_LIGHT so light behaviour is unchanged.
 _FALLBACK_PAL = {
@@ -410,6 +423,11 @@ class PreviewScreen(QWidget):
         self.plots = pg.GraphicsLayoutWidget()
         self.plots.setBackground(_plot_pal()["bg"])
         self.plots.scene().sigMouseClicked.connect(self._on_plot_clicked)
+        # P17: a crosshair that tracks the cursor across the X-linked channel stack and
+        # reads out (time, value); built once, the per-channel lines are (re)made per render.
+        self._crosshair_lines = []
+        self._crosshair_proxy = pg.SignalProxy(
+            self.plots.scene().sigMouseMoved, rateLimit=60, slot=self._on_mech_mouse_moved)
         split.addWidget(self.plots)
         lower = QSplitter(Qt.Horizontal)
         self.table = QTableWidget(0, 0)
@@ -423,7 +441,78 @@ class PreviewScreen(QWidget):
         split.addWidget(lower)
         split.setStretchFactor(0, 3); split.setStretchFactor(1, 2)
         v.addWidget(split)
+        # P16/P17: a thin action bar — batch QC overview + crosshair read-out + export
+        bar = QHBoxLayout()
+        self.qc_overview = QLabel("")
+        self.qc_overview.setProperty("status", "muted")
+        self.qc_overview.setToolTip("Quality overview of the most recent test run.")
+        self.crosshair_label = QLabel("")
+        self.crosshair_label.setProperty("status", "muted")
+        self.btn_export_fig = QPushButton("Export Campbell…")
+        self.btn_export_fig.setEnabled(False)          # enabled once a diagram is drawn
+        self.btn_export_fig.setToolTip("Save the Campbell diagram as a PNG or PDF.")
+        self.btn_export_fig.clicked.connect(self._export_campbell)
+        bar.addWidget(self.qc_overview); bar.addStretch(1)
+        bar.addWidget(self.crosshair_label); bar.addSpacing(12); bar.addWidget(self.btn_export_fig)
+        v.addLayout(bar)
         return w
+
+    def _update_qc_overview(self, fr):
+        """P16: a persistent, at-a-glance quality summary of the current test run —
+        breaths used/excluded plus a conservative flag for any non-physiological
+        per-breath value (so a suspect run is obvious without reading the table)."""
+        bt = getattr(fr, "breaths_table", None)
+        total = len(fr.breaths) if getattr(fr, "breaths", None) else (len(bt) if bt is not None else 0)
+        used = len(bt) if bt is not None else 0
+        excl = max(0, total - used)
+        flags = []
+        if bt is not None and len(bt):
+            for c in ("vt", "ti", "te", "ttot"):
+                if c in bt.columns and (bt[c] <= 0).any():
+                    flags.append(f"{c}≤0")
+            for c in ("wobtotal", "vt", "ve"):          # core metrics must be finite
+                if c in bt.columns and not np.isfinite(bt[c].to_numpy(dtype=float)).all():
+                    flags.append(f"{c} NaN")
+        msg = f"QC:  {used} breaths used" + (f",  {excl} excluded" if excl else "")
+        status = "ok"
+        if flags:
+            msg += "   ⚠ " + "; ".join(dict.fromkeys(flags))
+            status = "warn"
+        else:
+            msg += "   ·  no flags"
+        self.qc_overview.setText(msg)
+        self.qc_overview.setProperty("status", status)
+        self.qc_overview.style().unpolish(self.qc_overview)
+        self.qc_overview.style().polish(self.qc_overview)
+
+    # -- P17 crosshair + figure export -------------------------------------
+    def _on_mech_mouse_moved(self, evt):
+        if not self._channel_plots or not self._crosshair_lines:
+            return
+        pos = evt[0]
+        for p, ln in zip(self._channel_plots, self._crosshair_lines):
+            if p.sceneBoundingRect().contains(pos):
+                mp = p.getViewBox().mapSceneToView(pos)
+                for l in self._crosshair_lines:
+                    l.setPos(mp.x()); l.show()
+                lab = p.getAxis("left").labelText or "value"
+                self.crosshair_label.setText(f"t = {mp.x():.3f} s     {lab} = {mp.y():.3g}")
+                return
+
+    def _export_campbell(self):
+        from PySide6.QtWidgets import QFileDialog       # noqa: PLC0415
+        base = (self._previewed_file or "campbell").rsplit(".", 1)[0]
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Campbell diagram", f"{base} – Campbell.png",
+            "PNG image (*.png);;PDF document (*.pdf)")
+        if not path:
+            return
+        try:
+            self.campbell.figure.savefig(path, dpi=150, bbox_inches="tight",
+                                         facecolor=self.campbell.figure.get_facecolor())
+            self._set_status(f"Saved Campbell diagram → {path}")
+        except Exception as e:                          # noqa: BLE001
+            self._set_status(f"Could not save figure: {short_error(str(e))}")
 
     def _build_emg_tab(self):
         w = QWidget(); v = QVBoxLayout(w); v.setContentsMargins(0, 6, 0, 0)
@@ -1016,6 +1105,7 @@ class PreviewScreen(QWidget):
         self._clear_panel_overlays("channels", "raw")   # dismiss any stale error card
         self.plots.clear()
         self._channel_plots = []
+        self._crosshair_lines = []                       # cleared with the plots; rebuilt below
         prev = None
         n = len(_CHANNELS)
         pal = _plot_pal()
@@ -1025,6 +1115,9 @@ class PreviewScreen(QWidget):
             p.setLabel("left", label)
             y = series[key]
             p.plot(t[:len(y)], y, pen=_pen(pal["channels"].get(key, colour)))
+            # P22: a subtle zero-reference baseline on every channel, so the sign and
+            # excursion of each signal read at a glance.
+            p.addLine(y=0, pen=pg.mkPen(pal["separator"], width=1, style=Qt.DashLine))
             if i == n - 1:
                 p.setLabel("bottom", "Time (s)")
             if prev is not None:
@@ -1032,6 +1125,12 @@ class PreviewScreen(QWidget):
             prev = p
             self._limit_x(p, t[:len(y)])          # can't zoom/pan past the data
             self._channel_plots.append(p)
+        # P17: one crosshair line per channel, hidden until the cursor enters the stack
+        self._crosshair_lines = []
+        for p in self._channel_plots:
+            ln = p.addLine(x=0, pen=pg.mkPen(pal["separator"], width=1, style=Qt.DashLine))
+            ln.hide()
+            self._crosshair_lines.append(ln)
         self._draw_breath_overlays(spans, data["label_y"])
         self._render_raw_stack(data["emg"], fs)
         # breaths are now known -> (re)number any EMG detail/result already rendered
@@ -1513,8 +1612,17 @@ class PreviewScreen(QWidget):
         self.emg_plots.clear()
         self.emg_plots.plot(t, np.asarray(data["raw"]), pen=_pen(pal["raw_trace"]), name="raw")
         self.emg_plots.plot(t, np.asarray(data["ecg"]), pen=_pen(ch["flow"]), name="ECG-removed")
+        final = np.asarray(data["ecg"])
         if data.get("noise_applied"):
-            self.emg_plots.plot(t, np.asarray(data["noise"]), pen=_pen(ch["volume"]), name="noise-reduced")
+            final = np.asarray(data["noise"])
+            self.emg_plots.plot(t, final, pen=_pen(ch["volume"]), name="noise-reduced")
+        # P13: overlay the RMS envelope the analysis quantifies (± the conditioned signal),
+        # so the picked amplitude is visible over the raw trace it is taken from.
+        fs = self.state.settings.input.format.sampling_frequency or (1.0 / (t[1] - t[0]) if len(t) > 1 else 1.0)
+        env = _rms_envelope(final, (self.state.settings.processing.emg.rms_window_s or 0.05) * fs)
+        env_pen = pg.mkPen((180, 50, 42), width=2)
+        self.emg_plots.plot(t, env, pen=env_pen, name="RMS envelope")
+        self.emg_plots.plot(t, -env, pen=env_pen)
         self.emg_plots.setLabel("bottom", "Time (s)"); self.emg_plots.setLabel("left", "EMG (a.u.)")
         self._limit_x(self.emg_plots.getPlotItem(), t)
         self._ensure_noise_region()
@@ -1608,6 +1716,7 @@ class PreviewScreen(QWidget):
             raise _FileRunError(err)
         self._fill_table(fr.breaths_table)
         self._draw_campbell(fr.breaths)
+        self._update_qc_overview(fr)                  # P16 batch QC overview
         nr = getattr(result, "noise_report", None)
         if nr:
             self.render_noise_report(result)         # sets its own status incl. prop_decrease
@@ -1644,16 +1753,54 @@ class PreviewScreen(QWidget):
         fig.set_facecolor(pal["mpl_bg"])
         ax = fig.add_subplot(111)
         ax.set_facecolor(pal["mpl_bg"])
-        for b in breaths.values():
-            if b["ignored"]:
-                continue
-            ax.plot(b["poes"], b["volume"], color=pal["mpl_loop"], lw=0.9, zorder=1)
+        kept = [b for b in breaths.values() if not b["ignored"]]
+        for b in kept:
+            ax.plot(b["poes"], b["volume"], color=pal["mpl_loop"], lw=0.7, alpha=0.5, zorder=1)
+        # P12: overlay the average breath bold, draw the elastic recoil (relaxation)
+        # line EELV→EILV, and shade the inspiratory work between the Poes trace and it.
+        self._overlay_campbell_work(ax, kept, pal)
         ax.axvline(0, color=pal["mpl_zeroline"], lw=0.8, zorder=0)
         ax.set_xlabel("Oesophageal pressure  Poes (cmH₂O)")
         ax.set_ylabel("Lung volume above end-expiration (L)")
         ax.set_title("Campbell diagram")
         fig.tight_layout()
         self.campbell.draw()
+        self.btn_export_fig.setEnabled(True)         # a diagram now exists to export
+
+    def _overlay_campbell_work(self, ax, kept, pal):
+        """Draw the average PV loop + elastic recoil line + shaded inspiratory work,
+        so the Campbell diagram *shows* the work of breathing, not just the loops.
+        Defensive: any missing average field falls back to just the loops (no raise)."""
+        if not kept:
+            return
+        b = kept[0]
+        insp = b.get("inspiration", {})
+        vavg, pavg = b.get("volumeavg"), b.get("poesavg")
+        iv, ip = insp.get("volumeavg"), insp.get("poesavg")
+        eelv, eilv = b.get("eelvavg"), b.get("eilvavg")   # each [volume, poes]
+        try:
+            import numpy as np
+            if vavg is not None and pavg is not None and len(vavg):
+                ax.plot(pavg, vavg, color="#2C6E9B", lw=2.0, zorder=3, label="average breath")
+            if eelv is not None and eilv is not None:
+                # elastic recoil line: straight line between the two volume endpoints
+                ax.plot([eelv[1], eilv[1]], [eelv[0], eilv[0]], color=pal["mpl_target"],
+                        ls="--", lw=1.3, zorder=4, label="elastic recoil")
+                if iv is not None and ip is not None and len(iv) > 1:
+                    iv = np.asarray(iv, float); ip = np.asarray(ip, float)
+                    # Poes on the recoil line at each inspiratory volume
+                    line_p = np.interp(iv, sorted([eelv[0], eilv[0]]),
+                                       [eelv[1], eilv[1]] if eelv[0] <= eilv[0] else [eilv[1], eelv[1]])
+                    ax.fill_betweenx(iv, ip, line_p, color="#2C6E9B", alpha=0.18,
+                                     zorder=2, label="inspiratory work")
+            wob = dict(b.get("wob") or {})
+            if "wobtotal" in wob:
+                ax.text(0.02, 0.98, f"WOB {wob['wobtotal']:.2f} J·min⁻¹",
+                        transform=ax.transAxes, va="top", ha="left", fontsize=8,
+                        color=pal["mpl_loop"])
+            ax.legend(loc="lower right", frameon=False, fontsize=7)
+        except Exception:                       # pragma: no cover - overlay is best-effort
+            pass
 
     # -- fidelity render ----------------------------------------------------
     def _draw_fidelity(self, nr):
