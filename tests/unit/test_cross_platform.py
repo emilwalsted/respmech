@@ -97,6 +97,21 @@ def test_match_input_files_safe_against_folder_metacharacters(tmp_path):
     assert got == {"a.csv", "b.csv"}
 
 
+def test_match_input_files_handles_a_subdirectory_pattern(tmp_path):
+    """A path-bearing mask ('raw/*.csv', or a Windows 'raw\\*.csv') must resolve the subdir
+    against the folder and match the filename part — parity with the old glob.glob(join())."""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "a.csv").write_text("x")
+    (raw / "b.csv").write_text("x")
+    (tmp_path / "top.csv").write_text("x")   # NOT under raw/ -> excluded
+    got = {os.path.basename(p) for p in match_input_files(str(tmp_path), "raw/*.csv")}
+    assert got == {"a.csv", "b.csv"}
+    # both separators accepted (a mask authored on Windows still works on macOS)
+    got_bs = {os.path.basename(p) for p in match_input_files(str(tmp_path), "raw\\*.csv")}
+    assert got_bs == {"a.csv", "b.csv"}
+
+
 def test_match_input_files_returns_sorted_full_paths(tmp_path):
     (tmp_path / "b.csv").write_text("x")
     (tmp_path / "a.csv").write_text("x")
@@ -121,16 +136,46 @@ def test_load_toml_rebases_relative_folders_against_file_dir(tmp_path):
     assert loaded.output.folder == os.path.normpath(str(sub / "output"))
 
 
-def test_load_toml_leaves_absolute_folders_untouched(tmp_path):
+def test_load_toml_leaves_external_absolute_folders_untouched(tmp_path):
+    """An absolute folder OUTSIDE the analysis file's directory is an explicit external
+    location and must survive a save→load round trip unchanged (not relativized)."""
     from respmech.settingsio.toml_io import load_toml, save_toml
     from respmech.core.settings import Settings
-    abs_in = os.path.normpath(str(tmp_path / "elsewhere_in"))
+    ext = tmp_path / "external"
+    ext.mkdir()
+    abs_in = os.path.normpath(str(ext / "in"))
+    sub = tmp_path / "study"
+    sub.mkdir()
     s = Settings()
-    s.input.folder = abs_in
-    s.output.folder = os.path.normpath(str(tmp_path / "elsewhere_out"))
-    save_toml(s, str(tmp_path / "a.toml"))
-    loaded = load_toml(str(tmp_path / "a.toml"))
-    assert loaded.input.folder == abs_in
+    s.input.folder = abs_in                          # outside sub/ (the .toml's dir)
+    s.output.folder = os.path.normpath(str(ext / "out"))
+    save_toml(s, str(sub / "a.toml"))
+    loaded = load_toml(str(sub / "a.toml"))
+    assert loaded.input.folder == abs_in             # external absolute path preserved
+
+
+def test_toml_open_save_roundtrip_keeps_folders_relative(tmp_path):
+    """The portability guard: opening a shared analysis rebases its relative folders to
+    absolute (for the run), but saving it back must write them RELATIVE again — otherwise
+    the first Open→Save on one machine bakes in machine-local absolute paths and the shared
+    file breaks for everyone else."""
+    import tomllib
+    from respmech.settingsio.toml_io import load_toml, save_toml
+    from respmech.core.settings import Settings
+    sub = tmp_path / "study"
+    sub.mkdir()
+    p = str(sub / "analysis.toml")
+    s = Settings()
+    s.input.folder = "input"                         # the shipped relative defaults
+    s.output.folder = "output"
+    save_toml(s, p)
+    loaded = load_toml(p)                             # rebases to absolute for the run
+    assert os.path.isabs(loaded.input.folder) and os.path.isabs(loaded.output.folder)
+    save_toml(loaded, p)                             # …and Save must re-relativize
+    with open(p, "rb") as f:
+        raw = tomllib.load(f)
+    assert raw["input"]["folder"] == "input"         # stored value is portable again
+    assert raw["output"]["folder"] == "output"
 
 
 # --- recent-analyses: case-insensitive dedup on a case-insensitive FS --------

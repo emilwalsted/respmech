@@ -198,10 +198,21 @@ def match_input_files(folder: str, pattern: str) -> list:
     ``Study [2024]`` as a pattern that matches nothing. ``os.listdir`` sidesteps the
     folder-name problem; ``fnmatchcase`` on lowered names is deterministic on both OSes.
     Leading-dot (Unix-hidden) files are excluded unless the pattern is explicitly
-    dot-leading, mirroring ``glob``."""
+    dot-leading, mirroring ``glob``. A pattern may carry a subdirectory (``raw/*.csv``,
+    or ``raw\\*.csv`` authored on Windows) — as ``glob.glob(join(folder, pattern))`` did —
+    in which case the directory part is resolved against ``folder`` and only the filename
+    part is matched, so a hand-edited/migrated config with a path-bearing mask keeps
+    working instead of silently matching nothing."""
+    pattern = pattern or "*.*"
+    norm = pattern.replace("\\", "/")
+    if "/" in norm:                            # split a path-bearing pattern into subdir + filemask
+        subdir, pattern = norm.rsplit("/", 1)
+        if subdir:
+            folder = os.path.join(folder, *subdir.split("/"))
+        pattern = pattern or "*.*"
     if not os.path.isdir(folder):
         return []
-    pat = (pattern or "*.*").lower()
+    pat = pattern.lower()
     hidden_ok = pat.startswith(".")
     out = []
     for name in os.listdir(folder):

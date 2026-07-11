@@ -13,17 +13,21 @@ import sys
 import pytest
 
 
-# Two of the tests below drive the real async job orchestration: selecting a file spins up
-# worker QThreads and the test waits (real QEventLoop) for their cross-thread `finished` to
-# land. On headless *offscreen* Qt on Windows CI that completion is never observed — the
-# same tests pass on macOS CI and locally, so this is specific to the headless-Windows event
-# delivery, not the app logic a real Windows user (real display + event loop) exercises.
-# Marked xfail (non-strict) on Windows so the smoke stays green and informative — if a run
-# ever completes, it surfaces as XPASS. Real Windows validation is running the built MSI.
+# The two tests below are FLAKY on headless Windows CI: the heaviest async scenarios — the
+# full multi-panel autorun (mechanics batch + EMG + noise fidelity together) and in-flight
+# job cancellation — sometimes exceed the drain timeout (they have also XPASSED on Windows,
+# so it is a timing race, not a hard hang). NB the earlier "cross-thread finished is never
+# delivered on Windows" theory is FALSE: the sibling tests below (switching mid-run, refresh,
+# noise-adopts-prop, gated reschedule) drain the identical worker-QThread path un-marked and
+# pass on Windows CI — so the core async mechanism IS covered there; only these two heavy
+# combinations are quarantined. Root cause is not yet reproduced on real Windows hardware
+# (no Windows dev machine); the authoritative check is running the built MSI. xfail is
+# non-strict so an XPASS never reddens the smoke — a known, documented gap, not a silent one.
 _WIN_ASYNC_XFAIL = pytest.mark.xfail(
     sys.platform.startswith("win"),
-    reason="async worker-thread completion not observed under headless offscreen Qt on "
-           "Windows CI; passes on macOS + real display. Verify on real Windows hardware.",
+    reason="flaky on headless Windows CI: heaviest autorun/cancel drain sometimes exceeds "
+           "the timeout (also seen to XPASS). Siblings cover the same worker path. Verify on "
+           "real Windows hardware.",
     strict=False,
 )
 

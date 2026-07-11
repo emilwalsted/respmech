@@ -78,7 +78,10 @@ interactively, and export publication-ready per-breath and averaged results.
 """
 icon = "installer/respmech"                  # briefcase picks respmech.ico / .icns / .png per platform
 sources = ["src/respmech"]
-test_sources = ["tests"]
+# ONLY the unit tests — deliberately NOT ["tests"], which would pull tests/golden/production/
+# (real research recordings that must never be redistributed) into a `briefcase … --test`
+# build. Distribution builds (`briefcase package`, no --test) ship `sources` only, never tests.
+test_sources = ["tests/unit"]
 
 # Everything needed to RUN the app (union of the base deps + gui/emg/plots extras). Kept
 # explicit rather than referencing the extras so a bundle can't silently drop a dependency.
