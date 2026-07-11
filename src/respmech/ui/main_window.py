@@ -53,8 +53,9 @@ class MainWindow(QMainWindow):
         sc.inputs_changed.connect(pv.refresh_files)
         sc.settings_changed.connect(pv.sync_from_settings)
         sc.settings_changed.connect(rn.refresh_actions)
-        # the guided "new analysis" flow hides Preview/Run until every setting is valid
-        sc.flow_ready_changed.connect(self._set_downstream_visible)
+        # the guided "new analysis" flow LOCKS (does not hide) Preview/Run until every
+        # setting is valid, so the whole workflow is visible as a stepper (P24)
+        sc.flow_ready_changed.connect(self._set_downstream_enabled)
         # the window title names the active analysis and its unsaved-edits (dirty) state
         sc.analysis_state_changed.connect(self._update_window_title)
         self._update_window_title()
@@ -88,12 +89,20 @@ class MainWindow(QMainWindow):
         # leaving the user in full mode over rolled-back defaults
         if dlg.mode == "open" and dlg.path and self.settings_screen.open_analysis(dlg.path):
             return
-        self.settings_screen.enter_new_mode()
+        if dlg.mode == "sample" and self.settings_screen.open_sample_analysis():   # P23
+            return
+        # P25: "New from last rig" inherits the last channel mapping into the guided flow
+        self.settings_screen.enter_new_mode(use_last_rig=(dlg.mode == "new_rig"))
 
-    def _set_downstream_visible(self, ready: bool):
-        """Show/hide the Preview & Run tabs together (they both need valid settings)."""
-        self.tabs.setTabVisible(self._i_preview, bool(ready))
-        self.tabs.setTabVisible(self._i_run, bool(ready))
+    def _set_downstream_enabled(self, ready: bool):
+        """Lock/unlock the Preview & Run tabs together (they both need valid settings).
+        They stay *visible* so the user always sees the three steps of the workflow;
+        a tooltip on a locked step says why it can't be entered yet (P24)."""
+        ready = bool(ready)
+        hint = "" if ready else "Complete the Setup to unlock this step."
+        for i in (self._i_preview, self._i_run):
+            self.tabs.setTabEnabled(i, ready)
+            self.tabs.setTabToolTip(i, hint)
 
     def _update_window_title(self):
         """Name the active analysis in the title bar and flag unsaved edits with a bullet,

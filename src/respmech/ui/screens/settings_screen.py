@@ -92,6 +92,11 @@ class SettingsScreen(QWidget):
                   "Filename or wildcard mask picking which recordings to load, e.g. *.txt; defaults to *.* (all files).")
         self._row(f, "Sampling frequency", self.samp_freq, "input.format.sampling_frequency",
                   "Samples recorded per second, in hertz (Hz); required, and must match the acquisition system (e.g. 2000).")
+        # P28: a live read-out of what was actually detected in the chosen recordings.
+        self.format_readout = QLabel("")
+        self.format_readout.setWordWrap(True)
+        self.format_readout.setProperty("status", "muted")
+        f.addRow("", self.format_readout)
         root.addWidget(gin)
 
         # Output (second in the flow: an analysis reads as Input -> Output -> rest) --
@@ -372,11 +377,14 @@ class SettingsScreen(QWidget):
         return w
 
     def _browse(self, line, folder):
+        from respmech.ui import prefs  # noqa: PLC0415
+        start = line.text() or prefs.last_folder("browse", ".")   # P26 sticky folder
         if folder:
-            d = QFileDialog.getExistingDirectory(self, "Select folder", line.text() or ".")
+            d = QFileDialog.getExistingDirectory(self, "Select folder", start)
         else:
-            d, _ = QFileDialog.getOpenFileName(self, "Select file", line.text() or ".")
+            d, _ = QFileDialog.getOpenFileName(self, "Select file", start)
         if d:
+            prefs.set_last_folder("browse", d)
             line.setText(d)
             if self._loading:
                 return
@@ -444,6 +452,7 @@ class SettingsScreen(QWidget):
         finally:
             self._loading = prev
         self._update_qc()
+        self._update_format_readout()       # P28 detected-format read-out
 
     def to_state(self):
         s = self.state.settings
@@ -609,9 +618,45 @@ class SettingsScreen(QWidget):
         self.to_state()
         self._normalize_mask()      # keep the mask a single pattern the core runner can glob
         self._mark_dirty()
+        self._update_format_readout()
         self.inputs_changed.emit()
         self.settings_changed.emit()
         self._update_disclosure()   # last, so guided-flow status wins (see above)
+
+    def _update_format_readout(self):
+        """P28: peek the first matching recording and report what was detected —
+        column count + delimiter — so a mis-picked folder/mask is obvious at once."""
+        lab = getattr(self, "format_readout", None)
+        if lab is None:
+            return
+        folder = self.in_folder.text().strip()
+        mask = self.in_files.text().strip()
+        status, text = "muted", ""
+        if folder and os.path.isdir(folder):
+            files = matching_files(folder, mask)
+            if not files:
+                status, text = "warn", f"No files match '{mask or '*.*'}' in this folder."
+            else:
+                first = files[0]
+                line = ""
+                try:
+                    with open(first, "r", errors="replace") as fh:
+                        line = fh.readline().strip()
+                except Exception:               # pragma: no cover - unreadable file
+                    line = ""
+                if "\t" in line:
+                    delim, dname = "\t", "tab"
+                elif "," in line:
+                    delim, dname = ",", "comma"
+                else:
+                    delim, dname = None, "whitespace"
+                ncol = len(line.split(delim)) if line else 0
+                status = "info"
+                text = (f"{len(files)} file(s) matched · first: {os.path.basename(first)} — "
+                        f"{ncol} columns, {dname}-separated")
+        lab.setText(text)
+        lab.setProperty("status", status)
+        lab.style().unpolish(lab); lab.style().polish(lab)
 
     def _on_emg_cols_changed(self, *_):
         if self._loading:
@@ -642,14 +687,18 @@ class SettingsScreen(QWidget):
         return self._dirty
 
     # -- guided flow / progressive disclosure -------------------------------
-    def enter_new_mode(self):
+    def enter_new_mode(self, use_last_rig: bool = False):
         """Enter the guided 'new analysis' flow: collapse the reveal back to just the
-        Input card and keep the downstream (Preview/Run) tabs hidden until every setting
-        validates. Cards then appear stage by stage as each is completed."""
+        Input card and keep the downstream (Preview/Run) tabs locked until every setting
+        validates. Cards then appear stage by stage as each is completed.
+
+        ``use_last_rig`` (P25) pre-fills the channel mapping + sampling from the last
+        analysis, so a returning user keeps their hardware layout and the channel-
+        assignment modal doesn't force-open."""
         self._mode = "new"
         self._revealed = 1
         self._flow_ready = None          # force the next _set_flow_ready() to emit
-        self._channel_modal_done = False     # re-arm the channel-assignment modal
+        self._channel_modal_done = bool(use_last_rig)   # rig inherited → don't force the modal
         self._channel_modal_pending = False
         # A fresh analysis starts with the gating folders empty, so each stage is a real
         # step: the relative "input"/"output" defaults would otherwise auto-satisfy their
@@ -663,6 +712,12 @@ class SettingsScreen(QWidget):
             self.in_folder.setText("")
             self.out_folder.setText("")
             self.in_files.setText(_DEFAULT_MASK)
+            if use_last_rig:                          # P25: inherit the last channel rig
+                from respmech.ui import prefs  # noqa: PLC0415
+                rig = prefs.last_rig()
+                if rig:
+                    prefs.apply_rig(self.state.settings, rig)
+                    self.from_state()                # reflect the rig in the widgets
         finally:
             self._loading = prev
         # let the downstream screens react to the blanked settings FIRST, so the guided
@@ -692,6 +747,38 @@ class SettingsScreen(QWidget):
         if ok:
             self.enter_open_mode()
         return ok
+
+    def open_sample_analysis(self):
+        """P23: generate a small synthetic recording, wire a ready analysis around it,
+        and open it in full mode — a no-setup door for first-time users. Returns True on
+        success. The sample lives in a temp folder (throwaway)."""
+        import tempfile  # noqa: PLC0415
+        from respmech.core.sample import write_sample_recording  # noqa: PLC0415
+        from respmech.core.settings import Settings  # noqa: PLC0415
+        try:
+            base = os.path.join(tempfile.gettempdir(), "respmech_sample")
+            desc = write_sample_recording(os.path.join(base, "input"))
+            s = Settings()
+            s.input.folder = desc["folder"]
+            s.input.files = desc["filename"]
+            s.input.format.sampling_frequency = desc["sampling_frequency"]
+            m, ch = desc["mapping"], s.input.channels
+            ch.flow, ch.volume = m["flow"], m["volume"]
+            ch.poes, ch.pgas, ch.pdi = m["poes"], m["pgas"], m["pdi"]
+            ch.emg, ch.entropy = list(m["emg"]), list(m["entropy"])
+            s.processing.segmentation.buffer = 200
+            s.output.folder = os.path.join(base, "output")
+            self.state.settings, self.state.settings_path = s, None
+            self.from_state()
+            self.enter_open_mode()
+            self._mark_clean()
+            self.inputs_changed.emit()
+            self.settings_changed.emit()
+            self._set_status("Sample analysis loaded — try Preview & QC, then Run.")
+            return True
+        except Exception:                       # noqa: BLE001
+            self._report_error("Explore sample data", traceback.format_exc())
+            return False
 
     def _new_analysis(self):
         """Action-bar 'New analysis': discard the current settings for a fresh set and
@@ -1074,7 +1161,9 @@ class SettingsScreen(QWidget):
     def _load(self, path=None):
         """Load a saved .toml analysis. Returns True on success, False if cancelled or
         rolled back, so the caller (open_analysis) can gate the mode transition."""
-        p = path or QFileDialog.getOpenFileName(self, "Open analysis", ".", "Saved analysis (*.toml)")[0]
+        from respmech.ui import prefs  # noqa: PLC0415
+        p = path or QFileDialog.getOpenFileName(
+            self, "Open analysis", prefs.last_folder("analysis", "."), "Saved analysis (*.toml)")[0]
         if not p:
             return False
         prior, prior_path = self.state.settings, self.state.settings_path
@@ -1089,13 +1178,19 @@ class SettingsScreen(QWidget):
             return False
         self._set_status(f"Opened {p}")
         self._mark_clean()
+        prefs.add_recent_analysis(p)                 # P26 recent analyses
+        prefs.set_last_folder("analysis", p)
+        prefs.save_rig(self.state.settings)          # P25 remember the rig
         self.inputs_changed.emit()
         self.settings_changed.emit()
         return True
 
     def _save(self):
+        from respmech.ui import prefs  # noqa: PLC0415
         self.to_state()
-        p, _ = QFileDialog.getSaveFileName(self, "Save analysis", "analysis.toml", "Saved analysis (*.toml)")
+        p, _ = QFileDialog.getSaveFileName(
+            self, "Save analysis", os.path.join(prefs.last_folder("analysis", "."), "analysis.toml"),
+            "Saved analysis (*.toml)")
         if not p:
             return
         try:
@@ -1105,6 +1200,9 @@ class SettingsScreen(QWidget):
             return
         self._set_status(f"Saved {p}")
         self._mark_clean()
+        prefs.add_recent_analysis(p)                 # P26 recent analyses
+        prefs.set_last_folder("analysis", p)
+        prefs.save_rig(self.state.settings)          # P25 remember the rig
 
     def _import(self, path=None):
         """Import a legacy .py setup (runs the migrator). Returns True on success, False

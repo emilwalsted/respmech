@@ -124,8 +124,8 @@ def test_plain_construction_keeps_full_access(qapp):
     tests depend on)."""
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState())
-    assert win.tabs.isTabVisible(win._i_preview)
-    assert win.tabs.isTabVisible(win._i_run)
+    assert win.tabs.isTabEnabled(win._i_preview)
+    assert win.tabs.isTabEnabled(win._i_run)
     win.close()
 
 
@@ -139,8 +139,8 @@ def test_new_mode_shows_only_input_and_hides_downstream(qapp):
     sc.enter_new_mode()
     inp, out, rest = sc._stage_cards[0][0], sc._stage_cards[1][0], sc._stage_cards[2][0]
     assert _shown(inp) and not _shown(out) and not _shown(rest)
-    assert not win.tabs.isTabVisible(win._i_preview)
-    assert not win.tabs.isTabVisible(win._i_run)
+    assert not win.tabs.isTabEnabled(win._i_preview)
+    assert not win.tabs.isTabEnabled(win._i_run)
     win.close()
 
 
@@ -185,18 +185,18 @@ def test_progressive_reveal_then_unlock_downstream(qapp, tmp_path):
 
     _fill_valid_input(sc)                     # Input valid -> Output appears
     assert _shown(out) and not _shown(rest)
-    assert not win.tabs.isTabVisible(win._i_preview)
+    assert not win.tabs.isTabEnabled(win._i_preview)
 
     _fill_valid_output(sc, tmp_path)          # Output valid -> the channel modal gates the rest
     assert not _shown(rest)
     assert "assign your data channels" in sc.status.text().lower()
-    assert not win.tabs.isTabVisible(win._i_preview)
+    assert not win.tabs.isTabEnabled(win._i_preview)
 
     _pass_channel_step(sc)                    # modal OK -> channels applied -> rest + unlock
     assert _shown(rest)
     assert sc._all_ok()
-    assert win.tabs.isTabVisible(win._i_preview)
-    assert win.tabs.isTabVisible(win._i_run)
+    assert win.tabs.isTabEnabled(win._i_preview)
+    assert win.tabs.isTabEnabled(win._i_run)
     win.close()
 
 
@@ -207,14 +207,14 @@ def test_reveal_is_monotonic_but_downstream_relocks(qapp, tmp_path):
     out, rest = sc._stage_cards[1][0], sc._stage_cards[2][0]
     sc.enter_new_mode()
     _fill_valid_input(sc); _fill_valid_output(sc, tmp_path); _pass_channel_step(sc)
-    assert win.tabs.isTabVisible(win._i_preview)
+    assert win.tabs.isTabEnabled(win._i_preview)
 
     sc.in_folder.setText("/nonexistent-xyz-123"); sc._on_inputs_changed()
     # cards stay revealed (monotonic, no jarring retraction)...
     assert _shown(out) and _shown(rest)
     # ...but the downstream tabs re-lock because the settings are no longer valid
-    assert not win.tabs.isTabVisible(win._i_preview)
-    assert not win.tabs.isTabVisible(win._i_run)
+    assert not win.tabs.isTabEnabled(win._i_preview)
+    assert not win.tabs.isTabEnabled(win._i_run)
     win.close()
 
 
@@ -226,13 +226,13 @@ def test_open_mode_reveals_everything(qapp):
     win = MainWindow(AppState())
     sc = win.settings_screen
     sc.enter_new_mode()
-    assert not win.tabs.isTabVisible(win._i_preview)
+    assert not win.tabs.isTabEnabled(win._i_preview)
     sc.enter_open_mode()
     for stage in sc._stage_cards:
         for card in stage:
             assert _shown(card)
-    assert win.tabs.isTabVisible(win._i_preview)
-    assert win.tabs.isTabVisible(win._i_run)
+    assert win.tabs.isTabEnabled(win._i_preview)
+    assert win.tabs.isTabEnabled(win._i_run)
     win.close()
 
 
@@ -253,7 +253,7 @@ def test_open_analysis_from_saved_toml_roundtrips(qapp, tmp_path):
     sc2.open_analysis(str(p))
     assert sc2.in_folder.text() == INPUT
     assert sc2.cols_emg.text().replace(" ", "") == "2,3,4"
-    assert win2.tabs.isTabVisible(win2._i_preview)
+    assert win2.tabs.isTabEnabled(win2._i_preview)
     assert "valid" in sc2.status.text().lower()
     win2.close()
 
@@ -289,7 +289,7 @@ def test_begin_session_new_enters_guided_mode(qapp, monkeypatch):
     monkeypatch.setattr(startup_dialog, "StartupDialog", lambda parent=None: _FakeChooser("new"))
     win.begin_session()
     assert win.settings_screen._mode == "new"
-    assert not win.tabs.isTabVisible(win._i_preview)
+    assert not win.tabs.isTabEnabled(win._i_preview)
     win.close()
 
 
@@ -310,7 +310,7 @@ def test_begin_session_open_loads_and_reveals(qapp, monkeypatch, tmp_path):
                         lambda parent=None: _FakeChooser("open", str(p)))
     win.begin_session()
     assert win.settings_screen._mode == "full"
-    assert win.tabs.isTabVisible(win._i_preview)
+    assert win.tabs.isTabEnabled(win._i_preview)
     win.close()
 
 
@@ -364,8 +364,8 @@ def test_channel_modal_cancel_reveals_rest_but_keeps_downstream_locked(qapp, tmp
     _fill_valid_input(sc); _fill_valid_output(sc, tmp_path)
     qapp.processEvents()                           # auto-open -> cancelled
     assert _shown(rest)                            # the rest reveals (non-trapping)...
-    assert not win.tabs.isTabVisible(win._i_preview)   # ...but stays locked (channels unset)
-    assert not win.tabs.isTabVisible(win._i_run)
+    assert not win.tabs.isTabEnabled(win._i_preview)   # ...but stays locked (channels unset)
+    assert not win.tabs.isTabEnabled(win._i_run)
     win.close()
 
 
@@ -405,7 +405,7 @@ def test_begin_session_with_cli_path_opens_directly(qapp):
     win.settings_screen.enter_new_mode()
     win.begin_session(cli_path="/some/preloaded.toml")   # already loaded in __init__
     assert win.settings_screen._mode == "full"
-    assert win.tabs.isTabVisible(win._i_preview)
+    assert win.tabs.isTabEnabled(win._i_preview)
     win.close()
 
 
@@ -417,7 +417,7 @@ def test_chooser_cancel_falls_through_to_new(qapp, monkeypatch):
                         lambda parent=None: _FakeChooser("new"))   # cancel == default "new"
     win.begin_session()
     assert win.settings_screen._mode == "new"
-    assert not win.tabs.isTabVisible(win._i_preview)
+    assert not win.tabs.isTabEnabled(win._i_preview)
     win.close()
 
 
@@ -436,12 +436,12 @@ def test_integrate_from_flow_unlocks_without_a_volume_column(qapp, tmp_path):
     _pass_channel_step(sc, {"flow": 5, "volume": None, "poes": 7, "pgas": 8,
                             "pdi": 9, "emg": [2, 3, 4], "entropy": []})
     assert not sc._all_ok()                # volume missing + integrate off -> not valid
-    assert not win.tabs.isTabVisible(win._i_preview)
+    assert not win.tabs.isTabEnabled(win._i_preview)
     assert "volume" in sc.status.text().lower()
     # ...ticking 'Calculate volume from flow' makes the volume column optional -> unlock
     sc.integrate.setChecked(True); sc._on_field_changed()
     assert sc._all_ok()
-    assert win.tabs.isTabVisible(win._i_preview)
+    assert win.tabs.isTabEnabled(win._i_preview)
     win.close()
 
 
@@ -472,13 +472,13 @@ def test_reenter_new_mode_after_completing_collapses_and_blanks(qapp, tmp_path):
     sc = win.settings_screen
     sc.enter_new_mode()
     _fill_valid_input(sc); _fill_valid_output(sc, tmp_path); _pass_channel_step(sc)
-    assert win.tabs.isTabVisible(win._i_preview)          # completed once
+    assert win.tabs.isTabEnabled(win._i_preview)          # completed once
     sc.enter_new_mode()                                   # start over
     assert _shown(sc._stage_cards[0][0])                  # Input shown again
     assert not _shown(sc._stage_cards[1][0]) and not _shown(sc._stage_cards[2][0])
     assert sc.in_folder.text() == "" and sc.out_folder.text() == ""
-    assert not win.tabs.isTabVisible(win._i_preview)
-    assert not win.tabs.isTabVisible(win._i_run)
+    assert not win.tabs.isTabEnabled(win._i_preview)
+    assert not win.tabs.isTabEnabled(win._i_run)
     win.close()
 
 
@@ -528,7 +528,7 @@ def test_open_invalid_analysis_reveals_all_but_warns(qapp, tmp_path):
     for stage in sc._stage_cards:
         for card in stage:
             assert _shown(card)
-    assert win.tabs.isTabVisible(win._i_preview)
+    assert win.tabs.isTabEnabled(win._i_preview)
     assert sc.status.text().lower().startswith("invalid")
     win.close()
 
@@ -618,5 +618,5 @@ def test_new_analysis_confirm_declined_is_noop_accepted_resets(qapp, tmp_path, m
     sc._new_analysis()
     assert sc._mode == "new"
     assert sc.in_folder.text() == "" and sc.out_folder.text() == ""
-    assert not win.tabs.isTabVisible(win._i_preview)
+    assert not win.tabs.isTabEnabled(win._i_preview)
     win.close()

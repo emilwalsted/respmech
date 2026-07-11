@@ -85,7 +85,7 @@ def test_cancelled_channel_modal_leaves_flow_gated(qapp, tmp_path, monkeypatch):
     sc.out_folder.setText(str(tmp_path)); sc._on_field_changed()
     qapp.processEvents()                                 # auto-open -> cancelled
     assert not sc._all_ok()                              # channels default to col 1 -> gated
-    assert not win.tabs.isTabVisible(win._i_preview)
+    assert not win.tabs.isTabEnabled(win._i_preview)
     win.close()
 
 

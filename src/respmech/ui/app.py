@@ -42,6 +42,9 @@ def main(argv=None) -> int:
 
     argv = list(sys.argv if argv is None else argv)
     app = QApplication(argv)
+    # stable identity so QSettings (recent analyses, sticky folders, last rig) persists
+    app.setOrganizationName("RespMech")
+    app.setApplicationName("RespMech")
 
     # Show the splash as the VERY FIRST thing on screen (it is a self-contained
     # pixmap, so it needs neither the theme nor the icon), then keep it up for at
