@@ -130,6 +130,23 @@ def is_dark() -> bool:
     """Whether the most-recently-applied theme is the dark variant. Never raises."""
     return bool(_IS_DARK)
 
+
+# Fixed left-axis width (px) for vertically-stacked channel graphs. Wide enough for a
+# rotated axis label plus physiological tick values (e.g. "-140.0"); pinning it keeps
+# every panel's plotting area starting at the same x so the stacked x-axes line up.
+PLOT_AXIS_WIDTH = 68
+
+
+def align_left_axis(plot, width: int = PLOT_AXIS_WIDTH) -> None:
+    """Pin a plot's left-axis to a fixed width so vertically-stacked channel graphs share
+    the same left margin and their x-axes align — regardless of y-tick-label width. Without
+    this, a panel whose ticks read "-140" sits further right than one reading "0", and the
+    stacked channels visibly step in and out. Never raises (cosmetic-only)."""
+    try:
+        plot.getAxis("left").setWidth(int(width))
+    except Exception:                       # pragma: no cover - never break a render over this
+        pass
+
 # --------------------------------------------------------------------------- #
 # Full theme token tables. The QSS template and QPalette are built from these.
 # --------------------------------------------------------------------------- #

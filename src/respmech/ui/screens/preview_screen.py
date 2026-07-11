@@ -1148,6 +1148,8 @@ class PreviewScreen(QWidget):
             p = self.plots.addPlot(row=i, col=0)
             p.showGrid(x=True, y=True, alpha=pal["grid_alpha"])
             p.setLabel("left", label)
+            if _theme is not None:
+                _theme.align_left_axis(p)          # keep the stacked channels x-aligned
             y = series[key]
             p.plot(t[:len(y)], y, pen=_pen(pal["channels"].get(key, colour)))
             # P22: a subtle zero-reference baseline on every channel, so the sign and
@@ -1205,6 +1207,8 @@ class PreviewScreen(QWidget):
             p = self.emg_raw_plots.addPlot(row=i, col=0)
             p.showGrid(x=True, y=True, alpha=0.12)
             p.setLabel("left", f"col {cols[i]}" if i < len(cols) else f"EMG {i + 1}")
+            if _theme is not None:
+                _theme.align_left_axis(p)          # keep the stacked channels x-aligned
             p.plot(t, emg[:, i], pen=_pen(cycle[i % len(cycle)]))
             if i == emg.shape[1] - 1:
                 p.setLabel("bottom", "Time (s)")
