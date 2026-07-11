@@ -45,13 +45,19 @@ def test_run_batch_and_write(tmp_path):
     assert any(e.kind == "finished" for e in events)
 
     written = write_batch(result, settings, str(tmp_path))
-    # 2 breathdata + 2 processed + 1 average + 2 provenance (analysis-used.toml + run-report.txt)
-    assert len(written) == 7
-    assert os.path.isfile(os.path.join(tmp_path, "analysis-used.toml"))
-    assert os.path.isfile(os.path.join(tmp_path, "run-report.txt"))
+    # core data outputs: 2 breathdata + 2 processed + 1 average
+    for name in ("data/synth_case_A.csv.breathdata.xlsx", "data/synth_case_B.csv.breathdata.xlsx",
+                 "data/synth_case_A.csv – Processed data.csv", "data/Average breathdata.xlsx",
+                 "data/Cohort summary.xlsx",              # P8/P15 cohort aggregation
+                 "analysis-used.toml", "run-report.txt"):  # P7 provenance
+        assert os.path.isfile(os.path.join(tmp_path, name)), f"missing {name}"
+    # P11 diagnostic figures land under diagnostics/
+    assert any(p.endswith(".png") for p in written)
     avg = pd.read_excel(os.path.join(tmp_path, "data", "Average breathdata.xlsx"), sheet_name="Data")
     assert list(avg["file"]) == ["synth_case_A.csv", "synth_case_B.csv"]
     assert "wobtotal" in avg.columns
+    # the raw result table is unchanged — the extras live in separate sheets/files
+    assert "rms_col_2_pct" not in avg.columns
 
 
 def test_cli_migrate_and_validate(tmp_path):
