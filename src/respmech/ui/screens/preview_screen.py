@@ -375,14 +375,26 @@ class PreviewScreen(QWidget):
         root = QVBoxLayout(self)
         bar = QHBoxLayout()
         self.file_combo = QComboBox()
+        # P27: step through files without leaving the plots — buttons + PageUp/PageDown.
+        self.btn_prev_file = QPushButton("◀")
+        self.btn_next_file = QPushButton("▶")
+        for b, tip in ((self.btn_prev_file, "Previous file (PgUp)"),
+                       (self.btn_next_file, "Next file (PgDn)")):
+            b.setFixedWidth(30); b.setToolTip(tip)
+        self.btn_prev_file.clicked.connect(lambda: self._step_file(-1))
+        self.btn_next_file.clicked.connect(lambda: self._step_file(+1))
         # 'Refresh' recomputes every auto panel (not the test run); the file list itself
         # refreshes automatically when file-related settings change.
         self.btn_refresh_all = QPushButton("Refresh")
         self.btn_refresh_all.setToolTip("Recompute all preview panels for the current file.")
         self.btn_refresh_all.clicked.connect(self._refresh_all)
-        bar.addWidget(QLabel("File:")); bar.addWidget(self.file_combo, 1)
+        bar.addWidget(QLabel("File:")); bar.addWidget(self.btn_prev_file)
+        bar.addWidget(self.file_combo, 1); bar.addWidget(self.btn_next_file)
         bar.addWidget(self.btn_refresh_all)
         root.addLayout(bar)
+        from PySide6.QtGui import QShortcut, QKeySequence  # noqa: PLC0415
+        QShortcut(QKeySequence(Qt.Key_PageUp), self, activated=lambda: self._step_file(-1))
+        QShortcut(QKeySequence(Qt.Key_PageDown), self, activated=lambda: self._step_file(+1))
         # Status is shown ONLY in the main-window bottom status bar (via status_changed).
         # Keep the label object (state holder + tests read pv.status) but never place it
         # under the file selector.
@@ -791,6 +803,15 @@ class PreviewScreen(QWidget):
     def _current_file(self):
         name = self.file_combo.currentText()
         return os.path.join(self.state.settings.input.folder, name) if name else None
+
+    def _step_file(self, delta: int):
+        """P27: move the file selection by ``delta`` (keyboard/▲▼), clamped to the list."""
+        n = self.file_combo.count()
+        if n <= 1:
+            return
+        i = min(max(self.file_combo.currentIndex() + delta, 0), n - 1)
+        if i != self.file_combo.currentIndex():
+            self.file_combo.setCurrentIndex(i)
 
     # -- enablement / guidance ---------------------------------------------
     def _settings_ok(self):
