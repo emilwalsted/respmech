@@ -73,7 +73,13 @@ def trim(timecol, flow, volume, poes, pgas, pdi, emgcolumns, settings):
             "Could not trim data to whole breaths: the flow signal never crosses "
             "zero as required (data must start in late expiration and end in early "
             "inspiration). Check the flow channel / inverseflow setting.")
-    startix = int(np.argmax(flow <= 0))
+    # Start at the first INSPIRATION sample (flow strictly < 0), not the first
+    # non-positive one: a recording that begins at rest (flow == 0) would otherwise set
+    # startix = 0, leaving the leading expiration in place — then the first breath begins
+    # in expiration, its inspiration loop never advances, and inend underflows to -1 so
+    # the "inspiration" slice [0:-1] spans the whole recording (a malformed breath #1
+    # that was silently averaged into the mean breath / WOB).
+    startix = int(np.argmax(flow < 0))
     endix = int(above[:, 0][len(above[:, 0]) - 1])
     if endix <= startix:
         raise TrimError(
