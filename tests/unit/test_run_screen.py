@@ -1,55 +1,22 @@
-"""Wave 5 of the full-app review: the tune-to-run loop & batch control.
-
-P18 re-run only the files that failed (the BatchWorker already accepts a file subset);
-P19 "Process & write this file" from Preview, so one tuned file can be produced without
-re-running the whole batch; P20 a per-file Run-results table whose rows drill back into
-Preview & QC. All GUI wiring — no core, no golden exposure.
-"""
-import os
+"""Run screen — the tune-to-run loop & batch control: re-run only the failed files (P18),
+"Process & write this file" from Preview (P19), and the per-file results table with
+drill-back into Preview (P20). Previously test_review_wave5.py; the run-screen tests from
+wave 2 (dry-run plan P5, overwrite guard, open-folder P7) are appended below."""
 from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-pytest.importorskip("PySide6")
-pytest.importorskip("pyqtgraph")
+from respmech.ui.state import AppState
 
-import matplotlib  # noqa: E402
-matplotlib.use("QtAgg")
+from _helpers import requires_synth, synth_settings
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
-
-from respmech.ui.state import AppState  # noqa: E402
-
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-INPUT = os.path.join(ROOT, "tests", "golden", "input")
-pytestmark = pytest.mark.skipif(
-    not os.path.exists(os.path.join(INPUT, "synth_case_A.csv")), reason="synthetic input absent")
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    from respmech.ui import theme
-    app = QApplication.instance() or QApplication([])
-    theme.apply_theme(app)
-    yield app
+pytestmark = requires_synth()
 
 
 def _win(tmp):
-    from respmech.settingsio.migrate import migrate_dict
     from respmech.ui.main_window import MainWindow
-    legacy = {"input": {"inputfolder": INPUT, "files": "synth_case_*.csv",
-                        "format": {"samplingfrequency": 1000},
-                        "data": {"column_poes": 7, "column_pgas": 8, "column_pdi": 9,
-                                 "column_volume": 6, "column_flow": 5, "columns_emg": [2, 3, 4],
-                                 "columns_entropy": [10, 11, 12]}},
-              "processing": {"mechanics": {"breathseparationbuffer": 200, "separateby": "flow",
-                                           "avgresamplingobs": 300},
-                             "emg": {"remove_ecg": False, "remove_noise": False}},
-              "output": {"outputfolder": str(tmp), "data": {}}}
-    s, _ = migrate_dict(legacy); s.input.folder = INPUT; s.output.folder = str(tmp)
-    return MainWindow(AppState(s))
+    return MainWindow(AppState(synth_settings(tmp)))
 
 
 def _result_with_failure():
@@ -129,4 +96,50 @@ def test_subset_run_is_noted_in_the_plan(qapp, tmp_path):
     rn._append_plan(write=False)
     log = rn.log.toPlainText()
     assert "subset" in log and "synth_case_B.csv" in log
+    win.close()
+
+
+# ---------------------------------------------------------------------------
+# Dry-run pre-flight plan + overwrite guard (P5) — from wave 2
+# ---------------------------------------------------------------------------
+def test_dry_run_plan_lists_inputs_and_planned_outputs(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(tmp_path))); rn = win.run_screen
+    rn._append_plan(write=False)
+    log = rn.log.toPlainText()
+    assert "DRY RUN" in log and "nothing will be written" in log.lower()
+    assert log.count("synth_case_") >= 2                      # both inputs listed
+    assert "analysis-used.toml" in log and "run-report.txt" in log
+    win.close()
+
+
+def test_planned_outputs_follow_save_flags(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.validation import matching_files
+    s = synth_settings(tmp_path)
+    win = MainWindow(AppState(s)); rn = win.run_screen
+    files = matching_files(s.input.folder, s.input.files)
+    s.output.data.save_processed = False
+    assert not any("Processed data" in n for n in rn._planned_outputs(files))
+    s.output.data.save_processed = True
+    assert any("Processed data" in n for n in rn._planned_outputs(files))
+    win.close()
+
+
+def test_overwrite_guard_detects_prior_results(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(tmp_path))); rn = win.run_screen
+    assert rn._existing_output() is None                     # empty folder — nothing to clobber
+    (tmp_path / "analysis-used.toml").write_text("x")
+    data = tmp_path / "data"; data.mkdir()
+    (data / "Average breathdata.xlsx").write_text("y")
+    ex = rn._existing_output()
+    assert ex is not None and ex[1] == 2                      # 2 prior files detected
+    win.close()
+
+
+def test_open_output_button_starts_disabled(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(tmp_path))); rn = win.run_screen
+    assert not rn.btn_open.isEnabled()                        # enabled only after a real write
     win.close()

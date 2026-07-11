@@ -8,28 +8,9 @@ import os
 
 import numpy as np
 import pytest
+from PySide6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-pytest.importorskip("PySide6")
-pytest.importorskip("pyqtgraph")
-
-import matplotlib  # noqa: E402
-matplotlib.use("QtAgg")
-
-from PySide6.QtWidgets import QApplication  # noqa: E402
-
-from respmech.ui.state import AppState  # noqa: E402
-
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-INPUT = os.path.join(ROOT, "tests", "golden", "input")
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    from respmech.ui import theme
-    app = QApplication.instance() or QApplication([])
-    theme.apply_theme(app)
-    yield app
+from _helpers import INPUT  # noqa: F401  (qapp fixture comes from conftest)
 
 
 def _viewbox_lefts(plots):
@@ -60,18 +41,11 @@ def test_channel_setup_previews_are_x_aligned(qapp):
 @pytest.mark.skipif(not os.path.exists(os.path.join(INPUT, "synth_case_A.csv")),
                     reason="synthetic input absent")
 def test_mechanics_channel_stack_is_x_aligned(qapp):
-    from respmech.settingsio.migrate import migrate_dict
     from respmech.ui.workers import stage_mechanics_preview
     from respmech.ui.main_window import MainWindow
-    legacy = {"input": {"inputfolder": INPUT, "files": "synth_case_A.csv",
-                        "format": {"samplingfrequency": 1000},
-                        "data": {"column_poes": 7, "column_pgas": 8, "column_pdi": 9,
-                                 "column_volume": 6, "column_flow": 5, "columns_emg": [2, 3, 4],
-                                 "columns_entropy": [10, 11, 12]}},
-              "processing": {"mechanics": {"breathseparationbuffer": 200, "separateby": "flow",
-                                           "avgresamplingobs": 300}, "emg": {}},
-              "output": {"outputfolder": "", "data": {}}}
-    s, _ = migrate_dict(legacy); s.input.folder = INPUT
+    from respmech.ui.state import AppState
+    from _helpers import synth_settings
+    s = synth_settings("")
     win = MainWindow(AppState(s)); pv = win.preview_screen
     pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
     pv._render_preview(stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv")))

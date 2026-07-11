@@ -505,3 +505,13 @@ def test_manual_assign_channels_button_opens_setup_with_current_mapping(qapp, mo
     # so the picker pre-selects whatever channels are already set (not a blank fresh flow)
     assert seen.get("initial_is_none") is True
     win.close()
+
+
+# ---------------------------------------------------------------------------
+# Descriptive channel-role labels (P1) — from wave 1
+# ---------------------------------------------------------------------------
+def test_channel_role_labels_are_descriptive(qapp):
+    from respmech.ui.channel_setup_dialog import _ROLES
+    labels = dict(_ROLES)
+    assert "oesophageal" in labels["poes"] and "gastric" in labels["pgas"]
+    assert "transdiaphragmatic" in labels["pdi"] and "diaphragm" in labels["emg"]

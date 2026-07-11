@@ -6,41 +6,10 @@ and noise-profile dialogs do NOT inherit Qt styling — they must pull the dark 
 palette via theme.plot_palette(). These tests force dark mode, build every dialog, and
 assert the theme is dark and the plot surfaces are dark (not the light fallback).
 """
-import os
-
 import numpy as np
-import pytest
+from PySide6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-pytest.importorskip("PySide6")
-pytest.importorskip("pyqtgraph")
-
-import matplotlib  # noqa: E402
-matplotlib.use("QtAgg")
-
-from PySide6.QtWidgets import QApplication  # noqa: E402
-
-
-@pytest.fixture
-def dark_app():
-    """Force the dark theme for the duration of a test, then restore the OS default so
-    the global theme state never leaks into other test modules."""
-    from respmech.ui import theme
-    app = QApplication.instance() or QApplication([])
-    orig = theme._prefers_dark
-    theme._prefers_dark = lambda _a: True
-    theme.apply_theme(app)
-    try:
-        yield app, theme
-    finally:
-        theme._prefers_dark = orig
-        theme.apply_theme(app)
-
-
-def _is_dark_hex(h):
-    h = h.lstrip("#")
-    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
-    return (0.299 * r + 0.587 * g + 0.114 * b) < 110      # perceived luminance is dark
+from _helpers import is_dark_hex as _is_dark_hex  # noqa: F401 (dark_app fixture from conftest)
 
 
 def test_theme_switches_to_dark(dark_app):

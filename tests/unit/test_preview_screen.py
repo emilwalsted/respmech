@@ -1,57 +1,19 @@
-"""Wave 4 of the full-app review: the Preview as an analysis & QC surface.
-
-P12 the Campbell diagram gains the elastic-recoil line + shaded inspiratory work +
-a WOB read-out; P13 the EMG detail overlays the RMS envelope it quantifies; P16 a
-persistent batch-QC overview flags non-physiological breaths; P17 a crosshair read-out
-+ Campbell figure export; P22 a zero-reference baseline on every mechanics channel.
-All Preview-screen (pyqtgraph/matplotlib) work — no core, no golden exposure.
-"""
+"""Preview screen as an analysis & QC surface: the Campbell diagram's recoil line +
+shaded work + WOB (P12), the EMG RMS envelope (P13), the batch-QC overview (P16), the
+crosshair + Campbell export (P17) and zero-reference baselines (P22). Previously
+test_review_wave4.py; the preview tests from waves 1 (P2) and 6 (P27) are appended below."""
 import os
 
 import numpy as np
+import pyqtgraph as pg
 import pytest
+from PySide6.QtCore import QPointF
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-pytest.importorskip("PySide6")
-pytest.importorskip("pyqtgraph")
+from respmech.ui.state import AppState
 
-import matplotlib  # noqa: E402
-matplotlib.use("QtAgg")
+from _helpers import INPUT, requires_synth, synth_settings
 
-import pyqtgraph as pg  # noqa: E402
-from PySide6.QtCore import QPointF  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
-
-from respmech.ui.state import AppState  # noqa: E402
-
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-INPUT = os.path.join(ROOT, "tests", "golden", "input")
-pytestmark = pytest.mark.skipif(
-    not os.path.exists(os.path.join(INPUT, "synth_case_A.csv")), reason="synthetic input absent")
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    from respmech.ui import theme
-    app = QApplication.instance() or QApplication([])
-    theme.apply_theme(app)
-    yield app
-
-
-def _settings():
-    from respmech.settingsio.migrate import migrate_dict
-    legacy = {"input": {"inputfolder": INPUT, "files": "synth_case_*.csv",
-                        "format": {"samplingfrequency": 1000},
-                        "data": {"column_poes": 7, "column_pgas": 8, "column_pdi": 9,
-                                 "column_volume": 6, "column_flow": 5, "columns_emg": [2, 3, 4],
-                                 "columns_entropy": [10, 11, 12]}},
-              "processing": {"mechanics": {"breathseparationbuffer": 200, "separateby": "flow",
-                                           "avgresamplingobs": 300},
-                             "emg": {"remove_ecg": False, "remove_noise": False}},
-              "output": {"outputfolder": "", "data": {}}}
-    s, _ = migrate_dict(legacy)
-    s.input.folder = INPUT
-    return s
+pytestmark = requires_synth()
 
 
 def _render_mech(pv, s):
@@ -66,7 +28,7 @@ def _render_mech(pv, s):
 def test_campbell_has_recoil_line_and_shaded_work(qapp):
     from respmech.ui.main_window import MainWindow
     from respmech.core.pipeline import run_batch
-    s = _settings()
+    s = synth_settings("")
     win = MainWindow(AppState(s)); pv = win.preview_screen
     fr = run_batch(s).ok_files["synth_case_A.csv"]
     pv._draw_campbell(fr.breaths)
@@ -93,7 +55,7 @@ def test_rms_envelope_helper():
 
 def test_emg_detail_overlays_rms_envelope(qapp):
     from respmech.ui.main_window import MainWindow
-    s = _settings()
+    s = synth_settings("")
     win = MainWindow(AppState(s)); pv = win.preview_screen
     t = np.linspace(0, 1, 1000)
     raw = np.sin(2 * np.pi * 50 * t)
@@ -112,7 +74,7 @@ def test_qc_overview_ok_and_warn(qapp):
     import pandas as pd
     from respmech.ui.main_window import MainWindow
     from respmech.core.pipeline import run_batch
-    s = _settings()
+    s = synth_settings("")
     win = MainWindow(AppState(s)); pv = win.preview_screen
     fr = run_batch(s).ok_files["synth_case_A.csv"]
     pv._update_qc_overview(fr)
@@ -133,7 +95,7 @@ def test_qc_overview_ok_and_warn(qapp):
 def test_crosshair_and_export(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     from respmech.core.pipeline import run_batch
-    s = _settings()
+    s = synth_settings("")
     win = MainWindow(AppState(s)); pv = win.preview_screen
     _render_mech(pv, s)
     assert len(pv._crosshair_lines) == len(pv._channel_plots)
@@ -157,11 +119,50 @@ def test_crosshair_and_export(qapp, tmp_path):
 # --------------------------------------------------------------------------- #
 def test_zero_baseline_on_every_channel(qapp):
     from respmech.ui.main_window import MainWindow
-    s = _settings()
+    s = synth_settings("")
     win = MainWindow(AppState(s)); pv = win.preview_screen
     _render_mech(pv, s)
     for p in pv._channel_plots:
         horiz = [it for it in p.items
                  if isinstance(it, pg.InfiniteLine) and float(it.angle) % 180 == 0]
         assert horiz, "channel missing its zero baseline"
+    win.close()
+
+
+# ---------------------------------------------------------------------------
+# Keyboard file-stepping (P27) — from wave 6
+# ---------------------------------------------------------------------------
+def test_file_stepping(qapp):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); pv = win.preview_screen
+    pv.file_combo.clear(); pv.file_combo.addItems(["f1.csv", "f2.csv", "f3.csv"])
+    pv.file_combo.setCurrentIndex(0)
+    pv._step_file(+1); assert pv.file_combo.currentText() == "f2.csv"
+    pv._step_file(+1); pv._step_file(+1)                 # clamps at the end
+    assert pv.file_combo.currentIndex() == 2
+    pv._step_file(-1); assert pv.file_combo.currentText() == "f2.csv"
+    win.close()
+
+
+# --------------------------------------------------------------------------- #
+# P28 — detected-format read-out
+# --------------------------------------------------------------------------- #
+@pytest.mark.skipif(not os.path.exists(os.path.join(INPUT, "synth_case_A.csv")),
+                    reason="synthetic input absent")
+
+
+# ---------------------------------------------------------------------------
+# Live recompute on breath exclusion (P2) — from wave 1
+# ---------------------------------------------------------------------------
+def test_toggle_breath_requests_recompute(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_mechanics_preview
+    s = synth_settings(tmp_path)
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._render_preview(stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv")))
+    a_breath = next(iter(pv._breath_spans))
+    pv._toggle_breath(a_breath)
+    assert pv._batch_recompute_pending is True            # the average is being recomputed…
+    assert "recomputing" in pv.status.text().lower()      # …not deferred to a manual run
     win.close()

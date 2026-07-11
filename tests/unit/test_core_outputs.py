@@ -1,10 +1,7 @@
-"""Wave 3 of the full-app review: publishable science.
-
-All of it is additive at the writer level so the golden-pinned result tables never
-change: P8 cohort mean ± SD / n / CV%; P10/P21 unit-labelled headers + a Units and a
-Provenance sheet; P11 diagnostic figures; P14 EMG amplitude normalisation (a separate
-normalised sheet, default per-file max); P15 subject/condition grouping + comparison.
-"""
+"""Core publishable-science outputs: units, cohort summary, EMG normalisation, and
+diagnostic figures — all additive at the writer level so the golden result tables are
+byte-identical (units P10/P21, cohort mean±SD/CV% P8, figures P11, normalisation P14,
+grouping P15). Previously test_review_wave3.py."""
 import os
 from datetime import datetime
 from types import SimpleNamespace
@@ -13,29 +10,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-INPUT = os.path.join(ROOT, "tests", "golden", "input")
-pytestmark = pytest.mark.skipif(
-    not os.path.exists(os.path.join(INPUT, "synth_case_A.csv")), reason="synthetic input absent")
+from _helpers import INPUT, requires_synth, synth_settings
 
-
-def _legacy(out, **overrides):
-    from respmech.settingsio.migrate import migrate_dict
-    legacy = {"input": {"inputfolder": INPUT, "files": "synth_case_*.csv",
-                        "format": {"samplingfrequency": 1000},
-                        "data": {"column_poes": 7, "column_pgas": 8, "column_pdi": 9,
-                                 "column_volume": 6, "column_flow": 5, "columns_emg": [2, 3, 4],
-                                 "columns_entropy": [10, 11, 12]}},
-              "processing": {"mechanics": {"breathseparationbuffer": 200, "separateby": "flow",
-                                           "avgresamplingobs": 300},
-                             "emg": {"remove_ecg": False, "remove_noise": False}},
-              "output": {"outputfolder": str(out), "data": {}}}
-    s, _ = migrate_dict(legacy)
-    s.input.folder = INPUT
-    s.output.folder = str(out)
-    for k, v in overrides.items():
-        setattr(s, k, v)
-    return s
+pytestmark = requires_synth()
 
 
 # --------------------------------------------------------------------------- #
@@ -137,7 +114,7 @@ def test_emg_normalization_modes():
 def test_figures_written_and_flag_driven(tmp_path):
     from respmech.core.pipeline import run_batch
     from respmech.core import plots
-    s = _legacy(tmp_path)
+    s = synth_settings(tmp_path)
     s.output.diagnostics.save_pv_average = True
     s.output.diagnostics.save_pv_individual = False
     s.output.diagnostics.save_raw = False
@@ -158,7 +135,7 @@ def test_drift_figure_renders_from_volume_endpoints(tmp_path):
     figure must render (it was silently failing and producing no file)."""
     from respmech.core.pipeline import run_batch
     from respmech.core import plots
-    s = _legacy(tmp_path)
+    s = synth_settings(tmp_path)
     for flag in ("save_pv_average", "save_pv_individual", "save_raw", "save_trimmed"):
         setattr(s.output.diagnostics, flag, False)
     s.output.diagnostics.save_drift = True
@@ -175,7 +152,7 @@ def test_drift_figure_renders_from_volume_endpoints(tmp_path):
 def test_write_batch_adds_units_provenance_summary_without_touching_data(tmp_path):
     from respmech.core.pipeline import run_batch
     from respmech.core.io.writers import write_batch
-    s = _legacy(tmp_path)
+    s = synth_settings(tmp_path)
     result = run_batch(s)
     raw_cols = list(next(iter(result.ok_files.values())).breaths_table.columns)
     write_batch(result, s, str(tmp_path), when=datetime(2026, 7, 11))
@@ -188,3 +165,60 @@ def test_write_batch_adds_units_provenance_summary_without_touching_data(tmp_pat
     data_cols = [c.value for c in next(wb["Data"].iter_rows(max_row=1))]
     assert data_cols == raw_cols
     assert os.path.isfile(os.path.join(tmp_path, "data", "Cohort summary.xlsx"))
+
+
+# ---------------------------------------------------------------------------
+# Run report + reloadable manifest (P7); sample data (P23) — waves 2, 6
+# ---------------------------------------------------------------------------
+def test_run_report_accounts_for_excluded_and_failed(tmp_path):
+    """The run report must show per-file breath accounting (excluded → used) and any
+    failures, without needing a full batch — driven by lightweight fakes."""
+    from types import SimpleNamespace
+    from respmech.core.io.writers import _write_run_report
+
+    ok = SimpleNamespace(breaths={1: {"ignored": False}, 2: {"ignored": True},
+                                  3: {"ignored": False}}, error=None)
+    bad = SimpleNamespace(breaths=None, error="boom while loading")
+    result = SimpleNamespace(
+        ok_files={"good.csv": ok}, failed_files={"bad.csv": bad})
+    s = synth_settings(tmp_path)
+    path = _write_run_report(result, s, str(tmp_path), ["data/x.xlsx"], datetime(2026, 7, 11))
+    report = open(path).read()
+    assert "1 processed, 1 failed" in report
+    assert "3 breaths (1 excluded → 2 used)" in report
+    assert "[FAIL] bad.csv   ERROR: boom while loading" in report
+
+
+def test_write_batch_emits_reloadable_manifest(tmp_path):
+    from respmech.core.pipeline import run_batch
+    from respmech.core.io.writers import write_batch
+    from respmech.settingsio.toml_io import load_toml
+    s = synth_settings(tmp_path)
+    s.output.data.save_processed = True
+    result = run_batch(s)
+    written = write_batch(result, s, str(tmp_path), when=datetime(2026, 7, 11, 14, 0, 0))
+    manifest = os.path.join(str(tmp_path), "analysis-used.toml")
+    report = os.path.join(str(tmp_path), "run-report.txt")
+    assert os.path.isfile(manifest) and os.path.isfile(report)
+    assert manifest in written and report in written
+    # the manifest is a real, reloadable settings file (round-trips the sampling rate)
+    reloaded = load_toml(manifest)
+    assert reloaded.input.format.sampling_frequency == 1000
+    assert "2 processed, 0 failed" in open(report).read()
+
+
+def test_sample_recording_is_analysable(tmp_path):
+    from respmech.core.sample import write_sample_recording
+    from respmech.core.pipeline import run_batch
+    from respmech.core.settings import Settings
+    desc = write_sample_recording(str(tmp_path / "input"))
+    assert os.path.isfile(desc["path"])
+    s = Settings()
+    s.input.folder = desc["folder"]; s.input.files = desc["filename"]
+    s.input.format.sampling_frequency = desc["sampling_frequency"]
+    m, ch = desc["mapping"], s.input.channels
+    ch.flow, ch.volume, ch.poes, ch.pgas, ch.pdi = m["flow"], m["volume"], m["poes"], m["pgas"], m["pdi"]
+    ch.emg = m["emg"]; s.processing.segmentation.buffer = 200
+    result = run_batch(s)
+    fr = next(iter(result.ok_files.values()))
+    assert len([b for b in fr.breaths.values() if not b["ignored"]]) >= 4   # real breaths detected
