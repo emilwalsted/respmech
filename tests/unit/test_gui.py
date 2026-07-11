@@ -191,3 +191,15 @@ def test_validate_checks_paths(qapp, tmp_path):
     sc.state.settings.processing.emg.noise.reference_file = "not_here.csv"
     msg = sc._path_problem()
     assert msg and "noise reference file" in msg
+
+
+def test_checkboxes_show_a_box_in_both_states(qapp):
+    """A deselected checkable option must read as an empty checkbox, not plain text:
+    the theme styles QCheckBox::indicator (a visible box unchecked, accent + tick when
+    checked) rather than leaving Fusion's checkmark-only default."""
+    from respmech.ui import theme
+    qss = qapp.styleSheet()
+    assert "QCheckBox::indicator" in qss                 # the box is styled at all…
+    assert "QCheckBox::indicator:checked" in qss         # …and the checked state
+    assert "border" in qss.split("QCheckBox::indicator")[1][:120]   # unchecked draws a border
+    assert theme._check_icon_path() != ""                # the tick image is available
