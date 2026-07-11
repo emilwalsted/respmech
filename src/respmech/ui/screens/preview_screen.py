@@ -328,6 +328,8 @@ class PreviewScreen(QWidget):
     status_changed = Signal(str)
     # emitted when a noise reference is chosen on the graph (feature B)
     noise_reference_changed = Signal(str, object, bool)
+    # emitted to process AND write just the previewed file (P19)
+    process_file_requested = Signal(str)
 
     def __init__(self, state):
         super().__init__()
@@ -452,10 +454,22 @@ class PreviewScreen(QWidget):
         self.btn_export_fig.setEnabled(False)          # enabled once a diagram is drawn
         self.btn_export_fig.setToolTip("Save the Campbell diagram as a PNG or PDF.")
         self.btn_export_fig.clicked.connect(self._export_campbell)
+        # P19: process AND write just this file, so a tuned file can be produced without
+        # re-running the whole batch (reuses the Run screen's write machinery).
+        self.btn_process_file = QPushButton("Process && write this file")
+        self.btn_process_file.setEnabled(False)
+        self.btn_process_file.setToolTip("Run and write output for the previewed file only.")
+        self.btn_process_file.clicked.connect(self._process_this_file)
         bar.addWidget(self.qc_overview); bar.addStretch(1)
-        bar.addWidget(self.crosshair_label); bar.addSpacing(12); bar.addWidget(self.btn_export_fig)
+        bar.addWidget(self.crosshair_label); bar.addSpacing(12)
+        bar.addWidget(self.btn_process_file); bar.addWidget(self.btn_export_fig)
         v.addLayout(bar)
         return w
+
+    def _process_this_file(self):
+        name = self._previewed_file or self.file_combo.currentText()
+        if name:
+            self.process_file_requested.emit(os.path.basename(name))
 
     def _update_qc_overview(self, fr):
         """P16: a persistent, at-a-glance quality summary of the current test run —
@@ -1138,6 +1152,7 @@ class PreviewScreen(QWidget):
         self._repaint_view_breaths("result")
 
         self._previewed_file = data["name"]
+        self.btn_process_file.setEnabled(True)       # a file is loaded → can process just it
         if data.get("trim_error"):
             self._set_status(f"{data['name']}: showing raw channels — could not detect "
                              f"breaths. {data['trim_error']}")
