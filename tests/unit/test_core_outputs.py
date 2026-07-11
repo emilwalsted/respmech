@@ -183,7 +183,7 @@ def test_run_report_accounts_for_excluded_and_failed(tmp_path):
         ok_files={"good.csv": ok}, failed_files={"bad.csv": bad})
     s = synth_settings(tmp_path)
     path = _write_run_report(result, s, str(tmp_path), ["data/x.xlsx"], datetime(2026, 7, 11))
-    report = open(path).read()
+    report = open(path, encoding="utf-8").read()   # the report is UTF-8 (em-dash, → arrow)
     assert "1 processed, 1 failed" in report
     assert "3 breaths (1 excluded → 2 used)" in report
     assert "[FAIL] bad.csv   ERROR: boom while loading" in report
@@ -204,7 +204,7 @@ def test_write_batch_emits_reloadable_manifest(tmp_path):
     # the manifest is a real, reloadable settings file (round-trips the sampling rate)
     reloaded = load_toml(manifest)
     assert reloaded.input.format.sampling_frequency == 1000
-    assert "2 processed, 0 failed" in open(report).read()
+    assert "2 processed, 0 failed" in open(report, encoding="utf-8").read()
 
 
 def test_sample_recording_is_analysable(tmp_path):

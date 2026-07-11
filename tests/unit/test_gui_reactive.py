@@ -8,7 +8,6 @@ then clears each panel's spinner, supersedes stale jobs cleanly when the file
 changes mid-run, and shuts the threads down without leaking.
 """
 import os
-import time
 
 import pytest
 
@@ -34,14 +33,36 @@ def _settings(outdir, noise=False):
 
 
 def _pump_until(qapp, predicate, timeout=60.0):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        qapp.processEvents()
+    """Spin a REAL Qt event loop until ``predicate`` holds (or ``timeout`` seconds pass).
+
+    Uses ``QEventLoop.exec()`` rather than a hand-rolled ``processEvents()``/``sleep`` pump:
+    a manual pump does not reliably deliver cross-thread *queued* signals on every platform
+    (headless Windows delivers the same-thread ``singleShot`` dispatch but not the workers'
+    cross-thread ``finished`` — so jobs looked stuck), whereas a real event loop delivers
+    them exactly as the running app does. This makes the async-orchestration tests exercise
+    the true signal-delivery path and behave identically on macOS and Windows."""
+    from PySide6.QtCore import QEventLoop, QTimer, QElapsedTimer
+    if predicate():
+        return True
+    loop = QEventLoop()
+    clock = QElapsedTimer()
+    clock.start()
+    state = {"ok": False}
+    timer = QTimer()
+    timer.setInterval(10)
+
+    def _tick():
         if predicate():
-            return True
-        time.sleep(0.02)
-    qapp.processEvents()
-    return predicate()
+            state["ok"] = True
+            loop.quit()
+        elif clock.elapsed() > timeout * 1000:
+            loop.quit()
+
+    timer.timeout.connect(_tick)
+    timer.start()
+    loop.exec()
+    timer.stop()
+    return state["ok"] or predicate()
 
 
 def test_selecting_a_file_autoruns_all_panels(qapp, tmp_path):
