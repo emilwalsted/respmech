@@ -34,6 +34,7 @@ class RunScreen(QWidget):
     status_changed = Signal(str)
     run_started = Signal()          # a batch run began (main window locks Settings)
     run_finished = Signal()         # the batch run ended
+    open_file_requested = Signal(str)   # drill back into Preview for one file (P20)
 
     def __init__(self, state):
         super().__init__()
@@ -44,6 +45,8 @@ class RunScreen(QWidget):
         self._error_dialog = None
         self._incomplete_shown = False
         self._last_write = False        # did the most recent completed run write files?
+        self._last_failed = []          # basenames that failed in the last run (P18 re-run)
+        self._only_files = None         # subset the current run is restricted to (P18/P19)
         self._build()
         self.refresh_actions()
 
@@ -53,6 +56,9 @@ class RunScreen(QWidget):
         self.btn_run = QPushButton("Run batch")
         self.btn_dry = QPushButton("Dry run (no files written)")
         self.btn_cancel = QPushButton("Cancel"); self.btn_cancel.setEnabled(False)
+        self.btn_rerun = QPushButton("Re-run failed")
+        self.btn_rerun.setEnabled(False)    # enabled after a run that had failures (P18)
+        self.btn_rerun.setToolTip("Re-run only the files that failed in the last run.")
         self.btn_open = QPushButton("Open output folder")
         self.btn_open.setEnabled(False)     # enabled once a run has written results
         if _theme is not None:
@@ -60,10 +66,11 @@ class RunScreen(QWidget):
         self.btn_run.clicked.connect(lambda: self._start(write=True))
         self.btn_dry.clicked.connect(lambda: self._start(write=False))
         self.btn_cancel.clicked.connect(self._cancel)
+        self.btn_rerun.clicked.connect(self._rerun_failed)
         self.btn_open.clicked.connect(self._open_output_folder)
         bar.addWidget(self.btn_run); bar.addWidget(self.btn_dry)
         bar.addWidget(self.btn_cancel); bar.addStretch(1)
-        bar.addWidget(self.btn_open)
+        bar.addWidget(self.btn_rerun); bar.addWidget(self.btn_open)
         root.addLayout(bar)
 
         self.progress = QProgressBar()
@@ -75,7 +82,16 @@ class RunScreen(QWidget):
         self.log = QPlainTextEdit(); self.log.setReadOnly(True)
         root.addWidget(self.log, 2)
 
-        self.table = QTableWidget(0, 0)
+        # P20: per-file results — status + breath count; double-click drills into Preview
+        self.files_table = QTableWidget(0, 3)
+        self.files_table.setHorizontalHeaderLabels(["File", "Status", "Breaths"])
+        self.files_table.setToolTip("Double-click a file to open it in Preview & QC.")
+        self.files_table.verticalHeader().setVisible(False)
+        self.files_table.setEditTriggers(self.files_table.EditTrigger.NoEditTriggers)
+        self.files_table.cellDoubleClicked.connect(self._on_file_row_activated)
+        root.addWidget(self.files_table, 1)
+
+        self.table = QTableWidget(0, 0)     # the averaged-metrics table (unchanged)
         root.addWidget(self.table, 1)
 
     # -- helpers ------------------------------------------------------------
@@ -133,9 +149,14 @@ class RunScreen(QWidget):
         (for a real run) exactly what will be written — or, for a dry run, would be."""
         s = self.state.settings
         files = matching_files(s.input.folder, s.input.files)
+        if self._only_files:                            # a subset / re-run (P18/P19)
+            keep = set(self._only_files)
+            files = [f for f in files if os.path.basename(f) in keep]
         head = "DRY RUN — nothing will be written." if not write else "RUN — writing output."
         self._append(f"── {head} ──")
-        self._append(f"Input:  {len(files)} file(s) matching '{s.input.files}' in {s.input.folder}")
+        subset = f" (subset: {len(files)} of {len(matching_files(s.input.folder, s.input.files))})" \
+            if self._only_files else ""
+        self._append(f"Input:  {len(files)} file(s) matching '{s.input.files}' in {s.input.folder}{subset}")
         for f in files:
             self._append(f"    • {os.path.basename(f)}")
         planned = self._planned_outputs(files)
@@ -184,7 +205,7 @@ class RunScreen(QWidget):
             self._set_status("Output folder does not exist yet.")
 
     # -- run lifecycle ------------------------------------------------------
-    def _start(self, write: bool):
+    def _start(self, write: bool, only_files=None):
         if self._thread is not None:
             return
         ok, why = self._settings_ok()
@@ -201,6 +222,7 @@ class RunScreen(QWidget):
             if existing and not self._confirm_overwrite(existing):
                 self._set_status("Run cancelled — existing results kept.")
                 return
+        self._only_files = list(only_files) if only_files else None
         self.log.clear(); self.progress.setRange(0, 0)  # busy until first file
         self._fatal_msg = None
         self._last_write = write
@@ -210,7 +232,8 @@ class RunScreen(QWidget):
 
         self._thread = QThread()
         # snapshot the settings so edits mid-run can't change what the worker reads
-        self._worker = BatchWorker(copy.deepcopy(self.state.settings), write=write)
+        self._worker = BatchWorker(copy.deepcopy(self.state.settings), write=write,
+                                   only_files=self._only_files)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_progress)
@@ -268,7 +291,9 @@ class RunScreen(QWidget):
         if result is not None:
             try:
                 self._fill_table(result)
+                self._fill_files_table(result)        # P20 per-file status
                 self._append_summary(result)
+                self._last_failed = list(result.failed_files)   # P18 re-run set
             except Exception as e:                # noqa: BLE001
                 self._append(f"\n(results table error: {e})")
         if self._thread is not None:
@@ -296,6 +321,7 @@ class RunScreen(QWidget):
         # a clean real-write run leaves results on disk — offer to open them
         if self._last_write and result is not None and not fatal and not cancelled:
             self.btn_open.setEnabled(True)
+        self.btn_rerun.setEnabled(bool(self._last_failed))    # P18: re-run only if something failed
         self.run_finished.emit()
         # surface a copyable error-log window if anything failed
         failed = getattr(result, "failed_files", {}) if result is not None else {}
@@ -365,6 +391,46 @@ class RunScreen(QWidget):
         self.btn_run.setEnabled(not running)
         self.btn_dry.setEnabled(not running)
         self.btn_cancel.setEnabled(running)
+        if running:
+            self.btn_rerun.setEnabled(False)      # can't re-run while a run is in flight
+
+    # -- per-file results, subset re-run, single-file write (P18/P19/P20) ----
+    def _fill_files_table(self, result):
+        """One row per file: name, ok/failed status, breath count. Double-clicking a
+        row drills back into Preview & QC for that file."""
+        files = getattr(result, "files", {}) or {}
+        self.files_table.setRowCount(len(files))
+        for r, (fname, fr) in enumerate(files.items()):
+            err = getattr(fr, "error", None)
+            status = "failed" if err else "ok"
+            bt = getattr(fr, "breaths_table", None)
+            nb = "" if err else str(len(bt) if bt is not None else 0)
+            name_item = QTableWidgetItem(fname)
+            if err:
+                name_item.setToolTip(str(err))
+            self.files_table.setItem(r, 0, name_item)
+            self.files_table.setItem(r, 1, QTableWidgetItem(status))
+            self.files_table.setItem(r, 2, QTableWidgetItem(nb))
+        self.files_table.resizeColumnsToContents()
+
+    def _on_file_row_activated(self, row, _col):
+        item = self.files_table.item(row, 0)
+        if item and item.text():
+            self.open_file_requested.emit(item.text())   # MainWindow -> Preview tab + select
+
+    def _rerun_failed(self):
+        """Re-run only the files that failed in the last run (P18)."""
+        if not self._last_failed:
+            self._set_status("No failed files to re-run.")
+            return
+        self._append(f"\n── Re-running {len(self._last_failed)} failed file(s) ──")
+        self._start(write=self._last_write, only_files=list(self._last_failed))
+
+    def run_single_file(self, filename: str):
+        """Process AND write just one file (P19 'Process & write this file' from Preview).
+        Reuses the full run machinery (overwrite guard, provenance) restricted to one
+        file. The shared noise profile is still built from the whole test."""
+        self._start(write=True, only_files=[filename])
 
     def _append(self, text):
         self.log.appendPlainText(text)

@@ -60,6 +60,10 @@ class MainWindow(QMainWindow):
         self._update_window_title()
         # a noise reference chosen on the Preview graph (feature B) mirrors into Settings
         pv.noise_reference_changed.connect(sc.set_noise_reference)
+        # P19: "Process & write this file" on Preview → run just that file on the Run screen
+        pv.process_file_requested.connect(self._process_single_file)
+        # P20: double-clicking a file in the Run results drills back into Preview
+        rn.open_file_requested.connect(self._open_file_in_preview)
         # while a batch runs, lock the Settings screen so its state can't be swapped
         # (e.g. Load TOML) out from under the running worker
         rn.run_started.connect(self._on_run_started)
@@ -99,6 +103,20 @@ class MainWindow(QMainWindow):
         name = os.path.basename(path) if path else "new analysis (unsaved)"
         dirty = " •" if self.settings_screen.is_dirty() else ""
         self.setWindowTitle(f"RespMech {__version__} — {name}{dirty}")
+
+    def _process_single_file(self, filename: str):
+        """P19: switch to the Run screen and process+write just the previewed file."""
+        self.tabs.setCurrentIndex(self._i_run)
+        self.run_screen.run_single_file(filename)
+
+    def _open_file_in_preview(self, filename: str):
+        """P20: drill back from the Run results into Preview & QC for one file."""
+        self.tabs.setCurrentIndex(self._i_preview)
+        self.preview_screen.refresh_files()
+        try:
+            self.preview_screen.file_combo.setCurrentText(filename)
+        except Exception:                       # pragma: no cover - best-effort selection
+            pass
 
     def _on_run_started(self):
         self.settings_screen.setEnabled(False)
