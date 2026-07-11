@@ -409,14 +409,21 @@ def test_begin_session_with_cli_path_opens_directly(qapp):
     win.close()
 
 
-def test_chooser_cancel_falls_through_to_new(qapp, monkeypatch):
+def test_cancelled_chooser_falls_through_to_new(qapp, monkeypatch):
+    """Cancelling the REAL startup chooser (exec → reject, default mode 'new') must drop
+    into the guided New flow — the genuine composed path, not a re-run of the 'new'
+    branch (that is test_begin_session_new_enters_guided_mode)."""
     from respmech.ui import startup_dialog
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState())
-    monkeypatch.setattr(startup_dialog, "StartupDialog",
-                        lambda parent=None: _FakeChooser("new"))   # cancel == default "new"
+
+    class _Cancelled(startup_dialog.StartupDialog):
+        def exec(self):
+            self.reject()                       # the user cancels; mode stays the default "new"
+            return 0
+    monkeypatch.setattr(startup_dialog, "StartupDialog", _Cancelled)
     win.begin_session()
-    assert win.settings_screen._mode == "new"
+    assert win.settings_screen._mode == "new" and win.settings_screen.state.settings_path is None
     assert not win.tabs.isTabEnabled(win._i_preview)
     win.close()
 
