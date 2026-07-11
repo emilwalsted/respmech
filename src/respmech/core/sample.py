@@ -1,13 +1,25 @@
-"""A small synthetic recording, generated on demand for the "Explore sample data"
-onboarding door (feature P23).
+"""A small but physiologically realistic synthetic recording, generated on demand for
+the "Explore sample data" onboarding door (feature P23).
 
 Real recordings are large and cannot ship in the package, so instead we synthesise a
-short, physiologically-shaped breathing trace (a sin² volume model, its analytic flow,
-plausible oesophageal/gastric pressures, and band-limited EMG) whenever a first-time
+short breathing trace from a simple respiratory-mechanics model whenever a first-time
 user asks to explore. The layout matches a typical LabChart export so the standard
 channel mapping applies:
 
     col 1 time · 2–4 EMG · 5 flow · 6 volume · 7 Poes · 8 Pgas · 9 Pdi
+
+The model is what makes the Campbell (Poes–Volume) loop look real. Oesophageal
+pressure is the sum of an **elastic** term (proportional to lung volume) and a
+**resistive** term (proportional to flow):
+
+    Poes(t) = Poes₀ − V/C + R·flow
+
+Because inspiratory and expiratory flow have opposite sign, at any given volume the
+two limbs sit at different pressures, so the loop **opens** — its enclosed area is the
+resistive work of breathing. A modest airway resistance (as in mildly loaded
+breathing) is used so the loop is clearly visible. Gastric pressure rises with
+inspiration (diaphragm descent); transdiaphragmatic pressure Pdi = Pgas − Poes.
+Diaphragm EMG bursts during inspiration, band-limited to the EMG range.
 
 Deterministic (fixed seed) so the sample is identical every time. Computation only —
 no file I/O beyond the single CSV it writes, and no Qt.
@@ -18,46 +30,64 @@ import os
 
 import numpy as np
 
-FS = 500                      # Hz — modest, so the sample file stays small
-N_BREATHS = 6
-PERIOD_S = 3.0
+FS = 500                       # Hz
+N_BREATHS = 8
+PERIOD_S = 4.0                 # ~15 breaths/min
+VT_L = 0.6                     # tidal volume (L)
+RESISTANCE = 6.5               # cmH₂O/(L/s) → a visibly open (mildly loaded) loop
+POES_EE = -5.0                 # end-expiratory pleural pressure (cmH₂O)
+PGAS_EE = 8.0                  # end-expiratory gastric pressure (cmH₂O)
+ELASTIC_SWING = 8.0            # cmH₂O elastic recoil over a tidal breath
 FILENAME = "sample_recording.csv"
+
+
+def _one_breath(rng, T, vt):
+    """One breath on the sin² volume model (segments reliably), with Poes built from an
+    elastic term (∝ volume) plus a resistive term (∝ flow) so the loop opens."""
+    n = int(round(T * FS))
+    t = np.arange(n) / FS
+    vol = vt * np.sin(np.pi * t / T) ** 2                          # 0 → VT → 0
+    dvdt = vt * (np.pi / T) * np.sin(2 * np.pi * t / T)            # +insp… −exp
+    flow = -dvdt                                                   # inspiration → flow negative
+
+    # Poes = baseline − elastic recoil (∝ volume) + resistive (∝ flow). The resistive
+    # term has opposite sign on the two limbs, which is what opens the Campbell loop.
+    poes = (POES_EE - (ELASTIC_SWING / vt) * vol + RESISTANCE * flow
+            + 0.10 * rng.standard_normal(n))
+    pgas = PGAS_EE + (3.0 / vt) * vol + 0.08 * rng.standard_normal(n)
+
+    env = np.clip(np.sin(np.pi * t / T), 0, None)                 # inspiratory-weighted burst
+    emg = []
+    for ch in range(3):
+        carrier = np.sin(2 * np.pi * (70 + 20 * ch) * t) + 0.6 * np.sin(2 * np.pi * (140 + 25 * ch) * t)
+        emg.append(0.03 * (1.0 + 0.2 * ch) * env * carrier + 0.006 * rng.standard_normal(n))
+    return vol, flow, poes, pgas, emg
 
 
 def _signals():
     rng = np.random.default_rng(20260711)
-    flow_all, vol_all, poes_all, pgas_all, emg_all = [], [], [], [], [[], [], []]
-    for b in range(N_BREATHS):
-        amp = 1.2 * (1.0 + 0.08 * np.sin(0.7 * b))       # mild per-breath variation
-        T = PERIOD_S * (1.0 + 0.05 * np.sin(1.3 * b))
-        n = int(round(T * FS))
-        t = np.arange(n) / FS
-        vol = amp * np.sin(np.pi * t / T) ** 2
-        dvdt = amp * (np.pi / T) * np.sin(2 * np.pi * t / T)
-        flow = -dvdt                                     # inspiration: volume up → flow negative
-        poes = -8.0 * np.sin(np.pi * t / T) ** 2 - 5.0 + 0.15 * np.sin(3.1 * np.pi * t / T)
-        pgas = 6.0 * np.sin(np.pi * t / T) ** 2 + 8.0 + 0.10 * np.cos(2.3 * np.pi * t / T)
-        insp_env = np.clip(np.sin(np.pi * t / T), 0, None)
-        flow_all.append(flow); vol_all.append(vol); poes_all.append(poes); pgas_all.append(pgas)
-        for ch in range(3):
-            carrier = np.sin(2 * np.pi * (80 + 15 * ch) * t)
-            noise = 0.05 * rng.standard_normal(n)
-            emg_all[ch].append(0.02 * (1 + ch * 0.3) * insp_env * carrier + noise * 0.01)
-    flow = np.concatenate(flow_all); vol = np.concatenate(vol_all)
-    poes = np.concatenate(poes_all); pgas = np.concatenate(pgas_all)
-    emg = [np.concatenate(c) for c in emg_all]
-    # a short expiratory lead-in so the first breath has a clean start
+    vol_all, flow_all, poes_all, pgas_all, emg_all = [], [], [], [], [[], [], []]
+    # a short resting expiratory lead-in so the first breath starts cleanly
     nlead = int(0.6 * FS)
     tl = np.arange(nlead) / FS
-    lead = lambda base, amp2: base + amp2 * np.sin(np.pi * tl / 0.6)   # noqa: E731
-    flow = np.concatenate([0.4 * np.sin(np.pi * tl / 0.6), flow])
-    vol = np.concatenate([np.zeros(nlead), vol])
-    poes = np.concatenate([np.full(nlead, -5.0), poes])
-    pgas = np.concatenate([np.full(nlead, 8.0), pgas])
-    emg = [np.concatenate([0.01 * np.random.default_rng(ch).standard_normal(nlead), e])
-           for ch, e in enumerate(emg)]
-    vol = vol + np.linspace(0, 0.15, len(vol))           # a little drift to correct
-    pdi = pgas - poes                                    # transdiaphragmatic = gastric − oesophageal
+    vol_all.append(np.zeros(nlead))
+    flow_all.append(0.3 * np.sin(np.pi * tl / (nlead / FS)))       # gentle expiratory hump
+    poes_all.append(np.full(nlead, POES_EE) + 0.2 * rng.standard_normal(nlead))
+    pgas_all.append(np.full(nlead, PGAS_EE) + 0.15 * rng.standard_normal(nlead))
+    for ch in range(3):
+        emg_all[ch].append(0.006 * rng.standard_normal(nlead))
+    for b in range(N_BREATHS):
+        T = PERIOD_S * (1.0 + 0.06 * np.sin(1.3 * b))               # breath-to-breath variation
+        vt = VT_L * (1.0 + 0.10 * np.sin(0.7 * b + 0.5))
+        vol, flow, poes, pgas, emg = _one_breath(rng, T, vt)
+        vol_all.append(vol); flow_all.append(flow); poes_all.append(poes); pgas_all.append(pgas)
+        for ch in range(3):
+            emg_all[ch].append(emg[ch])
+    vol = np.concatenate(vol_all); flow = np.concatenate(flow_all)
+    poes = np.concatenate(poes_all); pgas = np.concatenate(pgas_all)
+    emg = [np.concatenate(c) for c in emg_all]
+    vol = vol + np.linspace(0, 0.12, len(vol))                     # slow baseline drift to correct
+    pdi = pgas - poes                                              # transdiaphragmatic
     return flow, vol, poes, pgas, pdi, emg
 
 
