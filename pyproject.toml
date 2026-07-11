@@ -1,0 +1,117 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "respmech"
+version = "2.0.0-dev"
+description = "Respiratory mechanics, work of breathing and diaphragm EMG entropy analysis"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Emil Schwarz Walsted", email = "emilwalsted@gmail.com" }]
+keywords = ["respiratory", "mechanics", "work-of-breathing", "EMG", "physiology"]
+dependencies = [
+    "numpy>=1.24",
+    # >=1.11: scipy.integrate.simpson's default even-interval rule became the
+    # Cartwright correction at 1.11 (was 'avg' in 1.10). The EMG/PTP/WOB goldens are
+    # validated on the Cartwright rule (golden env scipy 1.13.x), so 1.10 would give
+    # ~1% different integrated-EMG/WOB numbers. Pin the floor to the validated rule.
+    "scipy>=1.11",
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "tomli-w>=1.0",
+]
+
+[project.optional-dependencies]
+# EMG spectral noise reduction needs librosa; diagnostic plots need matplotlib.
+emg = ["librosa>=0.10"]
+plots = ["matplotlib>=3.7", "seaborn>=0.12"]
+gui = ["PySide6>=6.6", "pyqtgraph>=0.13", "matplotlib>=3.7"]
+dev = ["pytest>=7.0", "librosa>=0.10", "matplotlib>=3.7", "seaborn>=0.12"]
+# desktop-installer tooling (briefcase builds the Windows MSI / macOS dmg); a build-time
+# dependency only — never needed to run or import the app.
+packaging = ["briefcase>=0.3.19"]
+
+[project.scripts]
+respmech = "respmech.cli.__main__:main"
+
+[project.gui-scripts]
+respmech-gui = "respmech.ui.app:main"
+
+[project.urls]
+Homepage = "https://github.com/emilwalsted/respmech"
+Repository = "https://github.com/emilwalsted/respmech"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/respmech"]
+
+[tool.pytest.ini_options]
+# src/ before cwd so the package wins over the legacy root respmech.py.
+pythonpath = ["src"]
+addopts = "--import-mode=importlib"
+
+
+# --- briefcase: native desktop installers (Windows MSI / macOS dmg) ----------
+# Build with `.[packaging]` installed:
+#     briefcase create <windows|macOS>
+#     briefcase build  <windows|macOS>
+#     briefcase package <windows|macOS>     # -> the distributable installer
+# The bundle runs `python -m respmech` (src/respmech/__main__.py -> the GUI); the CLI
+# stays the separate `respmech` console script.
+[tool.briefcase]
+project_name = "RespMech"
+bundle = "dk.respmech"                       # reverse-domain id (brand domain respmech.dk)
+version = "2.0.0"
+url = "https://github.com/emilwalsted/respmech"
+license = "GPL-3.0-or-later"
+author = "Emil Schwarz Walsted"
+author_email = "emilwalsted@gmail.com"
+
+[tool.briefcase.app.respmech]
+formal_name = "RespMech"
+description = "Respiratory mechanics, work of breathing and diaphragm EMG analysis"
+long_description = """RespMech analyses human respiratory physiology recordings: respiratory
+mechanics, work of breathing (Campbell diagram), and diaphragm EMG (RMS + spectral entropy,
+with optional ECG/noise suppression). Load LabChart/CSV/Excel exports, tune the analysis
+interactively, and export publication-ready per-breath and averaged results.
+"""
+icon = "installer/respmech"                  # briefcase picks respmech.ico / .icns / .png per platform
+sources = ["src/respmech"]
+# ONLY the unit tests — deliberately NOT ["tests"], which would pull tests/golden/production/
+# (real research recordings that must never be redistributed) into a `briefcase … --test`
+# build. Distribution builds (`briefcase package`, no --test) ship `sources` only, never tests.
+test_sources = ["tests/unit"]
+
+# Everything needed to RUN the app (union of the base deps + gui/emg/plots extras). Kept
+# explicit rather than referencing the extras so a bundle can't silently drop a dependency.
+requires = [
+    "numpy>=1.24",
+    "scipy>=1.11",
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "tomli-w>=1.0",
+    "librosa>=0.10",
+    "matplotlib>=3.7",
+    "seaborn>=0.12",
+    "PySide6>=6.6",
+    "pyqtgraph>=0.13",
+]
+test_requires = ["pytest>=7.0"]
+
+[tool.briefcase.app.respmech.macOS]
+# Single-arch (host) build: librosa's numba/llvmlite don't reliably ship universal2
+# wheels, which a universal_build would require. Testers on the other Mac arch get a
+# separate build. std-nslog routes app logging to Apple's unified logging.
+universal_build = false
+# Raise the deployment target above briefcase's default (macOS 11): scipy's cp313 arm64
+# wheels are built for macOS 12+, so a macos_11 pip target resolves scipy to "no versions".
+# numpy's macos_11 wheels remain compatible with a 12.0 target.
+min_os_version = "12.0"
+requires = ["std-nslog>=1.0.0"]
+
+[tool.briefcase.app.respmech.windows]
+# NOTE (MAX_PATH): Windows caps legacy paths at 260 chars. If a tester nests the input
+# folder very deeply a run can fail on path length. Long-path awareness needs a manifest
+# flag + a machine registry opt-in that briefcase's stock template doesn't expose; tracked
+# as a follow-up. Workaround for now: keep input/output folders reasonably shallow.

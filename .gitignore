@@ -105,3 +105,17 @@ venv.bak/
 .vscode/launch.json
 temp.py
 Error log.txt
+
+# RespMech golden-test transient output
+tests/golden/_work/
+
+# Production golden RAW DATA — never commit (repo is public): real recordings +
+# Emil's expected output spreadsheets stay local. Only the derived, de-identified
+# golden numbers (tests/golden/production_golden.json) and manifest are committed.
+/tests/golden/production/*
+!/tests/golden/production/README.md
+tests/golden/_prod_work/
+
+# macOS
+.DS_Store
+tests/golden/_prod_work_newcore/

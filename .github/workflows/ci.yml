@@ -1,0 +1,101 @@
+name: CI
+
+# The project is developed on macOS; this exists to catch the Windows-only failure
+# modes an all-macOS machine never surfaces (encoding, case-insensitive file matching,
+# path handling) BEFORE they reach a tester. The GUI smoke runs on Windows *and* macOS
+# so portability is proven on both; the numerical golden runs once (Linux) because its
+# 1e-9 tolerance is about library reproducibility, not the OS.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash          # one shell on every OS (Git Bash on Windows) so quoting is uniform
+
+jobs:
+  smoke:
+    name: GUI smoke · ${{ matrix.os }} · py${{ matrix.python-version }}
+    strategy:
+      fail-fast: false   # let every OS/version combo report, don't cancel siblings on first red
+      matrix:
+        os: [windows-latest, macos-latest]
+        python-version: ["3.11", "3.12"]   # numba/librosa wheels lag the newest Python; 3.13 excluded on purpose
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen   # headless Qt — no display on the runner
+      PYQTGRAPH_QT_LIB: PySide6    # never let pyqtgraph bind PyQt6 (two Qt bindings in one process crash)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install (gui + dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[gui,dev]"
+
+      # The smoke steps below run from a neutral directory: the repo root holds a legacy
+      # `respmech.py` module that would shadow the installed `respmech` package when cwd is
+      # first on sys.path (pytest sidesteps this via its pythonpath=["src"], plain python
+      # does not). The editable install makes the package importable from anywhere.
+      - name: Import smoke (fail fast on a bad import / missing dep)
+        working-directory: ${{ runner.temp }}
+        run: python -c "import respmech, respmech.ui.app, respmech.ui.main_window, respmech.ui.theme, respmech.ui.splash, respmech.cli.__main__; print('import OK')"
+
+      - name: CLI entry point resolves
+        working-directory: ${{ runner.temp }}
+        run: respmech --version
+
+      - name: GUI constructs headless (MainWindow + themed splash)
+        working-directory: ${{ runner.temp }}
+        run: python -c "import respmech.ui.splash as s; from PySide6.QtWidgets import QApplication; from respmech.ui import theme; from respmech.ui.state import AppState; from respmech.ui.main_window import MainWindow; app=QApplication([]); theme.apply_theme(app); s.make_splash(app); w=MainWindow(AppState()); assert w.tabs.count()==3; print('GUI OK')"
+
+      - name: Unit suite (headless, offscreen Qt)
+        run: |
+          # PySide6 can crash at interpreter shutdown on headless CI (macOS Abort trap 6 /
+          # Windows segfault 139) AFTER every test has already passed — worker QThreads and
+          # the QApplication being torn down by static destructors. That post-run crash is
+          # not a test failure, so decide pass/fail from pytest's REPORTED results, not the
+          # crash-prone process exit code. A genuine failure/error still fails the job.
+          set +e
+          python -m pytest tests/unit -q 2>&1 | tee pytest-unit.log
+          set -e
+          if grep -qE "[0-9]+ (failed|error)" pytest-unit.log; then
+            echo "::error::real test failures or errors"; exit 1
+          fi
+          if ! grep -qE "[0-9]+ passed" pytest-unit.log; then
+            echo "::error::pytest did not reach a passing summary (crashed mid-run?)"; exit 1
+          fi
+          echo "Unit suite passed (any non-zero exit was a post-run Qt teardown crash)."
+
+  golden:
+    name: Numerical golden (synthetic, rtol 1e-9)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install (dev extras — no GUI needed for the core golden)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Synthetic golden reproduces the reference
+        run: python -m pytest tests/golden/test_golden.py -q
