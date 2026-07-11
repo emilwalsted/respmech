@@ -34,10 +34,11 @@ class MainWindow(QMainWindow):
         self.settings_screen = SettingsScreen(self.state, on_settings_changed=self._on_settings_changed)
         self.preview_screen = PreviewScreen(self.state)
         self.run_screen = RunScreen(self.state)
-        self._i_settings = self.tabs.addTab(self.settings_screen, "1. Settings / batch setup")
-        # "&&" renders as a literal "&" (a lone "&" would be swallowed as a tab mnemonic)
-        self._i_preview = self.tabs.addTab(self.preview_screen, "2. Preview && tuning")
-        self._i_run = self.tabs.addTab(self.run_screen, "3. Run")
+        # No wizard "1./2./3." numbering — the real workflow loops back (tune -> re-run),
+        # it is not one-way. ("&&" renders a literal "&"; a lone "&" is a tab mnemonic.)
+        self._i_settings = self.tabs.addTab(self.settings_screen, "Setup")
+        self._i_preview = self.tabs.addTab(self.preview_screen, "Preview && QC")
+        self._i_run = self.tabs.addTab(self.run_screen, "Run && results")
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
         central = QWidget()
@@ -54,6 +55,9 @@ class MainWindow(QMainWindow):
         sc.settings_changed.connect(rn.refresh_actions)
         # the guided "new analysis" flow hides Preview/Run until every setting is valid
         sc.flow_ready_changed.connect(self._set_downstream_visible)
+        # the window title names the active analysis and its unsaved-edits (dirty) state
+        sc.analysis_state_changed.connect(self._update_window_title)
+        self._update_window_title()
         # a noise reference chosen on the Preview graph (feature B) mirrors into Settings
         pv.noise_reference_changed.connect(sc.set_noise_reference)
         # while a batch runs, lock the Settings screen so its state can't be swapped
@@ -86,6 +90,15 @@ class MainWindow(QMainWindow):
         """Show/hide the Preview & Run tabs together (they both need valid settings)."""
         self.tabs.setTabVisible(self._i_preview, bool(ready))
         self.tabs.setTabVisible(self._i_run, bool(ready))
+
+    def _update_window_title(self):
+        """Name the active analysis in the title bar and flag unsaved edits with a bullet,
+        so it is obvious which analysis is loaded and whether it has been saved."""
+        import os  # noqa: PLC0415
+        path = getattr(self.state, "settings_path", None)
+        name = os.path.basename(path) if path else "new analysis (unsaved)"
+        dirty = " •" if self.settings_screen.is_dirty() else ""
+        self.setWindowTitle(f"RespMech {__version__} — {name}{dirty}")
 
     def _on_run_started(self):
         self.settings_screen.setEnabled(False)
