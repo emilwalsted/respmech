@@ -73,14 +73,16 @@ def cmd_migrate(args) -> int:
 
 
 def cmd_validate(args) -> int:
-    import glob
     import os
     from respmech.settingsio.toml_io import load_toml
+    from respmech.core.pipeline import match_input_files
 
     settings = load_toml(args.settings)
     settings.validate()
     pattern = os.path.join(settings.input.folder, settings.input.files)
-    files = glob.glob(pattern)
+    # match_input_files: the SAME matcher run_batch uses, so the reported count is exactly
+    # what `respmech run` will process (case-insensitive; safe against folder metacharacters).
+    files = match_input_files(settings.input.folder, settings.input.files)
     print(f"Settings valid. Input pattern '{pattern}' matches {len(files)} file(s).")
     if not files:
         print("WARNING: no input files match.", file=sys.stderr)
@@ -110,6 +112,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    # On Windows the console is often cp1252; a file name or message carrying a
+    # non-cp1252 character (Excel exports, é/ø/…) would otherwise abort a whole run
+    # with UnicodeEncodeError. Degrade unencodable characters instead of crashing.
+    for _stream in (sys.stdout, sys.stderr):
+        if _stream is not None and hasattr(_stream, "reconfigure"):
+            try:
+                _stream.reconfigure(errors="replace")
+            except Exception:
+                pass
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)

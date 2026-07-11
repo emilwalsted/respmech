@@ -18,11 +18,32 @@ class DataValidationError(ValueError):
     """Raised when an input column is missing, non-numeric, NaN, or mismatched."""
 
 
+def _read_table(f, **kw):
+    """Read a CSV/TSV tolerantly across encodings. Excel's "Unicode Text" export is
+    UTF-16 (BOM-prefixed); European instrument exports are often cp1252/latin-1 — the
+    dev machine's plain UTF-8 files are only a subset. Downstream column access is
+    positional (``df.iloc``), so header mojibake under a fallback never touches the
+    numeric data."""
+    with open(f, "rb") as fh:
+        if fh.read(2) in (b"\xff\xfe", b"\xfe\xff"):
+            return pd.read_csv(f, encoding="utf-16", **kw)
+    for enc in ("utf-8-sig", "cp1252"):        # utf-8-sig also strips a stray UTF-8 BOM
+        try:
+            return pd.read_csv(f, encoding=enc, **kw)
+        except UnicodeDecodeError:
+            continue
+    return pd.read_csv(f, encoding="latin-1", **kw)   # latin-1 maps every byte, never raises
+
+
 def _checkcolumn(text, data):
-    if np.isnan(data).any():
-        raise DataValidationError(text + " contains NaN values.")
-    if any(isinstance(d, str) for d in data):
+    arr = np.asarray(data)
+    # a non-numeric column reads as object/str dtype; check that BEFORE np.isnan, which
+    # raises TypeError on an object array (so a text column would crash instead of
+    # reporting the friendly "must be numeric" error).
+    if arr.dtype.kind in ("U", "S", "O"):
         raise DataValidationError(text + " contains text values – all values must be numeric.")
+    if np.isnan(arr).any():
+        raise DataValidationError(text + " contains NaN values.")
 
 
 def _alleq(iterable):
@@ -60,6 +81,7 @@ def validatedata(flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, sett
 
 def load(filepath, settings):
     _, fext = os.path.splitext(filepath)
+    fext = fext.lower()                        # DATA.CSV / export.TXT (common on Windows)
     d = settings.input.data
 
     def _cols_from_df(df):
@@ -76,10 +98,13 @@ def load(filepath, settings):
         return _cols_from_df(pd.read_excel(f))
 
     def loadcsv(f):
-        return _cols_from_df(pd.read_csv(f))
+        # honour the configured decimal separator (loadtxt already did): European Excel
+        # CSVs are ';'-separated with a ',' decimal, and would otherwise mis-split.
+        dec = settings.input.format.decimalcharacter
+        return _cols_from_df(_read_table(f, sep=";" if dec == "," else ",", decimal=dec))
 
     def loadtxt(f):
-        return _cols_from_df(pd.read_csv(f, sep='\t', decimal=settings.input.format.decimalcharacter))
+        return _cols_from_df(_read_table(f, sep='\t', decimal=settings.input.format.decimalcharacter))
 
     def loadmat(f):
         try:

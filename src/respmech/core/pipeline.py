@@ -18,8 +18,7 @@ clear message rather than a generic trace.
 """
 from __future__ import annotations
 
-import glob
-import ntpath
+import fnmatch
 import os
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -131,7 +130,7 @@ def _emg_segmented(path, s):
         tc, flow, vol, poes, pgas, pdi, np.array(emg) if len(emg) else np.array([]), s)
     emg_full = _ecg_remove_trim(s, emg, si, ei)
     volc = compute.correctdrift(compute.zero(vT), s) if s.processing.mechanics.correctvolumedrift else compute.zero(vT)
-    br = compute.separateintobreaths("flow", ntpath.basename(path), tcT, fT, volc,
+    br = compute.separateintobreaths("flow", os.path.basename(path), tcT, fT, volc,
                                      pT, gT, dT, [], emg_full, s)
     ins = np.zeros(len(fT), bool); ex = np.zeros(len(fT), bool); p = 0
     for b in br.values():
@@ -190,6 +189,30 @@ def _build_noise_set(settings, s, files, progress=None):
     return noiselib.NoiseProfileSet(profiles, prop), report
 
 
+def match_input_files(folder: str, pattern: str) -> list:
+    """Files in ``folder`` matching ``pattern``, sorted. Case-INSENSITIVE and safe
+    against glob metacharacters in the folder name — unlike ``glob.glob``, which is
+    case-sensitive on macOS but not Windows (so a mixed-case batch would process
+    different files, and the shared EMG noise profile would diverge numerically between
+    the two platforms), and which treats ``[`` / ``*`` in a folder name like
+    ``Study [2024]`` as a pattern that matches nothing. ``os.listdir`` sidesteps the
+    folder-name problem; ``fnmatchcase`` on lowered names is deterministic on both OSes.
+    Leading-dot (Unix-hidden) files are excluded unless the pattern is explicitly
+    dot-leading, mirroring ``glob``."""
+    if not os.path.isdir(folder):
+        return []
+    pat = (pattern or "*.*").lower()
+    hidden_ok = pat.startswith(".")
+    out = []
+    for name in os.listdir(folder):
+        if not hidden_ok and name.startswith("."):
+            continue
+        full = os.path.join(folder, name)
+        if fnmatch.fnmatchcase(name.lower(), pat) and os.path.isfile(full):
+            out.append(full)
+    return sorted(out)
+
+
 def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
               cancel_check: Optional[Callable[[], bool]] = None,
               only_files: Optional[list] = None) -> BatchResult:
@@ -200,11 +223,11 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
     settings.validate()
     s = to_legacy_ns(settings)
 
-    filepath = os.path.join(s.input.inputfolder, s.input.files)
-    allfiles = sorted(glob.glob(filepath))          # the full test (defines the shared profile)
-    files = [f for f in allfiles if only_files is None or ntpath.basename(f) in set(only_files)]
+    allfiles = match_input_files(s.input.inputfolder, s.input.files)   # the full test (defines the shared profile)
+    files = [f for f in allfiles if only_files is None or os.path.basename(f) in set(only_files)]
     if len(files) == 0:
-        raise FileNotFoundError(f"No input files found for '{filepath}'")
+        raise FileNotFoundError(
+            f"No input files found for '{s.input.files}' in '{s.input.inputfolder}'")
 
     result = BatchResult()
     average_rows = []
@@ -223,7 +246,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
             _emit(progress, ProgressEvent("finished", message="cancelled"))
             return result
         file = os.path.abspath(fi)
-        filename = ntpath.basename(file)
+        filename = os.path.basename(file)
         _emit(progress, ProgressEvent("file_start", file=filename, message="loading"))
         try:
             flowraw, volumeraw, poesraw, pgasraw, pdiraw, entropycolumnsraw, emgcolumnsraw = load(file, s)

@@ -47,10 +47,13 @@ def add_recent_analysis(path: str) -> None:
         return
     path = os.path.abspath(path)
     items = [p for p in ([path] + recent_analyses()) if p]
+    # Dedup case-insensitively on Windows (C:\A\x.toml == c:\a\X.TOML) but preserve each
+    # entry's original casing for display; normcase is a no-op on case-sensitive macOS.
     seen, ordered = set(), []
     for p in items:
-        if p not in seen:
-            seen.add(p); ordered.append(p)
+        key = os.path.normcase(p)
+        if key not in seen:
+            seen.add(key); ordered.append(p)
     s.setValue("recent_analyses", ordered[:_MAX_RECENT])
 
 

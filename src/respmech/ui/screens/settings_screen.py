@@ -9,7 +9,6 @@ model is preserved on load/save round-trips.
 """
 from __future__ import annotations
 
-import glob
 import os
 import traceback
 
@@ -640,8 +639,22 @@ class SettingsScreen(QWidget):
                 first = files[0]
                 line = ""
                 try:
-                    with open(first, "r", errors="replace") as fh:
-                        line = fh.readline().strip()
+                    # Sniff the raw bytes so the column-count hint is right across encodings:
+                    # UTF-16 (Excel "Unicode Text"), UTF-8(-BOM) and cp1252 all decode here
+                    # rather than mojibake under the Windows locale default. Matches the
+                    # tolerant reader core.load actually uses; latin-1 never raises.
+                    with open(first, "rb") as fh:
+                        head = fh.read(8192)
+                    if head[:2] in (b"\xff\xfe", b"\xfe\xff"):
+                        text0 = head.decode("utf-16", errors="replace")
+                    else:
+                        for enc in ("utf-8-sig", "cp1252", "latin-1"):
+                            try:
+                                text0 = head.decode(enc)
+                                break
+                            except UnicodeDecodeError:
+                                continue
+                    line = text0.splitlines()[0].strip() if text0 else ""
                 except Exception:               # pragma: no cover - unreadable file
                     line = ""
                 if "\t" in line:
