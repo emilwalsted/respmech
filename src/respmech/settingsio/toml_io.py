@@ -6,6 +6,7 @@ writing uses ``tomli_w``.
 """
 from __future__ import annotations
 
+import os
 import tomllib
 from pathlib import Path
 
@@ -14,10 +15,25 @@ import tomli_w
 from respmech.core.settings import Settings
 
 
+def _rebase_folders(settings: Settings, base: str) -> None:
+    """Resolve relative input/output folders against ``base`` (the analysis file's own
+    directory), not the process CWD. A frozen app's CWD is the install dir / System32, so
+    a shared analysis carrying the default relative 'input'/'output' folders would
+    otherwise read from and write to the wrong place (often a PermissionError after a full
+    run). The EMG noise reference is left as-is — a bare filename is resolved against the
+    input folder downstream."""
+    for obj, attr in ((settings.input, "folder"), (settings.output, "folder")):
+        val = getattr(obj, attr)
+        if val and not os.path.isabs(val):
+            setattr(obj, attr, os.path.normpath(os.path.join(base, val)))
+
+
 def load_toml(path: str | Path) -> Settings:
     with open(path, "rb") as f:
         data = tomllib.load(f)
-    return Settings.from_dict(data)
+    settings = Settings.from_dict(data)
+    _rebase_folders(settings, os.path.dirname(os.path.abspath(str(path))))
+    return settings
 
 
 def dumps_toml(settings: Settings) -> str:

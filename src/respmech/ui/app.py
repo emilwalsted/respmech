@@ -72,7 +72,8 @@ def main(argv=None) -> int:
     from respmech.ui.state import AppState
     from respmech.ui.main_window import MainWindow
     startup_error = None
-    toml_arg = argv[1] if (len(argv) > 1 and argv[1].endswith(".toml")) else None
+    # casefold() so a Windows-style ANALYSIS.TOML / .Toml drag-drop is recognised too.
+    toml_arg = argv[1] if (len(argv) > 1 and argv[1].casefold().endswith(".toml")) else None
     try:
         state = AppState()
         # Optional: a settings file passed on the command line is loaded on start.

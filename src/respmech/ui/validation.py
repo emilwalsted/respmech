@@ -7,18 +7,20 @@ Qt-free.
 """
 from __future__ import annotations
 
-import glob
 import os
+
+from respmech.core.pipeline import match_input_files
 
 
 def matching_files(folder: str, mask: str) -> list:
     """Files under ``folder`` matching a possibly multi-pattern ``mask`` — patterns split on
-    ';' or ',' so a mask like '*.csv; *.txt' works in the UI (the core batch runner globs a
-    single pattern, so the mask is narrowed to one extension before a run). Sorted, unique."""
+    ';' or ',' so a mask like '*.csv; *.txt' works in the UI. Delegates to the core matcher
+    (``match_input_files``) so the file list the UI shows is exactly the set the batch will
+    process — case-insensitive and folder-metacharacter-safe on both platforms."""
     patterns = [p.strip() for p in (mask or "*.*").replace(";", ",").split(",") if p.strip()]
     out = set()
     for pat in (patterns or ["*.*"]):
-        out.update(f for f in glob.glob(os.path.join(folder, pat)) if os.path.isfile(f))
+        out.update(match_input_files(folder, pat))
     return sorted(out)
 
 

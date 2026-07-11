@@ -27,7 +27,6 @@ All computation reuses the core; nothing here writes to disk.
 from __future__ import annotations
 
 import copy
-import glob
 import os
 import traceback
 from dataclasses import dataclass

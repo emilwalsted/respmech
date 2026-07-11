@@ -317,6 +317,8 @@ def load_raw_matrix(settings: Settings, file_path: str):
 
     import pandas as pd  # noqa: PLC0415
 
+    from respmech.core.io.loaders import _read_table  # noqa: PLC0415 — same encoding-tolerant reader as core.load
+
     ext = os.path.splitext(file_path)[1].lower()
     fmt = settings.input.format
 
@@ -326,10 +328,12 @@ def load_raw_matrix(settings: Settings, file_path: str):
         return arr, names
 
     if ext in (".csv",):
-        arr, names = _from_df(pd.read_csv(file_path))
+        # match core.loadcsv: honour the decimal separator (';'-CSV for a comma decimal)
+        dec = getattr(fmt, "decimal", ".") or "."
+        arr, names = _from_df(_read_table(file_path, sep=";" if dec == "," else ",", decimal=dec))
     elif ext in (".txt",):
         dec = getattr(fmt, "decimal", ".") or "."
-        arr, names = _from_df(pd.read_csv(file_path, sep="\t", decimal=dec))
+        arr, names = _from_df(_read_table(file_path, sep="\t", decimal=dec))
     elif ext in (".xls", ".xlsx"):
         arr, names = _from_df(pd.read_excel(file_path))
     elif ext in (".mat",):
@@ -386,14 +390,17 @@ def probe_data_columns(settings: Settings, file_path: str):
 
     import pandas as pd  # noqa: PLC0415
 
+    from respmech.core.io.loaders import _read_table  # noqa: PLC0415 — encoding-tolerant reader
+
     ext = os.path.splitext(file_path)[1].lower()
     fmt = settings.input.format
     try:
         if ext == ".csv":
-            return len(pd.read_csv(file_path, nrows=1).columns)
+            dec = getattr(fmt, "decimal", ".") or "."
+            return len(_read_table(file_path, sep=";" if dec == "," else ",", decimal=dec, nrows=1).columns)
         if ext == ".txt":
             dec = getattr(fmt, "decimal", ".") or "."
-            return len(pd.read_csv(file_path, sep="\t", decimal=dec, nrows=1).columns)
+            return len(_read_table(file_path, sep="\t", decimal=dec, nrows=1).columns)
         if ext in (".xls", ".xlsx"):
             return len(pd.read_excel(file_path, nrows=1).columns)
         if ext == ".mat":                       # no cheap header probe for MATLAB
@@ -435,7 +442,7 @@ def _commas_look_like_thousands(file_path: str) -> bool:
     import re  # noqa: PLC0415
 
     try:
-        with open(file_path, "r", errors="ignore") as fh:
+        with open(file_path, "r", encoding="latin-1") as fh:  # latin-1 maps every byte, never raises
             head = fh.read(20000)
     except Exception:
         return False
@@ -476,13 +483,14 @@ def stage_noise_fidelity(settings: Settings) -> dict:
     Preview screen shows, decoupled from the full mechanics test run. Pure compute,
     Qt-free, no disk writes. Returns the noise ``report`` dict (``frontier`` /
     ``prop_decrease`` / ``fidelity_target`` / ``channels``)."""
-    import glob
-    import os
     from respmech.core._legacy_ns import to_legacy_ns
-    from respmech.core.pipeline import _build_noise_set
+    from respmech.core.pipeline import _build_noise_set, match_input_files
 
     s = to_legacy_ns(settings)
-    allfiles = sorted(glob.glob(os.path.join(s.input.inputfolder, s.input.files)))
+    # SAME matcher as run_batch: the shared noise profile must be built from exactly the
+    # file set the batch will process, or the frontier the user tunes against diverges
+    # from the real run — and between macOS and Windows. See match_input_files.
+    allfiles = match_input_files(s.input.inputfolder, s.input.files)
     if not allfiles:
         raise FileNotFoundError(f"No input files found for '{s.input.files}'.")
     _noise_set, report = _build_noise_set(settings, s, allfiles)   # full test defines the profile
