@@ -29,6 +29,9 @@ emg = ["librosa>=0.10"]
 plots = ["matplotlib>=3.7", "seaborn>=0.12"]
 gui = ["PySide6>=6.6", "pyqtgraph>=0.13", "matplotlib>=3.7"]
 dev = ["pytest>=7.0", "librosa>=0.10", "matplotlib>=3.7", "seaborn>=0.12"]
+# desktop-installer tooling (briefcase builds the Windows MSI / macOS dmg); a build-time
+# dependency only — never needed to run or import the app.
+packaging = ["briefcase>=0.3.19"]
 
 [project.scripts]
 respmech = "respmech.cli.__main__:main"
@@ -47,3 +50,61 @@ packages = ["src/respmech"]
 # src/ before cwd so the package wins over the legacy root respmech.py.
 pythonpath = ["src"]
 addopts = "--import-mode=importlib"
+
+
+# --- briefcase: native desktop installers (Windows MSI / macOS dmg) ----------
+# Build with `.[packaging]` installed:
+#     briefcase create <windows|macOS>
+#     briefcase build  <windows|macOS>
+#     briefcase package <windows|macOS>     # -> the distributable installer
+# The bundle runs `python -m respmech` (src/respmech/__main__.py -> the GUI); the CLI
+# stays the separate `respmech` console script.
+[tool.briefcase]
+project_name = "RespMech"
+bundle = "dk.respmech"                       # reverse-domain id (brand domain respmech.dk)
+version = "2.0.0"
+url = "https://github.com/emilwalsted/respmech"
+license = "GPL-3.0-or-later"
+author = "Emil Schwarz Walsted"
+author_email = "emilwalsted@gmail.com"
+
+[tool.briefcase.app.respmech]
+formal_name = "RespMech"
+description = "Respiratory mechanics, work of breathing and diaphragm EMG analysis"
+long_description = """RespMech analyses human respiratory physiology recordings: respiratory
+mechanics, work of breathing (Campbell diagram), and diaphragm EMG (RMS + spectral entropy,
+with optional ECG/noise suppression). Load LabChart/CSV/Excel exports, tune the analysis
+interactively, and export publication-ready per-breath and averaged results.
+"""
+icon = "installer/respmech"                  # briefcase picks respmech.ico / .icns / .png per platform
+sources = ["src/respmech"]
+test_sources = ["tests"]
+
+# Everything needed to RUN the app (union of the base deps + gui/emg/plots extras). Kept
+# explicit rather than referencing the extras so a bundle can't silently drop a dependency.
+requires = [
+    "numpy>=1.24",
+    "scipy>=1.11",
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "tomli-w>=1.0",
+    "librosa>=0.10",
+    "matplotlib>=3.7",
+    "seaborn>=0.12",
+    "PySide6>=6.6",
+    "pyqtgraph>=0.13",
+]
+test_requires = ["pytest>=7.0"]
+
+[tool.briefcase.app.respmech.macOS]
+# Single-arch (host) build: librosa's numba/llvmlite don't reliably ship universal2
+# wheels, which a universal_build would require. Testers on the other Mac arch get a
+# separate build. std-nslog routes app logging to Apple's unified logging.
+universal_build = false
+requires = ["std-nslog>=1.0.0"]
+
+[tool.briefcase.app.respmech.windows]
+# NOTE (MAX_PATH): Windows caps legacy paths at 260 chars. If a tester nests the input
+# folder very deeply a run can fail on path length. Long-path awareness needs a manifest
+# flag + a machine registry opt-in that briefcase's stock template doesn't expose; tracked
+# as a follow-up. Workaround for now: keep input/output folders reasonably shallow.
