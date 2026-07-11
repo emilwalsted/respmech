@@ -1246,12 +1246,27 @@ class PreviewScreen(QWidget):
                 except Exception:                      # noqa: BLE001
                     pass
         nexcl = len({b for e in excl if e.file == name for b in e.breaths} & set(self._breath_spans))
-        # the test run is manual, so the exclusion is recorded now and applied the next
-        # time the user runs 'Test run this file' (no automatic re-run).
+        # excluding/including a breath must update the AVERAGED result in lockstep with the
+        # overlay — otherwise the Campbell loop + per-breath table stay stale and the user
+        # tunes blind. Recompute the (mechanics-only) test run, debounced.
+        self._request_batch_recompute()
         self._set_status(
             f"{name}: breath {breath_no} {'excluded' if now_excluded else 'included'} "
-            f"({nexcl}/{len(self._breath_spans)} excluded). Runs on the next test run.")
+            f"({nexcl}/{len(self._breath_spans)} excluded). Recomputing the average…")
         return now_excluded
+
+    def _request_batch_recompute(self):
+        """Debounced recompute of the mechanics test run (Campbell + per-breath table) after
+        a breath is toggled, so the averaged result tracks the overlay live. Inert headless
+        (never spins the loop), like _request_autorun."""
+        if getattr(self, "_batch_recompute_pending", False):
+            return
+        self._batch_recompute_pending = True
+        QTimer.singleShot(0, self._run_batch_recompute)
+
+    def _run_batch_recompute(self):
+        self._batch_recompute_pending = False
+        self._schedule("batch")
 
     # -- breath overlays on the EMG views ----------------------------------
     def _excluded_now(self):

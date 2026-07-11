@@ -32,10 +32,10 @@ _ROLES = [
     ("", "(unused)"),
     ("flow", "Flow"),
     ("volume", "Volume"),
-    ("poes", "Poes"),
-    ("pgas", "Pgas"),
-    ("pdi", "Pdi"),
-    ("emg", "EMG"),
+    ("poes", "Poes — oesophageal pressure"),
+    ("pgas", "Pgas — gastric pressure"),
+    ("pdi", "Pdi — transdiaphragmatic"),
+    ("emg", "EMG — diaphragm"),
     ("entropy", "Entropy"),
 ]
 # roles that may be assigned to at most one column (the multi-column roles are emg/entropy)
@@ -150,6 +150,11 @@ class ChannelSetupDialog(QDialog):
                       "when you switch files.")
         hint.setProperty("status", "muted"); hint.setWordWrap(True)
         v.addWidget(hint)
+        nfiles = len(self._files)
+        banner = QLabel(f"This mapping is applied to all {nfiles} file"
+                        f"{'s' if nfiles != 1 else ''} in the batch.")
+        banner.setProperty("status", "info"); banner.setWordWrap(True)
+        v.addWidget(banner)
 
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)

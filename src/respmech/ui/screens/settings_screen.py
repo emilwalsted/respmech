@@ -35,12 +35,14 @@ class SettingsScreen(QWidget):
     inputs_changed = Signal()       # input folder/mask edited -> file list is stale
     status_changed = Signal(str)
     flow_ready_changed = Signal(bool)   # downstream (Preview/Run) tabs should be shown
+    analysis_state_changed = Signal()   # loaded file / unsaved-edits state changed (title)
 
     def __init__(self, state, on_settings_changed=None):
         super().__init__()
         self.state = state
         self.on_settings_changed = on_settings_changed
         self._loading = True          # suppress reactions during programmatic fills
+        self._dirty = False           # unsaved edits since the last save/open/new
         self._err_dialog = None       # copyable error dialog (replace, don't accumulate)
         self._report_dialog = None    # migration report dialog
         self._build()
@@ -226,6 +228,13 @@ class SettingsScreen(QWidget):
         scroll.setWidget(content)
         outer.addWidget(scroll, 1)
 
+        # Live QC strip, pinned below the (scrolling) form: every current caution at a
+        # glance, so a first-timer sees them without ever clicking Validate.
+        self.qc = QLabel("")
+        self.qc.setWordWrap(True)
+        self.qc.setContentsMargins(2, 2, 2, 2)
+        outer.addWidget(self.qc)
+
         # --- progressive-disclosure stages (used only in guided "new analysis" mode) -
         # Ordered reveal groups. Placement-agnostic: reordering or moving a card only
         # changes this registry, not the reveal logic. Stage 0 shows immediately; each
@@ -335,6 +344,7 @@ class SettingsScreen(QWidget):
             self._sync_widgets()
         finally:
             self._loading = prev
+        self._update_qc()
 
     def to_state(self):
         s = self.state.settings
@@ -440,6 +450,7 @@ class SettingsScreen(QWidget):
             return
         self._sync_widgets()
         self.to_state()
+        self._mark_dirty()
         self.settings_changed.emit()
         self._update_disclosure()   # last, so guided-flow status wins over downstream
                                     # screens' technical validation messages
@@ -449,6 +460,7 @@ class SettingsScreen(QWidget):
             return
         self.to_state()
         self._normalize_mask()      # keep the mask a single pattern the core runner can glob
+        self._mark_dirty()
         self.inputs_changed.emit()
         self.settings_changed.emit()
         self._update_disclosure()   # last, so guided-flow status wins (see above)
@@ -467,6 +479,19 @@ class SettingsScreen(QWidget):
     def _set_status(self, text):
         self.status.setText(text)
         self.status_changed.emit(text)
+
+    def _mark_dirty(self):
+        if not self._dirty:
+            self._dirty = True
+            self.analysis_state_changed.emit()
+
+    def _mark_clean(self):
+        """Record a saved / freshly-opened / new analysis as having no unsaved edits."""
+        self._dirty = False
+        self.analysis_state_changed.emit()
+
+    def is_dirty(self):
+        return self._dirty
 
     # -- guided flow / progressive disclosure -------------------------------
     def enter_new_mode(self):
@@ -522,15 +547,18 @@ class SettingsScreen(QWidget):
 
     def _new_analysis(self):
         """Action-bar 'New analysis': discard the current settings for a fresh set and
-        re-enter the guided flow (confirmed first, since unsaved edits would be lost)."""
-        if QMessageBox.question(
+        re-enter the guided flow. Only confirm when there are REAL unsaved edits, so the
+        warning means something instead of training the user to click through it."""
+        if self._dirty and QMessageBox.question(
                 self, "New analysis",
-                "Start a new analysis? Any unsaved changes will be lost.") != QMessageBox.Yes:
+                "You have unsaved changes. Start a new analysis and discard them?"
+                ) != QMessageBox.Yes:
             return
         self.state.settings = Settings()
         self.state.settings_path = None
         self.from_state()
         self.enter_new_mode()       # emits inputs/settings_changed then sets guided status
+        self._mark_clean()          # a fresh analysis has no unsaved edits yet
 
     def _open_analysis_dialog(self):
         p, _ = QFileDialog.getOpenFileName(self, "Open analysis", ".", OPEN_FILTER)
@@ -696,6 +724,7 @@ class SettingsScreen(QWidget):
         once shown, so editing one can't yank another away), while the downstream gate is
         live (it re-locks if the settings become invalid). In any other mode everything
         is visible and the downstream tabs are always available."""
+        self._update_qc()               # keep the live caution strip current in every mode
         if self._mode != "new":
             self._apply_card_visibility()
             self._set_flow_ready(True)
@@ -755,9 +784,30 @@ class SettingsScreen(QWidget):
         return f"Almost done — {blocker}." if blocker else \
             "Almost done — complete the remaining settings to unlock Preview."
 
+    def _channel_collision(self):
+        """A HARD channel-mapping error (message, else '') that the core's null-only
+        validate() would miss but which gives a silently wrong analysis: a required channel
+        (flow/poes/pgas/pdi) still pointing at column 1 — the time axis, the value they
+        default to when the mapping is skipped/cancelled — or two of them sharing a column."""
+        ch = self.state.settings.input.channels
+        req = [("flow", ch.flow), ("poes", ch.poes), ("pgas", ch.pgas), ("pdi", ch.pdi)]
+        on_time = [n for n, c in req if c == 1]
+        if on_time:
+            return (f"{', '.join(on_time)} still point at column 1 (the time axis) — "
+                    "click 'Assign channels from data…'")
+        cols = [c for _n, c in req if c]
+        dup = sorted({c for c in cols if cols.count(c) > 1})
+        if dup:
+            names = [n for n, c in req if c in dup]
+            return f"{', '.join(names)} are mapped to the same column"
+        return ""
+
     def _first_blocker(self):
         """A short, human reason the analysis is not yet valid, for the final guided
-        stage (core validation message, else the first filesystem problem). None if OK."""
+        stage (channel collision, else core validation message, else the first path problem)."""
+        collision = self._channel_collision()
+        if collision:
+            return collision
         try:
             self.state.settings.validate()
         except SettingsError as e:
@@ -800,6 +850,8 @@ class SettingsScreen(QWidget):
             self.state.settings.validate()
         except Exception:                           # noqa: BLE001 — any invalidity -> not ready
             return False
+        if self._channel_collision():               # required channel on time / colliding
+            return False                            # (validate() only null-checks) -> not ready
         mask = self.state.settings.input.files or ""
         if ";" in mask or "," in mask:              # a multi-pattern mask the core runner
             return False                            # can't glob -> not runnable (defensive)
@@ -818,6 +870,33 @@ class SettingsScreen(QWidget):
         if ch.emg and (s.input.format.sampling_frequency or 0) < 1000:
             return "sampling frequency < 1000 Hz is low for EMG"
         return ""
+
+    def _all_cautions(self):
+        """Every current caution (hard channel collision first, then soft science notes) —
+        for the live QC strip."""
+        out = []
+        c = self._channel_collision()
+        if c:
+            out.append(c)
+        n = self._science_note()
+        if n:
+            out.append(n)
+        return out
+
+    def _update_qc(self):
+        """Refresh the pinned QC strip with the live cautions (styled warn), or an all-clear."""
+        if getattr(self, "qc", None) is None:
+            return
+        cautions = self._all_cautions()
+        if cautions:
+            self.qc.setText("⚠  " + "   ·   ".join(cautions))
+            self.qc.setProperty("status", "warn")
+        else:
+            self.qc.setText("✓  No warnings — channels, columns and sampling look consistent.")
+            self.qc.setProperty("status", "ok")
+        st = self.qc.style()
+        if st is not None:
+            st.unpolish(self.qc); st.polish(self.qc)
 
     def _show_validation_status(self):
         """Run validation for its status line (used on open); never raises."""
@@ -861,6 +940,7 @@ class SettingsScreen(QWidget):
             self._report_error("Open analysis", detail)
             return False
         self._set_status(f"Opened {p}")
+        self._mark_clean()
         self.inputs_changed.emit()
         self.settings_changed.emit()
         return True
@@ -876,6 +956,7 @@ class SettingsScreen(QWidget):
             self._report_error("Save analysis", traceback.format_exc())
             return
         self._set_status(f"Saved {p}")
+        self._mark_clean()
 
     def _import(self, path=None):
         """Import a legacy .py setup (runs the migrator). Returns True on success, False
@@ -897,6 +978,7 @@ class SettingsScreen(QWidget):
             self, "Migration report", report,
             intro="Legacy analysis imported and converted.", prior=self._report_dialog)
         self._set_status(f"Imported {p}")
+        self._mark_clean()
         self.inputs_changed.emit()
         self.settings_changed.emit()
         return True
