@@ -41,9 +41,22 @@ ELASTIC_SWING = 8.0            # cmH₂O elastic recoil over a tidal breath
 FILENAME = "sample_recording.csv"
 
 
+def _physio_noise(n, rng, amp, smooth_s=0.35):
+    """Low-frequency, physiological-looking noise (a smooth wander), not white fuzz:
+    white noise low-passed by a Hann window so it varies over ~a third of a second
+    rather than sample-to-sample, then scaled to ``amp`` (cmH₂O). This is what gives the
+    Campbell loops natural breath-to-breath spread instead of a hairline of jitter."""
+    w = np.hanning(max(3, int(smooth_s * FS)))
+    w = w / w.sum()
+    x = np.convolve(rng.standard_normal(n + w.size), w, mode="same")[:n]
+    return amp * x / (x.std() or 1.0)
+
+
 def _one_breath(rng, T, vt):
     """One breath on the sin² volume model (segments reliably), with Poes built from an
-    elastic term (∝ volume) plus a resistive term (∝ flow) so the loop opens."""
+    elastic term (∝ volume) plus a resistive term (∝ flow) so the loop opens. Pressure
+    noise is added later, continuously across the whole recording (see _signals); the EMG
+    carrier is genuinely high-frequency, so its measurement noise stays white here."""
     n = int(round(T * FS))
     t = np.arange(n) / FS
     vol = vt * np.sin(np.pi * t / T) ** 2                          # 0 → VT → 0
@@ -52,9 +65,8 @@ def _one_breath(rng, T, vt):
 
     # Poes = baseline − elastic recoil (∝ volume) + resistive (∝ flow). The resistive
     # term has opposite sign on the two limbs, which is what opens the Campbell loop.
-    poes = (POES_EE - (ELASTIC_SWING / vt) * vol + RESISTANCE * flow
-            + 0.10 * rng.standard_normal(n))
-    pgas = PGAS_EE + (3.0 / vt) * vol + 0.08 * rng.standard_normal(n)
+    poes = POES_EE - (ELASTIC_SWING / vt) * vol + RESISTANCE * flow
+    pgas = PGAS_EE + (3.0 / vt) * vol
 
     env = np.clip(np.sin(np.pi * t / T), 0, None)                 # inspiratory-weighted burst
     emg = []
@@ -72,8 +84,8 @@ def _signals():
     tl = np.arange(nlead) / FS
     vol_all.append(np.zeros(nlead))
     flow_all.append(0.3 * np.sin(np.pi * tl / (nlead / FS)))       # gentle expiratory hump
-    poes_all.append(np.full(nlead, POES_EE) + 0.2 * rng.standard_normal(nlead))
-    pgas_all.append(np.full(nlead, PGAS_EE) + 0.15 * rng.standard_normal(nlead))
+    poes_all.append(np.full(nlead, POES_EE))
+    pgas_all.append(np.full(nlead, PGAS_EE))
     for ch in range(3):
         emg_all[ch].append(0.006 * rng.standard_normal(nlead))
     for b in range(N_BREATHS):
@@ -87,6 +99,9 @@ def _signals():
     poes = np.concatenate(poes_all); pgas = np.concatenate(pgas_all)
     emg = [np.concatenate(c) for c in emg_all]
     vol = vol + np.linspace(0, 0.12, len(vol))                     # slow baseline drift to correct
+    # continuous low-frequency wander on the pressures (physiological variation, not fuzz)
+    poes = poes + _physio_noise(len(poes), rng, amp=0.6)
+    pgas = pgas + _physio_noise(len(pgas), rng, amp=0.4)
     pdi = pgas - poes                                              # transdiaphragmatic
     return flow, vol, poes, pgas, pdi, emg
 
