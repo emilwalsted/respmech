@@ -101,6 +101,10 @@ test_requires = ["pytest>=7.0"]
 # wheels, which a universal_build would require. Testers on the other Mac arch get a
 # separate build. std-nslog routes app logging to Apple's unified logging.
 universal_build = false
+# Raise the deployment target above briefcase's default (macOS 11): scipy's cp313 arm64
+# wheels are built for macOS 12+, so a macos_11 pip target resolves scipy to "no versions".
+# numpy's macos_11 wheels remain compatible with a 12.0 target.
+min_os_version = "12.0"
 requires = ["std-nslog>=1.0.0"]
 
 [tool.briefcase.app.respmech.windows]
