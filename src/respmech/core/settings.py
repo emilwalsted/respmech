@@ -130,6 +130,11 @@ class EmgSettings:
     ecg_window_s: float = 0.4
     remove_noise: bool = False
     outlier_rms_sd_limit: float = 0.0
+    # EMG amplitude normalisation for the OUTPUT tables (P14): each file's RMS columns
+    # are also reported as a % of a per-file reference so amplitudes compare across
+    # subjects/electrodes. "none" | "per_file_max" | "per_file_mean". This adds a
+    # normalised sheet to the output; it never changes the raw computed RMS.
+    normalization: str = "per_file_max"
     save_sound: bool = False
     plot_yscale: list[float] = field(default_factory=lambda: [-0.1, 0.1])
     # legacy filename-keyed noise-profile intervals (kept for migration):
@@ -202,6 +207,9 @@ class OutputSettings:
     folder: str = "output"
     data: DataOutput = field(default_factory=DataOutput)
     diagnostics: DiagnosticsOutput = field(default_factory=DiagnosticsOutput)
+    # cohort grouping for the summary (P15): a regex whose first capture group is the
+    # subject/condition key; None → the leading filename token (e.g. "P03_120W" → "P03").
+    group_regex: Optional[str] = None
 
 
 @dataclass

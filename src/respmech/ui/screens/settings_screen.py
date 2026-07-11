@@ -187,6 +187,15 @@ class SettingsScreen(QWidget):
                   "Sliding-window length for the EMG RMS envelope, in seconds; each breath takes its largest windowed value (default 0.05).")
         self._row(fe, "EMG RMS outlier limit", self.emg_outlier_sd, "processing.emg.outlier_rms_sd_limit",
                   "Replace any breath's EMG RMS value lying more than this many standard deviations from the across-breath mean; 0 = off (default).")
+        self.emg_norm = QComboBox()
+        for _label, _token in (("None — raw amplitude", "none"),
+                               ("Per-file maximum (% of peak breath)", "per_file_max"),
+                               ("Per-file mean (% of mean breath)", "per_file_mean")):
+            self.emg_norm.addItem(_label, _token)
+        self._row(fe, "EMG amplitude normalisation", self.emg_norm, "processing.emg.normalization",
+                  "Also report each file's EMG RMS as a percentage of a per-file reference so amplitudes "
+                  "compare across subjects/electrodes. Adds a normalised sheet to the output; never changes "
+                  "the raw RMS (default: per-file maximum).")
         root.addWidget(gemg)
 
         # EMG — ECG removal ------------------------------------------------
@@ -275,6 +284,12 @@ class SettingsScreen(QWidget):
                 (self.save_trimmed_fig, "output.diagnostics.save_trimmed", "Trimmed-signal diagnostic figures."),
                 (self.save_drift_fig, "output.diagnostics.save_drift", "Drift-correction diagnostic figures.")):
             self._check_row(fsv, cb, var, tip)
+        _lg = QLabel("Cohort summary"); _lg.setProperty("status", "muted"); fsv.addRow(_lg)
+        self.group_regex = QLineEdit()
+        self.group_regex.setPlaceholderText("leading filename token (e.g. P03_120W → P03)")
+        self._row(fsv, "Group files by", self.group_regex, "output.group_regex",
+                  "How files are grouped (subject / condition) for the by-group summary. Leave blank to use "
+                  "the leading filename token; or enter a regular expression whose first capture group is the key.")
         self.save_preview = QLabel(""); self.save_preview.setWordWrap(True)
         self.save_preview.setProperty("status", "info")
         fsv.addRow("You will get", self.save_preview)
@@ -403,11 +418,14 @@ class SettingsScreen(QWidget):
             self.save_raw_fig.setChecked(dg.save_raw)
             self.save_trimmed_fig.setChecked(dg.save_trimmed)
             self.save_drift_fig.setChecked(dg.save_drift)
+            self.group_regex.setText(s.output.group_regex or "")
 
             emg, n = s.processing.emg, s.processing.emg.noise
             # EMG RMS envelope
             self.emg_rms_window.setValue(emg.rms_window_s)
             self.emg_outlier_sd.setValue(emg.outlier_rms_sd_limit)
+            _ni = self.emg_norm.findData(emg.normalization)
+            self.emg_norm.setCurrentIndex(_ni if _ni >= 0 else 0)
             # ECG removal
             self.remove_ecg.setChecked(emg.remove_ecg)
             self.ecg_min_height.setValue(emg.ecg_min_height)
@@ -460,11 +478,13 @@ class SettingsScreen(QWidget):
         dg.save_raw = self.save_raw_fig.isChecked()
         dg.save_trimmed = self.save_trimmed_fig.isChecked()
         dg.save_drift = self.save_drift_fig.isChecked()
+        s.output.group_regex = self.group_regex.text().strip() or None
 
         emg, n = s.processing.emg, s.processing.emg.noise
         # EMG RMS envelope
         emg.rms_window_s = self.emg_rms_window.value()
         emg.outlier_rms_sd_limit = self.emg_outlier_sd.value()
+        emg.normalization = self.emg_norm.currentData()
         # ECG removal
         emg.remove_ecg = self.remove_ecg.isChecked()
         emg.ecg_min_height = self.ecg_min_height.value()
@@ -535,22 +555,26 @@ class SettingsScreen(QWidget):
         got = []
         if self.save_average.isChecked():
             got.append("average workbook")
+            got.append("cohort summary (mean ± SD, CV%, by group)")   # always paired with the average
         if self.save_bbb.isChecked():
             got.append("breath-by-breath workbook")
+            if self.emg_norm.currentData() != "none" and _parse_ints(self.cols_emg.text()):
+                got.append("normalised-EMG sheet")     # only when EMG channels are configured
         if self.save_processed.isChecked():
             got.append("processed CSV")
         figs = sum(cb.isChecked() for cb in (self.save_pv_avg, self.save_pv_ind,
                    self.save_raw_fig, self.save_trimmed_fig, self.save_drift_fig))
         if figs:
             got.append(f"{figs} diagnostic-figure set{'s' if figs != 1 else ''}")
-        self.save_preview.setText(", ".join(got) if got else "nothing — tick at least one output.")
+        got.append("run report + settings snapshot")                  # P7, always written
+        self.save_preview.setText(", ".join(got) if got else "run report + settings snapshot only.")
 
     # -- reactivity ---------------------------------------------------------
     def _wire_reactivity(self):
         self.in_folder.editingFinished.connect(self._on_inputs_changed)
         self.in_files.editingFinished.connect(self._on_inputs_changed)
         self.cols_emg.editingFinished.connect(self._on_emg_cols_changed)
-        for le in (self.cols_entropy, self.out_folder, self.noise_ref):
+        for le in (self.cols_entropy, self.out_folder, self.noise_ref, self.group_regex):
             le.editingFinished.connect(self._on_field_changed)
         for sb in (self.samp_freq, self.col_flow, self.col_volume, self.col_poes,
                    self.col_pgas, self.col_pdi, self.resample_hz):
@@ -561,6 +585,7 @@ class SettingsScreen(QWidget):
         for cb in (self.seg_method, self.wob_from, self.trend_method):
             cb.currentTextChanged.connect(self._on_field_changed)
         self.ecg_detect.currentIndexChanged.connect(self._on_field_changed)
+        self.emg_norm.currentIndexChanged.connect(self._on_field_changed)
         for chk in (self.integrate, self.remove_ecg, self.remove_noise, self.noise_use_exp,
                     self.correct_drift, self.correct_trend, self.inverse_flow, self.inverse_volume,
                     self.resample, self.save_average, self.save_bbb, self.save_processed,
