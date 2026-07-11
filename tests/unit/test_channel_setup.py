@@ -6,33 +6,20 @@ import os
 
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("PySide6")
-pytest.importorskip("pyqtgraph")
 
-import matplotlib  # noqa: E402
-matplotlib.use("QtAgg")
 
 from PySide6.QtWidgets import QApplication, QDialog  # noqa: E402
 
 from respmech.core.settings import Settings  # noqa: E402
 from respmech.ui.state import AppState  # noqa: E402
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-INPUT = os.path.join(ROOT, "tests", "golden", "input")
 
-pytestmark = pytest.mark.skipif(
-    not os.path.exists(os.path.join(INPUT, "synth_case_A.csv")),
-    reason="synthetic input not present")
+from _helpers import INPUT, requires_synth  # noqa: F401
+
+pytestmark = requires_synth()
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    from respmech.ui import theme
-    app = QApplication.instance() or QApplication([])
-    theme.apply_theme(app)
-    yield app
 
 
 def _load():
