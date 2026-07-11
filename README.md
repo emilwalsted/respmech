@@ -17,6 +17,36 @@ This is a port/rewrite of my MATLAB code from 2016, with some changes and additi
 
 from a time series of recordings (e.g. obtained via LabChart).
 
+---
+
+## 🚀 Version 2 (2026): installable package, CLI & desktop GUI
+
+RespMech is being refactored into a production-ready, installable package with a
+clean calculation core, a real command-line tool, and a **PySide6 desktop GUI**.
+The physiology is unchanged and locked by golden/characterisation tests.
+
+**Install & use** (see [docs/INSTALL.md](docs/INSTALL.md)):
+```bash
+pipx install respmech                 # command-line tool
+pip install "respmech[gui]"           # + desktop GUI  (respmech-gui)
+
+respmech migrate old_settings.py -o settings.toml   # convert v1 settings (no code run)
+respmech validate settings.toml
+respmech run settings.toml            # batch;  --dry-run to compute without writing
+respmech-gui                          # GUI: Settings → Preview & tuning → Run
+```
+
+Settings are now declarative **TOML** (no longer an executable `.py`); the
+`migrate` command converts old settings files and prints a report of every field
+moved/renamed/dropped. The section below documents the original v1 workflow, which
+still describes the analysis; the migrator maps it onto the new format.
+
+- Design & rationale: [docs/PLAN.md](docs/PLAN.md)
+- How the calculations work (formulas/units): [docs/REVERSE_ENGINEERING.md](docs/REVERSE_ENGINEERING.md)
+- Correctness tests: [tests/golden/](tests/golden/)
+
+---
+
 # Prerequisites
 The code runs on Python 3.6+. If you don't have Python installed, I would recommend that you download and install the free [Anaconda](https://www.anaconda.com/distribution/) – An all-inclusive package for scientists that contains everything you need. I prefer running/editing with Spyder (choose from the Anaconda main menu).
 

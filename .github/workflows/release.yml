@@ -1,0 +1,73 @@
+name: Build installers
+
+# Builds the native desktop installers with briefcase: an unsigned Windows MSI and an
+# ad-hoc-signed macOS dmg, uploaded as workflow artifacts for testers. Run it by hand
+# (Actions ▸ Build installers ▸ Run workflow) or by pushing a v* tag.
+#
+# The installers are UNSIGNED / ad-hoc signed: Windows testers must click through
+# SmartScreen ("More info" ▸ "Run anyway"); macOS testers must right-click ▸ Open the
+# first time (or `xattr -dr com.apple.quarantine` the app). Real signing + notarisation
+# is a later step (needs an Apple Developer ID and a Windows code-signing certificate).
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  windows-msi:
+    name: Windows MSI (unsigned)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"          # numba/llvmlite (via librosa) ship cp312 wheels
+      - name: Install briefcase
+        run: |
+          python -m pip install --upgrade pip
+          pip install "briefcase>=0.3.19"
+      - name: Create · build · package
+        run: |
+          briefcase create windows --no-input
+          briefcase build windows --no-input
+          briefcase package windows --adhoc-sign --packaging-format msi --no-input
+      - name: Show artifacts
+        run: ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RespMech-Windows-MSI
+          path: dist/*.msi
+          if-no-files-found: error
+
+  macos-dmg:
+    name: macOS dmg (ad-hoc signed)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install briefcase
+        run: |
+          python -m pip install --upgrade pip
+          pip install "briefcase>=0.3.19"
+      - name: Create · build · package
+        run: |
+          briefcase create macOS --no-input
+          briefcase build macOS --no-input
+          briefcase package macOS --adhoc-sign --packaging-format dmg --no-input
+      - name: Show artifacts
+        run: ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RespMech-macOS-dmg
+          path: dist/*.dmg
+          if-no-files-found: error
