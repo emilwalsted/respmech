@@ -71,3 +71,42 @@ jobs:
           name: RespMech-macOS-dmg
           path: dist/*.dmg
           if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub pre-release
+    needs: [windows-msi, macos-dmg]
+    if: startsWith(github.ref, 'refs/tags/v')   # only on a v* tag, not on manual dispatch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write                           # create the release + upload assets
+    steps:
+      - name: Download the built installers
+        uses: actions/download-artifact@v4
+        with:
+          path: dist                            # -> dist/<artifact-name>/<file>
+      - name: Publish release with installers attached
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -R dist
+          cat > notes.md <<'NOTES'
+          Desktop installers for testers — download below.
+
+          | Platform | File |
+          |---|---|
+          | Windows | `RespMech-*.msi` (unsigned) |
+          | macOS | `RespMech-*.dmg` (ad-hoc signed) |
+
+          **Install**
+          - **Windows:** SmartScreen will warn (unsigned) → *More info ▸ Run anyway*.
+          - **macOS:** right-click ▸ **Open** the first time (or `xattr -dr com.apple.quarantine` the app).
+
+          Bundles its own Python + the full scientific stack; no separate install needed.
+          Pre-release: unsigned / ad-hoc signed, and the reactive Preview panels are still
+          pending verification on real Windows hardware.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
+            --title "RespMech $GITHUB_REF_NAME" \
+            --prerelease \
+            --notes-file notes.md \
+            dist/*/*.msi dist/*/*.dmg
