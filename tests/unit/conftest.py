@@ -31,6 +31,34 @@ for _p in (SRC, HERE):
 import pytest  # noqa: E402
 
 
+_EXIT_STATUS = {"code": 0}
+
+
+def pytest_sessionfinish(session, exitstatus):
+    _EXIT_STATUS["code"] = int(exitstatus)
+
+
+def pytest_unconfigure(config):
+    """Exit with pytest's final status *before* Qt's static destructors run.
+
+    On some platforms (seen on offscreen macOS + Python 3.11 in CI) a worker QThread can
+    outlive its window and, at interpreter shutdown, Qt aborts — "QThread: Destroyed while
+    thread is still running" → Abort trap 6 → the process exits 134 even though every test
+    passed. This is pytest's LAST hook (after the summary has printed), so we flush and
+    exit immediately with the captured status — a failing run keeps its non-zero code, a
+    passing run sidesteps the abort-prone teardown. No-op unless a QApplication was created
+    (pure-core runs are unaffected)."""
+    try:
+        from PySide6.QtWidgets import QApplication
+    except Exception:
+        return
+    if QApplication.instance() is None:
+        return
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(_EXIT_STATUS["code"])
+
+
 @pytest.fixture(scope="session")
 def qapp():
     """One themed ``QApplication`` for the whole session (Qt permits only one). Skips the

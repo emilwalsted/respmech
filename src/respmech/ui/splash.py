@@ -53,7 +53,10 @@ def _resolve_svg_fonts():
                 if cand in installed:
                     return cand
             role = QFontDatabase.FixedFont if fixed else QFontDatabase.GeneralFont
-            return QFontDatabase.systemFont(role).family()
+            fam = QFontDatabase.systemFont(role).family()
+            # A headless system can expose no fonts (systemFont family = ""); fall back to
+            # the stack's trailing generic so we never hand Qt an empty font-family.
+            return fam or stack.split(",")[-1].strip()
 
         _FONT = pick(_FONT, fixed=False)
         _MONO = pick(_MONO, fixed=True)
