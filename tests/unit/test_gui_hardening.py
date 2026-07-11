@@ -4,49 +4,26 @@ import os
 
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("PySide6")
-pytest.importorskip("pyqtgraph")
 
-import matplotlib  # noqa: E402
-matplotlib.use("QtAgg")
 
 import numpy as np  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from respmech.settingsio.migrate import migrate_dict  # noqa: E402
 from respmech.ui.state import AppState  # noqa: E402
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-INPUT = os.path.join(ROOT, "tests", "golden", "input")
 
-pytestmark = pytest.mark.skipif(
-    not os.path.exists(os.path.join(INPUT, "synth_case_A.csv")),
-    reason="synthetic input not present")
+from _helpers import INPUT, requires_synth, synth_settings  # noqa: F401
+
+_DATA_OUT = {"saveaveragedata": True, "savebreathbybreathdata": True}
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    app = QApplication.instance() or QApplication([])
-    yield app
+pytestmark = requires_synth()
+
+
 
 
 def _settings(outdir, remove_ecg=True):
-    legacy = {
-        "input": {"inputfolder": INPUT, "files": "synth_case_*.csv",
-                  "format": {"samplingfrequency": 1000},
-                  "data": {"column_poes": 7, "column_pgas": 8, "column_pdi": 9,
-                           "column_volume": 6, "column_flow": 5,
-                           "columns_emg": [2, 3, 4], "columns_entropy": [10, 11, 12]}},
-        "processing": {"mechanics": {"breathseparationbuffer": 200, "separateby": "flow",
-                                     "avgresamplingobs": 300},
-                       "emg": {"remove_ecg": remove_ecg, "remove_noise": False}},
-        "output": {"outputfolder": outdir,
-                   "data": {"saveaveragedata": True, "savebreathbybreathdata": True}},
-    }
-    s, _ = migrate_dict(legacy)
-    return s
+    return synth_settings(outdir, remove_ecg=remove_ecg, data_out=_DATA_OUT)
 
 
 # -- graceful failure: write failure keeps the result + a clear message --------

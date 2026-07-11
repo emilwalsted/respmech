@@ -7,8 +7,7 @@ import pytest
 
 from respmech.core import noise as N
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-INPUT = os.path.join(ROOT, "tests", "golden", "input")
+from _helpers import INPUT  # noqa: F401
 
 
 def _clip(seed=0, n=4000):
