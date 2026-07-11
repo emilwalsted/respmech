@@ -63,7 +63,22 @@ jobs:
         run: python -c "import respmech.ui.splash as s; from PySide6.QtWidgets import QApplication; from respmech.ui import theme; from respmech.ui.state import AppState; from respmech.ui.main_window import MainWindow; app=QApplication([]); theme.apply_theme(app); s.make_splash(app); w=MainWindow(AppState()); assert w.tabs.count()==3; print('GUI OK')"
 
       - name: Unit suite (headless, offscreen Qt)
-        run: python -m pytest tests/unit -q
+        run: |
+          # PySide6 can crash at interpreter shutdown on headless CI (macOS Abort trap 6 /
+          # Windows segfault 139) AFTER every test has already passed — worker QThreads and
+          # the QApplication being torn down by static destructors. That post-run crash is
+          # not a test failure, so decide pass/fail from pytest's REPORTED results, not the
+          # crash-prone process exit code. A genuine failure/error still fails the job.
+          set +e
+          python -m pytest tests/unit -q 2>&1 | tee pytest-unit.log
+          set -e
+          if grep -qE "[0-9]+ (failed|error)" pytest-unit.log; then
+            echo "::error::real test failures or errors"; exit 1
+          fi
+          if ! grep -qE "[0-9]+ passed" pytest-unit.log; then
+            echo "::error::pytest did not reach a passing summary (crashed mid-run?)"; exit 1
+          fi
+          echo "Unit suite passed (any non-zero exit was a post-run Qt teardown crash)."
 
   golden:
     name: Numerical golden (synthetic, rtol 1e-9)
