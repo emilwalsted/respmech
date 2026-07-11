@@ -85,8 +85,14 @@ def test_splash_resolves_fonts_to_installed_families(qapp):
     from respmech.ui import splash
     splash.make_splash(qapp)
     installed = set(QFontDatabase.families())
-    assert splash._MONO in installed and splash._FONT in installed
-    assert "," not in splash._MONO and "," not in splash._FONT   # single families, not stacks
+    # The real regression guard: the stacks are resolved to a SINGLE family, not passed to
+    # Qt's SVG renderer as a comma-list (which triggered the "missing font family" warning).
+    assert splash._MONO and "," not in splash._MONO
+    assert splash._FONT and "," not in splash._FONT
+    # A headless runner can expose NO fonts (Windows CI offscreen): only assert membership
+    # when the font DB is actually populated.
+    if installed:
+        assert splash._MONO in installed and splash._FONT in installed
 
 
 def test_theme_applies_light_and_dark(qapp, monkeypatch):

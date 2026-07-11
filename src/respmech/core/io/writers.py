@@ -216,7 +216,11 @@ def _write_run_report(result, settings, outputfolder: str,
 
     L.append(f"OUTPUTS WRITTEN ({len(written) + 1} files)")
     for p in written:
-        L.append(f"  {os.path.relpath(p, outputfolder)}")
+        try:
+            rel = os.path.relpath(p, outputfolder)
+        except ValueError:               # Windows: p and outputfolder on different drives
+            rel = os.path.basename(p)     # a cosmetic display path must never crash the report
+        L.append(f"  {rel}")
     L.append("  run-report.txt")
     L.append("")
 
