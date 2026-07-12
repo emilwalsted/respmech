@@ -239,6 +239,14 @@ class _Job:
 # referenced forever) so CPython never GCs a still-running QThread and aborts.
 _ORPHANED_THREADS = []
 
+# Cap the number of worker QThreads running AT ONCE. A file select fans out up to 5 heavy,
+# largely GIL-bound staging jobs; starting them all together on a 2-core machine thrashes the
+# GIL + oversubscribes OpenBLAS, starving the GUI thread so queued `finished` signals (and the
+# UI) stall for seconds — badly on Windows (coarse GIL hand-off + no offscreen message pump),
+# where it tips reactive tests past their timeout. Running at most 2 keeps the GUI responsive;
+# the rest queue and start as slots free. See _pump_pool / _launch.
+_MAX_ACTIVE = 2
+
 
 class _FileRunError(RuntimeError):
     """A per-file analysis error (the core returned FileResult.error). Raised so
@@ -402,7 +410,10 @@ class PreviewScreen(QWidget):
         self.state = state
         # reactive-job bookkeeping (replaces the old single self._thread/_worker)
         self._jobs = {}                  # kind -> _Job (the current owner)
-        self._draining = set()           # superseded jobs, kept alive until self-cleanup
+        self._draining = set()           # superseded jobs (thread started), kept alive until they self-clean
+        self._launch_queue = []          # _Jobs registered but not yet thread.start()ed (concurrency cap)
+        self._active = set()             # _Jobs whose thread is started, compute not yet delivered
+        self._reaping = set()            # _Jobs delivered; thread quitting — ref held until thread.finished
         self._tokens = {"mech": 0, "batch": 0, "emg_all": 0, "emg_detail": 0, "noise": 0}
         self._overlays = {}              # panel key -> BusyOverlay
         # Debounced auto-recompute: rapid edits (a spinbox drag / multi-keystroke entry)
@@ -971,12 +982,16 @@ class PreviewScreen(QWidget):
         for kind, job in list(self._jobs.items()):
             if kind not in target:
                 continue
-            if hasattr(job.worker, "cancel"):
-                try:
-                    job.worker.cancel()
-                except Exception:                      # noqa: BLE001
-                    pass
-            self._draining.add(job)
+            if job in self._launch_queue:
+                self._launch_queue.remove(job)         # never started -> drop (no thread/finished)
+                self._clear_panel_overlays(*_PANELS[kind])   # ...and its spinner (no _on_job_done to stop it)
+            else:
+                if hasattr(job.worker, "cancel"):
+                    try:
+                        job.worker.cancel()
+                    except Exception:                  # noqa: BLE001
+                        pass
+                self._draining.add(job)                # still running -> joined on completion
             del self._jobs[kind]
         self._invalidate_inflight(target)
 
@@ -1122,12 +1137,17 @@ class PreviewScreen(QWidget):
     def _launch(self, kind, token, worker):
         old = self._jobs.pop(kind, None)
         if old is not None:
-            if hasattr(old.worker, "cancel"):
-                try:
-                    old.worker.cancel()
-                except Exception:                      # noqa: BLE001
-                    pass
-            self._draining.add(old)                    # keep referenced until it self-cleans
+            if old in self._launch_queue:
+                # never started -> no running thread (no GC hazard) and its `finished` would
+                # never fire, so drop it rather than draining (which would wedge the drain)
+                self._launch_queue.remove(old)
+            else:
+                if hasattr(old.worker, "cancel"):
+                    try:
+                        old.worker.cancel()
+                    except Exception:              # noqa: BLE001
+                        pass
+                self._draining.add(old)            # still running -> keep referenced until it self-cleans
         for p in _PANELS[kind]:
             self._overlays[p].start(_SPIN_TEXT[kind])
         thread = QThread()
@@ -1143,8 +1163,30 @@ class PreviewScreen(QWidget):
         worker.finished.connect(self._job_finished)
         if hasattr(worker, "failed"):
             worker.failed.connect(self._job_failed_slot)
-        thread.start()
+        thread.finished.connect(self._release_thread)   # non-blocking cleanup when the thread exits exec()
+        self._launch_queue.append(job)                  # start it when a concurrency slot is free
+        self._pump_pool()
         self._update_actions(status=False)
+
+    def _pump_pool(self):
+        """Start queued jobs up to the concurrency cap. Called after a launch and after each
+        job is delivered (freeing a slot), so at most _MAX_ACTIVE worker threads run at once."""
+        while self._launch_queue and len(self._active) < _MAX_ACTIVE:
+            job = self._launch_queue.pop(0)
+            self._active.add(job)
+            job.thread.start()
+
+    def _release_thread(self):
+        """Queued to the GUI thread by thread.finished: the thread has exited its event loop,
+        so its strong ref can be dropped + deletion scheduled. NEVER runs while the thread is
+        alive (that is why the ref is held in _reaping until here) — preserving the crash-safe
+        'never GC a running QThread' invariant without a blocking join on the GUI thread."""
+        thread = self.sender()
+        for job in list(self._reaping):
+            if job.thread is thread:
+                self._reaping.discard(job)
+                job.thread.deleteLater()
+                break
 
     def _find_job(self, worker):
         for j in list(self._jobs.values()) + list(self._draining):
@@ -1163,14 +1205,17 @@ class PreviewScreen(QWidget):
             self._on_job_done(job, result)
 
     def _on_job_done(self, job, result):
-        # join + release the thread (the ONLY place a worker thread is joined);
-        # a thread that will not stop is parked, never GC'd while running
+        # NON-BLOCKING teardown: post a quit and hold a strong ref in _reaping until the
+        # thread's `finished` fires (_release_thread) — the GUI thread never blocks in a join,
+        # so sibling jobs' queued `finished` signals (and the UI) keep flowing. Freeing this
+        # slot lets the next queued job start.
         job.thread.quit()
-        if not job.thread.wait(2000):
-            _ORPHANED_THREADS.append((job.thread, job.worker))
+        self._active.discard(job)
+        self._reaping.add(job)
         if self._jobs.get(job.kind) is job:
             del self._jobs[job.kind]
         self._draining.discard(job)
+        self._pump_pool()
         # superseded by a newer same-kind job: drop the payload silently, and
         # only clear the spinner if no newer owner took over the panels — but
         # never wipe an error card the current owner already painted (a stale
@@ -1222,7 +1267,10 @@ class PreviewScreen(QWidget):
         for any thread that will not stop in time, keep it referenced forever in
         the module-level parking list rather than let CPython GC a running
         QThread (which would call std::terminate and abort the process)."""
-        jobs = list(self._jobs.values()) + list(self._draining)
+        self._launch_queue.clear()                     # unstarted jobs: no thread to join
+        # a superseded-running job can be in both _draining and _active; a delivered one in
+        # _reaping (its thread may still be quitting) — join every started thread exactly once
+        jobs = list(set(self._jobs.values()) | self._draining | self._active | self._reaping)
         for j in jobs:
             if hasattr(j.worker, "cancel"):
                 try:
@@ -1236,6 +1284,8 @@ class PreviewScreen(QWidget):
                 _ORPHANED_THREADS.append((j.thread, j.worker))
         self._jobs.clear()
         self._draining.clear()
+        self._active.clear()
+        self._reaping.clear()
 
     def panel_busy(self, key):
         ov = self._overlays.get(key)
