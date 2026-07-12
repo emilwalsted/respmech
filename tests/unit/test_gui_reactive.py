@@ -294,3 +294,41 @@ def test_edits_debounce_into_one_recompute(qapp, tmp_path):
     assert calls and max(Counter(calls).values()) == 1   # each kind scheduled exactly once
     _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60)
     win.close()
+
+
+def test_settings_change_scopes_recompute_to_affected_panels(qapp, tmp_path):
+    """Dependency-scoped recompute: an EMG-only edit re-runs only the EMG/noise panels
+    (not the mechanics preview / test run); a mechanics-only edit does the reverse."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path), noise=True)))
+    pv = win.preview_screen
+    import copy as _copy
+    pv._refresh_files(); pv.file_combo.setCurrentIndex(1)
+    assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining and pv._previewed_file, 60)
+    # establish a clean diff baseline without kicking off another recompute
+    pv._last_synced_settings = _copy.deepcopy(pv.state.settings)
+    pv._pending_kinds.clear(); pv._autorun_timer.stop()
+
+    def _capture(mutate):
+        calls = []
+        orig = pv._schedule
+        pv._schedule = lambda k: (calls.append(k), orig(k))[1]
+        try:
+            mutate(pv.state.settings)
+            pv.sync_from_settings()
+            _pump_until(qapp, lambda: bool(calls), 5)
+        finally:
+            pv._schedule = orig
+        _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60)
+        return set(calls)
+
+    emg = _capture(lambda s: setattr(s.processing.emg, "rms_window_s",
+                                     s.processing.emg.rms_window_s + 0.01))
+    assert {"emg_all", "emg_detail"} & emg          # EMG panels recompute
+    assert "mech" not in emg and "batch" not in emg  # mechanics panels do NOT
+
+    mech = _capture(lambda s: setattr(s.processing.segmentation, "buffer",
+                                      s.processing.segmentation.buffer + 10))
+    assert {"mech", "batch"} <= mech                 # mechanics panels recompute
+    assert "emg_all" not in mech and "emg_detail" not in mech  # EMG panels do NOT
+    win.close()

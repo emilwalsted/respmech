@@ -90,6 +90,61 @@ _AUTO_KINDS = ("mech", "batch", "emg_all", "emg_detail", "noise")
 _FILE_KINDS = ("mech", "batch", "emg_all", "emg_detail")
 
 
+def _kinds_for_settings_path(path):
+    """Which auto kinds a changed Settings field (dotted path, as produced by
+    ``dataclasses.asdict``) can affect, so a settings edit recomputes only the impacted
+    panels. GOLDEN-SAFE: this only scopes the PREVIEW; the batch/CLI always use the real
+    Settings, never this map. Erring WIDE is safe (over-recompute); erring narrow risks a
+    stale panel — so any field NOT classified below falls through to ALL kinds. The
+    exhaustive per-kind field lists were derived + adversarially verified against each
+    stage_* function; the coarse buckets here stay on the safe (wide) side of them."""
+    # output / diagnostics and the optional pre-resample never surface in any preview panel
+    if path == "output" or path.startswith("output.") or path.startswith("processing.sampling"):
+        return frozenset()
+    # the EMG channel SET: mechanics shows the raw EMG traces and all EMG/noise panels use
+    # them; the mechanics test run strips EMG, so it is unaffected
+    if path == "input.channels.emg":
+        return frozenset(("mech", "emg_all", "emg_detail", "noise"))
+    if path.startswith("processing.emg"):
+        if path == "processing.emg.outlier_rms_sd_limit":
+            return frozenset(("batch",))          # a batch-table outlier flag only
+        if path in ("processing.emg.normalization", "processing.emg.save_sound",
+                    "processing.emg.plot_yscale", "processing.emg.noise_profile"):
+            return frozenset(("emg_all", "emg_detail"))   # display/output-ish -> redraw EMG panels
+        # EMG conditioning (remove_ecg / ecg_* / rms_window_s / remove_noise) + noise.* params:
+        # the EMG/noise panels only (the mechanics test run forces EMG + ECG + noise off)
+        return frozenset(("emg_all", "emg_detail", "noise"))
+    # mechanics-only compute that feeds the test-run table/Campbell exclusively
+    if (path.startswith("processing.wob") or path.startswith("processing.ptp")
+            or path.startswith("processing.entropy") or path.startswith("processing.breath_counts")):
+        return frozenset(("batch",))
+    # breath segmentation + volume drift/trend + explicit breath exclusion: the mechanics
+    # panels + the noise reference's expiration segmentation
+    if (path.startswith("processing.segmentation") or path.startswith("processing.volume.correct")
+            or path.startswith("processing.volume.trend") or path.startswith("processing.exclude_breaths")):
+        return frozenset(("mech", "batch", "noise"))
+    # channels core / format / volume inverse+integrate (all applied inside load()),
+    # channels.entropy (validated in every load path), input.folder/files, and anything not
+    # matched above -> recompute everything (safe default; never leaves a panel stale)
+    return frozenset(_AUTO_KINDS)
+
+
+def _changed_settings_paths(old, new):
+    """Dotted paths of the leaves that differ between two Settings snapshots."""
+    from dataclasses import asdict
+    changed = set()
+
+    def _walk(a, b, prefix):
+        if isinstance(a, dict) and isinstance(b, dict):
+            for k in set(a) | set(b):
+                _walk(a.get(k), b.get(k), f"{prefix}.{k}" if prefix else k)
+        elif a != b:
+            changed.add(prefix)
+
+    _walk(asdict(old), asdict(new), "")
+    return changed
+
+
 def _pen(colour, width=1):
     return pg.mkPen(colour, width=width)
 
@@ -353,6 +408,7 @@ class PreviewScreen(QWidget):
         self._autorun_timer.setInterval(300)         # ms
         self._autorun_timer.timeout.connect(self._run_autorun)
         self._pending_kinds = set()
+        self._last_synced_settings = None   # snapshot for dependency-scoped invalidation (diff)
         self._noise_has_result = False   # has the fidelity panel a current result? (first-compute guard)
         self._previewed_file = None
         self._loading_noise = False
@@ -811,8 +867,23 @@ class PreviewScreen(QWidget):
         self._load_noise_params()
         self._update_emg_tab_visibility()
         self._update_actions()
-        self._cancel_inflight()      # settings changed -> abort the now-stale panel jobs
-        self._request_autorun()
+        # Dependency-scoped invalidation: diff the settings against the last-synced snapshot
+        # and recompute ONLY the panels whose inputs actually changed. An EMG-only edit no
+        # longer re-runs the mechanics preview + test run; a mechanics-only edit no longer
+        # re-conditions EMG or rebuilds the noise profile. The first sync (no baseline) and
+        # any unclassified field recompute everything, so a panel can never be left stale.
+        cur = self.state.settings
+        if self._last_synced_settings is None:
+            kinds = set(_AUTO_KINDS)
+        else:
+            kinds = set()
+            for p in _changed_settings_paths(self._last_synced_settings, cur):
+                kinds |= _kinds_for_settings_path(p)
+        self._last_synced_settings = copy.deepcopy(cur)
+        if not kinds:
+            return                   # nothing preview-relevant changed -> leave panels as they are
+        self._cancel_inflight(kinds)  # abort only the now-stale panels' jobs
+        self._request_autorun(kinds)
 
     def _current_file(self):
         name = self.file_combo.currentText()
@@ -1960,6 +2031,11 @@ class PreviewScreen(QWidget):
         noise = self.state.settings.processing.emg.noise
         if chosen is not None and noise.auto_prop:
             noise.prop_decrease = float(chosen)
+            # This is an APP-driven change, not a user edit — fold it into the diff baseline
+            # so the next user edit's dependency-scope diff does not mistake it for a change
+            # and needlessly recompute the EMG/noise panels.
+            if self._last_synced_settings is not None:
+                self._last_synced_settings.processing.emg.noise.prop_decrease = float(chosen)
         self._load_noise_params()                    # reflect the chosen prop in the spinbox
         if nr.get("frontier"):
             target = nr.get("fidelity_target", 0.8)
