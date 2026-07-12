@@ -310,17 +310,21 @@ def test_settings_change_scopes_recompute_to_affected_panels(qapp, tmp_path):
     pv._pending_kinds.clear(); pv._autorun_timer.stop()
 
     def _capture(mutate):
-        calls = []
-        orig = pv._schedule
-        pv._schedule = lambda k: (calls.append(k), orig(k))[1]
+        # capture the kinds the debounced dispatch SCOPES to (the dependency-scope decision),
+        # not the downstream noise-adopt cascade (a noise-profile change legitimately
+        # re-conditions EMG afterwards via _apply_noise_report)
+        captured = {}
+        orig = pv._schedule_all
+        pv._schedule_all = lambda kinds=None: (captured.update(k=set(kinds or _AUTO_KINDS)),
+                                               orig(kinds))[1]
         try:
             mutate(pv.state.settings)
             pv.sync_from_settings()
-            _pump_until(qapp, lambda: bool(calls), 5)
+            _pump_until(qapp, lambda: "k" in captured, 5)
         finally:
-            pv._schedule = orig
+            pv._schedule_all = orig
         _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60)
-        return set(calls)
+        return captured.get("k", set())
 
     emg = _capture(lambda s: setattr(s.processing.emg, "rms_window_s",
                                      s.processing.emg.rms_window_s + 0.01))

@@ -16,6 +16,7 @@ Usage (moveToThread pattern):
 """
 from __future__ import annotations
 
+import os
 import traceback
 
 import numpy as np
@@ -87,7 +88,68 @@ class BatchWorker(QObject):
 # matches the real run. Pure compute here (Qt-free, no disk writes) so it is both
 # unit-testable headless and safe to run on a QThread.
 # --------------------------------------------------------------------------- #
-def stage_emg_channel(settings: Settings, file_path: str, channel_index: int) -> dict:
+def _cached_reference_clip(settings: Settings, s, cancel_check=None):
+    """The reference noise clip, memoised per (reference-file freshness + load/ECG/
+    segmentation inputs) so emg_all + emg_detail + noise share ONE build of it within a
+    scoped recompute instead of three. Read-only (callers only build profiles from it),
+    so no defensive copy is needed. Preview-only wrapper around the core clip builder."""
+    from respmech.core.pipeline import _reference_noise_clip
+    from respmech.ui.screens import _preview_cache as _pc
+    ref = settings.processing.emg.noise.reference_file
+    ref_path = os.path.join(s.input.inputfolder, ref) if ref else None
+    key = _pc.ref_clip_key(settings, ref_path) if ref_path else None
+    return _pc.cached(_pc.REF_CLIP, key,
+                      lambda: _reference_noise_clip(settings, s, cancel_check=cancel_check))
+
+
+def _load_and_condition(settings: Settings, s, file_path: str, cancel_check=None):
+    """Load a file's EMG matrix and ECG-remove ALL channels, memoised per (file freshness
+    + load + ECG params) so emg_all and emg_detail share one ECG pass (the dominant EMG
+    cost) instead of each doing the full-matrix subtraction. Returns COPIES of
+    ``(raw[n,nch], conditioned[n,nch], ecg_applied, ecg_error)`` so a caller that mutates
+    the conditioned matrix in place (the per-channel noise apply) cannot corrupt the
+    cached entry."""
+    import os as _os  # noqa: PLC0415
+    from respmech.ui.screens import _preview_cache as _pc
+
+    def _compute():
+        from respmech.core.io.loaders import load  # noqa: PLC0415
+        from respmech.core import emg as emglib     # noqa: PLC0415
+        fs = int(s.input.format.samplingfrequency)
+        _flow, _v, _p, _g, _d, _e, emg = load(file_path, s)
+        emg = np.asarray(emg, dtype=float)
+        if emg.ndim == 1:
+            emg = emg[:, None]
+        raw = np.array(emg, dtype=float)
+        conditioned = np.array(emg, dtype=float)
+        applied, error = False, None
+        nch = emg.shape[1]
+        if nch and settings.processing.emg.remove_ecg:
+            try:
+                detect = max(0, min(int(s.processing.emg.column_detect), nch - 1))
+                proc, _w, _pk = emglib.remove_ecg(
+                    np.array(emg), emg[:, detect], samplingfrequency=fs,
+                    ecgminheight=s.processing.emg.minheight,
+                    ecgmindistance=s.processing.emg.mindistance,
+                    ecgminwidth=s.processing.emg.minwidth,
+                    windowsize=s.processing.emg.windowsize,
+                    cancel_check=cancel_check)
+                conditioned = np.asarray(proc, dtype=float)
+                if conditioned.ndim == 1:
+                    conditioned = conditioned[:, None]
+                applied = True
+            except Exception:                          # noqa: BLE001 — preview stays useful
+                conditioned = np.array(emg, dtype=float)
+                error = traceback.format_exc()
+        return raw, conditioned, applied, error
+
+    raw, cond, applied, error = _pc.cached(
+        _pc.ECG_MATRIX, _pc.ecg_matrix_key(settings, file_path), _compute)
+    return np.array(raw, dtype=float), np.array(cond, dtype=float), applied, error
+
+
+def stage_emg_channel(settings: Settings, file_path: str, channel_index: int,
+                      cancel_check=None) -> dict:
     """Stage one EMG channel of ``file_path`` through the conditioning pipeline and
     return time-domain + PSD arrays for plotting:
 
@@ -101,47 +163,22 @@ def stage_emg_channel(settings: Settings, file_path: str, channel_index: int) ->
     Never writes to disk and never touches Qt."""
     from scipy.signal import welch
 
-    from respmech.core.io.loaders import load
     from respmech.core._legacy_ns import to_legacy_ns
-    from respmech.core import emg as emglib
     from respmech.core import noise as noiselib
-    from respmech.core.pipeline import _reference_noise_clip
 
     s = to_legacy_ns(settings)
     fs = int(s.input.format.samplingfrequency)
-    flow, vol, poes, pgas, pdi, ent, emg = load(file_path, s)
-    emg = np.asarray(emg, dtype=float)
-    if emg.ndim == 1:
-        emg = emg[:, None]
-    nch = emg.shape[1]
+    # stages 1+2 (load + all-channel ECG removal) are shared with emg_all via the cache
+    raw_mat, cond_mat, ecg_applied, ecg_error = _load_and_condition(
+        settings, s, file_path, cancel_check=cancel_check)
+    nch = raw_mat.shape[1]
     if nch == 0:
         raise ValueError("No EMG channels are configured for this file.")
     ch = max(0, min(int(channel_index), nch - 1))
-    raw = emg[:, ch].astype(float)
+    raw = raw_mat[:, ch].astype(float)
+    ecg = cond_mat[:, ch].astype(float)                # == raw when remove_ecg off / failed
     cols = list(settings.input.channels.emg)
     col = cols[ch] if ch < len(cols) else ch + 1
-
-    # -- stage 2: ECG removal (honours remove_ecg; test-level detect params) --
-    ecg = raw
-    ecg_applied = False
-    ecg_error = None
-    if settings.processing.emg.remove_ecg:
-        try:
-            detect = max(0, min(int(s.processing.emg.column_detect), nch - 1))
-            proc, _win, _peaks = emglib.remove_ecg(
-                emg, emg[:, detect], samplingfrequency=fs,
-                ecgminheight=s.processing.emg.minheight,
-                ecgmindistance=s.processing.emg.mindistance,
-                ecgminwidth=s.processing.emg.minwidth,
-                windowsize=s.processing.emg.windowsize)
-            proc = np.asarray(proc, dtype=float)
-            if proc.ndim == 1:
-                proc = proc[:, None]
-            ecg = proc[:, ch].astype(float)
-            ecg_applied = True
-        except Exception:                              # noqa: BLE001 — preview stays useful
-            ecg = raw
-            ecg_error = traceback.format_exc()
 
     # -- stage 3: shared-profile spectral noise reduction on this channel --
     cfg = settings.processing.emg.noise
@@ -150,7 +187,8 @@ def stage_emg_channel(settings: Settings, file_path: str, channel_index: int) ->
     noise_error = None
     if cfg.reference_file:
         try:
-            clip = np.asarray(_reference_noise_clip(settings, s), dtype=float)
+            clip = np.asarray(_cached_reference_clip(settings, s, cancel_check=cancel_check),
+                              dtype=float)
             if clip.ndim == 1:
                 clip = clip[:, None]
             prof = noiselib.NoiseProfile.from_clip(
@@ -203,69 +241,54 @@ class EmgConditioningWorker(QObject):
 
     @Slot()
     def run(self):
+        from respmech.core._cancel import Cancelled
         if self._cancelled:                 # superseded before we got the thread
             self.finished.emit(None)
             return
         try:
-            data = stage_emg_channel(self._settings, self._path, self._ch)
+            data = stage_emg_channel(self._settings, self._path, self._ch,
+                                     cancel_check=lambda: self._cancelled)
             self.finished.emit(data)
-        except Exception as e:  # noqa: BLE001
+        except Cancelled:                   # superseded mid-compute -> aborted cleanly, no result
+            self.finished.emit(None)
+        except Exception:  # noqa: BLE001
             self.failed.emit(traceback.format_exc())
             self.finished.emit(None)
 
 
-def stage_emg_all_channels(settings: Settings, file_path: str) -> dict:
+def stage_emg_all_channels(settings: Settings, file_path: str, cancel_check=None) -> dict:
     """Stage EVERY configured EMG channel of ``file_path`` (raw -> conditioned = ECG
     removal + shared-profile noise reduction) for the "result" view where the user
     picks which channels to see. ECG removal runs once for all channels; the noise
     profile is built per channel from the shared reference clip. Pure compute, Qt-free,
     no disk writes."""
-    from respmech.core.io.loaders import load
     from respmech.core._legacy_ns import to_legacy_ns
-    from respmech.core import emg as emglib
     from respmech.core import noise as noiselib
-    from respmech.core.pipeline import _reference_noise_clip
 
     s = to_legacy_ns(settings)
     fs = int(s.input.format.samplingfrequency)
     cols = list(settings.input.channels.emg)
-    flow, vol, poes, pgas, pdi, ent, emg = load(file_path, s)
-    emg = np.asarray(emg, dtype=float)
-    if emg.ndim == 1:
-        emg = emg[:, None]
+    # load + all-channel ECG removal, shared with emg_detail via the cache; the cache
+    # returns COPIES, so the in-place per-channel noise apply below cannot corrupt it
+    emg, conditioned, ecg_applied, ecg_error = _load_and_condition(
+        settings, s, file_path, cancel_check=cancel_check)
     nch = emg.shape[1]
     if nch == 0:
         raise ValueError("No EMG channels are configured for this file.")
-
-    conditioned = np.array(emg, dtype=float)
-    ecg_applied = False
-    ecg_error = None
-    if settings.processing.emg.remove_ecg:
-        try:
-            detect = max(0, min(int(s.processing.emg.column_detect), nch - 1))
-            proc, _w, _p = emglib.remove_ecg(
-                np.array(emg), emg[:, detect], samplingfrequency=fs,
-                ecgminheight=s.processing.emg.minheight,
-                ecgmindistance=s.processing.emg.mindistance,
-                ecgminwidth=s.processing.emg.minwidth,
-                windowsize=s.processing.emg.windowsize)
-            conditioned = np.asarray(proc, dtype=float)
-            if conditioned.ndim == 1:
-                conditioned = conditioned[:, None]
-            ecg_applied = True
-        except Exception:                              # noqa: BLE001
-            conditioned = np.array(emg, dtype=float)
-            ecg_error = traceback.format_exc()
 
     noise_applied = False
     noise_error = None
     cfg = settings.processing.emg.noise
     if cfg.reference_file:
         try:
-            clip = np.asarray(_reference_noise_clip(settings, s), dtype=float)
+            clip = np.asarray(_cached_reference_clip(settings, s, cancel_check=cancel_check),
+                              dtype=float)
             if clip.ndim == 1:
                 clip = clip[:, None]
             for i in range(nch):
+                if cancel_check is not None and cancel_check():
+                    from respmech.core._cancel import Cancelled
+                    raise Cancelled()
                 prof = noiselib.NoiseProfile.from_clip(
                     clip[:, min(i, clip.shape[1] - 1)], fs,
                     n_fft=cfg.n_fft, hop_length=cfg.hop_length, win_length=cfg.win_length,
@@ -477,7 +500,7 @@ def detect_sampling_frequency(time_column):
     return int(round(fs))
 
 
-def stage_noise_fidelity(settings: Settings) -> dict:
+def stage_noise_fidelity(settings: Settings, cancel_check=None) -> dict:
     """Build the shared noise profile for the WHOLE test and measure the EMG fidelity
     frontier + the auto-selected suppression strength — the per-test noise summary the
     Preview screen shows, decoupled from the full mechanics test run. Pure compute,
@@ -493,8 +516,16 @@ def stage_noise_fidelity(settings: Settings) -> dict:
     allfiles = match_input_files(s.input.inputfolder, s.input.files)
     if not allfiles:
         raise FileNotFoundError(f"No input files found for '{s.input.files}'.")
-    _noise_set, report = _build_noise_set(settings, s, allfiles)   # full test defines the profile
-    return report
+    from respmech.ui.screens import _preview_cache as _pc
+    ref = settings.processing.emg.noise.reference_file
+    ref_path = os.path.join(s.input.inputfolder, ref) if ref else None
+
+    def _compute():
+        clip = _cached_reference_clip(settings, s, cancel_check=cancel_check)  # shared clip build
+        return _build_noise_set(settings, s, allfiles, clip=clip, cancel_check=cancel_check)[1]
+
+    key = _pc.noise_report_key(settings, ref_path, allfiles) if ref_path else None
+    return _pc.cached(_pc.NOISE_REPORT, key, _compute)   # test-wide report; keyed on all-file tokens
 
 
 class EmgAllChannelsWorker(QObject):
@@ -514,12 +545,16 @@ class EmgAllChannelsWorker(QObject):
 
     @Slot()
     def run(self):
+        from respmech.core._cancel import Cancelled
         if self._cancelled:
             self.finished.emit(None)
             return
         try:
-            self.finished.emit(stage_emg_all_channels(self._settings, self._path))
-        except Exception as e:  # noqa: BLE001
+            self.finished.emit(stage_emg_all_channels(
+                self._settings, self._path, cancel_check=lambda: self._cancelled))
+        except Cancelled:                   # superseded mid-compute -> aborted cleanly
+            self.finished.emit(None)
+        except Exception:  # noqa: BLE001
             self.failed.emit(traceback.format_exc())
             self.finished.emit(None)
 
@@ -614,11 +649,23 @@ class FnWorker(QObject):
 
     @Slot()
     def run(self):
+        import inspect
+        from respmech.core._cancel import Cancelled
         if self._cancelled:
             self.finished.emit(None)
             return
+        kwargs = dict(self._kwargs)
+        # inject a live cancel checker only for targets that accept one (e.g. the noise
+        # job); the mechanics staging has no cancel_check param and is left untouched
         try:
-            self.finished.emit(self._fn(*self._args, **self._kwargs))
+            if "cancel_check" in inspect.signature(self._fn).parameters:
+                kwargs.setdefault("cancel_check", lambda: self._cancelled)
+        except (TypeError, ValueError):     # builtins / lambdas without a signature
+            pass
+        try:
+            self.finished.emit(self._fn(*self._args, **kwargs))
+        except Cancelled:                   # superseded mid-compute -> aborted cleanly
+            self.finished.emit(None)
         except Exception as e:  # noqa: BLE001
             self.failed.emit(traceback.format_exc())
             self.finished.emit(None)
