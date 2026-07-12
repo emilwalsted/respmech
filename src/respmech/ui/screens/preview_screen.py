@@ -84,6 +84,73 @@ _KIND_LABEL = {"mech": "Channel preview", "batch": "Test run",
 # the kinds that run automatically (on file select / settings change / Refresh). The
 # test run ('batch') is now automatic too, but MECHANICS-ONLY (no ECG/EMG work).
 _AUTO_KINDS = ("mech", "batch", "emg_all", "emg_detail", "noise")
+# the kinds whose result depends on the SELECTED file. 'noise' is deliberately absent: the
+# fidelity/noise profile is test-wide (built from the reference file + the whole input set),
+# so switching the previewed file must NOT blank or rebuild it. See _begin_file_switch.
+_FILE_KINDS = ("mech", "batch", "emg_all", "emg_detail")
+
+
+def _kinds_for_settings_path(path):
+    """Which auto kinds a changed Settings field (dotted path, as produced by
+    ``dataclasses.asdict``) can affect, so a settings edit recomputes only the impacted
+    panels. GOLDEN-SAFE: this only scopes the PREVIEW; the batch/CLI always use the real
+    Settings, never this map. Erring WIDE is safe (over-recompute); erring narrow risks a
+    stale panel — so any field NOT classified below falls through to ALL kinds. The
+    exhaustive per-kind field lists were derived + adversarially verified against each
+    stage_* function; the coarse buckets here stay on the safe (wide) side of them."""
+    # output / diagnostics and the optional pre-resample never surface in any preview panel
+    if path == "output" or path.startswith("output.") or path.startswith("processing.sampling"):
+        return frozenset()
+    # the EMG channel SET: mechanics shows the raw EMG traces and all EMG/noise panels use
+    # them; the mechanics test run strips EMG, so it is unaffected
+    if path == "input.channels.emg":
+        return frozenset(("mech", "emg_all", "emg_detail", "noise"))
+    if path.startswith("processing.emg"):
+        if path == "processing.emg.outlier_rms_sd_limit":
+            return frozenset(("batch",))          # a batch-table outlier flag only
+        if path in ("processing.emg.normalization", "processing.emg.save_sound",
+                    "processing.emg.plot_yscale", "processing.emg.noise_profile"):
+            return frozenset(("emg_all", "emg_detail"))   # display/output-ish -> redraw EMG panels
+        # EMG conditioning (remove_ecg / ecg_* / rms_window_s / remove_noise) + noise.* params:
+        # the EMG/noise panels only (the mechanics test run forces EMG + ECG + noise off)
+        return frozenset(("emg_all", "emg_detail", "noise"))
+    # mechanics-only compute that feeds the test-run table/Campbell exclusively
+    if (path.startswith("processing.wob") or path.startswith("processing.ptp")
+            or path.startswith("processing.entropy") or path.startswith("processing.breath_counts")):
+        return frozenset(("batch",))
+    # breath segmentation feeds the mechanics panels AND — via the noise reference clip's
+    # expiration segmentation and the auto_prop gather — the EMG conditioning + fidelity
+    # panels (which build NoiseProfile.from_clip on a buffer-dependent clip). So a
+    # segmentation edit must recompute all five, or the EMG traces go stale when auto_prop
+    # is off (nothing else re-dispatches them). The ECG cache keeps the extra work cheap.
+    if path.startswith("processing.segmentation"):
+        return frozenset(_AUTO_KINDS)
+    # volume drift/trend + explicit breath exclusion: the mechanics panels (+ noise, a
+    # cache hit); these do NOT change the flow-based EMG reference masks, so the EMG panels
+    # are left alone.
+    if (path.startswith("processing.volume.correct") or path.startswith("processing.volume.trend")
+            or path.startswith("processing.exclude_breaths")):
+        return frozenset(("mech", "batch", "noise"))
+    # channels core / format / volume inverse+integrate (all applied inside load()),
+    # channels.entropy (validated in every load path), input.folder/files, and anything not
+    # matched above -> recompute everything (safe default; never leaves a panel stale)
+    return frozenset(_AUTO_KINDS)
+
+
+def _changed_settings_paths(old, new):
+    """Dotted paths of the leaves that differ between two Settings snapshots."""
+    from dataclasses import asdict
+    changed = set()
+
+    def _walk(a, b, prefix):
+        if isinstance(a, dict) and isinstance(b, dict):
+            for k in set(a) | set(b):
+                _walk(a.get(k), b.get(k), f"{prefix}.{k}" if prefix else k)
+        elif a != b:
+            changed.add(prefix)
+
+    _walk(asdict(old), asdict(new), "")
+    return changed
 
 
 def _pen(colour, width=1):
@@ -171,6 +238,14 @@ class _Job:
 # threads that would not stop within the shutdown budget are parked here (kept
 # referenced forever) so CPython never GCs a still-running QThread and aborts.
 _ORPHANED_THREADS = []
+
+# Cap the number of worker QThreads running AT ONCE. A file select fans out up to 5 heavy,
+# largely GIL-bound staging jobs; starting them all together on a 2-core machine thrashes the
+# GIL + oversubscribes OpenBLAS, starving the GUI thread so queued `finished` signals (and the
+# UI) stall for seconds — badly on Windows (coarse GIL hand-off + no offscreen message pump),
+# where it tips reactive tests past their timeout. Running at most 2 keeps the GUI responsive;
+# the rest queue and start as slots free. See _pump_pool / _launch.
+_MAX_ACTIVE = 2
 
 
 class _FileRunError(RuntimeError):
@@ -335,10 +410,25 @@ class PreviewScreen(QWidget):
         self.state = state
         # reactive-job bookkeeping (replaces the old single self._thread/_worker)
         self._jobs = {}                  # kind -> _Job (the current owner)
-        self._draining = set()           # superseded jobs, kept alive until self-cleanup
+        self._draining = set()           # superseded jobs (thread started), kept alive until they self-clean
+        self._launch_queue = []          # _Jobs registered but not yet thread.start()ed (concurrency cap)
+        self._active = set()             # _Jobs whose thread is started, compute not yet delivered
+        self._reaping = set()            # _Jobs delivered; thread quitting — ref held until thread.finished
         self._tokens = {"mech": 0, "batch": 0, "emg_all": 0, "emg_detail": 0, "noise": 0}
         self._overlays = {}              # panel key -> BusyOverlay
-        self._autorun_pending = False
+        # Debounced auto-recompute: rapid edits (a spinbox drag / multi-keystroke entry)
+        # restart one single-shot timer, collapsing the burst into ONE re-dispatch after a
+        # short quiet period. The timer only fires while an event loop spins, so it stays
+        # inert in headless tests (no thread starts synchronously) — same property as the
+        # previous QTimer.singleShot(0) coalescing. _pending_kinds accumulates which panels
+        # the pending run should recompute.
+        self._autorun_timer = QTimer(self)
+        self._autorun_timer.setSingleShot(True)
+        self._autorun_timer.setInterval(300)         # ms
+        self._autorun_timer.timeout.connect(self._run_autorun)
+        self._pending_kinds = set()
+        self._last_synced_settings = None   # snapshot for dependency-scoped invalidation (diff)
+        self._noise_has_result = False   # has the fidelity panel a current result? (first-compute guard)
         self._previewed_file = None
         self._loading_noise = False
         # breath-overlay interaction state (feature A)
@@ -760,6 +850,14 @@ class PreviewScreen(QWidget):
     # -- file list (reactive) ----------------------------------------------
     def refresh_files(self):
         s = self.state.settings
+        # drop the preview caches only when the input folder/mask ACTUALLY changes (the file
+        # set may differ) — not on every entry into the Preview tab, which would defeat the
+        # cross-revisit reuse. Per-file freshness tokens in the keys guard in-place edits.
+        fm = ((s.input.folder or ""), (s.input.files or ""))
+        if fm != getattr(self, "_cache_fm", None):
+            from respmech.ui.screens import _preview_cache
+            _preview_cache.clear_all()
+            self._cache_fm = fm
         prev = self.file_combo.currentText()
         folder = (s.input.folder or "").strip()
         self.file_combo.blockSignals(True)
@@ -796,8 +894,23 @@ class PreviewScreen(QWidget):
         self._load_noise_params()
         self._update_emg_tab_visibility()
         self._update_actions()
-        self._cancel_inflight()      # settings changed -> abort the now-stale panel jobs
-        self._request_autorun()
+        # Dependency-scoped invalidation: diff the settings against the last-synced snapshot
+        # and recompute ONLY the panels whose inputs actually changed. An EMG-only edit no
+        # longer re-runs the mechanics preview + test run; a mechanics-only edit no longer
+        # re-conditions EMG or rebuilds the noise profile. The first sync (no baseline) and
+        # any unclassified field recompute everything, so a panel can never be left stale.
+        cur = self.state.settings
+        if self._last_synced_settings is None:
+            kinds = set(_AUTO_KINDS)
+        else:
+            kinds = set()
+            for p in _changed_settings_paths(self._last_synced_settings, cur):
+                kinds |= _kinds_for_settings_path(p)
+        self._last_synced_settings = copy.deepcopy(cur)
+        if not kinds:
+            return                   # nothing preview-relevant changed -> leave panels as they are
+        self._cancel_inflight(kinds)  # abort only the now-stale panels' jobs
+        self._request_autorun(kinds)
 
     def _current_file(self):
         name = self.file_combo.currentText()
@@ -848,38 +961,79 @@ class PreviewScreen(QWidget):
         elif has_file and not ok:
             self._set_status(f"Settings incomplete: {why}")
 
-    def _invalidate_inflight(self):
-        """Bump every kind's token so any in-flight job for the *previous* file is
-        dropped by the acceptance check in _on_job_done when it lands — even if it
-        finished in the same event-loop iteration as the switch, before the deferred
-        autorun bumps tokens. A superseded job still clears its own spinner. Safe
-        against _schedule's bump-last invariant: after a file change EVERY in-flight
-        job is known-stale (wrong file), so none of them must survive."""
-        for k in self._tokens:
-            self._tokens[k] += 1
+    def _invalidate_inflight(self, kinds=None):
+        """Bump the token of each targeted kind so any in-flight job for it is dropped by
+        the acceptance check in _on_job_done when it lands — even if it finished in the
+        same event-loop iteration as the change, before the (debounced) autorun bumps
+        tokens. A superseded job still clears its own spinner. ``kinds`` defaults to ALL:
+        on a file switch pass only the file-dependent kinds so the still-valid, test-wide
+        noise job is not needlessly invalidated."""
+        for k in (self._tokens if kinds is None else kinds):
+            if k in self._tokens:
+                self._tokens[k] += 1
 
-    def _cancel_inflight(self):
-        """Abort every in-flight job: cancel its worker (cooperative), invalidate its
-        token so a late result is dropped, and move it to draining so its thread is
-        still joined on completion. Used on a settings change / file switch / Refresh."""
-        for job in list(self._jobs.values()):
-            if hasattr(job.worker, "cancel"):
-                try:
-                    job.worker.cancel()
-                except Exception:                      # noqa: BLE001
-                    pass
-            self._draining.add(job)
-        self._jobs.clear()
-        self._invalidate_inflight()
+    def _cancel_inflight(self, kinds=None):
+        """Abort the in-flight jobs of ``kinds`` (default all): cancel each worker
+        (cooperative), invalidate its token so a late result is dropped, and move it to
+        draining so its thread is still joined on completion. Used on a settings change /
+        file switch / Refresh — a file switch scopes to the file-dependent kinds so the
+        test-wide noise job keeps running."""
+        target = set(_AUTO_KINDS if kinds is None else kinds)
+        for kind, job in list(self._jobs.items()):
+            if kind not in target:
+                continue
+            if job in self._launch_queue:
+                self._launch_queue.remove(job)         # never started -> drop (no thread/finished)
+                self._clear_panel_overlays(*_PANELS[kind])   # ...and its spinner (no _on_job_done to stop it)
+            else:
+                if hasattr(job.worker, "cancel"):
+                    try:
+                        job.worker.cancel()
+                    except Exception:                  # noqa: BLE001
+                        pass
+                self._draining.add(job)                # still running -> joined on completion
+            del self._jobs[kind]
+        self._invalidate_inflight(target)
+
+    def _noise_applicable(self):
+        """True when the noise/fidelity job would produce a panel (EMG channels present,
+        noise enabled, a reference file set) — same gate as _schedule('noise')."""
+        ncfg = self.state.settings.processing.emg.noise
+        return bool(self.state.settings.input.channels.emg) and ncfg.enabled and bool(ncfg.reference_file)
 
     def _begin_file_switch(self):
-        """Shared cleanup when the current file changes: clear every panel to its
-        start/blank state, abort the old file's in-flight jobs, and re-dispatch the
-        auto panels for the new file. Reached both from an interactive combo change and
-        from refresh_files silently switching the current file when the prev vanished."""
-        self._clear_all_panels()     # blank every panel + show the test-run CTA (as at start)
-        self._cancel_inflight()      # abort the old file's in-flight jobs
-        self._request_autorun()
+        """Shared cleanup when the current file changes: blank the FILE-dependent panels,
+        abort their in-flight jobs, and re-dispatch them for the new file. The test-wide
+        noise/fidelity panel is left intact — switching the previewed file cannot change
+        its result — so it is neither blanked nor rebuilt, EXCEPT on its first compute
+        (no result yet). Reached from an interactive combo change and from refresh_files
+        silently switching the current file when the previous one vanished."""
+        kinds = set(_FILE_KINDS)
+        if self._noise_applicable() and not self._noise_has_result:
+            kinds.add("noise")                 # first compute only; an existing result survives the switch
+        self._clear_file_panels("noise" in kinds)
+        self._cancel_inflight(kinds)           # abort only the file-dependent jobs (noise keeps running)
+        self._request_autorun(kinds)
+
+    def _clear_file_panels(self, include_noise=False):
+        """Blank the FILE-dependent panels for a file switch, leaving the test-wide
+        fidelity panel (and its last result) intact unless ``include_noise`` (a first
+        compute is being scheduled)."""
+        self.plots.clear(); self._channel_plots = []
+        self.table.setRowCount(0); self.table.setColumnCount(0)
+        self.campbell.figure.clear(); self.campbell.draw()
+        self.emg_raw_plots.clear()
+        self.emg_plots.clear()
+        self.emg_psd_canvas.figure.clear(); self.emg_psd_canvas.draw()
+        if include_noise:
+            self.fidelity_canvas.figure.clear(); self.fidelity_canvas.draw()
+            self._noise_has_result = False
+        self._reset_breath_state()   # clears _bov/_breaths/_emg_all/result plot/_previewed_file
+        self._ensure_noise_region()  # re-attach the rest-region selector to the cleared detail plot
+        panels = [p for k in _FILE_KINDS for p in _PANELS[k]]
+        if include_noise:
+            panels += _PANELS["noise"]
+        self._clear_panel_overlays(*panels)   # dismiss stale spinners/cards on the cleared panels
 
     def _refresh_all(self):
         """The 'Refresh' button: recompute every auto panel (NOT the test run) for the
@@ -901,6 +1055,7 @@ class PreviewScreen(QWidget):
         self.emg_plots.clear()
         self.emg_psd_canvas.figure.clear(); self.emg_psd_canvas.draw()
         self.fidelity_canvas.figure.clear(); self.fidelity_canvas.draw()
+        self._noise_has_result = False
         self._reset_breath_state()   # clears _bov/_breaths/_emg_all/result plot/_previewed_file
         self._ensure_noise_region()  # re-attach the rest-region selector to the cleared detail plot
         self._clear_panel_overlays(*self._overlays)   # dismiss stale spinners / error cards
@@ -911,22 +1066,25 @@ class PreviewScreen(QWidget):
             self._begin_file_switch()
 
     # -- reactive scheduling ------------------------------------------------
-    def _request_autorun(self):
-        """Coalesce many change events into a single full re-dispatch on the next
-        event-loop tick. Never starts a thread synchronously (so it is inert in
-        headless tests, which never spin the loop)."""
-        if self._autorun_pending:
-            return
-        self._autorun_pending = True
-        QTimer.singleShot(0, self._run_autorun)
+    def _request_autorun(self, kinds=None):
+        """Coalesce change events into a single re-dispatch after a short quiet period
+        (~300 ms). Restarting the single-shot timer on each edit debounces a spinbox drag
+        / multi-keystroke entry into ONE recompute. ``kinds`` scopes which panels the
+        pending run recomputes (default: all auto kinds); pending kinds accumulate across
+        edits until the timer fires. Never starts a thread synchronously — the timer only
+        fires while an event loop spins, so this is inert in headless tests."""
+        self._pending_kinds |= set(_AUTO_KINDS if kinds is None else kinds)
+        self._autorun_timer.start()          # start() on a running single-shot timer restarts it
 
     def _run_autorun(self):
-        self._autorun_pending = False
-        self._schedule_all()
+        kinds = self._pending_kinds or set(_AUTO_KINDS)
+        self._pending_kinds = set()
+        self._schedule_all(kinds)
 
-    def _schedule_all(self):
-        for k in _AUTO_KINDS:
-            self._schedule(k)
+    def _schedule_all(self, kinds=None):
+        for k in (_AUTO_KINDS if kinds is None else kinds):
+            if k in _AUTO_KINDS:             # ignore anything that is not an auto kind
+                self._schedule(k)
 
     def _schedule(self, kind):
         """Evaluate the kind's gate, build its worker, and (only if it will
@@ -968,6 +1126,7 @@ class PreviewScreen(QWidget):
             ncfg = self.state.settings.processing.emg.noise
             if not has_emg or not ncfg.enabled or not ncfg.reference_file:
                 self._clear_panel_overlays(*_PANELS[kind])   # no reference -> no fidelity panel
+                self._noise_has_result = False
                 return                                 # no fidelity without a noise reference
             worker = FnWorker(stage_noise_fidelity, snap)
         if worker is None:
@@ -978,12 +1137,17 @@ class PreviewScreen(QWidget):
     def _launch(self, kind, token, worker):
         old = self._jobs.pop(kind, None)
         if old is not None:
-            if hasattr(old.worker, "cancel"):
-                try:
-                    old.worker.cancel()
-                except Exception:                      # noqa: BLE001
-                    pass
-            self._draining.add(old)                    # keep referenced until it self-cleans
+            if old in self._launch_queue:
+                # never started -> no running thread (no GC hazard) and its `finished` would
+                # never fire, so drop it rather than draining (which would wedge the drain)
+                self._launch_queue.remove(old)
+            else:
+                if hasattr(old.worker, "cancel"):
+                    try:
+                        old.worker.cancel()
+                    except Exception:              # noqa: BLE001
+                        pass
+                self._draining.add(old)            # still running -> keep referenced until it self-cleans
         for p in _PANELS[kind]:
             self._overlays[p].start(_SPIN_TEXT[kind])
         thread = QThread()
@@ -999,8 +1163,30 @@ class PreviewScreen(QWidget):
         worker.finished.connect(self._job_finished)
         if hasattr(worker, "failed"):
             worker.failed.connect(self._job_failed_slot)
-        thread.start()
+        thread.finished.connect(self._release_thread)   # non-blocking cleanup when the thread exits exec()
+        self._launch_queue.append(job)                  # start it when a concurrency slot is free
+        self._pump_pool()
         self._update_actions(status=False)
+
+    def _pump_pool(self):
+        """Start queued jobs up to the concurrency cap. Called after a launch and after each
+        job is delivered (freeing a slot), so at most _MAX_ACTIVE worker threads run at once."""
+        while self._launch_queue and len(self._active) < _MAX_ACTIVE:
+            job = self._launch_queue.pop(0)
+            self._active.add(job)
+            job.thread.start()
+
+    def _release_thread(self):
+        """Queued to the GUI thread by thread.finished: the thread has exited its event loop,
+        so its strong ref can be dropped + deletion scheduled. NEVER runs while the thread is
+        alive (that is why the ref is held in _reaping until here) — preserving the crash-safe
+        'never GC a running QThread' invariant without a blocking join on the GUI thread."""
+        thread = self.sender()
+        for job in list(self._reaping):
+            if job.thread is thread:
+                self._reaping.discard(job)
+                job.thread.deleteLater()
+                break
 
     def _find_job(self, worker):
         for j in list(self._jobs.values()) + list(self._draining):
@@ -1019,14 +1205,17 @@ class PreviewScreen(QWidget):
             self._on_job_done(job, result)
 
     def _on_job_done(self, job, result):
-        # join + release the thread (the ONLY place a worker thread is joined);
-        # a thread that will not stop is parked, never GC'd while running
+        # NON-BLOCKING teardown: post a quit and hold a strong ref in _reaping until the
+        # thread's `finished` fires (_release_thread) — the GUI thread never blocks in a join,
+        # so sibling jobs' queued `finished` signals (and the UI) keep flowing. Freeing this
+        # slot lets the next queued job start.
         job.thread.quit()
-        if not job.thread.wait(2000):
-            _ORPHANED_THREADS.append((job.thread, job.worker))
+        self._active.discard(job)
+        self._reaping.add(job)
         if self._jobs.get(job.kind) is job:
             del self._jobs[job.kind]
         self._draining.discard(job)
+        self._pump_pool()
         # superseded by a newer same-kind job: drop the payload silently, and
         # only clear the spinner if no newer owner took over the panels — but
         # never wipe an error card the current owner already painted (a stale
@@ -1065,6 +1254,8 @@ class PreviewScreen(QWidget):
             return
         for p in _PANELS[job.kind]:
             self._overlays[p].stop()
+        if job.kind == "noise":
+            self._noise_has_result = True   # the fidelity panel now holds a current result
         self._update_actions(status=False)
 
     def shutdown(self, wait_ms=5000):
@@ -1076,7 +1267,16 @@ class PreviewScreen(QWidget):
         for any thread that will not stop in time, keep it referenced forever in
         the module-level parking list rather than let CPython GC a running
         QThread (which would call std::terminate and abort the process)."""
-        jobs = list(self._jobs.values()) + list(self._draining)
+        # Disarm the debounced auto-run FIRST: a torn-down screen must never keep a loaded
+        # 300ms timer that could later fire into another screen's event loop and launch real,
+        # never-cancelled jobs on a dead screen (a cross-test/tab thread leak). Clearing the
+        # pending set makes a stray timeout that already slipped through a no-op.
+        self._autorun_timer.stop()
+        self._pending_kinds.clear()
+        self._launch_queue.clear()                     # unstarted jobs: no thread to join
+        # a superseded-running job can be in both _draining and _active; a delivered one in
+        # _reaping (its thread may still be quitting) — join every started thread exactly once
+        jobs = list(set(self._jobs.values()) | self._draining | self._active | self._reaping)
         for j in jobs:
             if hasattr(j.worker, "cancel"):
                 try:
@@ -1090,6 +1290,8 @@ class PreviewScreen(QWidget):
                 _ORPHANED_THREADS.append((j.thread, j.worker))
         self._jobs.clear()
         self._draining.clear()
+        self._active.clear()
+        self._reaping.clear()
 
     def panel_busy(self, key):
         ov = self._overlays.get(key)
@@ -1901,6 +2103,11 @@ class PreviewScreen(QWidget):
         noise = self.state.settings.processing.emg.noise
         if chosen is not None and noise.auto_prop:
             noise.prop_decrease = float(chosen)
+            # This is an APP-driven change, not a user edit — fold it into the diff baseline
+            # so the next user edit's dependency-scope diff does not mistake it for a change
+            # and needlessly recompute the EMG/noise panels.
+            if self._last_synced_settings is not None:
+                self._last_synced_settings.processing.emg.noise.prop_decrease = float(chosen)
         self._load_noise_params()                    # reflect the chosen prop in the spinbox
         if nr.get("frontier"):
             target = nr.get("fidelity_target", 0.8)
