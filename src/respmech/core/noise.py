@@ -170,19 +170,25 @@ def snr_db(active, quiet, sr, band=EMG_BAND):
 
 def build_profiles(reference_cols, sr, *, n_fft=DEFAULT_N_FFT, hop_length=DEFAULT_HOP,
                    win_length=DEFAULT_WIN, n_std_thresh=DEFAULT_N_STD,
-                   n_grad_freq=0, n_grad_time=4) -> list:
+                   n_grad_freq=0, n_grad_time=4, cancel_check=None) -> list:
     """One NoiseProfile per column of an EMG-free reference clip (shape [n, nch])."""
+    from respmech.core._cancel import check as _ck
     reference_cols = np.asarray(reference_cols, dtype=float)
     if reference_cols.ndim == 1:
         reference_cols = reference_cols[:, None]
-    return [NoiseProfile.from_clip(reference_cols[:, i], sr, n_fft=n_fft, hop_length=hop_length,
-                                   win_length=win_length, n_std_thresh=n_std_thresh,
-                                   n_grad_freq=n_grad_freq, n_grad_time=n_grad_time)
-            for i in range(reference_cols.shape[1])]
+    out = []
+    for i in range(reference_cols.shape[1]):
+        _ck(cancel_check)                 # abort a superseded preview job between channels
+        out.append(NoiseProfile.from_clip(reference_cols[:, i], sr, n_fft=n_fft,
+                                          hop_length=hop_length, win_length=win_length,
+                                          n_std_thresh=n_std_thresh, n_grad_freq=n_grad_freq,
+                                          n_grad_time=n_grad_time))
+    return out
 
 
 def select_prop_decrease(profiles, active_cols, quiet_cols, sr, *,
-                         target=DEFAULT_FIDELITY_TARGET, grid=None, band=EMG_BAND):
+                         target=DEFAULT_FIDELITY_TARGET, grid=None, band=EMG_BAND,
+                         cancel_check=None):
     """Pick — ONCE per test — the highest ``prop_decrease`` whose worst-channel
     fidelity stays ≥ ``target`` on the test's active EMG. Returns
     (prop_decrease, report) where report lists per-channel fidelity/ΔSNR.
@@ -193,9 +199,11 @@ def select_prop_decrease(profiles, active_cols, quiet_cols, sr, *,
     quiet_cols = np.asarray(quiet_cols, dtype=float)
     if grid is None:
         grid = [round(x, 2) for x in np.arange(0.1, 1.001, 0.1)]
+    from respmech.core._cancel import check as _ck
     best = None
     per_prop = {}
     for prop in sorted(grid):
+        _ck(cancel_check)                 # each prop step is a full per-channel STFT sweep
         fids = []
         for i, prof in enumerate(profiles):
             proc = prof.apply(active_cols[:, i], prop)

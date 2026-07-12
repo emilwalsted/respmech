@@ -97,11 +97,13 @@ def amplitude_average(ecgdata, avgdata, rangefactor, steps):
     return alowest, aavg
 
 
-def subtractecg(ch, peaks, samplingfrequency, windowsize):
+def subtractecg(ch, peaks, samplingfrequency, windowsize, cancel_check=None):
+    from respmech.core._cancel import check as _ck
     emgecgchannels = list(np.array(ch).T)
     retch = []
     chno = 0
     for emgecgch in emgecgchannels:
+        _ck(cancel_check)                 # abort a superseded preview job between channels
         chno += 1
         ecgwindows = []
         ecgwindowstart = int(windowsize * samplingfrequency / 2)
@@ -123,6 +125,7 @@ def subtractecg(ch, peaks, samplingfrequency, windowsize):
         # Subtract average ECG from EMG
         retwindows = []
         for peak in peaks:
+            _ck(cancel_check)             # the 1000-step amplitude sweep per peak is the hot spot
             partial = False
             if (peak - ecgwindowstart < 0):
                 ecgwindow = emgecgch[0:peak + ecgwindowend]
@@ -145,9 +148,9 @@ def subtractecg(ch, peaks, samplingfrequency, windowsize):
     return list(np.array(retch).T), retwindows
 
 
-def remove_ecg(emgecgchannels, peakch, samplingfrequency, ecgminheight, ecgmindistance, ecgminwidth, windowsize):
+def remove_ecg(emgecgchannels, peakch, samplingfrequency, ecgminheight, ecgmindistance, ecgminwidth, windowsize, cancel_check=None):
     peaks, _ = signal.find_peaks(peakch, height=ecgminheight, distance=ecgmindistance * samplingfrequency, width=ecgminwidth * samplingfrequency)
-    processedchannels, ecgwindows = subtractecg(emgecgchannels, peaks, samplingfrequency, windowsize)
+    processedchannels, ecgwindows = subtractecg(emgecgchannels, peaks, samplingfrequency, windowsize, cancel_check=cancel_check)
     return processedchannels, ecgwindows, peaks / samplingfrequency
 
 

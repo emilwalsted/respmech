@@ -6,6 +6,8 @@ import itertools
 import numpy as np
 from math import factorial
 
+from respmech.core._cancel import check
+
 
 def _embed(x, order=3, delay=1):
     """Time-delay embedding.
@@ -110,7 +112,7 @@ def shannon_entropy(time_series):
     return ent
 
 
-def sample_entropy(time_series, sample_length, tolerance = None):
+def sample_entropy(time_series, sample_length, tolerance = None, cancel_check = None):
     """Calculates the sample entropy of degree m of a time_series.
 
     This method uses chebychev norm.
@@ -151,6 +153,7 @@ def sample_entropy(time_series, sample_length, tolerance = None):
 
 
     for i in range(n - M - 1):
+        check(cancel_check)   # cooperative abort point (no-op when cancel_check is None -> golden-safe)
         template = time_series[i:(i+M+1)];#We have 'M+1' elements in the template
         rem_time_series = time_series[i+1:]
 

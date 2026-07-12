@@ -8,30 +8,16 @@ then clears each panel's spinner, supersedes stale jobs cleanly when the file
 changes mid-run, and shuts the threads down without leaking.
 """
 import os
-import sys
 
-import pytest
-
-
-# The two tests below are FLAKY on headless Windows CI: the heaviest async scenarios — the
-# full multi-panel autorun (mechanics batch + EMG + noise fidelity together) and in-flight
-# job cancellation — sometimes exceed the drain timeout (they have also XPASSED on Windows,
-# so it is a timing race, not a hard hang). NB the earlier "cross-thread finished is never
-# delivered on Windows" theory is FALSE: the sibling tests below (switching mid-run, refresh,
-# noise-adopts-prop, gated reschedule) drain the identical worker-QThread path un-marked and
-# pass on Windows CI — so the core async mechanism IS covered there; only these two heavy
-# combinations are quarantined. Root cause is not yet reproduced on real Windows hardware
-# (no Windows dev machine); the authoritative check is running the built MSI. xfail is
-# non-strict so an XPASS never reddens the smoke — a known, documented gap, not a silent one.
-_WIN_ASYNC_XFAIL = pytest.mark.xfail(
-    sys.platform.startswith("win"),
-    reason="flaky on headless Windows CI: heaviest autorun/cancel drain sometimes exceeds "
-           "the timeout (also seen to XPASS). Siblings cover the same worker path. Verify on "
-           "real Windows hardware.",
-    strict=False,
-)
-
-
+# These heavy full-autorun / supersede tests used to be xfail'd on headless Windows CI
+# because the drain sometimes exceeded 60s. Root cause (diagnosed via a multi-agent
+# investigation): the reactive dispatch started up to 5 GIL-bound worker QThreads at once
+# and _on_job_done blocked the GUI thread on thread.wait(2000), starving the event loop that
+# delivers the workers' `finished` signals — a high-variance stall, worst on Windows (coarse
+# GIL hand-off + offscreen has no native message pump). Fixed at the source: the Preview now
+# caps concurrency at _MAX_ACTIVE and tears threads down non-blockingly (see preview_screen.py
+# _pump_pool / _release_thread), so the drain is fast and deterministic on all platforms — the
+# xfail is gone.
 
 from respmech.ui.state import AppState  # noqa: E402
 
@@ -83,7 +69,6 @@ def _pump_until(qapp, predicate, timeout=60.0):
     return state["ok"] or predicate()
 
 
-@_WIN_ASYNC_XFAIL
 def test_selecting_a_file_autoruns_all_panels(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path), noise=True)))
@@ -128,14 +113,13 @@ def test_switching_file_mid_run_supersedes_cleanly(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path), noise=True)))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentIndex(1)          # start jobs for synth_case_B
-    qapp.processEvents()                       # fire the singleShot -> launch B's jobs
-    pv.file_combo.setCurrentIndex(0)          # immediately switch to synth_case_A
-    # everything drains and clears with no crash
-    assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60)
+    pv.file_combo.setCurrentIndex(1)          # request jobs for synth_case_B (debounced)
+    pv.file_combo.setCurrentIndex(0)          # switch to synth_case_A before the debounce fires
+    # the debounce coalesces the rapid A/B switch into ONE run for the last-selected file;
+    # everything drains and clears with no crash and A's mechanics preview is the one that won
+    assert _pump_until(qapp, lambda: pv._previewed_file == "synth_case_A.csv"
+                       and not pv._jobs and not pv._draining, 60)
     assert pv.busy_panels() == set()
-    # the last-selected file (A) is the one whose mechanics preview won
-    assert pv._previewed_file == "synth_case_A.csv"
     win.close()
 
 
@@ -212,7 +196,6 @@ def test_autoprop_writes_chosen_prop_back_to_settings(qapp, tmp_path):
     pv.shutdown()
 
 
-@_WIN_ASYNC_XFAIL
 def test_settings_change_cancels_inflight_jobs(qapp, tmp_path):
     """A settings change aborts every in-flight panel-refresh job (cancel + token
     invalidation), then re-dispatches — nothing is left running or leaked."""
@@ -245,7 +228,9 @@ def test_refresh_recomputes_all_auto_panels(qapp, tmp_path):
     pv._schedule = lambda k: (launched.append(k), orig(k))[1]
     try:
         pv._refresh_all()
-        qapp.processEvents()                                # fire the deferred auto-run
+        # wait out the debounce, then confirm every auto kind was dispatched
+        _pump_until(qapp, lambda: {"mech", "batch", "emg_all", "emg_detail", "noise"}
+                    <= set(launched), 5)
     finally:
         pv._schedule = orig
     assert {"mech", "batch", "emg_all", "emg_detail", "noise"} <= set(launched)
@@ -269,3 +254,71 @@ def test_noise_job_draws_fidelity_and_adopts_prop(qapp, tmp_path):
     assert abs(s.processing.emg.noise.prop_decrease - chosen) < 1e-9
     assert abs(pv.noise_prop.value() - chosen) < 1e-9
     pv.shutdown()
+
+
+def test_edits_debounce_into_one_recompute(qapp, tmp_path):
+    """Rapid settings changes coalesce: many _request_autorun calls within the debounce
+    window fire the recompute ONCE (each kind scheduled once), not once per edit."""
+    from collections import Counter
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_combo.setCurrentIndex(1)
+    assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining and pv._previewed_file, 60)
+    calls = []
+    orig = pv._schedule
+    pv._schedule = lambda k: (calls.append(k), orig(k))[1]
+    try:
+        for _ in range(8):
+            pv._request_autorun()                 # 8 rapid edits within the debounce window
+        assert calls == []                         # debounced: nothing dispatched synchronously
+        _pump_until(qapp, lambda: bool(calls), 5)  # let the single debounced run fire
+    finally:
+        pv._schedule = orig
+    assert calls and max(Counter(calls).values()) == 1   # each kind scheduled exactly once
+    _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60)
+    win.close()
+
+
+def test_settings_change_scopes_recompute_to_affected_panels(qapp, tmp_path):
+    """Dependency-scoped recompute: an EMG-only edit re-runs only the EMG/noise panels
+    (not the mechanics preview / test run); a mechanics-only edit does the reverse."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path), noise=True)))
+    pv = win.preview_screen
+    import copy as _copy
+    pv._refresh_files(); pv.file_combo.setCurrentIndex(1)
+    assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining and pv._previewed_file, 60)
+    # establish a clean diff baseline without kicking off another recompute
+    pv._last_synced_settings = _copy.deepcopy(pv.state.settings)
+    pv._pending_kinds.clear(); pv._autorun_timer.stop()
+
+    def _capture(mutate):
+        # capture the kinds the debounced dispatch SCOPES to (the dependency-scope decision),
+        # not the downstream noise-adopt cascade (a noise-profile change legitimately
+        # re-conditions EMG afterwards via _apply_noise_report)
+        captured = {}
+        orig = pv._schedule_all
+        pv._schedule_all = lambda kinds=None: (captured.update(k=set(kinds or _AUTO_KINDS)),
+                                               orig(kinds))[1]
+        try:
+            mutate(pv.state.settings)
+            pv.sync_from_settings()
+            _pump_until(qapp, lambda: "k" in captured, 5)
+        finally:
+            pv._schedule_all = orig
+        _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60)
+        return captured.get("k", set())
+
+    emg = _capture(lambda s: setattr(s.processing.emg, "rms_window_s",
+                                     s.processing.emg.rms_window_s + 0.01))
+    assert {"emg_all", "emg_detail"} & emg          # EMG panels recompute
+    assert "mech" not in emg and "batch" not in emg  # mechanics panels do NOT
+
+    # a volume-drift edit is genuinely mechanics-only (it does not change the flow-based EMG
+    # reference masks), so the EMG conditioning panels are left alone
+    mech = _capture(lambda s: setattr(s.processing.volume, "correct_drift",
+                                      not s.processing.volume.correct_drift))
+    assert {"mech", "batch"} <= mech                 # mechanics panels recompute
+    assert "emg_all" not in mech and "emg_detail" not in mech  # EMG panels do NOT
+    win.close()

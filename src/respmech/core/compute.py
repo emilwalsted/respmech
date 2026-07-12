@@ -21,6 +21,7 @@ from collections import OrderedDict
 
 from respmech.core import emg as emglib
 from respmech.core import entropy as entlib
+from respmech.core._cancel import check
 
 
 # --- volume conditioning ---------------------------------------------------
@@ -323,7 +324,7 @@ def calculateaveragebreaths(breaths, settings):
 
 # --- entropy ---------------------------------------------------------------
 
-def calculateentropy(breath, settings, phase=None):
+def calculateentropy(breath, settings, phase=None, cancel_check=None):
     if phase is None:
         columns = breath["entcols"]
     else:
@@ -346,14 +347,15 @@ def calculateentropy(breath, settings, phase=None):
     sampen = np.zeros(columns.shape[1])
     for i in range(0, columns.shape[1]):
         std_ds = np.std(columns[:, i])
-        se = entlib.sample_entropy(columns[:, i], epoch, tolerancesd * std_ds)
+        se = entlib.sample_entropy(columns[:, i], epoch, tolerancesd * std_ds, cancel_check=cancel_check)
         sampen[i] = se[len(se) - 1]
     return sampen
 
 
 # --- per-breath mechanics (the big one) ------------------------------------
 
-def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, settings):
+def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, settings, cancel_check=None):
+    check(cancel_check)   # per-breath abort point (no-op when cancel_check is None -> golden-safe)
     retbreath = breath
     retbreath["inspiration"]["volumeavg"] = avgvolumein
     retbreath["expiration"]["volumeavg"] = avgvolumeex
@@ -440,9 +442,9 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
         retbreath["rms_exp"], retbreath["intemg_exp"] = emglib.calculate_rms(breath["expiration"]["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
 
     if len(settings.input.data.columns_entropy) > 0:
-        entropy = calculateentropy(breath, settings)
-        entropy_insp = calculateentropy(breath, settings, "inspiration")
-        entropy_exp = calculateentropy(breath, settings, "expiration")
+        entropy = calculateentropy(breath, settings, cancel_check=cancel_check)
+        entropy_insp = calculateentropy(breath, settings, "inspiration", cancel_check=cancel_check)
+        entropy_exp = calculateentropy(breath, settings, "expiration", cancel_check=cancel_check)
         retbreath["entropy"] = np.append(entropy.T, [max(entropy.T), min(entropy.T), np.mean(entropy.T)])
         retbreath["entropy_insp"] = np.append(entropy_insp.T, [max(entropy_insp.T), min(entropy_insp.T), np.mean(entropy_insp.T)])
         retbreath["entropy_exp"] = np.append(entropy_exp.T, [max(entropy_exp.T), min(entropy_exp.T), np.mean(entropy_exp.T)])
