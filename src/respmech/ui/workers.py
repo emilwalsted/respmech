@@ -25,6 +25,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 from respmech.core.pipeline import run_batch
 from respmech.core.io.writers import write_batch
 from respmech.core.settings import Settings
+from respmech.core._cancel import Cancelled
 
 
 class BatchWorker(QObject):
@@ -61,6 +62,12 @@ class BatchWorker(QObject):
             result = run_batch(self._settings, progress=self._on_event,
                                cancel_check=lambda: self._cancel,
                                only_files=self._only)
+        except Cancelled:  # cooperatively aborted mid-file (superseded/settings change/shutdown)
+            # Cancelled subclasses BaseException so the `except Exception` below can't catch
+            # it; deliver None (the preview drops a superseded payload silently) and let the
+            # thread exit cleanly instead of crashing the QThread with an unhandled exception.
+            self.finished.emit(None)
+            return
         except Exception:  # fatal (e.g. no files, invalid settings)
             self.failed.emit(traceback.format_exc())
             self.finished.emit(None)

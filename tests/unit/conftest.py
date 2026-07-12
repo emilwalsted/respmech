@@ -72,6 +72,40 @@ def qapp():
     return app
 
 
+@pytest.fixture(autouse=True)
+def _close_top_level_windows():
+    """Systemic GUI-test isolation. After EVERY test, close any lingering top-level window
+    so its ``closeEvent`` runs ``MainWindow`` → ``PreviewScreen.shutdown()``: that cancels +
+    joins any worker QThread and disarms the 300 ms auto-run debounce timer.
+
+    Why this is needed and not just per-test ``win.close()``:
+      * A test whose assertion FAILS skips its own trailing ``win.close()``, leaking a screen
+        (and, without cancellation, a running batch thread) into the next test.
+      * Several GUI tests arm the debounce (via a ``file_combo`` change) but never spin an
+        event loop, so the timer stays LOADED on a still-alive screen. When a later test
+        spins the session's first real event loop, that expired timer fires and dispatches
+        real, never-cancelled jobs on a dead screen — on the 2-core headless Windows runner
+        the accumulated GIL-bound threads starve the reactive tests into timing out.
+
+    Deliberately does NOT ``processEvents()`` before closing — that would fire the very
+    timers this net exists to neutralise. Closing is synchronous (``closeEvent`` runs inline),
+    so the timers are stopped without ever letting a pending one dispatch. A no-op until a
+    QApplication exists (pure-core tests are unaffected) and cheap when no windows are open."""
+    yield
+    try:
+        from PySide6.QtWidgets import QApplication
+    except Exception:                       # pragma: no cover - PySide6 always present in CI
+        return
+    app = QApplication.instance()
+    if app is None:
+        return
+    for w in list(app.topLevelWidgets()):
+        try:
+            w.close()
+        except Exception:                   # pragma: no cover - defensive; never fail teardown
+            pass
+
+
 @pytest.fixture
 def isolated_prefs(monkeypatch):
     """Point ``ui.prefs`` (QSettings) at a throwaway scope so tests never touch — or
