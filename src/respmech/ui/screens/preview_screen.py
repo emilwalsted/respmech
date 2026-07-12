@@ -830,6 +830,8 @@ class PreviewScreen(QWidget):
 
     # -- file list (reactive) ----------------------------------------------
     def refresh_files(self):
+        from respmech.ui.screens import _preview_cache
+        _preview_cache.clear_all()   # input folder/mask changed -> drop stale preview caches
         s = self.state.settings
         prev = self.file_combo.currentText()
         folder = (s.input.folder or "").strip()
