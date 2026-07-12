@@ -1,13 +1,21 @@
 name: Build installers
 
-# Builds the native desktop installers with briefcase: an unsigned Windows MSI and an
-# ad-hoc-signed macOS dmg, uploaded as workflow artifacts for testers. Run it by hand
-# (Actions ▸ Build installers ▸ Run workflow) or by pushing a v* tag.
+# Builds the native desktop installers with briefcase: a Windows MSI and a macOS dmg,
+# uploaded as workflow artifacts and (on a v* tag) attached to a GitHub pre-release.
+# Run it by hand (Actions ▸ Build installers ▸ Run workflow) or by pushing a v* tag.
 #
-# The installers are UNSIGNED / ad-hoc signed: Windows testers must click through
-# SmartScreen ("More info" ▸ "Run anyway"); macOS testers must right-click ▸ Open the
-# first time (or `xattr -dr com.apple.quarantine` the app). Real signing + notarisation
-# is a later step (needs an Apple Developer ID and a Windows code-signing certificate).
+# SIGNING IS OPTIONAL AND SECRET-GATED. If the signing secrets are present the installers
+# are properly signed (macOS: Developer ID + notarised; Windows: Azure Artifact Signing —
+# formerly "Trusted Signing"). If they are absent the build falls back to the previous
+# behaviour — an unsigned MSI and an ad-hoc-signed dmg — so the pipeline never breaks while
+# certificates are being set up. Adding the secrets is all it takes to switch signing on;
+# no workflow edit needed. See docs/SIGNING.md for the exact secrets + one-time cloud setup.
+#
+#   macOS secrets:   APPLE_DEV_ID_IDENTITY, APPLE_CERTIFICATE_P12_BASE64,
+#                    APPLE_CERTIFICATE_PASSWORD, APPLE_ID, APPLE_TEAM_ID,
+#                    APPLE_APP_SPECIFIC_PASSWORD, KEYCHAIN_PASSWORD
+#   Windows secrets: AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET,
+#                    TRUSTED_SIGNING_ENDPOINT, TRUSTED_SIGNING_ACCOUNT, TRUSTED_SIGNING_PROFILE
 
 on:
   workflow_dispatch:
@@ -23,8 +31,10 @@ defaults:
 
 jobs:
   windows-msi:
-    name: Windows MSI (unsigned)
+    name: Windows MSI
     runs-on: windows-latest
+    outputs:
+      signed: ${{ steps.check.outputs.sign }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,11 +44,59 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install "briefcase>=0.3.19"
+
+      # Sign only when the Azure Artifact Signing secrets are configured; else build unsigned.
+      - name: Detect signing config
+        id: check
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          TRUSTED_SIGNING_ACCOUNT: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
+        run: |
+          if [ -n "$AZURE_CLIENT_ID" ] && [ -n "$TRUSTED_SIGNING_ACCOUNT" ]; then
+            echo "sign=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "sign=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Azure signing secrets not set — building an UNSIGNED MSI."
+          fi
+
+      # briefcase's Windows backend can't drive cloud signing, and --adhoc-sign produces an
+      # unsigned MSI by design; the real Authenticode signature is applied afterwards below.
       - name: Create · build · package
         run: |
           briefcase create windows --no-input
           briefcase build windows --no-input
           briefcase package windows --adhoc-sign --packaging-format msi --no-input
+
+      - name: Sign MSI (Azure Artifact Signing)
+        if: steps.check.outputs.sign == 'true'
+        uses: azure/artifact-signing-action@v2
+        env:
+          # DefaultAzureCredential reads these; the service principal needs the
+          # "Artifact Signing Certificate Profile Signer" role on the profile.
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        with:
+          endpoint: ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}          # e.g. https://weu.codesigning.azure.net/
+          signing-account-name: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.TRUSTED_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist
+          files-folder-filter: msi
+          file-digest: SHA256
+          # Artifact Signing certs are valid ~3 days, so an RFC-3161 timestamp is mandatory
+          # for the signature to stay valid after the cert rotates.
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify signature
+        if: steps.check.outputs.sign == 'true'
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem dist/*.msi | Select-Object -First 1
+          $sig = Get-AuthenticodeSignature $msi.FullName
+          Write-Host "Status: $($sig.Status)  Signer: $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') { throw "MSI signature is not Valid: $($sig.Status)" }
+
       - name: Show artifacts
         run: ls -la dist
       - uses: actions/upload-artifact@v4
@@ -48,8 +106,10 @@ jobs:
           if-no-files-found: error
 
   macos-dmg:
-    name: macOS dmg (ad-hoc signed)
+    name: macOS dmg
     runs-on: macos-latest
+    outputs:
+      signed: ${{ steps.check.outputs.sign }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -59,11 +119,78 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install "briefcase>=0.3.19"
-      - name: Create · build · package
+
+      # Sign+notarise only when the Developer ID secrets are configured; else ad-hoc sign.
+      - name: Detect signing config
+        id: check
+        env:
+          APPLE_DEV_ID_IDENTITY: ${{ secrets.APPLE_DEV_ID_IDENTITY }}
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+        run: |
+          if [ -n "$APPLE_DEV_ID_IDENTITY" ] && [ -n "$APPLE_CERTIFICATE_P12_BASE64" ]; then
+            echo "sign=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "sign=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Apple signing secrets not set — building an AD-HOC-SIGNED dmg (not notarised)."
+          fi
+
+      - name: Import Developer ID certificate
+        if: steps.check.outputs.sign == 'true'
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          echo "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          # put the temp keychain first in the search list so codesign finds the identity
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          security default-keychain -s "$KEYCHAIN"
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security find-identity -v -p codesigning
+
+      - name: Create · build
         run: |
           briefcase create macOS --no-input
           briefcase build macOS --no-input
-          briefcase package macOS --adhoc-sign --packaging-format dmg --no-input
+
+      # Signed builds: sign the .app with the Developer ID (hardened runtime is applied
+      # automatically) but let US notarise — briefcase's own notarisation prompts
+      # interactively and would hang under --no-input.
+      - name: Package
+        env:
+          APPLE_DEV_ID_IDENTITY: ${{ secrets.APPLE_DEV_ID_IDENTITY }}
+        run: |
+          if [ "${{ steps.check.outputs.sign }}" = "true" ]; then
+            briefcase package macOS --identity "$APPLE_DEV_ID_IDENTITY" \
+              --no-notarize --packaging-format dmg --no-input
+          else
+            briefcase package macOS --adhoc-sign --packaging-format dmg --no-input
+          fi
+
+      - name: Notarize and staple dmg
+        if: steps.check.outputs.sign == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          DMG=$(ls dist/*.dmg | head -n1)
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --wait --output-format json
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+
       - name: Show artifacts
         run: ls -la dist
       - uses: actions/upload-artifact@v4
@@ -87,24 +214,39 @@ jobs:
       - name: Publish release with installers attached
         env:
           GH_TOKEN: ${{ github.token }}
+          WIN_SIGNED: ${{ needs.windows-msi.outputs.signed }}
+          MAC_SIGNED: ${{ needs.macos-dmg.outputs.signed }}
         run: |
           ls -R dist
-          cat > notes.md <<'NOTES'
-          Desktop installers for testers — download below.
-
-          | Platform | File |
-          |---|---|
-          | Windows | `RespMech-*.msi` (unsigned) |
-          | macOS | `RespMech-*.dmg` (ad-hoc signed) |
-
-          **Install**
-          - **Windows:** SmartScreen will warn (unsigned) → *More info ▸ Run anyway*.
-          - **macOS:** right-click ▸ **Open** the first time (or `xattr -dr com.apple.quarantine` the app).
-
-          Bundles its own Python + the full scientific stack; no separate install needed.
-          Pre-release: unsigned / ad-hoc signed, and the reactive Preview panels are still
-          pending verification on real Windows hardware.
-          NOTES
+          # accurate per-platform install notes, driven by whether each build actually signed
+          if [ "$WIN_SIGNED" = "true" ]; then
+            win_file='`RespMech-*.msi` (signed — Azure Artifact Signing)'
+            win_install='- **Windows:** double-click the MSI and install normally.'
+          else
+            win_file='`RespMech-*.msi` (unsigned)'
+            win_install='- **Windows:** SmartScreen will warn (unsigned) → *More info ▸ Run anyway*.'
+          fi
+          if [ "$MAC_SIGNED" = "true" ]; then
+            mac_file='`RespMech-*.dmg` (signed + notarised)'
+            mac_install='- **macOS:** open the dmg and drag the app to Applications — it launches with no Gatekeeper warning.'
+          else
+            mac_file='`RespMech-*.dmg` (ad-hoc signed)'
+            mac_install='- **macOS:** right-click ▸ **Open** the first time (or `xattr -dr com.apple.quarantine` the app).'
+          fi
+          {
+            echo "Desktop installers for testers — download below."
+            echo
+            echo "| Platform | File |"
+            echo "|---|---|"
+            echo "| Windows | $win_file |"
+            echo "| macOS | $mac_file |"
+            echo
+            echo "**Install**"
+            echo "$win_install"
+            echo "$mac_install"
+            echo
+            echo "Bundles its own Python + the full scientific stack; no separate install needed."
+          } > notes.md
           gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
             --title "RespMech $GITHUB_REF_NAME" \
             --prerelease \
