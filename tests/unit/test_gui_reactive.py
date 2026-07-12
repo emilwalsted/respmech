@@ -128,14 +128,13 @@ def test_switching_file_mid_run_supersedes_cleanly(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path), noise=True)))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentIndex(1)          # start jobs for synth_case_B
-    qapp.processEvents()                       # fire the singleShot -> launch B's jobs
-    pv.file_combo.setCurrentIndex(0)          # immediately switch to synth_case_A
-    # everything drains and clears with no crash
-    assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60)
+    pv.file_combo.setCurrentIndex(1)          # request jobs for synth_case_B (debounced)
+    pv.file_combo.setCurrentIndex(0)          # switch to synth_case_A before the debounce fires
+    # the debounce coalesces the rapid A/B switch into ONE run for the last-selected file;
+    # everything drains and clears with no crash and A's mechanics preview is the one that won
+    assert _pump_until(qapp, lambda: pv._previewed_file == "synth_case_A.csv"
+                       and not pv._jobs and not pv._draining, 60)
     assert pv.busy_panels() == set()
-    # the last-selected file (A) is the one whose mechanics preview won
-    assert pv._previewed_file == "synth_case_A.csv"
     win.close()
 
 
@@ -245,7 +244,9 @@ def test_refresh_recomputes_all_auto_panels(qapp, tmp_path):
     pv._schedule = lambda k: (launched.append(k), orig(k))[1]
     try:
         pv._refresh_all()
-        qapp.processEvents()                                # fire the deferred auto-run
+        # wait out the debounce, then confirm every auto kind was dispatched
+        _pump_until(qapp, lambda: {"mech", "batch", "emg_all", "emg_detail", "noise"}
+                    <= set(launched), 5)
     finally:
         pv._schedule = orig
     assert {"mech", "batch", "emg_all", "emg_detail", "noise"} <= set(launched)
@@ -269,3 +270,27 @@ def test_noise_job_draws_fidelity_and_adopts_prop(qapp, tmp_path):
     assert abs(s.processing.emg.noise.prop_decrease - chosen) < 1e-9
     assert abs(pv.noise_prop.value() - chosen) < 1e-9
     pv.shutdown()
+
+
+def test_edits_debounce_into_one_recompute(qapp, tmp_path):
+    """Rapid settings changes coalesce: many _request_autorun calls within the debounce
+    window fire the recompute ONCE (each kind scheduled once), not once per edit."""
+    from collections import Counter
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_combo.setCurrentIndex(1)
+    assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining and pv._previewed_file, 60)
+    calls = []
+    orig = pv._schedule
+    pv._schedule = lambda k: (calls.append(k), orig(k))[1]
+    try:
+        for _ in range(8):
+            pv._request_autorun()                 # 8 rapid edits within the debounce window
+        assert calls == []                         # debounced: nothing dispatched synchronously
+        _pump_until(qapp, lambda: bool(calls), 5)  # let the single debounced run fire
+    finally:
+        pv._schedule = orig
+    assert calls and max(Counter(calls).values()) == 1   # each kind scheduled exactly once
+    _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60)
+    win.close()
