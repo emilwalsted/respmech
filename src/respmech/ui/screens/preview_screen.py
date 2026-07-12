@@ -118,10 +118,18 @@ def _kinds_for_settings_path(path):
     if (path.startswith("processing.wob") or path.startswith("processing.ptp")
             or path.startswith("processing.entropy") or path.startswith("processing.breath_counts")):
         return frozenset(("batch",))
-    # breath segmentation + volume drift/trend + explicit breath exclusion: the mechanics
-    # panels + the noise reference's expiration segmentation
-    if (path.startswith("processing.segmentation") or path.startswith("processing.volume.correct")
-            or path.startswith("processing.volume.trend") or path.startswith("processing.exclude_breaths")):
+    # breath segmentation feeds the mechanics panels AND — via the noise reference clip's
+    # expiration segmentation and the auto_prop gather — the EMG conditioning + fidelity
+    # panels (which build NoiseProfile.from_clip on a buffer-dependent clip). So a
+    # segmentation edit must recompute all five, or the EMG traces go stale when auto_prop
+    # is off (nothing else re-dispatches them). The ECG cache keeps the extra work cheap.
+    if path.startswith("processing.segmentation"):
+        return frozenset(_AUTO_KINDS)
+    # volume drift/trend + explicit breath exclusion: the mechanics panels (+ noise, a
+    # cache hit); these do NOT change the flow-based EMG reference masks, so the EMG panels
+    # are left alone.
+    if (path.startswith("processing.volume.correct") or path.startswith("processing.volume.trend")
+            or path.startswith("processing.exclude_breaths")):
         return frozenset(("mech", "batch", "noise"))
     # channels core / format / volume inverse+integrate (all applied inside load()),
     # channels.entropy (validated in every load path), input.folder/files, and anything not
@@ -830,9 +838,15 @@ class PreviewScreen(QWidget):
 
     # -- file list (reactive) ----------------------------------------------
     def refresh_files(self):
-        from respmech.ui.screens import _preview_cache
-        _preview_cache.clear_all()   # input folder/mask changed -> drop stale preview caches
         s = self.state.settings
+        # drop the preview caches only when the input folder/mask ACTUALLY changes (the file
+        # set may differ) — not on every entry into the Preview tab, which would defeat the
+        # cross-revisit reuse. Per-file freshness tokens in the keys guard in-place edits.
+        fm = ((s.input.folder or ""), (s.input.files or ""))
+        if fm != getattr(self, "_cache_fm", None):
+            from respmech.ui.screens import _preview_cache
+            _preview_cache.clear_all()
+            self._cache_fm = fm
         prev = self.file_combo.currentText()
         folder = (s.input.folder or "").strip()
         self.file_combo.blockSignals(True)

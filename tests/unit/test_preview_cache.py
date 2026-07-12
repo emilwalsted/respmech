@@ -75,6 +75,12 @@ def test_noise_report_key_tracks_all_files_and_stft(tmp_path):
     k0 = pc.noise_report_key(s, ref, files)
     assert k0 is not None
     assert pc.noise_report_key(s, ref, files[:1]) != k0        # a different file set -> miss
+    s2 = _s(tmp_path)
+    s2.processing.emg.noise.use_expiration = False             # explicit-intervals branch
+    s2.processing.emg.noise.reference_intervals = [[1.0, 5.0]]
+    b0 = pc.noise_report_key(s2, ref, files)
+    s2.processing.segmentation.buffer += 50                    # auto_prop gather segments by flow
+    assert pc.noise_report_key(s2, ref, files) != b0          # -> buffer must invalidate the report
     s.processing.emg.noise.n_fft = 512
     assert pc.noise_report_key(s, ref, files) != k0            # an STFT param -> miss
 
@@ -85,3 +91,26 @@ def test_core_pipeline_does_not_import_the_preview_cache():
     import inspect
     src = inspect.getsource(pipeline)
     assert "_preview_cache" not in src
+
+
+def test_cached_is_thread_safe_and_single_flight():
+    """Concurrent worker threads that miss the SAME key compute it ONCE (single-flight)
+    and never race the shared OrderedDict."""
+    import threading
+    import time
+    lru = pc._LRU(cap=4)
+    calls = []
+    def thunk():
+        time.sleep(0.03)                 # slow enough that the 8 threads overlap on the miss
+        calls.append(1)
+        return "v"
+    results = []
+    def worker():
+        results.append(pc.cached(lru, ("k",), thunk))
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert results == ["v"] * 8          # every caller got the value
+    assert len(calls) == 1               # computed exactly once despite 8 concurrent callers

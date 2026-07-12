@@ -19,9 +19,17 @@ Erring toward MORE key fields only costs a cache miss; omitting one risks a stal
 from __future__ import annotations
 
 import os
+import threading
 from collections import OrderedDict
 
 _CAP = 4   # entries per cache — a handful of recently-tuned files is plenty
+
+# The preview launches emg_all + emg_detail + noise on SEPARATE QThreads that hit these
+# module-level caches concurrently, so every cache access is serialised under one lock and
+# a per-key in-flight registry gives single-flight (concurrent same-key misses compute the
+# shared reference clip ONCE, not three times — the whole point of the cache).
+_lock = threading.Lock()
+_inflight = {}   # cache key -> threading.Event, set when the owning thread finishes computing
 
 
 class _LRU:
@@ -30,19 +38,22 @@ class _LRU:
         self._cap = cap
 
     def get(self, key, default=None):
-        if key in self._d:
-            self._d.move_to_end(key)
-            return self._d[key]
-        return default
+        with _lock:
+            if key in self._d:
+                self._d.move_to_end(key)
+                return self._d[key]
+            return default
 
     def put(self, key, value):
-        self._d[key] = value
-        self._d.move_to_end(key)
-        while len(self._d) > self._cap:
-            self._d.popitem(last=False)
+        with _lock:
+            self._d[key] = value
+            self._d.move_to_end(key)
+            while len(self._d) > self._cap:
+                self._d.popitem(last=False)
 
     def clear(self):
-        self._d.clear()
+        with _lock:
+            self._d.clear()
 
 
 # one instance per distinct cached quantity
@@ -54,16 +65,37 @@ _SENTINEL = object()
 
 
 def cached(cache, key, thunk):
-    """Return ``cache[key]`` or compute it with ``thunk()`` and store it. A ``None`` key
-    (e.g. an unstattable file) bypasses the cache entirely (always recompute)."""
+    """Return ``cache[key]`` or compute it with ``thunk()`` and store it — thread-safe and
+    single-flight, so concurrent worker threads that miss the SAME key compute it once and
+    the rest reuse the result. A ``None`` key (e.g. an unstattable file) bypasses the cache
+    entirely (always recompute)."""
     if key is None:
         return thunk()
     hit = cache.get(key, _SENTINEL)
     if hit is not _SENTINEL:
         return hit
-    val = thunk()
-    cache.put(key, val)
-    return val
+    # register (or find) the in-flight compute for this key
+    with _lock:
+        hit = cache._d.get(key, _SENTINEL)   # re-check under the lock (a put may have raced in)
+        if hit is not _SENTINEL:
+            cache._d.move_to_end(key)
+            return hit
+        ev = _inflight.get(key)
+        owner = ev is None
+        if owner:
+            ev = _inflight[key] = threading.Event()
+    if not owner:                            # another thread is computing this key -> wait for it
+        ev.wait()
+        hit = cache.get(key, _SENTINEL)
+        return hit if hit is not _SENTINEL else thunk()   # recompute only if it was evicted/failed
+    try:
+        val = thunk()
+        cache.put(key, val)
+        return val
+    finally:
+        with _lock:
+            _inflight.pop(key, None)
+        ev.set()                             # release any waiters (they read the cache, or recompute)
 
 
 def clear_all():
@@ -144,9 +176,16 @@ def noise_report_key(settings, ref_path, files):
     if any(t is None for t in toks):
         return None
     n = settings.processing.emg.noise
-    return ("noise", rc, toks, n.n_fft, n.hop_length, n.win_length, n.n_std_thresh,
-            n.n_grad_freq, n.n_grad_time, bool(n.auto_prop), n.fidelity_target,
-            (None if n.auto_prop else n.prop_decrease))
+    key = ("noise", rc, toks, n.n_fft, n.hop_length, n.win_length, n.n_std_thresh,
+           n.n_grad_freq, n.n_grad_time, bool(n.auto_prop), n.fidelity_target,
+           (None if n.auto_prop else n.prop_decrease))
+    if n.auto_prop:
+        # the auto_prop gather (pipeline._build_noise_set) segments EVERY file by flow to
+        # pick prop_decrease, which reads segmentation.buffer — and ref_clip_key only carries
+        # it in the expiration branch. Add it here so a buffer edit invalidates the report in
+        # the explicit-intervals branch too (else a stale fidelity frontier is shown).
+        key += (settings.processing.segmentation.buffer,)
+    return key
 
 
 # expose the cache instances for the workers + tests
