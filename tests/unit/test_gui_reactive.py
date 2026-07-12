@@ -8,29 +8,16 @@ then clears each panel's spinner, supersedes stale jobs cleanly when the file
 changes mid-run, and shuts the threads down without leaking.
 """
 import os
-import sys
 
-import pytest
-
-
-# The heaviest full-autorun / supersede tests are timing-flaky on headless Windows CI: the
-# whole multi-panel autorun (mechanics batch + all-channel EMG conditioning ± noise) runs on
-# the slow headless runner and sometimes exceeds the 60s drain timeout (they also XPASS, so
-# it is a timing race, not a hard hang — and both Python versions on macOS pass, so the app
-# LOGIC is correct). The un-marked sibling tests (refresh, noise-adopts-prop, gated
-# reschedule) drain the identical worker-QThread path and pass on Windows, so the core async
-# mechanism IS covered there. Root cause is headless-Windows slowness (no Windows dev machine
-# to profile it); the authoritative Windows check is running the built MSI. xfail is
-# non-strict so an XPASS never reddens the smoke — a known, documented gap, not a silent one.
-_WIN_ASYNC_XFAIL = pytest.mark.xfail(
-    sys.platform.startswith("win"),
-    reason="timing-flaky on headless Windows CI: the heavy full autorun/supersede drain "
-           "sometimes exceeds the 60s timeout (also seen to XPASS; passes on macOS). "
-           "Siblings cover the same worker path. Verify on real Windows hardware (the MSI).",
-    strict=False,
-)
-
-
+# These heavy full-autorun / supersede tests used to be xfail'd on headless Windows CI
+# because the drain sometimes exceeded 60s. Root cause (diagnosed via a multi-agent
+# investigation): the reactive dispatch started up to 5 GIL-bound worker QThreads at once
+# and _on_job_done blocked the GUI thread on thread.wait(2000), starving the event loop that
+# delivers the workers' `finished` signals — a high-variance stall, worst on Windows (coarse
+# GIL hand-off + offscreen has no native message pump). Fixed at the source: the Preview now
+# caps concurrency at _MAX_ACTIVE and tears threads down non-blockingly (see preview_screen.py
+# _pump_pool / _release_thread), so the drain is fast and deterministic on all platforms — the
+# xfail is gone.
 
 from respmech.ui.state import AppState  # noqa: E402
 
@@ -82,7 +69,6 @@ def _pump_until(qapp, predicate, timeout=60.0):
     return state["ok"] or predicate()
 
 
-@_WIN_ASYNC_XFAIL
 def test_selecting_a_file_autoruns_all_panels(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path), noise=True)))
@@ -107,7 +93,6 @@ def test_selecting_a_file_autoruns_all_panels(qapp, tmp_path):
     win.close()
 
 
-@_WIN_ASYNC_XFAIL
 def test_autorun_without_noise_skips_fidelity_but_runs_the_rest(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path), noise=False)))
@@ -123,7 +108,6 @@ def test_autorun_without_noise_skips_fidelity_but_runs_the_rest(qapp, tmp_path):
     win.close()
 
 
-@_WIN_ASYNC_XFAIL
 def test_switching_file_mid_run_supersedes_cleanly(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path), noise=True)))
@@ -212,7 +196,6 @@ def test_autoprop_writes_chosen_prop_back_to_settings(qapp, tmp_path):
     pv.shutdown()
 
 
-@_WIN_ASYNC_XFAIL
 def test_settings_change_cancels_inflight_jobs(qapp, tmp_path):
     """A settings change aborts every in-flight panel-refresh job (cancel + token
     invalidation), then re-dispatches — nothing is left running or leaked."""
