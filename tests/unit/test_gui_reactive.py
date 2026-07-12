@@ -331,8 +331,10 @@ def test_settings_change_scopes_recompute_to_affected_panels(qapp, tmp_path):
     assert {"emg_all", "emg_detail"} & emg          # EMG panels recompute
     assert "mech" not in emg and "batch" not in emg  # mechanics panels do NOT
 
-    mech = _capture(lambda s: setattr(s.processing.segmentation, "buffer",
-                                      s.processing.segmentation.buffer + 10))
+    # a volume-drift edit is genuinely mechanics-only (it does not change the flow-based EMG
+    # reference masks), so the EMG conditioning panels are left alone
+    mech = _capture(lambda s: setattr(s.processing.volume, "correct_drift",
+                                      not s.processing.volume.correct_drift))
     assert {"mech", "batch"} <= mech                 # mechanics panels recompute
     assert "emg_all" not in mech and "emg_detail" not in mech  # EMG panels do NOT
     win.close()
