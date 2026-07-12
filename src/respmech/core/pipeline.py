@@ -306,7 +306,8 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                 breath = breaths[breathno]
                 if breath["ignored"]:
                     continue
-                compute.calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, s)
+                compute.calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, s,
+                                           cancel_check=cancel_check)
                 done += 1
                 _emit(progress, ProgressEvent("breath", file=filename, breath=done, total_breaths=total))
 

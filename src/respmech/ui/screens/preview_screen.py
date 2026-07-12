@@ -1267,6 +1267,12 @@ class PreviewScreen(QWidget):
         for any thread that will not stop in time, keep it referenced forever in
         the module-level parking list rather than let CPython GC a running
         QThread (which would call std::terminate and abort the process)."""
+        # Disarm the debounced auto-run FIRST: a torn-down screen must never keep a loaded
+        # 300ms timer that could later fire into another screen's event loop and launch real,
+        # never-cancelled jobs on a dead screen (a cross-test/tab thread leak). Clearing the
+        # pending set makes a stray timeout that already slipped through a no-op.
+        self._autorun_timer.stop()
+        self._pending_kinds.clear()
         self._launch_queue.clear()                     # unstarted jobs: no thread to join
         # a superseded-running job can be in both _draining and _active; a delivered one in
         # _reaping (its thread may still be quitting) — join every started thread exactly once
