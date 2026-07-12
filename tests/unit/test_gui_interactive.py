@@ -319,8 +319,10 @@ def test_file_change_clears_previewed_file(qapp, tmp_path):
 
 
 def test_file_switch_invalidates_inflight_tokens(qapp, tmp_path):
-    """Every kind's token bumps synchronously on a switch, so an old-file job that
-    finishes in the same event-loop iteration is dropped by the acceptance check."""
+    """Each FILE-dependent kind's token bumps synchronously on a switch, so an old-file
+    job that finishes in the same event-loop iteration is dropped by the acceptance
+    check. The test-wide 'noise' token is deliberately preserved — its result does not
+    depend on the selected file, so a running fidelity job must survive the switch."""
     from respmech.ui.main_window import MainWindow
     s = _settings(str(tmp_path))
     win = MainWindow(AppState(s))
@@ -328,7 +330,8 @@ def test_file_switch_invalidates_inflight_tokens(qapp, tmp_path):
     pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
     before = dict(pv._tokens)
     pv.file_combo.setCurrentText("synth_case_B.csv")  # -> _begin_file_switch
-    assert all(pv._tokens[k] > before[k] for k in before)
+    assert all(pv._tokens[k] > before[k] for k in ("mech", "batch", "emg_all", "emg_detail"))
+    assert pv._tokens["noise"] == before["noise"]     # file-independent -> preserved
     win.close()
 
 
