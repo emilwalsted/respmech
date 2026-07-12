@@ -25,11 +25,9 @@ from collections import OrderedDict
 _CAP = 4   # entries per cache — a handful of recently-tuned files is plenty
 
 # The preview launches emg_all + emg_detail + noise on SEPARATE QThreads that hit these
-# module-level caches concurrently, so every cache access is serialised under one lock and
-# a per-key in-flight registry gives single-flight (concurrent same-key misses compute the
-# shared reference clip ONCE, not three times — the whole point of the cache).
+# module-level caches concurrently, so every read/write of the shared OrderedDict is
+# serialised under one short-held lock (the slow compute runs OUTSIDE the lock).
 _lock = threading.Lock()
-_inflight = {}   # cache key -> threading.Event, set when the owning thread finishes computing
 
 
 class _LRU:
@@ -65,37 +63,20 @@ _SENTINEL = object()
 
 
 def cached(cache, key, thunk):
-    """Return ``cache[key]`` or compute it with ``thunk()`` and store it — thread-safe and
-    single-flight, so concurrent worker threads that miss the SAME key compute it once and
-    the rest reuse the result. A ``None`` key (e.g. an unstattable file) bypasses the cache
-    entirely (always recompute)."""
+    """Return ``cache[key]`` or compute it with ``thunk()`` and store it. Thread-safe: the
+    get/put touch the shared OrderedDict under a lock, but the (slow) ``thunk`` runs WITHOUT
+    the lock so the emg_all/emg_detail/noise worker threads stay parallel and a cancelled
+    worker is never blocked waiting on another. Concurrent misses of the same key may each
+    compute (last write wins — same value); the cache still dedupes across recompute cycles.
+    A ``None`` key (e.g. an unstattable file) bypasses the cache entirely (always recompute)."""
     if key is None:
         return thunk()
     hit = cache.get(key, _SENTINEL)
     if hit is not _SENTINEL:
         return hit
-    # register (or find) the in-flight compute for this key
-    with _lock:
-        hit = cache._d.get(key, _SENTINEL)   # re-check under the lock (a put may have raced in)
-        if hit is not _SENTINEL:
-            cache._d.move_to_end(key)
-            return hit
-        ev = _inflight.get(key)
-        owner = ev is None
-        if owner:
-            ev = _inflight[key] = threading.Event()
-    if not owner:                            # another thread is computing this key -> wait for it
-        ev.wait()
-        hit = cache.get(key, _SENTINEL)
-        return hit if hit is not _SENTINEL else thunk()   # recompute only if it was evicted/failed
-    try:
-        val = thunk()
-        cache.put(key, val)
-        return val
-    finally:
-        with _lock:
-            _inflight.pop(key, None)
-        ev.set()                             # release any waiters (they read the cache, or recompute)
+    val = thunk()
+    cache.put(key, val)
+    return val
 
 
 def clear_all():

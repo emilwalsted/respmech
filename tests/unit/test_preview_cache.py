@@ -93,24 +93,27 @@ def test_core_pipeline_does_not_import_the_preview_cache():
     assert "_preview_cache" not in src
 
 
-def test_cached_is_thread_safe_and_single_flight():
-    """Concurrent worker threads that miss the SAME key compute it ONCE (single-flight)
-    and never race the shared OrderedDict."""
+def test_cached_is_thread_safe_under_concurrency():
+    """Many worker threads hammering the shared cache with overlapping keys never race
+    the OrderedDict (no KeyError / corruption) and every caller gets the correct value.
+    The compute runs outside the lock, so a thread is never blocked waiting on another
+    (which on a slow/headless runner could stall a job past its timeout)."""
     import threading
     import time
-    lru = pc._LRU(cap=4)
-    calls = []
-    def thunk():
-        time.sleep(0.03)                 # slow enough that the 8 threads overlap on the miss
-        calls.append(1)
-        return "v"
-    results = []
-    def worker():
-        results.append(pc.cached(lru, ("k",), thunk))
-    threads = [threading.Thread(target=worker) for _ in range(8)]
+    lru = pc._LRU(cap=8)
+    def thunk(k):
+        time.sleep(0.01)
+        return f"v{k}"
+    results = {}
+    lock = threading.Lock()
+    def worker(k):
+        v = pc.cached(lru, (k,), lambda: thunk(k))
+        with lock:
+            results[(k, threading.get_ident())] = v
+    threads = [threading.Thread(target=worker, args=(i % 3,)) for i in range(24)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
-    assert results == ["v"] * 8          # every caller got the value
-    assert len(calls) == 1               # computed exactly once despite 8 concurrent callers
+    # every caller got the value for ITS key (no cross-key corruption from the race)
+    assert all(v == f"v{k}" for (k, _tid), v in results.items())
