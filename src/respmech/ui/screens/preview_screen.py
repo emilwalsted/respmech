@@ -2092,6 +2092,13 @@ class PreviewScreen(QWidget):
 
     # -- auto noise/fidelity job (decoupled from the test run) --------------
     def _on_noise_result(self, report):
+        # A user-fixable precondition surfaced by stage_noise_fidelity as {"error": msg} (e.g. a
+        # misassigned flow channel, so the reference has no segmentable breaths). Raise FIRST so
+        # _on_job_done paints a clean 'Noise fidelity failed' card with the message — otherwise the
+        # error dict would render a silently blank frontier, mark the panel as done, and even
+        # re-dispatch the EMG views, hiding the failure and suppressing the auto-retry.
+        if isinstance(report, dict) and report.get("error"):
+            raise _FileRunError(report["error"])
         self._apply_noise_report(report)
 
     def _apply_noise_report(self, nr):
