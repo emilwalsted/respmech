@@ -4,18 +4,20 @@ name: Build installers
 # uploaded as workflow artifacts and (on a v* tag) attached to a GitHub pre-release.
 # Run it by hand (Actions ▸ Build installers ▸ Run workflow) or by pushing a v* tag.
 #
-# SIGNING IS OPTIONAL AND SECRET-GATED. If the signing secrets are present the installers
-# are properly signed (macOS: Developer ID + notarised; Windows: Azure Artifact Signing —
-# formerly "Trusted Signing"). If they are absent the build falls back to the previous
-# behaviour — an unsigned MSI and an ad-hoc-signed dmg — so the pipeline never breaks while
-# certificates are being set up. Adding the secrets is all it takes to switch signing on;
-# no workflow edit needed. See docs/SIGNING.md for the exact secrets + one-time cloud setup.
+# macOS SIGNING IS OPTIONAL AND SECRET-GATED: with the Apple secrets present the dmg is
+# Developer ID-signed + notarised; without them it falls back to ad-hoc signing (the
+# previous behaviour), so the pipeline never breaks while certificates are being set up.
 #
-#   macOS secrets:   APPLE_DEV_ID_IDENTITY, APPLE_CERTIFICATE_P12_BASE64,
-#                    APPLE_CERTIFICATE_PASSWORD, APPLE_ID, APPLE_TEAM_ID,
-#                    APPLE_APP_SPECIFIC_PASSWORD, KEYCHAIN_PASSWORD
-#   Windows secrets: AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET,
-#                    TRUSTED_SIGNING_ENDPOINT, TRUSTED_SIGNING_ACCOUNT, TRUSTED_SIGNING_PROFILE
+#   macOS secrets: APPLE_DEV_ID_IDENTITY, APPLE_CERTIFICATE_P12_BASE64,
+#                  APPLE_CERTIFICATE_PASSWORD, APPLE_ID, APPLE_TEAM_ID,
+#                  APPLE_APP_SPECIFIC_PASSWORD, KEYCHAIN_PASSWORD
+#
+# The Windows MSI is deliberately built UNSIGNED here and Authenticode-signed LOCALLY after
+# publishing, with the maintainer's Certum code-signing card (scripts/sign-msi-certum.sh).
+# Certum individual/OSS keys are hardware-backed (no exportable PFX, per the 2023 CA/B
+# rules) and SimplySign needs an interactive session, so they cannot sign on an ephemeral
+# CI runner — and Azure's individual signing path is US/Canada-only, unavailable in DK.
+# See docs/SIGNING.md for both platforms.
 
 on:
   workflow_dispatch:
@@ -31,10 +33,8 @@ defaults:
 
 jobs:
   windows-msi:
-    name: Windows MSI
+    name: Windows MSI (unsigned — signed locally post-release)
     runs-on: windows-latest
-    outputs:
-      signed: ${{ steps.check.outputs.sign }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -45,57 +45,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install "briefcase>=0.3.19"
 
-      # Sign only when the Azure Artifact Signing secrets are configured; else build unsigned.
-      - name: Detect signing config
-        id: check
-        env:
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          TRUSTED_SIGNING_ACCOUNT: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
-        run: |
-          if [ -n "$AZURE_CLIENT_ID" ] && [ -n "$TRUSTED_SIGNING_ACCOUNT" ]; then
-            echo "sign=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "sign=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Azure signing secrets not set — building an UNSIGNED MSI."
-          fi
-
-      # briefcase's Windows backend can't drive cloud signing, and --adhoc-sign produces an
-      # unsigned MSI by design; the real Authenticode signature is applied afterwards below.
-      - name: Create · build · package
+      # The MSI is built UNSIGNED here on purpose. A Certum individual/OSS certificate is
+      # hardware-backed (physical card or SimplySign cloud, no exportable PFX per the 2023
+      # CA/B rules) and needs an interactive login, so it cannot sign on an ephemeral CI
+      # runner. It is Authenticode-signed locally after release with
+      # scripts/sign-msi-certum.sh (see docs/SIGNING.md). --adhoc-sign yields an unsigned MSI.
+      - name: Create · build · package (unsigned)
         run: |
           briefcase create windows --no-input
           briefcase build windows --no-input
           briefcase package windows --adhoc-sign --packaging-format msi --no-input
-
-      - name: Sign MSI (Azure Artifact Signing)
-        if: steps.check.outputs.sign == 'true'
-        uses: azure/artifact-signing-action@v2
-        env:
-          # DefaultAzureCredential reads these; the service principal needs the
-          # "Artifact Signing Certificate Profile Signer" role on the profile.
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-        with:
-          endpoint: ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}          # e.g. https://weu.codesigning.azure.net/
-          signing-account-name: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ secrets.TRUSTED_SIGNING_PROFILE }}
-          files-folder: ${{ github.workspace }}\dist
-          files-folder-filter: msi
-          file-digest: SHA256
-          # Artifact Signing certs are valid ~3 days, so an RFC-3161 timestamp is mandatory
-          # for the signature to stay valid after the cert rotates.
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-
-      - name: Verify signature
-        if: steps.check.outputs.sign == 'true'
-        shell: pwsh
-        run: |
-          $msi = Get-ChildItem dist/*.msi | Select-Object -First 1
-          $sig = Get-AuthenticodeSignature $msi.FullName
-          Write-Host "Status: $($sig.Status)  Signer: $($sig.SignerCertificate.Subject)"
-          if ($sig.Status -ne 'Valid') { throw "MSI signature is not Valid: $($sig.Status)" }
 
       - name: Show artifacts
         run: ls -la dist
@@ -214,18 +173,15 @@ jobs:
       - name: Publish release with installers attached
         env:
           GH_TOKEN: ${{ github.token }}
-          WIN_SIGNED: ${{ needs.windows-msi.outputs.signed }}
           MAC_SIGNED: ${{ needs.macos-dmg.outputs.signed }}
         run: |
           ls -R dist
-          # accurate per-platform install notes, driven by whether each build actually signed
-          if [ "$WIN_SIGNED" = "true" ]; then
-            win_file='`RespMech-*.msi` (signed — Azure Artifact Signing)'
-            win_install='- **Windows:** double-click the MSI and install normally.'
-          else
-            win_file='`RespMech-*.msi` (unsigned)'
-            win_install='- **Windows:** SmartScreen will warn (unsigned) → *More info ▸ Run anyway*.'
-          fi
+          # The Windows MSI CI attaches is unsigned; it is Certum-signed locally after release
+          # (scripts/sign-msi-certum.sh, which replaces this asset). The Run-anyway note holds
+          # in BOTH states — a brand-new code-signing cert has no SmartScreen reputation yet.
+          # macOS notes track the actual CI signing (Developer ID + notarisation).
+          win_file='`RespMech-*.msi`'
+          win_install='- **Windows:** if SmartScreen warns (unrecognised app / unknown publisher), *More info ▸ Run anyway*. A new code-signing certificate has no reputation yet, so this can appear even on a signed build.'
           if [ "$MAC_SIGNED" = "true" ]; then
             mac_file='`RespMech-*.dmg` (signed + notarised)'
             mac_install='- **macOS:** open the dmg and drag the app to Applications — it launches with no Gatekeeper warning.'
