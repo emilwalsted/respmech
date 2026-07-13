@@ -1,13 +1,17 @@
 # Code-signing the installers
 
-The release workflow (`.github/workflows/release.yml`) signs the installers **only when the
-relevant secrets are set**. With no secrets it builds an unsigned MSI + an ad-hoc-signed dmg
-(the current behaviour). Add the secrets below and the next `v*` tag produces signed builds —
-no workflow edit needed.
+The two platforms sign very differently:
 
-Add every secret under **GitHub ▸ repo ▸ Settings ▸ Secrets and variables ▸ Actions ▸ New
-repository secret**. Nothing here is handled by the workflow author — you create the
-certificates/accounts and paste the secrets yourself.
+- **macOS — signed in CI, secret-gated.** With the Apple secrets set (below), the release
+  workflow (`.github/workflows/release.yml`) produces a Developer ID-signed + notarised dmg;
+  with no secrets it falls back to an ad-hoc dmg. Add the secrets under **GitHub ▸ repo ▸
+  Settings ▸ Secrets and variables ▸ Actions** and the next `v*` tag signs automatically.
+- **Windows — signed LOCALLY after release.** CI always builds an *unsigned* MSI, because the
+  chosen certificate (Certum individual/OSS) is hardware-backed and can't sign on a CI runner
+  (see below). You run `scripts/sign-msi-certum.sh <tag>` on your Mac to sign it and replace
+  the release asset. No GitHub secrets are involved on the Windows side.
+
+You create the certificates/accounts and hold the keys yourself — nothing here is done for you.
 
 ---
 
@@ -51,54 +55,66 @@ dmg itself with `xcrun notarytool submit --wait` + `xcrun stapler staple`.
 
 ---
 
-## Windows — Azure Artifact Signing (formerly "Trusted Signing")
+## Windows — Certum individual / Open Source Code Signing (signed locally)
 
-~US$10/month (Basic tier, 5 000 signatures/mo), no hardware token — the key lives in
-Microsoft's cloud HSM. Certificates chain to Microsoft's root, so SmartScreen reputation is
-good from the start.
+**Why not signed in CI.** Azure's individual signing path is USA & Canada only (unavailable in
+Denmark). The individual-friendly EU option is **Certum Open Source Code Signing** — but since
+the June 2023 CA/Browser Forum rules, every code-signing key (EV *and* OSS) must live on a
+FIPS hardware module with **no exportable `.pfx`**. A Certum key sits either on a physical
+cryptoCertum card or in Certum's SimplySign cloud (reached via an interactive TOTP login).
+Neither can sign on an ephemeral GitHub-hosted runner, so **CI builds the MSI unsigned and you
+sign it locally on your Mac** with `scripts/sign-msi-certum.sh`. No GitHub secrets involved.
 
-> **Eligibility:** originally organisations with 3+ years' verifiable history; individual
-> identity validation is now available but confirm your status before subscribing. If it
-> doesn't fit, **Certum Open Source Code Signing** (individual, ~€90–120/yr, physical token)
-> is the fallback — that needs a different, token-based workflow step, not this one.
+### One-time setup
 
-### One-time setup (Azure portal)
+1. **Buy the certificate** at <https://shop.certum.eu> → *Open Source Code Signing*. Two SKUs
+   that matter (individuals only; a GitHub project URL is accepted as OSS proof):
+   - **Set** (~€69) — physical cryptoCertum card + reader. **Recommended**: a plugged-in card
+     is the simplest to sign with (just a PIN), no per-session cloud login, no monthly cap.
+   - **Cloud** (~€49) — key in SimplySign cloud; no hardware, but each signing session needs a
+     mobile-app TOTP login (~2 h session) and there's a 5 000-signature/month cap.
+   Identity validation: government photo ID + proof of address + a short video/liveness check.
+   (Validity term is changing in 2026 — confirm at checkout.)
+2. **Install the tools** on your Mac:
+   ```bash
+   brew install jsign osslsigncode gh
+   ```
+   - **Card**: plug in the cryptoCertum card + reader (macOS PC/SC detects it).
+   - **Cloud**: `brew install --cask simplysign`, open **SimplySign Desktop**, log in with your
+     userID + the TOTP from the SimplySign mobile app, and note the PKCS#11 cryptoki `.dylib`
+     path it installs (needed for a `PKCS11` config file).
 
-1. Create an **Artifact Signing** account (search "Artifact Signing"; formerly "Trusted
-   Signing"). Pick the region — its endpoint host is `https://<code>.codesigning.azure.net/`
-   (e.g. `weu` = West Europe, `eus` = East US). **The endpoint region must match the account.**
-2. Complete **identity validation** → choose **Public Trust** (for public distribution).
-3. Create a **certificate profile** under the account.
-4. Create an **App registration** (Entra ID) → this is the service principal. Create a
-   **client secret** on it (Certificates & secrets).
-5. Grant that service principal the RBAC role **"Artifact Signing Certificate Profile Signer"**
-   (older label: "Trusted Signing Certificate Profile Signer"), scoped to the account/profile.
+### Signing a release
 
-### Secrets
+After a `v*` tag has published (the release carries the **unsigned** MSI), run:
 
-| Secret | Value |
-|---|---|
-| `AZURE_TENANT_ID` | Entra tenant ID |
-| `AZURE_CLIENT_ID` | the app registration's client (application) ID |
-| `AZURE_CLIENT_SECRET` | the client secret from step 4 |
-| `TRUSTED_SIGNING_ENDPOINT` | e.g. `https://weu.codesigning.azure.net/` |
-| `TRUSTED_SIGNING_ACCOUNT` | the Artifact Signing account name |
-| `TRUSTED_SIGNING_PROFILE` | the certificate profile name |
+```bash
+# physical card (default)
+CERTUM_PIN=<card-PIN> CERTUM_ALIAS="<cert alias>" scripts/sign-msi-certum.sh v2.1.1
 
-The workflow builds the MSI unsigned (briefcase can't drive cloud signing), then signs it in
-place with `azure/artifact-signing-action@v2` and verifies the result with
-`Get-AuthenticodeSignature`. Timestamping is mandatory (the cloud cert rotates ~every 3 days)
-and is already configured in the workflow.
+# SimplySign cloud instead
+CERTUM_STORETYPE=PKCS11 CERTUM_PKCS11_CFG=~/certum-pkcs11.cfg \
+  CERTUM_PIN=<PIN> CERTUM_ALIAS="<alias>" scripts/sign-msi-certum.sh v2.1.1
+```
 
-> This uses the client-secret path (simplest to set up). To avoid a stored secret you can
-> switch to OIDC: add a federated credential on the app registration for this repo, add
-> `permissions: id-token: write` to the `windows-msi` job, and an `azure/login@v3` step — then
-> drop `AZURE_CLIENT_SECRET`.
+The script downloads the MSI from the release, Authenticode-signs it with
+`jsign` (RFC-3161 timestamp `http://time.certum.pl/`), verifies with `osslsigncode`, and
+re-uploads it over the unsigned asset (`gh release upload --clobber`). Run `jsign` once with
+no `--alias` to list the key aliases on the card/token if you don't know yours.
+
+> **SmartScreen reputation.** A brand-new Certum OSS certificate has no Microsoft SmartScreen
+> reputation, so the first downloads may still show "unrecognised app" even though the
+> signature and publisher are valid — reputation accrues as the signed installer is used. This
+> is why the release notes keep the *More info ▸ Run anyway* hint regardless.
 
 ---
 
-## Turning it off / partial setup
+## Summary
 
-The two platforms are independent: set only the Apple secrets and you get a signed dmg + an
-unsigned MSI, or vice versa. Remove the secrets and the build reverts to unsigned/ad-hoc. The
-GitHub release notes are generated to state, per platform, whether that artifact was signed.
+| Platform | Where | What you provide |
+|---|---|---|
+| **macOS** | CI, on a `v*` tag | The 7 `APPLE_*` / `KEYCHAIN_PASSWORD` secrets above → signed + notarised dmg. No secrets → ad-hoc dmg. |
+| **Windows** | Locally, after release | A Certum OSS cert (card or cloud) + `scripts/sign-msi-certum.sh`. Until you sign, the released MSI is unsigned. |
+
+The platforms are fully independent — you can ship a signed+notarised dmg while the MSI is
+still unsigned, or vice versa.
