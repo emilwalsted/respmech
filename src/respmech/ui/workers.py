@@ -515,6 +515,8 @@ def stage_noise_fidelity(settings: Settings, cancel_check=None) -> dict:
     ``prop_decrease`` / ``fidelity_target`` / ``channels``)."""
     from respmech.core._legacy_ns import to_legacy_ns
     from respmech.core.pipeline import _build_noise_set, match_input_files
+    from respmech.core import compute
+    from respmech.core.io.loaders import DataValidationError
 
     s = to_legacy_ns(settings)
     # SAME matcher as run_batch: the shared noise profile must be built from exactly the
@@ -532,7 +534,18 @@ def stage_noise_fidelity(settings: Settings, cancel_check=None) -> dict:
         return _build_noise_set(settings, s, allfiles, clip=clip, cancel_check=cancel_check)[1]
 
     key = _pc.noise_report_key(settings, ref_path, allfiles) if ref_path else None
-    return _pc.cached(_pc.NOISE_REPORT, key, _compute)   # test-wide report; keyed on all-file tokens
+    try:
+        return _pc.cached(_pc.NOISE_REPORT, key, _compute)   # test-wide report; keyed on all-file tokens
+    except (compute.TrimError, DataValidationError, FileNotFoundError, ImportError) as e:
+        # A user-fixable precondition on the reference/input files — most often a misassigned or
+        # inverted flow channel, so the reference has no segmentable breaths for the quiet-
+        # expiration clip. Surface it as a clean, single-line, actionable message (rendered by
+        # _on_noise_result -> _FileRunError) instead of a raw traceback. Genuine bugs
+        # (IndexError / KeyError / numeric) are NOT caught here and still propagate.
+        name = os.path.basename(ref_path) if ref_path else "the noise reference"
+        return {"error": (f"Could not build the noise profile from '{name}' or the input files: "
+                          f"{e} Check the flow channel and inverse-flow assignment, or turn off "
+                          f"'use expiration' and set explicit reference intervals.")}
 
 
 class EmgAllChannelsWorker(QObject):
