@@ -623,6 +623,41 @@ def test_batch_trim_error_is_soft_not_a_hard_card(qapp, tmp_path):
     win.close()
 
 
+def test_noise_fidelity_trim_error_returns_clean_error_dict(qapp, tmp_path, monkeypatch):
+    """A misassigned/inverted flow channel means the noise reference has no segmentable
+    breaths -> compute.trim raises TrimError deep in the reference-clip build. The noise
+    stage must catch that precondition failure and return a clean {"error": msg} (a single,
+    actionable line) instead of letting a raw traceback reach the fidelity panel."""
+    from respmech.ui import workers
+    from respmech.core import compute
+    from respmech.ui.screens import _preview_cache as pc
+    pc.clear_all()                                     # force a cache miss -> the trim runs
+    s = synth_settings(str(tmp_path), remove_ecg=True, noise=True, data_out=_DATA_OUT)
+    monkeypatch.setattr(compute, "trim",
+                        lambda *a, **k: (_ for _ in ()).throw(compute.TrimError("flow never crosses zero")))
+    report = workers.stage_noise_fidelity(s)
+    assert isinstance(report, dict) and report.get("error")
+    assert "\n" not in report["error"]                 # single line (short_error shows the last line)
+    assert "flow channel" in report["error"].lower() and "reference intervals" in report["error"].lower()
+    assert "traceback" not in report["error"].lower()
+
+
+def test_on_noise_result_error_paints_a_clean_card_not_a_traceback(qapp, tmp_path):
+    """_on_noise_result must raise _FileRunError for an {"error":...} report so _on_job_done
+    paints a clean 'failed' card — NOT silently render a blank frontier (which would also mark
+    the panel done and suppress the auto-retry)."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.screens.preview_screen import _FileRunError
+    s = synth_settings(str(tmp_path), remove_ecg=True, noise=True, data_out=_DATA_OUT)
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    with pytest.raises(_FileRunError) as ei:
+        pv._on_noise_result({"error": "no usable breaths — check the flow channel"})
+    assert "flow channel" in str(ei.value)
+    assert pv._noise_has_result is False               # a failed noise job stays retry-eligible
+    win.close()
+
+
 def test_view_limits_bound_x_to_the_data(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     s = _settings(str(tmp_path))
