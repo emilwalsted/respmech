@@ -99,6 +99,7 @@ jobs:
           APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_DEV_ID_IDENTITY: ${{ secrets.APPLE_DEV_ID_IDENTITY }}
         run: |
           KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
           echo "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
@@ -113,7 +114,19 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
           security default-keychain -s "$KEYCHAIN"
           rm -f "$RUNNER_TEMP/cert.p12"
+          # Defensive: import Apple's Developer ID / WWDR intermediates so a leaf-only .p12
+          # chains even for an older (G1) cert or an image that doesn't preinstall them. The
+          # `|| true` keeps this non-fatal (current runners already have G2 + WWDR system-wide).
+          for u in DeveloperIDG2CA DeveloperIDCA AppleWWDRCAG3; do
+            curl -fsSL "https://www.apple.com/certificateauthority/$u.cer" -o "$RUNNER_TEMP/$u.cer" \
+              && security import "$RUNNER_TEMP/$u.cer" -k "$KEYCHAIN" || true
+          done
+          # Fail FAST (seconds, not ~20 min into `briefcase package`) if the signing identity is
+          # absent or its name doesn't byte-match the secret — the #1 first-run secret-typo trap.
+          # briefcase does an EXACT name match, so this grep is exactly what will be looked up.
           security find-identity -v -p codesigning
+          security find-identity -v -p codesigning | grep -F -- "$APPLE_DEV_ID_IDENTITY" \
+            || { echo "::error::Signing identity not found. APPLE_DEV_ID_IDENTITY must be the EXACT string from 'security find-identity -v -p codesigning' (e.g. 'Developer ID Application: Name (TEAMID)'); also check APPLE_CERTIFICATE_P12_BASE64 / APPLE_CERTIFICATE_PASSWORD."; exit 1; }
 
       - name: Create · build
         run: |
@@ -142,11 +155,20 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
           DMG=$(ls dist/*.dmg | head -n1)
-          xcrun notarytool submit "$DMG" \
-            --apple-id "$APPLE_ID" \
-            --team-id "$APPLE_TEAM_ID" \
-            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-            --wait --output-format json
+          OUT=$(xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" --wait --output-format json)
+          echo "$OUT"
+          # notarytool submit --wait can exit 0 even on a REJECTED submission; gate on the status
+          # and print Apple's rejection reasons so a bad run is diagnosable without a blind re-run.
+          SID=$(echo "$OUT" | jq -r .id)
+          STATUS=$(echo "$OUT" | jq -r .status)
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "::error::Notarization status: $STATUS — full log:"
+            xcrun notarytool log "$SID" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" || true
+            exit 1
+          fi
           xcrun stapler staple "$DMG"
           xcrun stapler validate "$DMG"
 
