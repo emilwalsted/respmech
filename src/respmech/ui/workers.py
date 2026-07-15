@@ -337,6 +337,70 @@ def stage_raw_emg(settings: Settings, file_path: str) -> dict:
             "raw": [emg[:, i].astype(float) for i in range(emg.shape[1])]}
 
 
+def stage_ecg_reduction(settings: Settings, file_path: str, cancel_check=None) -> dict:
+    """Stage the "EMG – ECG reduction" tab: detect the R-peaks on the chosen capture channel and
+    (when ECG removal is ON) subtract the averaged ECG template from every EMG channel. The tab
+    is a live TUNING surface, so the R-peak "capture" is ALWAYS computed and shown; when removal
+    is OFF the processed stack shows the RAW channels (matching what the run will do), so the user
+    can dial in a capture that catches only R-peaks before enabling removal. Qt-free; memoised in
+    a DEDICATED preview cache (never the shared ECG_MATRIX). Returns raw capture + processed
+    channels + R-peak TIMES (s) + full-length flow (for the shared flow overlay)."""
+    from respmech.core.io.loaders import load
+    from respmech.core._legacy_ns import to_legacy_ns
+    from respmech.core import emg as emglib
+    from respmech.ui.screens import _preview_cache as _pc
+
+    s = to_legacy_ns(settings)
+    fs = int(s.input.format.samplingfrequency)
+    cols = list(settings.input.channels.emg)
+
+    def _compute():
+        flow, _v, _p, _g, _d, _e, emg = load(file_path, s)
+        emg = np.asarray(emg, dtype=float)
+        if emg.ndim == 1:
+            emg = emg[:, None]
+        nch = emg.shape[1]
+        if nch == 0:
+            raise ValueError("No EMG channels are configured for this file.")
+        flow_full = np.asarray(flow, dtype=float).ravel()
+        detect = max(0, min(int(s.processing.emg.column_detect), nch - 1))
+        t = np.arange(emg.shape[0], dtype=float) / fs
+        remove = bool(settings.processing.emg.remove_ecg)
+        ecg_error = None
+        peaks = np.array([], dtype=float)
+        processed = [emg[:, i].astype(float) for i in range(nch)]
+        try:
+            if remove:                                     # detect + subtract (the real pipeline)
+                proc, _w, peak_times = emglib.remove_ecg(
+                    np.array(emg), emg[:, detect], samplingfrequency=fs,
+                    ecgminheight=s.processing.emg.minheight,
+                    ecgmindistance=s.processing.emg.mindistance,
+                    ecgminwidth=s.processing.emg.minwidth,
+                    windowsize=s.processing.emg.windowsize, cancel_check=cancel_check)
+                proc = np.asarray(proc, dtype=float)
+                if proc.ndim == 1:
+                    proc = proc[:, None]
+                processed = [proc[:, i].astype(float) for i in range(proc.shape[1])]
+                peaks = np.asarray(peak_times, dtype=float)
+            else:                                          # detect ONLY (cheap); processed == raw
+                from scipy import signal as _sig
+                pk, _props = _sig.find_peaks(
+                    emg[:, detect], height=s.processing.emg.minheight,
+                    distance=s.processing.emg.mindistance * fs,
+                    width=s.processing.emg.minwidth * fs)
+                peaks = pk / fs
+        except Cancelled:
+            raise
+        except Exception:                                  # noqa: BLE001 — bad params -> raw + no capture
+            ecg_error = traceback.format_exc()
+        return {"t": t, "fs": fs, "cols": cols, "detect": detect,
+                "detect_col": cols[detect] if detect < len(cols) else detect + 1,
+                "raw_capture": emg[:, detect].astype(float), "processed": processed,
+                "peaks": peaks, "flow": flow_full, "ecg_applied": remove, "ecg_error": ecg_error}
+
+    return _pc.cached(_pc.ECG_REDUCTION, _pc.ecg_matrix_key(settings, file_path), _compute)
+
+
 def load_raw_matrix(settings: Settings, file_path: str):
     """Read EVERY column of a raw data file for the visual channel-assignment dialog.
 

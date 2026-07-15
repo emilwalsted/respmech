@@ -124,3 +124,41 @@ def test_psd_has_no_flow_overlay(qapp, tmp_path):
     ax = pv.emg_psd_canvas.figure.axes[0]
     assert ax.get_xlabel().lower().startswith("frequency")
     win.close()
+
+
+# -- ECG capture markers ------------------------------------------------------
+def test_capture_markers_two_items_noop_on_empty(qapp):
+    import pyqtgraph as pg
+    from respmech.ui.plot_overlays import add_ecg_capture_markers, _CAPTURE_Z
+    pw = pg.PlotWidget(); pi = pw.getPlotItem()
+    pi.plot(np.arange(200) / 200.0, np.sin(np.arange(200) / 5.0))
+    res = add_ecg_capture_markers(pi, np.array([0.1, 0.5, 0.9]), {"bg": "#FCFDFE"})
+    assert res is not None
+    line, marker = res
+    assert line.zValue() == _CAPTURE_Z and marker.zValue() == _CAPTURE_Z + 1
+    assert line in pi.listDataItems() and marker in pi.listDataItems()
+    # no-op on empty / missing / non-finite
+    assert add_ecg_capture_markers(pi, np.array([]), {}) is None
+    assert add_ecg_capture_markers(pi, None, {}) is None
+    assert add_ecg_capture_markers(pi, np.full(3, np.nan), {}) is None
+
+
+def test_stage_ecg_reduction_shape_and_peaks(qapp, tmp_path):
+    import os
+    from respmech.ui.workers import stage_ecg_reduction
+    from respmech.ui.screens import _preview_cache as pc
+    s = synth_settings(str(tmp_path), remove_ecg=True,
+                       data_out={"saveaveragedata": True, "savebreathbybreathdata": True})
+    nch = len(s.input.channels.emg)
+    pc.clear_all()
+    d = stage_ecg_reduction(s, os.path.join(INPUT, "synth_case_A.csv"))
+    assert len(d["processed"]) == nch
+    assert len(d["processed"][0]) == len(d["t"]) == len(d["raw_capture"]) == len(d["flow"])
+    assert 0 <= d["detect"] < nch and d["ecg_applied"] is True
+    assert np.asarray(d["peaks"]).ndim == 1                 # R-peak times (may be empty on synth)
+    # removal OFF: still returns a result; processed == raw (no subtraction), capture still computed
+    s2 = synth_settings(str(tmp_path), remove_ecg=False,
+                        data_out={"saveaveragedata": True, "savebreathbybreathdata": True})
+    pc.clear_all()
+    d2 = stage_ecg_reduction(s2, os.path.join(INPUT, "synth_case_A.csv"))
+    assert d2["ecg_applied"] is False and len(d2["processed"]) == nch
