@@ -567,9 +567,10 @@ def test_save_open_roundtrip_preserves_surfaced_fields(qapp, tmp_path):
     sc.wob_from.setCurrentText("individual")
     sc.emg_rms_window.setValue(0.1)
     sc.emg_outlier_sd.setValue(2.5)
-    sc.remove_ecg.setChecked(True)
-    sc.ecg_window.setValue(0.35)
-    sc.ecg_min_distance.setValue(0.6)
+    # ECG removal moved from the Settings screen to the Preview "› EMG – ECG reduction" tab;
+    # set it on the shared model and verify it still round-trips through the TOML.
+    e0 = sc.state.settings.processing.emg
+    e0.remove_ecg = True; e0.ecg_window_s = 0.35; e0.ecg_min_distance_s = 0.6
     sc._on_field_changed()
     p = tmp_path / "full.toml"
     sc.state.save_toml(str(p))
@@ -583,9 +584,10 @@ def test_save_open_roundtrip_preserves_surfaced_fields(qapp, tmp_path):
     assert sc2.wob_from.currentText() == "individual"
     assert abs(sc2.emg_rms_window.value() - 0.1) < 1e-9
     assert abs(sc2.emg_outlier_sd.value() - 2.5) < 1e-9
-    assert sc2.remove_ecg.isChecked()
-    assert abs(sc2.ecg_window.value() - 0.35) < 1e-9
-    assert abs(sc2.ecg_min_distance.value() - 0.6) < 1e-9
+    e2 = sc2.state.settings.processing.emg          # ECG params persist at the model level
+    assert e2.remove_ecg is True
+    assert abs(e2.ecg_window_s - 0.35) < 1e-9
+    assert abs(e2.ecg_min_distance_s - 0.6) < 1e-9
     win2.close()
 
 

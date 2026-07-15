@@ -147,8 +147,6 @@ def test_settings_widgets_expose_varpath_and_description_on_hover(qapp, tmp_path
         sc.col_flow: "input.channels.flow",
         sc.cols_emg: "input.channels.emg",
         sc.emg_rms_window: "processing.emg.rms_window_s",
-        sc.ecg_min_distance: "processing.emg.ecg_min_distance_s",
-        sc.remove_ecg: "processing.emg.remove_ecg",
         sc.remove_noise: "processing.emg.noise.enabled",
         sc.noise_ref: "processing.emg.noise.reference_file",
         sc.out_folder: "output.folder",
@@ -172,6 +170,10 @@ def test_preview_noise_params_expose_varpath_on_hover(qapp, tmp_path):
     assert "processing.emg.noise.prop_decrease" in pv.noise_prop.toolTip()
     assert "processing.emg.noise.fidelity_target" in pv.noise_target.toolTip()
     assert "processing.emg.noise.n_std_thresh" in pv.noise_nstd.toolTip()
+    # the ECG-removal params moved from Setup onto the ECG-reduction tab; varpaths follow
+    assert "processing.emg.remove_ecg" in pv.remove_ecg.toolTip()
+    assert "processing.emg.ecg_min_distance_s" in pv.ecg_min_distance.toolTip()
+    assert "processing.emg.ecg_window_s" in pv.ecg_window.toolTip()
     win.close()
 
 

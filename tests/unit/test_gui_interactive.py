@@ -129,15 +129,15 @@ def test_emg_controls_disabled_without_emg_channels(qapp, tmp_path):
     assert pv.emg_channel.count() == 0
 
 
-# -- Sub-tab structure: Mechanics always, EMG only with EMG channels --------
+# -- Sub-tab structure: Mechanics always, the two EMG tabs only with EMG channels ----
 def test_emg_subtab_visibility_tracks_channels(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
-    # with EMG channels -> both sub-tabs present
+    # with EMG channels -> all three sub-tabs, in the pipeline order (Mechanics › ECG › noise)
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
     titles = [pv.subtabs.tabText(i) for i in range(pv.subtabs.count())]
-    assert titles == ["Mechanics", "EMG processing"]
-    # remove the EMG channels and re-sync -> EMG sub-tab disappears, Mechanics stays
+    assert titles == ["Mechanics", "› EMG – ECG reduction", "› EMG – noise reduction"]
+    # remove the EMG channels and re-sync -> both EMG sub-tabs disappear, Mechanics stays
     win.state.settings.input.channels.emg = []
     pv.sync_from_settings()
     titles = [pv.subtabs.tabText(i) for i in range(pv.subtabs.count())]
