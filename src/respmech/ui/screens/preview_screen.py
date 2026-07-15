@@ -34,8 +34,8 @@ from dataclasses import dataclass
 import numpy as np
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton,
-                               QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
-                               QVBoxLayout, QWidget)
+                               QSizePolicy, QSplitter, QTableWidget, QTableWidgetItem,
+                               QTabWidget, QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt, QEvent, QThread, QTimer, Signal
 
 import pyqtgraph as pg
@@ -704,6 +704,8 @@ class PreviewScreen(QWidget):
         self.noise_opts.setObjectName("noiseChip")
         self.noise_opts.setStyleSheet(
             "#noiseChip { border: 1px solid rgba(128, 128, 128, 0.30); border-radius: 8px; }")
+        # hug the natural height — never stretch vertically into the plot area
+        self.noise_opts.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         # tight caption→field pairing (4 px) with a wider gap (10 px) BETWEEN groups so
         # 'Strength [ ]', 'Keep ≥ [ ]', 'Gate [ ]' read as clusters, not an even bead line
         nrow = QHBoxLayout(self.noise_opts); nrow.setContentsMargins(11, 3, 11, 3); nrow.setSpacing(4)
@@ -806,6 +808,7 @@ class PreviewScreen(QWidget):
 
         self.ecg_opts = QFrame(); self.ecg_opts.setObjectName("ecgChip")
         self.ecg_opts.setStyleSheet("#ecgChip { border: 1px solid rgba(128, 128, 128, 0.30); border-radius: 8px; }")
+        self.ecg_opts.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)   # hug natural height
         row = QHBoxLayout(self.ecg_opts); row.setContentsMargins(11, 3, 11, 3); row.setSpacing(4)
         row.addWidget(_cap("Capture channel")); row.addSpacing(4); row.addWidget(self.ecg_capture_channel)
         row.addSpacing(12); row.addWidget(self.remove_ecg)
@@ -984,9 +987,12 @@ class PreviewScreen(QWidget):
 
     def _align_noise_strip(self):
         """Match the 'Set noise profile' button to the noise chip's height so the strip
-        reads as one aligned band. The chip's themed height is only known once the EMG
-        sub-tab is laid out, so this is deferred to the sub-tab's first show."""
-        h = self.noise_opts.height()
+        reads as one aligned band. Keyed off the chip's *sizeHint* (its natural, laid-out
+        height), never its live allocated height: the button's minimum height feeds back
+        into the strip's row height, so reading the live height would let the chip balloon
+        a little more on every tab switch (the chip is clamped to Maximum vertically, but
+        sizeHint keeps this idempotent regardless)."""
+        h = self.noise_opts.sizeHint().height()
         if h > 1 and self.btn_set_noise.minimumHeight() != h:
             self.btn_set_noise.setMinimumHeight(h)
 
