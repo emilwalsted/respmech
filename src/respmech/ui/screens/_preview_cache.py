@@ -58,6 +58,8 @@ class _LRU:
 _REF_CLIP = _LRU()          # reference noise clip (multichannel), prop-independent
 _ECG_MATRIX = _LRU()        # (raw_matrix, ecg_removed_matrix, applied, error) for a file
 _NOISE_REPORT = _LRU()      # stage_noise_fidelity's report (test-wide)
+_ECG_REDUCTION = _LRU()     # stage_ecg_reduction's result (raw capture + processed + R-peaks)
+                            # DEDICATED — never reuse _ECG_MATRIX (it gates on remove_ecg, stores no peaks)
 
 _SENTINEL = object()
 
@@ -86,6 +88,7 @@ def clear_all():
     _REF_CLIP.clear()
     _ECG_MATRIX.clear()
     _NOISE_REPORT.clear()
+    _ECG_REDUCTION.clear()
 
 
 # --- freshness token + key builders ----------------------------------------
@@ -173,3 +176,4 @@ def noise_report_key(settings, ref_path, files):
 REF_CLIP = _REF_CLIP
 ECG_MATRIX = _ECG_MATRIX
 NOISE_REPORT = _NOISE_REPORT
+ECG_REDUCTION = _ECG_REDUCTION
