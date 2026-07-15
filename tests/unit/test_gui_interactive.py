@@ -187,7 +187,9 @@ def test_emg_result_view_selectable_channels(qapp, tmp_path):
         cb.setChecked(False)
     pv.result_checks[1][1].setChecked(True)   # triggers a re-render
     pv._render_emg_result()
-    plotted = [it for it in pv.emg_result_plots.getPlotItem().listDataItems()]
+    # count EMG channel traces by name; the discrete flow-background overlay is a separate item
+    plotted = [it for it in pv.emg_result_plots.getPlotItem().listDataItems()
+               if it.name() and it.name().startswith("col ")]
     assert len(plotted) == 1
 
 
