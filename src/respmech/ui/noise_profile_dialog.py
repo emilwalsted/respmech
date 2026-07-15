@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (QApplication, QDialog, QHBoxLayout, QLabel,
 
 import pyqtgraph as pg
 
+from respmech.ui.plot_overlays import add_flow_background
+
 try:
     from respmech.ui import theme as _theme
 except Exception:  # pragma: no cover
@@ -43,13 +45,14 @@ def _plot_pal():
 class NoiseProfileDialog(QDialog):
     """Pick a rest span across the raw EMG channels to use as the noise reference."""
 
-    def __init__(self, raw, t, fs, cols, parent=None, file_name=""):
+    def __init__(self, raw, t, fs, cols, parent=None, file_name="", flow=None):
         super().__init__(parent)
         self.setWindowTitle("Set noise profile" + (f" — {file_name}" if file_name else ""))
         self.setModal(True)
         self.resize(940, 580)
         self._t = np.asarray(t, dtype=float)
         self._fs = fs
+        self._flow = np.asarray(flow, dtype=float) if flow is not None else None
         self._selection = None             # (t0, t1) in seconds, or None
         self._dragging = False
         self._moved = False                # did the pointer move far enough to count as a drag?
@@ -79,6 +82,7 @@ class NoiseProfileDialog(QDialog):
             if _theme is not None:
                 _theme.align_left_axis(p)          # keep the stacked channels x-aligned
             p.plot(self._t[:len(y)], np.asarray(y, dtype=float), pen=pg.mkPen(trace_pen))
+            add_flow_background(p, self._t, self._flow, pal)   # discrete respiration reference, behind
             if i == n - 1:
                 p.setLabel("bottom", "Time (s)")
             vb = p.getViewBox()

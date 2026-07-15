@@ -123,7 +123,8 @@ def _load_and_condition(settings: Settings, s, file_path: str, cancel_check=None
         from respmech.core.io.loaders import load  # noqa: PLC0415
         from respmech.core import emg as emglib     # noqa: PLC0415
         fs = int(s.input.format.samplingfrequency)
-        _flow, _v, _p, _g, _d, _e, emg = load(file_path, s)
+        flow_col, _v, _p, _g, _d, _e, emg = load(file_path, s)
+        flow_col = np.asarray(flow_col, dtype=float).ravel()   # full-length, untrimmed (for the EMG-vs-flow overlay)
         emg = np.asarray(emg, dtype=float)
         if emg.ndim == 1:
             emg = emg[:, None]
@@ -148,11 +149,12 @@ def _load_and_condition(settings: Settings, s, file_path: str, cancel_check=None
             except Exception:                          # noqa: BLE001 — preview stays useful
                 conditioned = np.array(emg, dtype=float)
                 error = traceback.format_exc()
-        return raw, conditioned, applied, error
+        return raw, conditioned, applied, error, flow_col
 
-    raw, cond, applied, error = _pc.cached(
+    raw, cond, applied, error, flow_col = _pc.cached(
         _pc.ECG_MATRIX, _pc.ecg_matrix_key(settings, file_path), _compute)
-    return np.array(raw, dtype=float), np.array(cond, dtype=float), applied, error
+    return (np.array(raw, dtype=float), np.array(cond, dtype=float), applied, error,
+            np.array(flow_col, dtype=float))
 
 
 def stage_emg_channel(settings: Settings, file_path: str, channel_index: int,
@@ -176,7 +178,7 @@ def stage_emg_channel(settings: Settings, file_path: str, channel_index: int,
     s = to_legacy_ns(settings)
     fs = int(s.input.format.samplingfrequency)
     # stages 1+2 (load + all-channel ECG removal) are shared with emg_all via the cache
-    raw_mat, cond_mat, ecg_applied, ecg_error = _load_and_condition(
+    raw_mat, cond_mat, ecg_applied, ecg_error, flow_full = _load_and_condition(
         settings, s, file_path, cancel_check=cancel_check)
     nch = raw_mat.shape[1]
     if nch == 0:
@@ -221,7 +223,7 @@ def stage_emg_channel(settings: Settings, file_path: str, channel_index: int,
     _, psd_noise = _psd(noise_out)
     return {
         "channel": ch, "col": col, "fs": fs, "t": t,
-        "raw": raw, "ecg": ecg, "noise": noise_out,
+        "raw": raw, "ecg": ecg, "noise": noise_out, "flow": flow_full,
         "freqs": freqs, "psd_raw": psd_raw, "psd_ecg": psd_ecg, "psd_noise": psd_noise,
         "band": noiselib.EMG_BAND, "noise_applied": noise_applied,
         "ecg_applied": ecg_applied, "ecg_error": ecg_error, "noise_error": noise_error,
@@ -277,7 +279,7 @@ def stage_emg_all_channels(settings: Settings, file_path: str, cancel_check=None
     cols = list(settings.input.channels.emg)
     # load + all-channel ECG removal, shared with emg_detail via the cache; the cache
     # returns COPIES, so the in-place per-channel noise apply below cannot corrupt it
-    emg, conditioned, ecg_applied, ecg_error = _load_and_condition(
+    emg, conditioned, ecg_applied, ecg_error, flow_full = _load_and_condition(
         settings, s, file_path, cancel_check=cancel_check)
     nch = emg.shape[1]
     if nch == 0:
@@ -308,7 +310,7 @@ def stage_emg_all_channels(settings: Settings, file_path: str, cancel_check=None
 
     t = np.arange(emg.shape[0], dtype=float) / fs
     return {
-        "t": t, "fs": fs, "cols": cols,
+        "t": t, "fs": fs, "cols": cols, "flow": flow_full,
         "raw": [emg[:, i].astype(float) for i in range(nch)],
         "conditioned": [conditioned[:, i].astype(float) for i in range(nch)],
         "noise_applied": noise_applied, "noise_error": noise_error,
@@ -325,12 +327,13 @@ def stage_raw_emg(settings: Settings, file_path: str) -> dict:
     s = to_legacy_ns(settings)
     fs = int(s.input.format.samplingfrequency)
     cols = list(settings.input.channels.emg)
-    _flow, _vol, _poes, _pgas, _pdi, _ent, emg = load(file_path, s)
+    flow, _vol, _poes, _pgas, _pdi, _ent, emg = load(file_path, s)
     emg = np.asarray(emg, dtype=float)
     if emg.ndim == 1:
         emg = emg[:, None]
     t = np.arange(emg.shape[0], dtype=float) / fs
     return {"t": t, "fs": fs, "cols": cols,
+            "flow": np.asarray(flow, dtype=float).ravel(),   # full-length, untrimmed (EMG-vs-flow overlay)
             "raw": [emg[:, i].astype(float) for i in range(emg.shape[1])]}
 
 
@@ -624,6 +627,7 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
             "name": name, "fs": fs, "t": tc, "series": series, "spans": [],
             "label_y": float(np.nanmax(series["flow"])) if series["flow"].size else 0.0,
             "startix": 0, "endix": len(flow), "nbreaths": 0, "emg": _emg2d(emg),
+            "emg_flow": np.asarray(flow, dtype=float),   # UNTRIMMED (aligns with the untrimmed 'emg')
             "trim_error": str(e),
         }
 
@@ -644,7 +648,9 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
     return {
         "name": name, "fs": fs, "t": t, "series": series,
         "spans": spans, "label_y": label_y, "startix": startix, "endix": endix,
-        "nbreaths": len(breaths), "emg": _emg2d(emg), "trim_error": None,
+        "nbreaths": len(breaths), "emg": _emg2d(emg),
+        "emg_flow": np.asarray(flow, dtype=float),   # UNTRIMMED (aligns with the untrimmed 'emg')
+        "trim_error": None,
     }
 
 

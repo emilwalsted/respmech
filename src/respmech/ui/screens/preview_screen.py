@@ -48,6 +48,7 @@ from respmech.core._legacy_ns import to_legacy_ns  # noqa: F401 (back-compat imp
 from respmech.core.settings import ExcludeEntry
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
+from respmech.ui.plot_overlays import add_flow_background
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
                                   stage_mechanics_preview, stage_noise_fidelity)
@@ -1370,7 +1371,7 @@ class PreviewScreen(QWidget):
             ln.hide()
             self._crosshair_lines.append(ln)
         self._draw_breath_overlays(spans, data["label_y"])
-        self._render_raw_stack(data["emg"], fs)
+        self._render_raw_stack(data["emg"], fs, data.get("emg_flow"))
         # breaths are now known -> (re)number any EMG detail/result already rendered
         self._repaint_view_breaths("detail")
         self._repaint_view_breaths("result")
@@ -1388,8 +1389,10 @@ class PreviewScreen(QWidget):
                 + f", trimmed to {data['startix'] / fs:.2f}–{data['endix'] / fs:.2f} s. "
                 "Click a shaded breath to include/exclude (red = excluded).")
 
-    def _render_raw_stack(self, emg, fs):
-        """Draw the stacked raw EMG channels and keep the noise region alive."""
+    def _render_raw_stack(self, emg, fs, flow=None):
+        """Draw the stacked raw EMG channels and keep the noise region alive. A discrete
+        full-length flow silhouette is superimposed behind each channel so EMG activity can
+        be read against the respiration cycle (``flow`` is untrimmed, aligned to the emg)."""
         emg = np.asarray(emg, dtype=float)
         if emg.ndim == 1:
             emg = emg[:, None]
@@ -1411,6 +1414,7 @@ class PreviewScreen(QWidget):
             if _theme is not None:
                 _theme.align_left_axis(p)          # keep the stacked channels x-aligned
             p.plot(t, emg[:, i], pen=_pen(cycle[i % len(cycle)]))
+            add_flow_background(p, t, flow, _plot_pal())   # discrete respiration reference, behind
             if i == emg.shape[1] - 1:
                 p.setLabel("bottom", "Time (s)")
             if prev is not None:
@@ -1821,7 +1825,8 @@ class PreviewScreen(QWidget):
             self._set_status("This file has no EMG channels to pick a noise profile from.")
             return
         dlg = NoiseProfileDialog(data["raw"], data["t"], data["fs"], data["cols"],
-                                 parent=self, file_name=self.file_combo.currentText())
+                                 parent=self, file_name=self.file_combo.currentText(),
+                                 flow=data.get("flow"))
         if dlg.exec() == QDialog.Accepted:
             sel = dlg.selected_region()
             if sel is not None:
@@ -1864,6 +1869,8 @@ class PreviewScreen(QWidget):
         env_pen = pg.mkPen((180, 50, 42), width=2)
         self.emg_plots.plot(t, env, pen=env_pen, name="RMS envelope")
         self.emg_plots.plot(t, -env, pen=env_pen)
+        # discrete full-length flow silhouette behind the EMG, to read bursts against respiration
+        add_flow_background(self.emg_plots.getPlotItem(), t, data.get("flow"), pal)
         self.emg_plots.setLabel("bottom", "Time (s)"); self.emg_plots.setLabel("left", "EMG (a.u.)")
         self._limit_x(self.emg_plots.getPlotItem(), t)
         self._ensure_noise_region()
@@ -1932,6 +1939,8 @@ class PreviewScreen(QWidget):
                 continue
             self.emg_result_plots.plot(t, np.asarray(data["conditioned"][i]),
                                        pen=_pen(cycle[i % len(cycle)]), name=f"col {c}")
+        # discrete full-length flow silhouette behind the ticked EMG channels
+        add_flow_background(self.emg_result_plots.getPlotItem(), t, data.get("flow"), _plot_pal())
         self._limit_x(self.emg_result_plots.getPlotItem(), t)
         self._result_label_y = self._safe_top(*[np.asarray(c) for c in data.get("conditioned", [])])
         self._repaint_view_breaths("result")
