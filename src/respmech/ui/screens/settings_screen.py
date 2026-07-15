@@ -202,37 +202,13 @@ class SettingsScreen(QWidget):
                   "the raw RMS (default: per-file maximum).")
         root.addWidget(gemg)
 
-        # EMG — ECG removal ------------------------------------------------
-        gecg = QGroupBox("EMG — ECG removal")
-        gecg.setToolTip("Detect R-waves on one EMG channel and subtract an averaged "
-                        "ECG template from every EMG channel.")
-        fg = QFormLayout(gecg)
-        self.remove_ecg = QCheckBox("Remove ECG artefact from EMG")
-        self.ecg_detect = QComboBox()
-        self.ecg_min_height = QDoubleSpinBox()
-        self.ecg_min_height.setRange(0.0, 1_000_000.0); self.ecg_min_height.setDecimals(6)
-        self.ecg_min_height.setSingleStep(0.0001)
-        self.ecg_min_distance = QDoubleSpinBox()
-        self.ecg_min_distance.setRange(0.05, 2.0); self.ecg_min_distance.setSingleStep(0.05)
-        self.ecg_min_distance.setDecimals(3); self.ecg_min_distance.setSuffix(" s")
-        self.ecg_min_width = QDoubleSpinBox()
-        self.ecg_min_width.setRange(0.0, 0.1); self.ecg_min_width.setSingleStep(0.001)
-        self.ecg_min_width.setDecimals(4); self.ecg_min_width.setSuffix(" s")
-        self.ecg_window = QDoubleSpinBox()
-        self.ecg_window.setRange(0.05, 1.0); self.ecg_window.setSingleStep(0.05)
-        self.ecg_window.setDecimals(3); self.ecg_window.setSuffix(" s")
-        self._check_row(fg, self.remove_ecg, "processing.emg.remove_ecg",
-                        "Subtracts an averaged ECG template from each EMG channel to cancel cardiac contamination; off by default.")
-        self._row(fg, "EMG channel for heartbeat detection", self.ecg_detect, "processing.emg.detect_channel",
-                  "Index of the EMG channel used to detect R-wave (heartbeat) peaks when building the ECG template; defaults to the first channel (0).")
-        self._row(fg, "Minimum heartbeat peak height", self.ecg_min_height, "processing.emg.ecg_min_height",
-                  "Smallest peak amplitude, in raw EMG units, accepted as a heartbeat during R-wave detection; default 0.0005.")
-        self._row(fg, "Minimum time between heartbeats", self.ecg_min_distance, "processing.emg.ecg_min_distance_s",
-                  "Shortest interval allowed between detected heartbeats, in seconds; a refractory period that caps the maximum heart rate (default 0.5).")
-        self._row(fg, "Minimum heartbeat peak width", self.ecg_min_width, "processing.emg.ecg_min_width_s",
-                  "Narrowest peak accepted as a heartbeat, in seconds; rejects thin spikes that aren't true R-waves (default 0.001).")
-        self._row(fg, "ECG template window length", self.ecg_window, "processing.emg.ecg_window_s",
-                  "Total width, in seconds, of the ECG template averaged and subtracted around each beat, spanning the QRS-T complex (default 0.4).")
+        # EMG — ECG removal is tuned LIVE on the Preview screen now (the "› EMG – ECG
+        # reduction" tab shows the detected R-peak capture on every EMG channel), so it no
+        # longer lives here — only a pointer remains.
+        gecg = QLabel("EMG — ECG removal is now tuned live on the Preview screen, on the "
+                      "“› EMG – ECG reduction” tab (pick the capture channel + parameters, "
+                      "or use Auto-suggest, and watch the detected heartbeats).")
+        gecg.setProperty("status", "muted"); gecg.setWordWrap(True)
         root.addWidget(gecg)
 
         # EMG — noise reduction (shared profile) ---------------------------
@@ -433,19 +409,11 @@ class SettingsScreen(QWidget):
             self.emg_outlier_sd.setValue(emg.outlier_rms_sd_limit)
             _ni = self.emg_norm.findData(emg.normalization)
             self.emg_norm.setCurrentIndex(_ni if _ni >= 0 else 0)
-            # ECG removal
-            self.remove_ecg.setChecked(emg.remove_ecg)
-            self.ecg_min_height.setValue(emg.ecg_min_height)
-            self.ecg_min_distance.setValue(emg.ecg_min_distance_s)
-            self.ecg_min_width.setValue(emg.ecg_min_width_s)
-            self.ecg_window.setValue(emg.ecg_window_s)
-            # Noise reduction (enable + reference file; tuning lives in the EMG tab)
+            # Noise reduction (enable + reference file; tuning lives in the EMG tab). ECG
+            # removal is tuned on the Preview "› EMG – ECG reduction" tab, not here.
             self.remove_noise.setChecked(n.enabled)               # rebind to the real gate
             self.noise_ref.setText(n.reference_file or "")
             self.noise_use_exp.setChecked(n.use_expiration)
-            self._repopulate_ecg_detect()
-            if 0 <= emg.detect_channel < self.ecg_detect.count():
-                self.ecg_detect.setCurrentIndex(emg.detect_channel)
             self.out_folder.setText(s.output.folder)
             self._sync_widgets()
         finally:
@@ -493,18 +461,13 @@ class SettingsScreen(QWidget):
         emg.rms_window_s = self.emg_rms_window.value()
         emg.outlier_rms_sd_limit = self.emg_outlier_sd.value()
         emg.normalization = self.emg_norm.currentData()
-        # ECG removal
-        emg.remove_ecg = self.remove_ecg.isChecked()
-        emg.ecg_min_height = self.ecg_min_height.value()
-        emg.ecg_min_distance_s = self.ecg_min_distance.value()
-        emg.ecg_min_width_s = self.ecg_min_width.value()
-        emg.ecg_window_s = self.ecg_window.value()
+        # ECG removal (remove_ecg / detect_channel / ecg_*) is written by the Preview
+        # "› EMG – ECG reduction" tab, not here — leave those model fields untouched.
         # Noise reduction (enable + reference file; tuning owned by the EMG tab)
         n.enabled = self.remove_noise.isChecked()
         emg.remove_noise = self.remove_noise.isChecked()      # keep legacy mirror so TOML round-trips
         n.reference_file = self.noise_ref.text().strip() or None
         n.use_expiration = self.noise_use_exp.isChecked()
-        emg.detect_channel = max(0, self.ecg_detect.currentIndex())
         s.output.folder = self.out_folder.text()
         if self.on_settings_changed:
             self.on_settings_changed()
@@ -528,28 +491,11 @@ class SettingsScreen(QWidget):
         self._set_status(f"Noise reference set from graph selection: {file}")
 
     # -- helpers ------------------------------------------------------------
-    def _repopulate_ecg_detect(self):
-        prev, self._loading = getattr(self, "_loading", True), True
-        try:
-            cols = _parse_ints(self.cols_emg.text())
-            cur = self.ecg_detect.currentIndex()
-            self.ecg_detect.clear()
-            for i, c in enumerate(cols):
-                self.ecg_detect.addItem(f"EMGdi col {c} (ECG ref)" if i == 0 else f"EMGdi col {c}")
-            if 0 <= cur < self.ecg_detect.count():
-                self.ecg_detect.setCurrentIndex(cur)
-        finally:
-            self._loading = prev
-
     def _sync_widgets(self):
         noise_on = self.remove_noise.isChecked()
         self.noise_ref.setEnabled(noise_on)
         # "use expiration" only makes sense once a reference file is chosen
         self.noise_use_exp.setEnabled(noise_on and bool(self.noise_ref.text().strip()))
-        ecg_on = self.remove_ecg.isChecked()
-        for w in (self.ecg_detect, self.ecg_min_height, self.ecg_min_distance,
-                  self.ecg_min_width, self.ecg_window):
-            w.setEnabled(ecg_on)
         self.col_volume.setEnabled(not self.integrate.isChecked())
         self.trend_method.setEnabled(self.correct_trend.isChecked())
         self.resample_hz.setEnabled(self.resample.isChecked())
@@ -587,14 +533,12 @@ class SettingsScreen(QWidget):
         for sb in (self.samp_freq, self.col_flow, self.col_volume, self.col_poes,
                    self.col_pgas, self.col_pdi, self.resample_hz):
             sb.valueChanged.connect(self._on_field_changed)
-        for dsb in (self.emg_rms_window, self.emg_outlier_sd, self.ecg_min_height,
-                    self.ecg_min_distance, self.ecg_min_width, self.ecg_window):
+        for dsb in (self.emg_rms_window, self.emg_outlier_sd):
             dsb.valueChanged.connect(self._on_field_changed)
         for cb in (self.seg_method, self.wob_from, self.trend_method):
             cb.currentTextChanged.connect(self._on_field_changed)
-        self.ecg_detect.currentIndexChanged.connect(self._on_field_changed)
         self.emg_norm.currentIndexChanged.connect(self._on_field_changed)
-        for chk in (self.integrate, self.remove_ecg, self.remove_noise, self.noise_use_exp,
+        for chk in (self.integrate, self.remove_noise, self.noise_use_exp,
                     self.correct_drift, self.correct_trend, self.inverse_flow, self.inverse_volume,
                     self.resample, self.save_average, self.save_bbb, self.save_processed,
                     self.include_ignored, self.save_pv_avg, self.save_pv_ind, self.save_raw_fig,
@@ -677,7 +621,6 @@ class SettingsScreen(QWidget):
         # warn (non-blocking) if a typo silently dropped a non-numeric column token
         raw = [p.strip() for p in self.cols_emg.text().replace(";", ",").split(",") if p.strip()]
         dropped = [p for p in raw if not _is_int(p)]
-        self._repopulate_ecg_detect()
         self._on_field_changed()
         if dropped:
             self._set_status(f"Ignored non-numeric EMG column(s): {', '.join(dropped)}")
@@ -954,7 +897,6 @@ class SettingsScreen(QWidget):
                 self.col_pdi.setValue(int(m["pdi"]))
             self.cols_emg.setText(",".join(str(c) for c in m.get("emg", [])))
             self.cols_entropy.setText(",".join(str(c) for c in m.get("entropy", [])))
-            self._repopulate_ecg_detect()
         finally:
             self._loading = prev
         self._sync_widgets()

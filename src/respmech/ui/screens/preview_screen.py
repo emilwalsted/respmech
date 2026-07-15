@@ -48,10 +48,11 @@ from respmech.core._legacy_ns import to_legacy_ns  # noqa: F401 (back-compat imp
 from respmech.core.settings import ExcludeEntry
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
-from respmech.ui.plot_overlays import add_flow_background
+from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
-                                  stage_mechanics_preview, stage_noise_fidelity)
+                                  stage_ecg_reduction, stage_mechanics_preview,
+                                  stage_noise_fidelity)
 
 try:
     from respmech.ui import theme as _theme
@@ -73,22 +74,30 @@ _EMG_PENS = [(44, 110, 155), (180, 50, 42), (31, 122, 77), (183, 121, 31),
 # reactive job kinds -> which panel overlays they own, and the spinner caption.
 # 'batch' (the test run: table + Campbell) is NOT auto-run — only the button triggers
 # it. 'noise' auto-computes the fidelity frontier + suppression, decoupled from batch.
+# sub-tab titles — a leading chevron marks the intended flow: Mechanics › ECG reduction ›
+# noise reduction. Kept as constants so the insert code and the tests share one source.
+_TAB_MECH = "Mechanics"
+_TAB_ECG = "› EMG – ECG reduction"
+_TAB_NOISE = "› EMG – noise reduction"
+
 _PANELS = {"mech": ["channels", "raw"], "batch": ["campbell"],
+           "ecg": ["ecg_capture", "ecg_stack"],
            "emg_all": ["result"], "emg_detail": ["detail", "detail_psd"], "noise": ["fidelity"]}
 _SPIN_TEXT = {"mech": "Loading channels…", "batch": "Running test…",
+              "ecg": "Removing ECG…",
               "emg_all": "Conditioning channels…", "emg_detail": "Staging detail…",
               "noise": "Measuring fidelity…"}
 # human labels for status lines + panel error cards
-_KIND_LABEL = {"mech": "Channel preview", "batch": "Test run",
+_KIND_LABEL = {"mech": "Channel preview", "batch": "Test run", "ecg": "ECG reduction",
                "emg_all": "EMG result", "emg_detail": "EMG detail",
                "noise": "Noise fidelity"}
 # the kinds that run automatically (on file select / settings change / Refresh). The
 # test run ('batch') is now automatic too, but MECHANICS-ONLY (no ECG/EMG work).
-_AUTO_KINDS = ("mech", "batch", "emg_all", "emg_detail", "noise")
+_AUTO_KINDS = ("mech", "batch", "ecg", "emg_all", "emg_detail", "noise")
 # the kinds whose result depends on the SELECTED file. 'noise' is deliberately absent: the
 # fidelity/noise profile is test-wide (built from the reference file + the whole input set),
 # so switching the previewed file must NOT blank or rebuild it. See _begin_file_switch.
-_FILE_KINDS = ("mech", "batch", "emg_all", "emg_detail")
+_FILE_KINDS = ("mech", "batch", "ecg", "emg_all", "emg_detail")
 
 
 def _kinds_for_settings_path(path):
@@ -105,16 +114,17 @@ def _kinds_for_settings_path(path):
     # the EMG channel SET: mechanics shows the raw EMG traces and all EMG/noise panels use
     # them; the mechanics test run strips EMG, so it is unaffected
     if path == "input.channels.emg":
-        return frozenset(("mech", "emg_all", "emg_detail", "noise"))
+        return frozenset(("mech", "ecg", "emg_all", "emg_detail", "noise"))
     if path.startswith("processing.emg"):
         if path == "processing.emg.outlier_rms_sd_limit":
             return frozenset(("batch",))          # a batch-table outlier flag only
         if path in ("processing.emg.normalization", "processing.emg.save_sound",
                     "processing.emg.plot_yscale", "processing.emg.noise_profile"):
             return frozenset(("emg_all", "emg_detail"))   # display/output-ish -> redraw EMG panels
-        # EMG conditioning (remove_ecg / ecg_* / rms_window_s / remove_noise) + noise.* params:
-        # the EMG/noise panels only (the mechanics test run forces EMG + ECG + noise off)
-        return frozenset(("emg_all", "emg_detail", "noise"))
+        # EMG conditioning (remove_ecg / detect_channel / ecg_* / rms_window_s / remove_noise) +
+        # noise.* params: the ECG-reduction tab + the EMG/noise panels (the mechanics test run
+        # forces EMG + ECG + noise off, so it is unaffected)
+        return frozenset(("ecg", "emg_all", "emg_detail", "noise"))
     # mechanics-only compute that feeds the test-run table/Campbell exclusively
     if (path.startswith("processing.wob") or path.startswith("processing.ptp")
             or path.startswith("processing.entropy") or path.startswith("processing.breath_counts")):
@@ -415,7 +425,7 @@ class PreviewScreen(QWidget):
         self._launch_queue = []          # _Jobs registered but not yet thread.start()ed (concurrency cap)
         self._active = set()             # _Jobs whose thread is started, compute not yet delivered
         self._reaping = set()            # _Jobs delivered; thread quitting — ref held until thread.finished
-        self._tokens = {"mech": 0, "batch": 0, "emg_all": 0, "emg_detail": 0, "noise": 0}
+        self._tokens = {"mech": 0, "batch": 0, "ecg": 0, "emg_all": 0, "emg_detail": 0, "noise": 0}
         self._overlays = {}              # panel key -> BusyOverlay
         # Debounced auto-recompute: rapid edits (a spinbox drag / multi-keystroke entry)
         # restart one single-shot timer, collapsing the burst into ONE re-dispatch after a
@@ -432,6 +442,8 @@ class PreviewScreen(QWidget):
         self._noise_has_result = False   # has the fidelity panel a current result? (first-compute guard)
         self._previewed_file = None
         self._loading_noise = False
+        self._loading_ecg = False
+        self._ecg_capture_subplots = []   # per-channel PlotItems of the ECG-processed stack
         # breath-overlay interaction state (feature A)
         self._channel_plots = []
         self._breath_spans = {}
@@ -455,6 +467,7 @@ class PreviewScreen(QWidget):
         self._RENDER = {
             "mech": self._render_preview,
             "batch": self._on_batch_result,
+            "ecg": self._on_ecg_result,
             "emg_all": self._on_emg_all_result,
             "emg_detail": self._on_emg_detail_result,
             "noise": self._on_noise_result,
@@ -495,14 +508,17 @@ class PreviewScreen(QWidget):
 
         self.subtabs = QTabWidget()
         self._mech_tab = self._build_mech_tab()
+        self._ecg_tab = self._build_ecg_tab()      # inserted between Mechanics + noise when EMG cols exist
         self._emg_tab = self._build_emg_tab()
-        self.subtabs.addTab(self._mech_tab, "Mechanics")
+        self.subtabs.addTab(self._mech_tab, _TAB_MECH)
         root.addWidget(self.subtabs, 1)
 
         # one spinner overlay per panel (each fed by exactly one job kind)
         self._overlays = {
             "channels": BusyOverlay(self.plots),
             "campbell": BusyOverlay(self._mech_lower),
+            "ecg_capture": BusyOverlay(self.ecg_capture_plot),
+            "ecg_stack": BusyOverlay(self.ecg_processed_plots),
             "raw": BusyOverlay(self.emg_raw_plots),
             "result": BusyOverlay(self.emg_result_plots),
             "detail": BusyOverlay(self.emg_plots),
@@ -511,7 +527,9 @@ class PreviewScreen(QWidget):
         }
 
         self._refresh_emg_channels()
+        self._refresh_ecg_channels()
         self._load_noise_params()
+        self._load_ecg_params()
         self._ensure_noise_region()
         self._update_emg_tab_visibility()
 
@@ -739,6 +757,201 @@ class PreviewScreen(QWidget):
         self.emg_result_plots.scene().sigMouseClicked.connect(self._on_emg_result_clicked)
         return w
 
+    # -- EMG – ECG reduction tab -------------------------------------------
+    def _build_ecg_tab(self):
+        """Tune the ECG artefact removal: a top settings row (capture channel + params +
+        Auto-suggest), the RAW capture channel with the detected R-peaks marked, and the
+        ECG-processed channels below — all with the flow background + capture markers."""
+        w = QWidget(); v = QVBoxLayout(w); v.setContentsMargins(0, 6, 0, 0)
+
+        def _cap(text, tip=""):
+            la = QLabel(text); la.setProperty("status", "muted")
+            if tip:
+                la.setToolTip(tip)
+            return la
+
+        self.ecg_capture_channel = QComboBox()
+        self.ecg_capture_channel.setToolTip("EMG channel used to detect the R-waves (heartbeats). "
+                                            "Pick the channel with the clearest ECG and weakest EMG "
+                                            "(often the middle channel).")
+        self.remove_ecg = QCheckBox("Remove ECG")
+        self.remove_ecg.setToolTip(_help_tip("processing.emg.remove_ecg",
+                                   "Subtract an averaged ECG template from every EMG channel; off by default."))
+        self.ecg_min_height = QDoubleSpinBox()
+        self.ecg_min_height.setRange(0.0, 1_000_000.0); self.ecg_min_height.setDecimals(6); self.ecg_min_height.setSingleStep(0.0001)
+        self.ecg_min_height.setToolTip(_help_tip("processing.emg.ecg_min_height",
+                                       "Minimum height of an R-wave peak (in signal units) on the capture channel."))
+        self.ecg_min_distance = QDoubleSpinBox()
+        self.ecg_min_distance.setRange(0.05, 2.0); self.ecg_min_distance.setSingleStep(0.05); self.ecg_min_distance.setDecimals(3); self.ecg_min_distance.setSuffix(" s")
+        self.ecg_min_distance.setToolTip(_help_tip("processing.emg.ecg_min_distance_s",
+                                         "Minimum time between heartbeats (the refractory gap)."))
+        self.ecg_min_width = QDoubleSpinBox()
+        self.ecg_min_width.setRange(0.0, 0.1); self.ecg_min_width.setSingleStep(0.001); self.ecg_min_width.setDecimals(4); self.ecg_min_width.setSuffix(" s")
+        self.ecg_min_width.setToolTip(_help_tip("processing.emg.ecg_min_width_s",
+                                      "Minimum width of an R-wave peak."))
+        self.ecg_window = QDoubleSpinBox()
+        self.ecg_window.setRange(0.05, 1.0); self.ecg_window.setSingleStep(0.05); self.ecg_window.setDecimals(3); self.ecg_window.setSuffix(" s")
+        self.ecg_window.setToolTip(_help_tip("processing.emg.ecg_window_s",
+                                   "Width of the ECG template averaged and subtracted around each beat (QRS-T)."))
+        for wdg in (self.remove_ecg,):
+            wdg.toggled.connect(self._on_ecg_param_changed)
+        for wdg in (self.ecg_min_height, self.ecg_min_distance, self.ecg_min_width, self.ecg_window):
+            wdg.valueChanged.connect(self._on_ecg_param_changed)
+        self.ecg_capture_channel.currentIndexChanged.connect(self._on_ecg_param_changed)
+        self.btn_ecg_autosuggest = QPushButton("Auto-suggest settings")
+        self.btn_ecg_autosuggest.setToolTip("Analyse the raw EMG channels: pick the channel with the "
+                                            "clearest ECG and propose settings that capture the R-peaks "
+                                            "and only those.")
+        self.btn_ecg_autosuggest.clicked.connect(self._on_ecg_autosuggest)
+
+        self.ecg_opts = QFrame(); self.ecg_opts.setObjectName("ecgChip")
+        self.ecg_opts.setStyleSheet("#ecgChip { border: 1px solid rgba(128, 128, 128, 0.30); border-radius: 8px; }")
+        row = QHBoxLayout(self.ecg_opts); row.setContentsMargins(11, 3, 11, 3); row.setSpacing(4)
+        row.addWidget(_cap("Capture channel")); row.addSpacing(4); row.addWidget(self.ecg_capture_channel)
+        row.addSpacing(12); row.addWidget(self.remove_ecg)
+        row.addSpacing(10); row.addWidget(_cap("Min height", self.ecg_min_height.toolTip())); row.addWidget(self.ecg_min_height)
+        row.addSpacing(10); row.addWidget(_cap("Min gap", self.ecg_min_distance.toolTip())); row.addWidget(self.ecg_min_distance)
+        row.addSpacing(10); row.addWidget(_cap("Min width", self.ecg_min_width.toolTip())); row.addWidget(self.ecg_min_width)
+        row.addSpacing(10); row.addWidget(_cap("Window", self.ecg_window.toolTip())); row.addWidget(self.ecg_window)
+
+        strip = QHBoxLayout(); strip.setSpacing(10)
+        strip.addWidget(self.ecg_opts); strip.addStretch(1); strip.addWidget(self.btn_ecg_autosuggest)
+        v.addLayout(strip)
+
+        _bg = _plot_pal()["bg"]
+        self.ecg_capture_plot = pg.PlotWidget(); self.ecg_capture_plot.setBackground(_bg)
+        self.ecg_capture_plot.setLabel("bottom", "Time (s)"); self.ecg_capture_plot.setLabel("left", "Capture channel (a.u.)")
+        self.ecg_processed_plots = pg.GraphicsLayoutWidget(); self.ecg_processed_plots.setBackground(_bg)
+        split = QSplitter(Qt.Vertical)
+        split.addWidget(self._titled("Raw capture channel — detected R-peaks (▼)", self.ecg_capture_plot))
+        split.addWidget(self._titled("ECG-processed EMG channels", self.ecg_processed_plots))
+        split.setStretchFactor(0, 1); split.setStretchFactor(1, 3)
+        v.addWidget(split, 1)
+        return w
+
+    def _refresh_ecg_channels(self):
+        """Populate the capture-channel combo; default it to the MIDDLE EMG channel (typically
+        the weakest-EMG / clearest-ECG electrode) when the analysis has not configured ECG yet."""
+        cols = list(self.state.settings.input.channels.emg)
+        e = self.state.settings.processing.emg
+        if len(cols) > 1 and int(e.detect_channel) == 0 and not e.remove_ecg:
+            e.detect_channel = len(cols) // 2         # preview-only seed (golden reads the model directly)
+        self.ecg_capture_channel.blockSignals(True)
+        self.ecg_capture_channel.clear()
+        for c in cols:
+            self.ecg_capture_channel.addItem(f"EMGdi col {c}")
+        if cols:
+            self.ecg_capture_channel.setCurrentIndex(max(0, min(int(e.detect_channel), len(cols) - 1)))
+        self.ecg_capture_channel.blockSignals(False)
+
+    def _load_ecg_params(self):
+        """Reflect the ECG settings into the tab's widgets without firing a recompute."""
+        self._loading_ecg = True
+        try:
+            e = self.state.settings.processing.emg
+            self.remove_ecg.setChecked(bool(e.remove_ecg))
+            self.ecg_min_height.setValue(float(e.ecg_min_height))
+            self.ecg_min_distance.setValue(float(e.ecg_min_distance_s))
+            self.ecg_min_width.setValue(float(e.ecg_min_width_s))
+            self.ecg_window.setValue(float(e.ecg_window_s))
+            cols = list(self.state.settings.input.channels.emg)
+            if cols:
+                self.ecg_capture_channel.setCurrentIndex(max(0, min(int(e.detect_channel), len(cols) - 1)))
+        finally:
+            self._loading_ecg = False
+
+    def _on_ecg_param_changed(self, *_):
+        if self._loading_ecg:
+            return
+        e = self.state.settings.processing.emg
+        e.remove_ecg = self.remove_ecg.isChecked()
+        e.ecg_min_height = float(self.ecg_min_height.value())
+        e.ecg_min_distance_s = float(self.ecg_min_distance.value())
+        e.ecg_min_width_s = float(self.ecg_min_width.value())
+        e.ecg_window_s = float(self.ecg_window.value())
+        e.detect_channel = max(0, self.ecg_capture_channel.currentIndex())
+        # ECG removal feeds the EMG/noise panels too, so recompute those alongside this tab.
+        self._request_autorun({"ecg", "emg_all", "emg_detail", "noise"})
+
+    def _on_ecg_autosuggest(self):
+        """Analyse the raw EMG and fill in the ECG settings (channel + params), then recompute."""
+        path = self._current_file()
+        if not path:
+            self._set_status("Pick a file first, then Auto-suggest can analyse its EMG.")
+            return
+        try:
+            from respmech.ui.workers import stage_raw_emg
+            from respmech.core.emg import suggest_ecg_settings
+            data = stage_raw_emg(self.state.settings, path)
+            matrix = np.column_stack(data["raw"]) if data.get("raw") else np.empty((0, 0))
+            fs = int(self.state.settings.input.format.sampling_frequency or data.get("fs") or 1)
+            sug = suggest_ecg_settings(matrix, fs)
+        except Exception:                              # noqa: BLE001
+            self._set_status(f"Auto-suggest failed — {short_error(traceback.format_exc())}")
+            return
+        e = self.state.settings.processing.emg
+        e.detect_channel = int(sug["detect_channel"])
+        e.ecg_min_height = float(sug["ecg_min_height"])
+        e.ecg_min_distance_s = float(sug["ecg_min_distance_s"])
+        e.ecg_min_width_s = float(sug["ecg_min_width_s"])
+        e.ecg_window_s = float(sug["ecg_window_s"])
+        self._load_ecg_params()                        # reflect into the widgets (guarded)
+        diag = sug.get("_diagnostics", {})
+        cols = list(self.state.settings.input.channels.emg)
+        col = cols[e.detect_channel] if e.detect_channel < len(cols) else e.detect_channel
+        if diag.get("confidence") == "low":
+            self._set_status("Auto-suggest: no clear ECG found — set conservative defaults on the "
+                             f"middle channel (col {col}). Tune the settings and watch the capture.")
+        else:
+            bpm = diag.get("est_bpm")
+            self._set_status(f"Auto-suggest: capture on col {col}"
+                             + (f" (~{bpm:.0f} bpm)" if bpm else "")
+                             + ". Review the ▼ markers and tune if needed.")
+        self._request_autorun({"ecg", "emg_all", "emg_detail", "noise"})
+
+    def _on_ecg_result(self, data):
+        """Render the ECG-reduction tab: the raw capture channel + detected R-peaks, and the
+        ECG-processed channels below — each with the flow background + capture markers."""
+        pal = _plot_pal()
+        t = np.asarray(data["t"])
+        peaks = data.get("peaks", [])
+        self.ecg_capture_plot.clear()
+        self.ecg_capture_plot.plot(t, np.asarray(data["raw_capture"]), pen=_pen(pal["raw_trace"]))
+        add_flow_background(self.ecg_capture_plot.getPlotItem(), t, data.get("flow"), pal)
+        add_ecg_capture_markers(self.ecg_capture_plot.getPlotItem(), peaks, pal)
+        self._limit_x(self.ecg_capture_plot.getPlotItem(), t)
+
+        self.ecg_processed_plots.clear()
+        self._ecg_capture_subplots = []
+        cols = data.get("cols", [])
+        proc = data.get("processed", [])
+        cycle = pal["emg_cycle"]
+        prev = None
+        for i, ch in enumerate(proc):
+            p = self.ecg_processed_plots.addPlot(row=i, col=0)
+            p.showGrid(x=True, y=True, alpha=0.12)
+            p.setLabel("left", f"col {cols[i]}" if i < len(cols) else f"EMG {i + 1}")
+            if _theme is not None:
+                _theme.align_left_axis(p)
+            p.plot(t, np.asarray(ch), pen=_pen(cycle[i % len(cycle)]))
+            add_flow_background(p, t, data.get("flow"), pal)
+            add_ecg_capture_markers(p, peaks, pal)
+            if i == len(proc) - 1:
+                p.setLabel("bottom", "Time (s)")
+            if prev is not None:
+                p.setXLink(prev)
+            prev = p
+            self._limit_x(p, t)
+            self._ecg_capture_subplots.append(p)
+
+        npk = int(np.asarray(peaks).size)
+        col = data.get("detect_col", "?")
+        state = "ECG removed" if data.get("ecg_applied") else "capture preview (removal is OFF for the run)"
+        if data.get("ecg_error"):
+            self._set_status(f"ECG reduction — capture on col {col}: {short_error(data['ecg_error'])}")
+        else:
+            self._set_status(f"ECG reduction — capture on col {col}: {npk} R-peaks · {state}.")
+
     @staticmethod
     def _style_legend(leg):
         """In DARK mode only, give a pyqtgraph legend a near-opaque dark backing and
@@ -779,12 +992,19 @@ class PreviewScreen(QWidget):
 
     # -- EMG tab visibility / channels -------------------------------------
     def _update_emg_tab_visibility(self):
+        """Show the two EMG sub-tabs only when EMG channels exist, in the fixed pipeline order
+        Mechanics(0) › EMG–ECG reduction(1) › EMG–noise reduction(2)."""
         has_emg = bool(self.state.settings.input.channels.emg)
-        idx = self.subtabs.indexOf(self._emg_tab)
-        if has_emg and idx < 0:
-            self.subtabs.addTab(self._emg_tab, "EMG processing")
-        elif not has_emg and idx >= 0:
-            self.subtabs.removeTab(idx)
+        if has_emg:
+            if self.subtabs.indexOf(self._ecg_tab) < 0:
+                self.subtabs.insertTab(1, self._ecg_tab, _TAB_ECG)     # right after Mechanics(0)
+            if self.subtabs.indexOf(self._emg_tab) < 0:
+                self.subtabs.insertTab(2, self._emg_tab, _TAB_NOISE)   # after the ECG tab(1)
+        else:
+            for tab in (self._emg_tab, self._ecg_tab):
+                idx = self.subtabs.indexOf(tab)
+                if idx >= 0:
+                    self.subtabs.removeTab(idx)
 
     def _refresh_emg_channels(self):
         cols = list(self.state.settings.input.channels.emg)
@@ -892,7 +1112,9 @@ class PreviewScreen(QWidget):
 
     def sync_from_settings(self):
         self._refresh_emg_channels()
+        self._refresh_ecg_channels()
         self._load_noise_params()
+        self._load_ecg_params()
         self._update_emg_tab_visibility()
         self._update_actions()
         # Dependency-scoped invalidation: diff the settings against the last-synced snapshot
@@ -1023,6 +1245,7 @@ class PreviewScreen(QWidget):
         self.plots.clear(); self._channel_plots = []
         self.table.setRowCount(0); self.table.setColumnCount(0)
         self.campbell.figure.clear(); self.campbell.draw()
+        self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []
         self.emg_raw_plots.clear()
         self.emg_plots.clear()
         self.emg_psd_canvas.figure.clear(); self.emg_psd_canvas.draw()
@@ -1052,6 +1275,7 @@ class PreviewScreen(QWidget):
         self.plots.clear(); self._channel_plots = []
         self.table.setRowCount(0); self.table.setColumnCount(0)
         self.campbell.figure.clear(); self.campbell.draw()
+        self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []
         self.emg_raw_plots.clear()
         self.emg_plots.clear()
         self.emg_psd_canvas.figure.clear(); self.emg_psd_canvas.draw()
@@ -1102,6 +1326,11 @@ class PreviewScreen(QWidget):
         worker = None
         if kind == "mech":
             worker = FnWorker(stage_mechanics_preview, snap, path)
+        elif kind == "ecg":
+            if not has_emg:
+                self._clear_panel_overlays(*_PANELS[kind])   # gated out -> drop a stale spinner/card
+                return
+            worker = FnWorker(stage_ecg_reduction, snap, path)
         elif kind == "batch":
             ok, _ = self._settings_ok()
             if not ok:
