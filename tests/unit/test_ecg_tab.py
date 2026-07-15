@@ -61,6 +61,26 @@ def test_ecg_render_draws_flow_and_capture_on_every_channel(qapp, tmp_path):
     assert _CAPTURE_Z not in [it.zValue() for it in pv.ecg_capture_plot.getPlotItem().listDataItems()]
 
 
+def test_noise_strip_stays_compact_across_tab_switches(qapp, tmp_path):
+    """Regression: with three sub-tabs the noise-strip aligner fires on every tab switch,
+    including while the noise tab is not laid out. Keyed off the chip's live height it fed
+    the button's min-height back into the strip row and let the chip balloon a little more
+    each switch — once to ~247 px, ~55% of the tab, crushing the plots into a bottom band.
+    Now keyed off sizeHint + a Maximum vertical policy, so it stays compact and idempotent."""
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    win = _win(s); pv = win.preview_screen
+    win.resize(1400, 900); win.show(); qapp.processEvents()
+    for _ in range(3):                                    # exercise the aligner repeatedly
+        for i in range(pv.subtabs.count()):
+            pv.subtabs.setCurrentIndex(i); qapp.processEvents()
+    idx = pv.subtabs.indexOf(pv._emg_tab); pv.subtabs.setCurrentIndex(idx)
+    for _ in range(4):
+        qapp.processEvents()
+    assert pv.btn_set_noise.minimumHeight() < 100         # compact — not the ~247 runaway
+    assert pv.noise_opts.height() < 100
+    win.close()
+
+
 def test_autosuggest_writes_settings_and_selects_channel(qapp, tmp_path, monkeypatch):
     from respmech.core import emg as emglib
     s = synth_settings(str(tmp_path), remove_ecg=False, data_out=_DATA_OUT)
