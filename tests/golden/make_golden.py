@@ -27,7 +27,7 @@ import pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-RESPMECH_PY = os.path.join(REPO_ROOT, "respmech.py")
+RESPMECH_PY = os.path.join(REPO_ROOT, "legacy", "respmech.py")   # frozen v1 oracle (legacy/README.md)
 INPUT_DIR = os.path.join(HERE, "input")
 WORK_DIR = os.path.join(HERE, "_work")           # transient output (gitignored)
 GOLDEN_JSON = os.path.join(HERE, "golden_reference.json")

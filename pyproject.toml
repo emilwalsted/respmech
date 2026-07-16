@@ -51,7 +51,7 @@ Repository = "https://github.com/emilwalsted/respmech"
 packages = ["src/respmech"]
 
 [tool.pytest.ini_options]
-# src/ before cwd so the package wins over the legacy root respmech.py.
+# The package lives under src/ (the v1 monolith is frozen in legacy/, not importable).
 pythonpath = ["src"]
 addopts = "--import-mode=importlib"
 
