@@ -52,22 +52,13 @@ class SettingsScreen(QWidget):
     # -- UI construction ----------------------------------------------------
     def _build(self):
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(11, 11, 11, 11)   # one shared inset for action bar + form + QC strip
+        outer.setContentsMargins(11, 11, 11, 11)   # one shared inset for the form + QC strip
 
-        # Action bar stays pinned above the scroll area so it is always reachable.
-        # "Analysis" is the user-facing name for a settings file (never "TOML"); "Open
-        # analysis…" accepts both a saved .toml analysis and a legacy .py setup, routed
-        # by file extension.
-        bar = QHBoxLayout()
-        for label, slot in (("New analysis", self._new_analysis),
-                            ("Open analysis…", self._open_analysis_dialog),
-                            ("Save analysis…", self._save),
-                            ("Validate", self._validate)):
-            b = QPushButton(label)
-            b.clicked.connect(slot)
-            bar.addWidget(b)
-        bar.addStretch(1)
-        outer.addLayout(bar)
+        # New/Open/Save are NOT here: opening and saving an analysis are window-level
+        # actions rather than part of the Setup step, so they live in the header's Analysis
+        # menu and stay reachable from every tab (see main_window._make_header). There is no
+        # Validate button either — every edit re-validates (see _update_disclosure) and
+        # reports into the window's status bar.
 
         # The long vertical form lives inside a scroll area so every section is
         # reachable on small screens. setWidgetResizable(True) keeps the content
@@ -142,8 +133,10 @@ class SettingsScreen(QWidget):
         fp = QFormLayout(gpr)
         fp.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
         self.seg_method = QComboBox()
+        self.seg_method.setProperty("formField", "compact")   # (theme.py)
         self.seg_method.addItem("Flow", "flow"); self.seg_method.addItem("Volume", "volume")
         self.wob_from = QComboBox()
+        self.wob_from.setProperty("formField", "compact")
         self.wob_from.addItem("Average", "average"); self.wob_from.addItem("Individual", "individual")
         self.integrate = QCheckBox("Calculate volume from flow")
         self._row(fp, "Signal used to split breaths", self.seg_method, "processing.segmentation.method",
@@ -162,6 +155,7 @@ class SettingsScreen(QWidget):
         self.correct_drift = QCheckBox("Correct volume drift")
         self.correct_trend = QCheckBox("Correct end-expiratory trend")
         self.trend_method = QComboBox()
+        self.trend_method.setProperty("formField", "compact")
         for _lbl, _tok in (("Linear", "linear"), ("Nearest", "nearest"), ("Cubic", "cubic"),
                            ("Quadratic", "quadratic"), ("Previous", "previous"), ("Next", "next")):
             self.trend_method.addItem(_lbl, _tok)
@@ -206,6 +200,7 @@ class SettingsScreen(QWidget):
         self._row(fe, "EMG RMS outlier limit", self.emg_outlier_sd, "processing.emg.outlier_rms_sd_limit",
                   "Replace any breath's EMG RMS value lying more than this many standard deviations from the across-breath mean; 0 = off (default).")
         self.emg_norm = QComboBox()
+        self.emg_norm.setProperty("formField", "wide")   # its choices are sentences, not words
         for _label, _token in (("None — raw amplitude", "none"),
                                ("Per-file maximum (% of peak breath)", "per_file_max"),
                                ("Per-file mean (% of mean breath)", "per_file_mean")):
@@ -334,12 +329,14 @@ class SettingsScreen(QWidget):
         self._row(fa, "Noise STFT window (n_fft)", self.noise_nfft, "processing.emg.noise.n_fft",
                   "FFT window length (samples) for the spectral noise gate; a power of two.")
         self.matlab_variant = QComboBox()
+        self.matlab_variant.setProperty("formField", "compact")   # share the spin boxes' column (theme.py)
         self.matlab_variant.addItem("MATLAB (Windows)", "windows")
         self.matlab_variant.addItem("MATLAB (Unix/Mac)", "mac")
         self._row(fa, "MATLAB file variant", self.matlab_variant, "input.format.matlab_variant",
                   "Variant/byte-order for .mat input files (ignored for CSV/Excel/text).")
         # one entry per line (not comma-separated) so filenames containing a comma survive
         self.breath_counts_edit = QPlainTextEdit()
+        self.breath_counts_edit.setProperty("formField", "wide")   # holds 'filename = count' lines (theme.py)
         self.breath_counts_edit.setPlaceholderText("one 'filename = count' per line")
         self.breath_counts_edit.setFixedHeight(64)
         self._row(fa, "Breath-count overrides", self.breath_counts_edit, "processing.breath_counts",
@@ -360,7 +357,7 @@ class SettingsScreen(QWidget):
         outer.addWidget(scroll, 1)
 
         # Live QC strip, pinned below the (scrolling) form: every current caution at a
-        # glance, so a first-timer sees them without ever clicking Validate.
+        # glance, so a first-timer sees them the moment they appear.
         self.qc = QLabel("")
         self.qc.setWordWrap(True)
         self.qc.setContentsMargins(2, 2, 2, 2)
@@ -856,8 +853,8 @@ class SettingsScreen(QWidget):
             self._report_error("Explore sample data", traceback.format_exc())
             return False
 
-    def _new_analysis(self):
-        """Action-bar 'New analysis': discard the current settings for a fresh set and
+    def new_analysis(self):
+        """Analysis > 'New analysis': discard the current settings for a fresh set and
         re-enter the guided flow. Only confirm when there are REAL unsaved edits, so the
         warning means something instead of training the user to click through it."""
         if self._dirty and QMessageBox.question(
@@ -871,7 +868,9 @@ class SettingsScreen(QWidget):
         self.enter_new_mode()       # emits inputs/settings_changed then sets guided status
         self._mark_clean()          # a fresh analysis has no unsaved edits yet
 
-    def _open_analysis_dialog(self):
+    def open_analysis_dialog(self):
+        """Analysis > 'Open analysis…': pick a saved .toml analysis or a legacy .py setup
+        (routed by extension). "Analysis" is the user-facing name — never "TOML"."""
         p, _ = QFileDialog.getOpenFileName(self, "Open analysis", ".", OPEN_FILTER)
         if p:
             self.open_analysis(p)
@@ -1038,6 +1037,7 @@ class SettingsScreen(QWidget):
         if self._mode != "new":
             self._apply_card_visibility()
             self._set_flow_ready(True)
+            self._set_status(self._validation_status())   # no Validate button: every edit re-checks
             return
         n_visible = 1
         for gate in self._stage_gate:
@@ -1169,8 +1169,8 @@ class SettingsScreen(QWidget):
 
     def _science_note(self):
         """A non-fatal science caution about the current settings, or '' — surfaced both by
-        Validate and at the end of the guided flow so a first-timer sees it without clicking
-        Validate. Covers EMG columns overlapping a pressure channel and a low EMG sample rate."""
+        the live verdict and at the end of the guided flow. Covers EMG columns overlapping a
+        pressure channel and a low EMG sample rate."""
         s = self.state.settings
         ch = s.input.channels
         clash = [n for n, c in (("flow", ch.flow), ("poes", ch.poes),
@@ -1209,11 +1209,13 @@ class SettingsScreen(QWidget):
             st.unpolish(self.qc); st.polish(self.qc)
 
     def _show_validation_status(self):
-        """Run validation for its status line (used on open); never raises."""
-        try:
-            self._validate()
-        except Exception:                           # noqa: BLE001 — status is cosmetic
-            pass
+        """Reconcile the form back into state, then report the validation verdict (used on
+        open). from_state() CLAMPS values the widgets cannot represent (e.g. a missing
+        sampling frequency shows as 2000, an unknown interpolation token shows as the first
+        entry); to_state() persists those so what the batch worker runs matches what the form
+        shows. Only called on open, so this is not on the per-keystroke path."""
+        self.to_state()
+        self._set_status(self._validation_status())
 
     # -- actions ------------------------------------------------------------
     def _resync_form(self):
@@ -1260,7 +1262,8 @@ class SettingsScreen(QWidget):
         self.settings_changed.emit()
         return True
 
-    def _save(self):
+    def save_analysis(self):
+        """Analysis > 'Save analysis…': write the current settings to a .toml analysis."""
         from respmech.ui import prefs  # noqa: PLC0415
         self.to_state()
         p, _ = QFileDialog.getSaveFileName(
@@ -1304,24 +1307,25 @@ class SettingsScreen(QWidget):
         self.settings_changed.emit()
         return True
 
-    def _validate(self):
-        self.to_state()
+    def _validation_status(self):
+        """The current settings' validation verdict, as one status-bar sentence.
+
+        Runs on every edit (there is no Validate button), so it must never raise and never
+        pop a dialog — an unexpected fault degrades to a message like any other verdict.
+        """
         try:
             self.state.settings.validate()
         except SettingsError as e:
-            self._set_status(f"Invalid: {e}")
-            return
-        except Exception:                       # noqa: BLE001 — unexpected: show a copyable trace
-            self._report_error("Validate settings", traceback.format_exc())
-            return
+            return f"Invalid: {e}"
+        except Exception:                       # noqa: BLE001 — never let a fault break typing
+            return f"Could not validate: {short_error(traceback.format_exc())}"
         # path checks (the core validate() is filesystem-agnostic)
         problem = self._path_problem()
         if problem:
-            self._set_status(f"Invalid: {problem}")
-            return
+            return f"Invalid: {problem}"
         # non-fatal science guardrails (shared with the guided-flow completion status)
         note = self._science_note()
-        self._set_status(f"Valid, but check: {note}." if note else "Settings valid ✓")
+        return f"Valid, but check: {note}." if note else "Settings valid ✓"
 
     def _path_problem(self):
         """Return a human message for the first invalid path, or None if all OK.

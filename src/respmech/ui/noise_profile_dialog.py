@@ -58,11 +58,14 @@ class NoiseProfileDialog(QDialog):
         self._moved = False                # did the pointer move far enough to count as a drag?
         self._press_x = None
         self._press_px = None              # press point in viewport pixels (click vs drag test)
+        self._sel_before_press = None      # selection as it was at the last press, so a double-
+                                           # click (whose leading click clears it) can restore it
         self._label_plot = None            # the plot the cursor label currently lives on
 
         v = QVBoxLayout(self)
         hint = QLabel("Hover to read the time; click-drag over a quiet (EMG-free) span to "
-                      "mark the rest region on all channels. Click once to clear it.")
+                      "mark the rest region on all channels. Click once to clear it. "
+                      "Scroll to zoom the time axis (all channels together); double-click to reset.")
         hint.setProperty("status", "muted"); hint.setWordWrap(True)
         v.addWidget(hint)
 
@@ -86,7 +89,12 @@ class NoiseProfileDialog(QDialog):
             if i == n - 1:
                 p.setLabel("bottom", "Time (s)")
             vb = p.getViewBox()
-            vb.setMouseEnabled(x=False, y=False)   # our drag marks a region, it does not pan
+            # Wheel-zoom the TIME axis only. y stays fixed: the channels have wildly different
+            # scales (col 2 is ±0.5, col 3 is ±500), so a shared y zoom would be meaningless —
+            # whereas x is already linked below, so zooming any channel zooms them ALL together.
+            # Left-drag still marks the rest region: eventFilter() consumes those events before
+            # the ViewBox can pan on them.
+            vb.setMouseEnabled(x=True, y=False)
             vb.setMenuEnabled(False)
             if prev is not None:
                 p.setXLink(prev)
@@ -138,6 +146,10 @@ class NoiseProfileDialog(QDialog):
 
     # -- interaction --------------------------------------------------------
     def eventFilter(self, obj, ev):
+        # The left button belongs to the REGION picker, the wheel belongs to the ViewBox's
+        # x zoom. Returning True on the left-button events stops them reaching the ViewBox,
+        # which would otherwise pan the view under the very drag that marks the region
+        # (mouse-x is enabled for the wheel). Wheel/other events fall through untouched.
         if obj is self.glw.viewport() and self._plots:
             try:
                 et = ev.type()
@@ -146,15 +158,34 @@ class NoiseProfileDialog(QDialog):
                     self._press_x = self._clamp(self._scene_x(self._press_px))
                     self._dragging = True
                     self._moved = False
+                    self._sel_before_press = self._selection   # so a double-click can restore it
+                    return True
                 elif et == QEvent.MouseMove:
                     self._on_move(ev.position().toPoint())
+                    if self._dragging:
+                        return True
                 elif et == QEvent.MouseButtonRelease and ev.button() == Qt.LeftButton:
                     self._on_release(ev.position().toPoint())
+                    return True
+                elif et == QEvent.MouseButtonDblClick and ev.button() == Qt.LeftButton:
+                    self._reset_zoom()                 # double-click anywhere -> whole recording
+                    # Qt delivers a double-click as Press-Release-DblClick-Release, so the
+                    # leading Release already ran _on_release -> _clear_selection. Put the
+                    # user's marked region back: resetting the view must not lose it.
+                    if self._sel_before_press is not None:
+                        self._set_selection(*self._sel_before_press)
+                    return True
                 elif et == QEvent.Leave:
                     self._hide_cursor()
             except Exception:                          # noqa: BLE001 — interaction is cosmetic
                 pass
         return super().eventFilter(obj, ev)
+
+    def _reset_zoom(self):
+        """Back to the whole recording. The plots are x-linked, so setting one resets all."""
+        if not self._plots or not self._t.size:
+            return
+        self._plots[0].getViewBox().setXRange(float(self._t[0]), float(self._t[-1]), padding=0)
 
     def _on_move(self, view_pos):
         x = self._clamp(self._scene_x(view_pos))

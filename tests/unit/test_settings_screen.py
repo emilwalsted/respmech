@@ -60,10 +60,10 @@ def test_new_analysis_only_confirms_when_dirty(qapp, monkeypatch):
     calls = []
     monkeypatch.setattr(ss.QMessageBox, "question",
                         staticmethod(lambda *a, **k: calls.append(1) or ss.QMessageBox.Yes))
-    sc._new_analysis()                                   # not dirty -> no confirmation
+    sc.new_analysis()                                   # not dirty -> no confirmation
     assert calls == []
     sc.samp_freq.setValue(999); sc._on_field_changed()   # now dirty
-    sc._new_analysis()
+    sc.new_analysis()
     assert calls == [1]                                  # confirmed exactly once
     win.close()
 
@@ -153,4 +153,74 @@ def test_advanced_panel_roundtrips_toml_only_knobs(qapp, tmp_path):
     assert out.processing.segmentation.buffer == 900 and out.processing.entropy.epochs == 4
     assert out.input.format.matlab_variant == "mac"
     assert [(e.file, e.count) for e in out.processing.breath_counts] == [("x.txt", 5), ("y.txt", 9)]
+    win.close()
+
+
+def test_form_fields_are_bounded_and_never_elide(qapp, tmp_path):
+    """Fusion's QFormLayout grows every uncapped field to the whole form width, so these
+    combos/text areas stretched the entire window (1433px at a 1700px window) while their
+    spin-box siblings sat in a tidy column. Each must stay bounded AND still fit its own
+    longest content — a cap that elides the text trades one bug for another.
+
+    This also guards the stylesheet itself: a QSS syntax error makes Qt silently drop the
+    WHOLE sheet, which un-caps every field here.
+    """
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(str(tmp_path))))
+    sc = win.settings_screen
+    win.resize(1700, 950); win.show(); qapp.processEvents()
+    column = sc.seg_buffer.width()                       # the QSS-capped numeric column
+    for w in (sc.seg_method, sc.wob_from, sc.trend_method, sc.matlab_variant,
+              sc.emg_norm, sc.breath_counts_edit):
+        assert w.width() < win.width() / 3, f"{w} stretched to {w.width()}"
+        assert w.width() >= w.sizeHint().width(), f"{w} elides its own text"
+    # word-length choices share the spin column exactly; sentence-length ones get more room
+    for w in (sc.seg_method, sc.wob_from, sc.trend_method, sc.matlab_variant):
+        assert w.width() == column
+    for w in (sc.emg_norm, sc.breath_counts_edit):
+        assert column < w.width() <= 2.5 * column
+    win.close()
+
+
+def test_open_reconciles_clamped_form_values_into_state(qapp, tmp_path):
+    """from_state() clamps values the widgets cannot represent (a 0/None sampling frequency
+    shows as 2000, an unknown token falls back to the first entry). Opening an analysis must
+    persist those clamps back into state.settings — the batch worker runs a deep copy of
+    state.settings, so a divergence there means it runs values the form never showed."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    s.input.format.sampling_frequency = 0            # the spin box (min 1) cannot show 0
+    win = MainWindow(AppState(s))
+    sc = win.settings_screen
+    assert sc.samp_freq.value() == 2000              # from_state clamped it on construction...
+    assert sc.state.settings.input.format.sampling_frequency == 0   # ...but state still diverges
+    sc.enter_open_mode()                             # the open path must reconcile the two
+    assert sc.state.settings.input.format.sampling_frequency == 2000
+    win.close()
+
+
+def test_every_edit_revalidates_into_the_status_bar(qapp, tmp_path):
+    """There is no Validate button any more: each edit re-runs validation and reports the
+    verdict, so a problem surfaces where the user made it rather than on a later click."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(str(tmp_path))))
+    sc = win.settings_screen
+    sc.samp_freq.setValue(1234)                       # a valid edit
+    assert sc.status.text() == "Settings valid ✓"
+    sc.in_folder.setText(str(tmp_path / "nope"))      # a filesystem problem
+    sc._on_inputs_changed()
+    assert "Invalid:" in sc.status.text() and "input folder" in sc.status.text()
+    win.close()
+
+
+def test_run_lock_covers_the_header_analysis_menu(qapp, tmp_path):
+    """The run lock exists so a running worker's settings can't be swapped out from under
+    it. The Analysis menu (New/Open/Save) sits in the header, OUTSIDE the locked screen,
+    so it has to be disabled alongside it."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(str(tmp_path))))
+    win._on_run_started()
+    assert not win.settings_screen.isEnabled() and not win.analysis_btn.isEnabled()
+    win._on_run_finished()
+    assert win.settings_screen.isEnabled() and win.analysis_btn.isEnabled()
     win.close()

@@ -2,7 +2,7 @@
 
 The core ``Settings.validate()`` is deliberately filesystem-agnostic; this adds the
 path checks (folders exist, files match, noise reference present) that both the
-Settings "Validate" action and the Run screen need, so the two stay consistent.
+Settings screen's live validation and the Run screen need, so the two stay consistent.
 Qt-free.
 """
 from __future__ import annotations
