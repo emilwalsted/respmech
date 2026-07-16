@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QSpinBox, QVBoxLayout, QWidget)
 from PySide6.QtCore import Signal, QTimer
 
-from respmech.core.settings import Settings, SettingsError
+from respmech.core.settings import BreathCountEntry, Settings, SettingsError
 from respmech.ui.dialogs import open_error_dialog, short_error
 from respmech.ui.help_text import tooltip as _tip
 from respmech.ui.startup_dialog import OPEN_FILTER
@@ -174,6 +174,10 @@ class SettingsScreen(QWidget):
                         "Resample every recording to a common frequency before analysis; off by default.")
         self._row(fp, "Resample to", self.resample_hz, "processing.sampling.resample_to_frequency",
                   "Target sampling frequency (Hz) used when 'Resample before analysis' is on.")
+        _rshint = QLabel("Keep ≥ ~1000 Hz when EMG channels are present — a low rate discards EMG "
+                         "energy and degrades RMS / entropy / noise reduction.")
+        _rshint.setWordWrap(True); _rshint.setProperty("status", "muted")
+        fp.addRow("", _rshint)
         root.addWidget(gpr)
 
         # EMG — RMS envelope -----------------------------------------------
@@ -280,6 +284,53 @@ class SettingsScreen(QWidget):
         fsv.addRow("You will get", self.save_preview)
         root.addWidget(gsave)
 
+        # --- Advanced (rarely changed): knobs that were previously TOML-only (audit #16/17/22-26)
+        gadv = QGroupBox("Advanced (rarely changed)")
+        fa = QFormLayout(gadv)
+        self.seg_buffer = QSpinBox(); self.seg_buffer.setRange(0, 100_000)
+        self._row(fa, "Breath-separation buffer", self.seg_buffer, "processing.segmentation.buffer",
+                  "Guard samples added around each detected breath boundary during segmentation.")
+        self.peak_height = QDoubleSpinBox(); self.peak_height.setRange(0.0, 1_000_000.0)
+        self.peak_height.setDecimals(4); self.peak_height.setSingleStep(0.01)
+        self._row(fa, "Breath peak — min height", self.peak_height, "processing.segmentation.peak.height",
+                  "Minimum peak height for breath detection (used for volume-based separation).")
+        self.peak_distance = QDoubleSpinBox(); self.peak_distance.setRange(0.0, 60.0)
+        self.peak_distance.setDecimals(3); self.peak_distance.setSingleStep(0.05); self.peak_distance.setSuffix(" s")
+        self._row(fa, "Breath peak — min distance", self.peak_distance, "processing.segmentation.peak.distance_s",
+                  "Minimum time between detected breath peaks.")
+        self.peak_width = QDoubleSpinBox(); self.peak_width.setRange(0.0, 60.0)
+        self.peak_width.setDecimals(3); self.peak_width.setSingleStep(0.05); self.peak_width.setSuffix(" s")
+        self._row(fa, "Breath peak — min width", self.peak_width, "processing.segmentation.peak.width_s",
+                  "Minimum width of a detected breath peak.")
+        self.avg_resamp = QSpinBox(); self.avg_resamp.setRange(10, 100_000)
+        self._row(fa, "Average-breath resampling points", self.avg_resamp, "processing.wob.avg_resampling_obs",
+                  "Points each breath is resampled to when building the average breath / WOB.")
+        self.ptp_baseline = QDoubleSpinBox(); self.ptp_baseline.setRange(0.0, 1.0)
+        self.ptp_baseline.setDecimals(3); self.ptp_baseline.setSingleStep(0.01); self.ptp_baseline.setSuffix(" s")
+        self._row(fa, "PTP baseline window", self.ptp_baseline, "processing.ptp.baseline_window_s",
+                  "End-expiratory window whose mean is the pressure-time-product baseline.")
+        self.ent_epochs = QSpinBox(); self.ent_epochs.setRange(1, 100)
+        self._row(fa, "Entropy — embedding (m)", self.ent_epochs, "processing.entropy.epochs",
+                  "Embedding dimension (m) for sample entropy.")
+        self.ent_tol = QDoubleSpinBox(); self.ent_tol.setRange(0.0, 10.0)
+        self.ent_tol.setDecimals(3); self.ent_tol.setSingleStep(0.05)
+        self._row(fa, "Entropy — tolerance (r)", self.ent_tol, "processing.entropy.tolerance",
+                  "Matching tolerance (r) for sample entropy.")
+        self.noise_nfft = QSpinBox(); self.noise_nfft.setRange(16, 8192)
+        self._row(fa, "Noise STFT window (n_fft)", self.noise_nfft, "processing.emg.noise.n_fft",
+                  "FFT window length (samples) for the spectral noise gate; a power of two.")
+        self.matlab_variant = QComboBox()
+        self.matlab_variant.addItem("MATLAB (Windows)", "windows")
+        self.matlab_variant.addItem("MATLAB (Unix/Mac)", "mac")
+        self._row(fa, "MATLAB file variant", self.matlab_variant, "input.format.matlab_variant",
+                  "Variant/byte-order for .mat input files (ignored for CSV/Excel/text).")
+        self.breath_counts_edit = QLineEdit()
+        self.breath_counts_edit.setPlaceholderText("filename=count, filename=count")
+        self._row(fa, "Breath-count overrides", self.breath_counts_edit, "processing.breath_counts",
+                  "Per-file override of the breath count used for per-minute rate scaling, e.g. "
+                  "'RIU_H5_40W.txt=12'. Leave blank to use each file's detected breath count.")
+        root.addWidget(gadv)
+
         # Status text is shown in the window's bottom status bar (see main_window). This
         # label is kept only as a hidden text holder mirroring that message — showing it
         # inline too would duplicate the same sentence on screen.
@@ -307,7 +358,7 @@ class SettingsScreen(QWidget):
         self._stage_cards = [
             [gin],                                   # 0: Input (always shown)
             [gout],                                  # 1: Output (after Input is valid)
-            [gch, gpr, gemg, gecg, gns, gsave],      # 2: the rest (after Output is valid)
+            [gch, gpr, gemg, gecg, gns, gsave, gadv], # 2: the rest (after Output is valid)
         ]
         self._stage_gate = [self._input_stage_ok, self._output_stage_ok]
         self._mode = "full"          # "full" = every card+tab visible (default/open); "new" = guided
@@ -421,6 +472,21 @@ class SettingsScreen(QWidget):
             self.noise_ref.setText(n.reference_file or "")
             self.noise_use_exp.setChecked(n.use_expiration)
             self.out_folder.setText(s.output.folder)
+            # Advanced (rarely changed)
+            seg, peak = s.processing.segmentation, s.processing.segmentation.peak
+            self.seg_buffer.setValue(seg.buffer)
+            self.peak_height.setValue(peak.height)
+            self.peak_distance.setValue(peak.distance_s)
+            self.peak_width.setValue(peak.width_s)
+            self.avg_resamp.setValue(s.processing.wob.avg_resampling_obs)
+            self.ptp_baseline.setValue(s.processing.ptp.baseline_window_s)
+            self.ent_epochs.setValue(s.processing.entropy.epochs)
+            self.ent_tol.setValue(s.processing.entropy.tolerance)
+            self.noise_nfft.setValue(n.n_fft)
+            _mi = self.matlab_variant.findData(s.input.format.matlab_variant)
+            self.matlab_variant.setCurrentIndex(_mi if _mi >= 0 else 0)
+            self.breath_counts_edit.setText(
+                ", ".join(f"{e.file}={e.count}" for e in s.processing.breath_counts))
             self._sync_widgets()
         finally:
             self._loading = prev
@@ -476,6 +542,30 @@ class SettingsScreen(QWidget):
         n.reference_file = self.noise_ref.text().strip() or None
         n.use_expiration = self.noise_use_exp.isChecked()
         s.output.folder = self.out_folder.text()
+        # Advanced (rarely changed)
+        s.processing.segmentation.buffer = self.seg_buffer.value()
+        s.processing.segmentation.peak.height = self.peak_height.value()
+        s.processing.segmentation.peak.distance_s = self.peak_distance.value()
+        s.processing.segmentation.peak.width_s = self.peak_width.value()
+        s.processing.wob.avg_resampling_obs = self.avg_resamp.value()
+        s.processing.ptp.baseline_window_s = self.ptp_baseline.value()
+        s.processing.entropy.epochs = self.ent_epochs.value()
+        s.processing.entropy.tolerance = self.ent_tol.value()
+        n.n_fft = self.noise_nfft.value()
+        s.input.format.matlab_variant = self.matlab_variant.currentData()
+        bcs = []
+        for part in self.breath_counts_edit.text().split(","):
+            part = part.strip()
+            if not part or "=" not in part:
+                continue
+            fpart, _, cpart = part.rpartition("=")
+            try:
+                cnt = int(cpart.strip())
+            except ValueError:
+                continue
+            if fpart.strip():
+                bcs.append(BreathCountEntry(fpart.strip(), cnt))
+        s.processing.breath_counts = bcs
         if self.on_settings_changed:
             self.on_settings_changed()
         return s
@@ -535,16 +625,20 @@ class SettingsScreen(QWidget):
         self.in_folder.editingFinished.connect(self._on_inputs_changed)
         self.in_files.editingFinished.connect(self._on_inputs_changed)
         self.cols_emg.editingFinished.connect(self._on_emg_cols_changed)
-        for le in (self.cols_entropy, self.out_folder, self.noise_ref, self.group_regex):
+        for le in (self.cols_entropy, self.out_folder, self.noise_ref, self.group_regex,
+                   self.breath_counts_edit):
             le.editingFinished.connect(self._on_field_changed)
         for sb in (self.samp_freq, self.col_flow, self.col_volume, self.col_poes,
-                   self.col_pgas, self.col_pdi, self.resample_hz):
+                   self.col_pgas, self.col_pdi, self.resample_hz,
+                   self.seg_buffer, self.avg_resamp, self.ent_epochs, self.noise_nfft):
             sb.valueChanged.connect(self._on_field_changed)
-        for dsb in (self.emg_rms_window, self.emg_outlier_sd):
+        for dsb in (self.emg_rms_window, self.emg_outlier_sd, self.peak_height,
+                    self.peak_distance, self.peak_width, self.ptp_baseline, self.ent_tol):
             dsb.valueChanged.connect(self._on_field_changed)
         for cb in (self.seg_method, self.wob_from, self.trend_method):
             cb.currentTextChanged.connect(self._on_field_changed)
         self.emg_norm.currentIndexChanged.connect(self._on_field_changed)
+        self.matlab_variant.currentIndexChanged.connect(self._on_field_changed)
         for chk in (self.integrate, self.remove_noise, self.noise_use_exp,
                     self.correct_drift, self.correct_trend, self.inverse_flow, self.inverse_volume,
                     self.resample, self.save_average, self.save_bbb, self.save_processed,
