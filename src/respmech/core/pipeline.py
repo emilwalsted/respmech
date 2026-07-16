@@ -76,6 +76,68 @@ def _emit(cb: Optional[ProgressCallback], event: ProgressEvent):
         cb(event)
 
 
+# --- pre-analysis resampling (all channels -> one common rate) ---------------
+# Gated on ``processing.sampling.resample``; default OFF ⇒ byte-identical (golden-safe).
+# One common rate keeps a single time base, so breath segmentation (on flow) and the
+# EMG sliced by the same sample indices stay consistent. See the resampling-revival note.
+
+def _resample_channels(data, fs_in, fs_out):
+    """Anti-aliased polyphase resample of every loaded channel from fs_in to fs_out.
+    ``data`` is the 7-tuple returned by ``load``; 1-D signals and the 2-D entropy/EMG
+    matrices are all resampled along the time axis (0)."""
+    from scipy import signal as _sig
+    g = np.gcd(int(fs_out), int(fs_in))
+    up, down = int(fs_out) // g, int(fs_in) // g
+
+    def rs(x):
+        if x is None:
+            return x
+        arr = np.asarray(x, dtype=float)
+        if arr.size == 0:
+            return arr
+        return _sig.resample_poly(arr, up, down, axis=0)
+
+    flow, volume, poes, pgas, pdi, ent, emg = data
+    return (rs(flow), rs(volume), rs(poes), rs(pgas), rs(pdi),
+            rs(ent) if len(ent) else ent, rs(emg) if len(emg) else emg)
+
+
+def _load(path, s):
+    """Load a file, then (only when a pre-analysis resample is active) resample every
+    channel from the file's true rate to the analysis rate. ``load`` integrates volume
+    from flow using ``samplingfrequency`` (loaders.py), so the load itself must run at
+    the true file rate; the value is temporarily restored for the load call, then left
+    at the analysis rate for all downstream compute."""
+    fs_out = int(s.input.format.samplingfrequency)
+    fs_in = int(getattr(s.input.format, "samplingfrequency_in", fs_out))
+    if fs_in == fs_out:
+        return load(path, s)
+    saved = s.input.format.samplingfrequency
+    s.input.format.samplingfrequency = fs_in
+    try:
+        data = load(path, s)
+    finally:
+        s.input.format.samplingfrequency = saved
+    return _resample_channels(data, fs_in, fs_out)
+
+
+def _coupled_stft(cfg, fs_in, fs_out):
+    """Scale the noise STFT window to preserve its TIME extent at the new rate: n_fft
+    means a different duration at a different sample rate, so a 128 ms window authored at
+    2000 Hz would collapse to a handful of samples after downsampling. n_fft/win are kept
+    powers of two; hop scales with them. Returns (n_fft, hop_length, win_length)."""
+    ratio = fs_out / fs_in
+
+    def _pow2(n):
+        n = max(8, int(round(n)))
+        return 1 << (n - 1).bit_length()
+
+    n_fft = _pow2(cfg.n_fft * ratio)
+    win_length = _pow2(cfg.win_length * ratio)
+    hop_length = max(1, int(round(cfg.hop_length * ratio)))
+    return n_fft, hop_length, win_length
+
+
 def _ecg_remove(s, emgcolumnsraw, cancel_check=None):
     """Run ECG removal on the (full, untrimmed) raw EMG. Returns (emgcols, diag) where
     diag reports R-peak count and peak-window RMS suppression on the detect channel,
@@ -125,7 +187,7 @@ def _emg_segmented(path, s, cancel_check=None):
     """Load a file, ECG-remove + trim its EMG, and segment breaths (by flow).
     Returns (emg_ecg_trimmed, insp_mask, exp_mask). Used to build the noise
     reference (expiration) and to gather active/quiet EMG for prop selection."""
-    flow, vol, poes, pgas, pdi, ent, emg = load(path, s)
+    flow, vol, poes, pgas, pdi, ent, emg = _load(path, s)
     tc = np.arange(len(flow)) / s.input.format.samplingfrequency
     tcT, fT, vT, pT, gT, dT, _e, si, ei = compute.trim(
         tc, flow, vol, poes, pgas, pdi, np.array(emg) if len(emg) else np.array([]), s)
@@ -155,23 +217,26 @@ def _reference_noise_clip(settings, s, cancel_check=None):
         emg_full, ins, ex = _emg_segmented(path, s, cancel_check=cancel_check)
         clip = emg_full[ex]   # diaphragm-quiet expiration of the rest reference
     else:
-        flow, vol, poes, pgas, pdi, ent, emg = load(path, s)
+        flow, vol, poes, pgas, pdi, ent, emg = _load(path, s)
         emg_ecg = _ecg_remove_trim(s, emg, 0, len(emg), cancel_check=cancel_check)  # full length (no trim)
         parts = [emg_ecg[int(t0 * fs):int(t1 * fs)] for t0, t1 in ns_cfg.reference_intervals]
         clip = np.concatenate(parts, axis=0)
     return clip
 
 
-def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=None):
+def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=None, stft=None):
     from respmech.core import noise as noiselib
     cfg = settings.processing.emg.noise
+    # ``stft`` (n_fft, hop, win) overrides the configured window when a pre-analysis
+    # resample is active, so the spectral gate keeps a fixed TIME window at the new rate.
+    n_fft, hop_length, win_length = stft if stft is not None else (cfg.n_fft, cfg.hop_length, cfg.win_length)
     # ``clip`` lets the PREVIEW pass a shared/cached reference clip; batch/CLI pass None
     # (default) and build it here exactly as before — byte-identical for the golden path.
     if clip is None:
         clip = _reference_noise_clip(settings, s, cancel_check=cancel_check)
     profiles = noiselib.build_profiles(
-        clip, s.input.format.samplingfrequency, n_fft=cfg.n_fft, hop_length=cfg.hop_length,
-        win_length=cfg.win_length, n_std_thresh=cfg.n_std_thresh,
+        clip, s.input.format.samplingfrequency, n_fft=n_fft, hop_length=hop_length,
+        win_length=win_length, n_std_thresh=cfg.n_std_thresh,
         n_grad_freq=cfg.n_grad_freq, n_grad_time=cfg.n_grad_time, cancel_check=cancel_check)
 
     if cfg.auto_prop:
@@ -238,6 +303,18 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
     settings.validate()
     s = to_legacy_ns(settings)
 
+    # Pre-analysis resample: fix the analysis rate up front so the shared noise profile
+    # AND every per-file load/compute use the same (possibly resampled) rate. Default OFF
+    # (fs_out == fs_in) ⇒ _load is a pass-through and the run is byte-identical.
+    fs_in = int(s.input.format.samplingfrequency)
+    stft_override = None
+    if settings.processing.sampling.resample:
+        fs_out = int(settings.processing.sampling.resample_to_frequency)
+        if fs_out > 0 and fs_out != fs_in:
+            s.input.format.samplingfrequency = fs_out          # analysis rate for all downstream
+            s.input.format.samplingfrequency_in = fs_in        # true file rate, read by _load
+            stft_override = _coupled_stft(settings.processing.emg.noise, fs_in, fs_out)
+
     allfiles = match_input_files(s.input.inputfolder, s.input.files)   # the full test (defines the shared profile)
     files = [f for f in allfiles if only_files is None or os.path.basename(f) in set(only_files)]
     if len(files) == 0:
@@ -254,7 +331,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
     noise_set = None
     if settings.processing.emg.noise.enabled and len(s.input.data.columns_emg) > 0:
         _emit(progress, ProgressEvent("stage", message="building shared noise profile"))
-        noise_set, result.noise_report = _build_noise_set(settings, s, allfiles, progress)
+        noise_set, result.noise_report = _build_noise_set(settings, s, allfiles, progress, stft=stft_override)
 
     for fi in files:
         if cancel_check is not None and cancel_check():
@@ -264,7 +341,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
         filename = os.path.basename(file)
         _emit(progress, ProgressEvent("file_start", file=filename, message="loading"))
         try:
-            flowraw, volumeraw, poesraw, pgasraw, pdiraw, entropycolumnsraw, emgcolumnsraw = load(file, s)
+            flowraw, volumeraw, poesraw, pgasraw, pdiraw, entropycolumnsraw, emgcolumnsraw = _load(file, s)
             timecolraw = np.arange(0, len(flowraw), dtype=int) / s.input.format.samplingfrequency
 
             _emit(progress, ProgressEvent("stage", file=filename, message="trimming"))
