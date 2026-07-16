@@ -25,11 +25,30 @@
 #   Cloud (SimplySign): CERTUM_STORETYPE=PKCS11 CERTUM_PKCS11_CFG=~/certum-pkcs11.cfg \
 #                       CERTUM_PIN=... CERTUM_ALIAS=... scripts/sign-msi-certum.sh v2.1.1
 #
+# NOTE: this script signs the MSI attached to a GitHub RELEASE (it downloads the asset and
+# re-uploads the signed one), so it needs a tag. To sign a LOCAL msi — e.g. an artifact from
+# a `workflow_dispatch` build with no tag — call jsign directly with the same flags. With the
+# SimplySign session logged in, neither --alias nor --storepass is needed:
+#
+#   jsign --storetype PKCS11 --keystore ~/certum-pkcs11.cfg \
+#         --tsaurl http://time.certum.pl/ --alg SHA-256 RespMech-<version>.msi
+#   osslsigncode verify RespMech-<version>.msi     # must show a "Timestamp time:" line
+#
+# --tsaurl is NOT optional in practice: without it the signature carries no RFC-3161
+# timestamp and dies when the certificate expires (osslsigncode then says
+# "Timestamp is not available"). Add --replace to re-sign an already-signed file.
+#
 # ENV (all optional except where noted):
 #   REPO               GitHub repo           (default: emilwalsted/respmech)
 #   CERTUM_STORETYPE   CRYPTOCERTUM | PKCS11 (default: CRYPTOCERTUM — the physical card)
-#   CERTUM_ALIAS       key/cert alias on the card/token (run `jsign` once to see the list)
-#   CERTUM_PIN         card / SimplySign PIN (else you'll be prompted, if the tool allows)
+#   CERTUM_ALIAS       key/cert alias on the card/token. USUALLY UNNECESSARY: with a single
+#                      key on the token jsign just uses it. (jsign is NOT a listing tool —
+#                      running it without --alias does not print the aliases, it goes ahead
+#                      and SIGNS. To list them: keytool -list -keystore NONE -storetype
+#                      PKCS11 -providerClass sun.security.pkcs11.SunPKCS11 -providerArg <cfg>)
+#   CERTUM_PIN         card / SimplySign PIN. Also usually unnecessary for PKCS11: while the
+#                      SimplySign Desktop session is logged in, the token is already unlocked
+#                      and jsign signs without prompting.
 #   CERTUM_PKCS11_CFG  PKCS11 config file (PKCS11 storetype only; points at the SimplySign
 #                      cryptoki .dylib — see the SimplySign Desktop install)
 #   CERTUM_TSA         RFC-3161 timestamp URL (default: http://time.certum.pl/)
