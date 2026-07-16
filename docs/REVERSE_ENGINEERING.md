@@ -5,9 +5,9 @@ _Phase 1 documentation for the production refactor. Describes the **current**
 physiological calculation (formula, units, assumptions). This is the reference a
 reviewer uses to confirm the refactor preserves behaviour._
 
-Source files analysed: [`respmech.py`](../respmech.py) (1660 lines),
-[`emg.py`](../emg.py) (585), [`entropy.py`](../entropy.py) (329),
-[`example.py`](../example.py), [`README.md`](../README.md).
+Source files analysed (v1.0.0, now frozen under [`legacy/`](../legacy/README.md)):
+[`respmech.py`](../legacy/respmech.py) (1660 lines), [`emg.py`](../legacy/emg.py) (585),
+[`entropy.py`](../legacy/entropy.py) (329), [`example.py`](../legacy/example.py).
 
 ---
 
