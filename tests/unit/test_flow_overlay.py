@@ -162,3 +162,21 @@ def test_stage_ecg_reduction_shape_and_peaks(qapp, tmp_path):
     pc.clear_all()
     d2 = stage_ecg_reduction(s2, os.path.join(INPUT, "synth_case_A.csv"))
     assert d2["ecg_applied"] is False and len(d2["processed"]) == nch
+
+
+def test_mechanics_preview_applies_trend_correction_like_batch(qapp, tmp_path):
+    """audit #11: the mechanics preview applied only drift, never trend — so with
+    correct_trend on it diverged from the batch. It must now match the batch volume."""
+    from respmech.core import pipeline
+    from respmech.ui.workers import stage_mechanics_preview
+    s = synth_settings(str(tmp_path), data_out=_DATA_OUT)
+    s.processing.volume.correct_trend = True
+    path = os.path.join(INPUT, "synth_case_A.csv")
+    prev = np.asarray(stage_mechanics_preview(s, path)["series"]["volume"], float)
+    fr = pipeline.run_batch(s, only_files=["synth_case_A.csv"]).ok_files["synth_case_A.csv"]
+    batch = np.asarray(fr.signals["vol_final"], float)
+    n = min(len(prev), len(batch))
+    assert np.allclose(prev[:n], batch[:n], atol=1e-9)          # preview == batch (trend applied)
+    s2 = synth_settings(str(tmp_path), data_out=_DATA_OUT)      # trend OFF
+    prev2 = np.asarray(stage_mechanics_preview(s2, path)["series"]["volume"], float)
+    assert not np.allclose(prev[:n], prev2[:n])                 # trend actually changed the volume

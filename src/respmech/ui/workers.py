@@ -697,6 +697,8 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
 
     volc = (compute.correctdrift(compute.zero(volT), s)
             if s.processing.mechanics.correctvolumedrift else compute.zero(volT))
+    if s.processing.mechanics.correctvolumetrend:      # match the batch pipeline (audit #11)
+        volc = compute.correcttrend(volc, s)
     breaths = compute.separateintobreaths(
         s.processing.mechanics.separateby, name, tcT, flowT,
         volc, poesT, pgasT, pdiT, [], [], s)
