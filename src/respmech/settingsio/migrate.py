@@ -257,6 +257,7 @@ def migrate_dict(legacy: dict) -> tuple[Settings, MigrationReport]:
             "save_raw": odiag.get("savedataviewraw", True),
             "save_trimmed": odiag.get("savedataviewtrimmed", True),
             "save_drift": odiag.get("savedataviewdriftcor", True),
+            "save_emg": odiag.get("saveemgoverview", True),
         },
     }
     m("output.outputfolder->output.folder; output.data.*->save_*; "

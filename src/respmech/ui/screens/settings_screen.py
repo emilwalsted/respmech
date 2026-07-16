@@ -248,6 +248,7 @@ class SettingsScreen(QWidget):
         self.save_raw_fig = QCheckBox("Raw-signal figures")
         self.save_trimmed_fig = QCheckBox("Trimmed-signal figures")
         self.save_drift_fig = QCheckBox("Drift-correction figures")
+        self.save_emg_fig = QCheckBox("EMG channel overviews")
         _lt = QLabel("Tables"); _lt.setProperty("status", "muted"); fsv.addRow(_lt)
         for cb, var, tip in (
                 (self.save_average, "output.data.save_average", "The across-breath average workbook."),
@@ -263,7 +264,10 @@ class SettingsScreen(QWidget):
                 (self.save_pv_ind, "output.diagnostics.save_pv_individual", "A Campbell diagram per individual breath."),
                 (self.save_raw_fig, "output.diagnostics.save_raw", "Raw-signal diagnostic figures."),
                 (self.save_trimmed_fig, "output.diagnostics.save_trimmed", "Trimmed-signal diagnostic figures."),
-                (self.save_drift_fig, "output.diagnostics.save_drift", "Drift-correction diagnostic figures.")):
+                (self.save_drift_fig, "output.diagnostics.save_drift", "Drift-correction diagnostic figures."),
+                (self.save_emg_fig, "output.diagnostics.save_emg",
+                 "Per-channel EMG overview figures (raw / ECG-removed / noise-reduced) with the flow "
+                 "reference and R-peak capture markers.")):
             self._check_row(fsv, cb, var, tip)
         _lg = QLabel("Cohort summary"); _lg.setProperty("status", "muted"); fsv.addRow(_lg)
         self.group_regex = QLineEdit()
@@ -402,6 +406,7 @@ class SettingsScreen(QWidget):
             self.save_raw_fig.setChecked(dg.save_raw)
             self.save_trimmed_fig.setChecked(dg.save_trimmed)
             self.save_drift_fig.setChecked(dg.save_drift)
+            self.save_emg_fig.setChecked(getattr(dg, "save_emg", True))
             self.group_regex.setText(s.output.group_regex or "")
 
             emg, n = s.processing.emg, s.processing.emg.noise
@@ -455,6 +460,7 @@ class SettingsScreen(QWidget):
         dg.save_raw = self.save_raw_fig.isChecked()
         dg.save_trimmed = self.save_trimmed_fig.isChecked()
         dg.save_drift = self.save_drift_fig.isChecked()
+        dg.save_emg = self.save_emg_fig.isChecked()
         s.output.group_regex = self.group_regex.text().strip() or None
 
         emg, n = s.processing.emg, s.processing.emg.noise
@@ -518,7 +524,7 @@ class SettingsScreen(QWidget):
         if self.save_processed.isChecked():
             got.append("processed CSV")
         figs = sum(cb.isChecked() for cb in (self.save_pv_avg, self.save_pv_ind,
-                   self.save_raw_fig, self.save_trimmed_fig, self.save_drift_fig))
+                   self.save_raw_fig, self.save_trimmed_fig, self.save_drift_fig, self.save_emg_fig))
         if figs:
             got.append(f"{figs} diagnostic-figure set{'s' if figs != 1 else ''}")
         got.append("run report + settings snapshot")                  # P7, always written
@@ -543,7 +549,7 @@ class SettingsScreen(QWidget):
                     self.correct_drift, self.correct_trend, self.inverse_flow, self.inverse_volume,
                     self.resample, self.save_average, self.save_bbb, self.save_processed,
                     self.include_ignored, self.save_pv_avg, self.save_pv_ind, self.save_raw_fig,
-                    self.save_trimmed_fig, self.save_drift_fig):
+                    self.save_trimmed_fig, self.save_drift_fig, self.save_emg_fig):
             chk.toggled.connect(self._on_field_changed)
 
     def _on_field_changed(self, *_):

@@ -120,11 +120,12 @@ def test_figures_written_and_flag_driven(tmp_path):
     s.output.diagnostics.save_raw = False
     s.output.diagnostics.save_trimmed = False
     s.output.diagnostics.save_drift = False
+    s.output.diagnostics.save_emg = False
     result = run_batch(s)
     written, failures = plots.write_figures(result, s, str(tmp_path))
     assert not failures
     names = [os.path.basename(p) for p in written]
-    assert all(n.endswith("PV loops (average).png") for n in names)   # only the enabled figure
+    assert all(n.endswith("Campbell (average).pdf") for n in names)   # only the enabled figure, as PDF
     assert len(names) == len(result.ok_files)
     for p in written:
         assert os.path.getsize(p) > 0
@@ -136,14 +137,52 @@ def test_drift_figure_renders_from_volume_endpoints(tmp_path):
     from respmech.core.pipeline import run_batch
     from respmech.core import plots
     s = synth_settings(tmp_path)
-    for flag in ("save_pv_average", "save_pv_individual", "save_raw", "save_trimmed"):
+    for flag in ("save_pv_average", "save_pv_individual", "save_raw", "save_trimmed", "save_emg"):
         setattr(s.output.diagnostics, flag, False)
     s.output.diagnostics.save_drift = True
     result = run_batch(s)
     written, failures = plots.write_figures(result, s, str(tmp_path))
     assert not failures                                  # no swallowed ValueError
-    assert written and all(p.endswith("drift.png") for p in written)
-    assert len(written) == len(result.ok_files)
+    # save_drift now drives the staged volume-correction figure AND the endpoint check;
+    # trend adjustment is off here, so its figure is skipped.
+    assert written and all(p.endswith(".pdf") for p in written)
+    assert any(p.endswith("volume endpoints.pdf") for p in written)   # the eelv/eilv endpoint figure
+    assert any(p.endswith("volume correction.pdf") for p in written)
+
+
+def test_emg_figures_wav_cohort_and_metrics(tmp_path):
+    """Restored EMG overviews (one per conditioning stage), WAV export, the cohort
+    average-Campbell, and the persisted ECG/noise diagnostics (audit #1/#10/#14/#15)."""
+    from respmech.core.pipeline import run_batch
+    from respmech.core import plots
+    from respmech.core.io.writers import _write_run_report
+    s = synth_settings(tmp_path, noise=True)             # ECG removal + shared-profile noise
+    s.processing.emg.save_sound = True
+    result = run_batch(s)
+    written, failures = plots.write_figures(result, s, str(tmp_path))
+    assert not failures
+    names = [os.path.basename(p) for p in written]
+    for stage in ("Raw EMG", "EMG (ECG removed)", "EMG (ECG removed + noise reduced)"):
+        assert any(stage in n and n.endswith(".pdf") for n in names), f"missing EMG {stage} figure"
+    assert any(n.endswith(".wav") for n in names)                    # WAV export
+    assert any("All files" in n and n.endswith(".pdf") for n in names)   # cohort Campbell
+    rp = _write_run_report(result, s, str(tmp_path), written, None)
+    txt = open(rp, encoding="utf-8").read()
+    assert "DIAGNOSTICS" in txt and "prop_decrease" in txt and "R-peaks" in txt
+
+
+def test_save_emg_flag_gates_emg_figures(tmp_path):
+    from respmech.core.pipeline import run_batch
+    from respmech.core import plots
+    s = synth_settings(tmp_path, remove_ecg=True)
+    for flag in ("save_pv_average", "save_pv_individual", "save_raw", "save_trimmed", "save_drift"):
+        setattr(s.output.diagnostics, flag, False)
+    s.output.diagnostics.save_emg = True
+    written, _ = plots.write_figures(run_batch(s), s, str(tmp_path))
+    assert written and all("EMG" in os.path.basename(p) for p in written)
+    s.output.diagnostics.save_emg = False
+    written2, _ = plots.write_figures(run_batch(s), s, str(tmp_path))
+    assert written2 == []                                            # nothing when all off
 
 
 # --------------------------------------------------------------------------- #

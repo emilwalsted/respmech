@@ -202,6 +202,7 @@ class DiagnosticsOutput:
     save_raw: bool = True
     save_trimmed: bool = True
     save_drift: bool = True
+    save_emg: bool = True                # per-channel EMG overviews (raw / ECG-removed / noise-reduced)
 
 
 @dataclass

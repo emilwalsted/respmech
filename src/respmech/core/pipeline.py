@@ -53,6 +53,7 @@ class FileResult:
     processed: object = None           # processed-data DataFrame or None
     breaths: object = None             # raw computed breaths (for plotting)
     ecg: object = None                 # ECG-removal diagnostics (n_peaks, suppression)
+    signals: object = None             # diagnostic signal arrays for the plotting/audio consumer
     error: Optional[str] = None
 
 
@@ -138,6 +139,15 @@ def _coupled_stft(cfg, fs_in, fs_out):
     return n_fft, hop_length, win_length
 
 
+def _diag_wanted(settings) -> bool:
+    """True when any diagnostic figure or the WAV export is enabled — i.e. when the
+    per-file diagnostic signal arrays need to be retained on the FileResult."""
+    dg = settings.output.diagnostics
+    return bool(dg.save_pv_average or dg.save_pv_individual or dg.save_raw or dg.save_trimmed
+                or dg.save_drift or getattr(dg, "save_emg", False)
+                or settings.processing.emg.save_sound)
+
+
 def _ecg_remove(s, emgcolumnsraw, cancel_check=None):
     """Run ECG removal on the (full, untrimmed) raw EMG. Returns (emgcols, diag) where
     diag reports R-peak count and peak-window RMS suppression on the detect channel,
@@ -163,7 +173,8 @@ def _ecg_remove(s, emgcolumnsraw, cancel_check=None):
     after = emglib.peak_window_rms(np.array(emgcols[:, detect], dtype=float), peaks_samp, fs)
     supp = (1.0 - after / before) if (before and before == before) else float("nan")
     diag = {"n_peaks": int(len(peaks_samp)), "detect_channel": int(detect),
-            "peak_rms_before": before, "peak_rms_after": after, "suppression": supp}
+            "peak_rms_before": before, "peak_rms_after": after, "suppression": supp,
+            "peaks_s": np.asarray(peaks_s, dtype=float)}   # R-peak times (untrimmed), for the EMG figure
     return emgcols, diag
 
 
@@ -175,12 +186,20 @@ def _ecg_remove_trim(s, emgcolumnsraw, startix, endix, cancel_check=None):
 
 def _process_emg(s, emgcolumnsraw, startix, endix, noise_set=None):
     """ECG removal -> trim -> shared-profile noise reduction (applied identically to
-    every file when ``noise_set`` is provided). Returns (emgcols, ecg_diag)."""
-    emgcols, ecg_diag = _ecg_remove(s, emgcolumnsraw)
-    emgcols = emgcols[startix:endix]
+    every file when ``noise_set`` is provided). Returns (emgcols, ecg_diag, stages) where
+    ``stages`` holds the trimmed EMG at each conditioning step (raw / ECG-removed /
+    noise-reduced) for the diagnostic figures — ``None`` for a step that did not run.
+    The returned ``emgcols`` is byte-identical to the previous behaviour."""
+    raw_trim = np.asarray(emgcolumnsraw, dtype=float)[startix:endix]
+    emgcols_ecg, ecg_diag = _ecg_remove(s, emgcolumnsraw)
+    ecg_trim = np.asarray(emgcols_ecg, dtype=float)[startix:endix]
+    emgcols = ecg_trim
     if noise_set is not None:
-        emgcols = noise_set.apply_columns(emgcols)
-    return emgcols, ecg_diag
+        emgcols = noise_set.apply_columns(ecg_trim)
+    stages = {"raw": raw_trim,
+              "ecg_removed": ecg_trim if s.processing.emg.remove_ecg else None,
+              "noise_reduced": emgcols if noise_set is not None else None}
+    return emgcols, ecg_diag, stages
 
 
 def _emg_segmented(path, s, cancel_check=None):
@@ -354,11 +373,13 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
 
             emgcolumns = []
             ecg_diag = None
+            emg_stages = None
             if len(emgcolumnsraw) > 0:
                 _emit(progress, ProgressEvent("stage", file=filename, message="processing EMG"))
-                emgcolumns, ecg_diag = _process_emg(s, emgcolumnsraw, startix, endix, noise_set)
+                emgcolumns, ecg_diag, emg_stages = _process_emg(s, emgcolumnsraw, startix, endix, noise_set)
 
             _emit(progress, ProgressEvent("stage", file=filename, message="volume correction"))
+            vol_uncorrected = volume                                  # trimmed, pre-zero
             zerovol = compute.zero(volume)
             driftvol = compute.correctdrift(zerovol, s) if s.processing.mechanics.correctvolumedrift else zerovol
             volume = compute.correcttrend(driftvol, s) if s.processing.mechanics.correctvolumetrend else driftvol
@@ -393,9 +414,34 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
             if s.output.data.saveprocesseddata:
                 processed = build_processed_data(breaths, s)
 
+            # Retain the diagnostic signal arrays for the plotting/audio consumer (only when
+            # a figure or WAV export could need them). Never touches the result DataFrames.
+            signals = None
+            if _diag_wanted(settings):
+                fs = s.input.format.samplingfrequency
+                # timecol (and breath["time"]) run in ABSOLUTE seconds starting at startix/fs,
+                # so the R-peak capture times stay absolute too — just clip to the trimmed window.
+                emg_peaks = np.asarray(ecg_diag["peaks_s"], float) if ecg_diag else np.array([])
+                if emg_peaks.size:
+                    emg_peaks = emg_peaks[(emg_peaks >= startix / fs) & (emg_peaks <= endix / fs)]
+                signals = {
+                    "fs": float(fs),
+                    "time": np.asarray(timecol, float), "flow": np.asarray(flow, float),
+                    "vol_uncorrected": np.asarray(vol_uncorrected, float),
+                    "vol_zeroed": np.asarray(zerovol, float),
+                    "vol_drift": np.asarray(driftvol, float), "vol_final": np.asarray(volume, float),
+                    "drift_on": bool(s.processing.mechanics.correctvolumedrift),
+                    "trend_on": bool(s.processing.mechanics.correctvolumetrend),
+                    "raw_time": np.asarray(timecolraw, float), "raw_flow": np.asarray(flowraw, float),
+                    "raw_volume": np.asarray(volumeraw, float), "raw_poes": np.asarray(poesraw, float),
+                    "raw_pgas": np.asarray(pgasraw, float), "raw_pdi": np.asarray(pdiraw, float),
+                    "emg_stages": emg_stages, "emg_peaks": emg_peaks,
+                    "emg_cols": list(s.input.data.columns_emg),
+                }
+
             result.files[filename] = FileResult(
                 file=filename, breaths_table=breaths_table, average_row=average_row,
-                processed=processed, breaths=breaths, ecg=ecg_diag)
+                processed=processed, breaths=breaths, ecg=ecg_diag, signals=signals)
             average_rows.append(average_row)
             _emit(progress, ProgressEvent("file_done", file=filename, message=f"{total} breaths"))
 
