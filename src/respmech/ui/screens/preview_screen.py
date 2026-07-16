@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QSizePolicy, QSplitter, QTableWidget, QTableWidgetItem,
                                QTabWidget, QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt, QEvent, QThread, QTimer, Signal
+from PySide6.QtGui import QFont
 
 import pyqtgraph as pg
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -1692,19 +1693,56 @@ class PreviewScreen(QWidget):
         except Exception:                        # noqa: BLE001 — cosmetic
             pass
 
-    def _label_headroom(self, plot, frac=0.22):
+    def _breath_text(self, num, ignored):
+        """A breath-number TextItem, sized for the SHORT stacked mechanics channel plots
+        (~46 px of data area each): at the 13 pt app font the box is 23 px, so the headroom
+        needed to show it swallows half the plot.
+
+        Both steps matter, and the second is the one that counts: the default box is 23 px
+        almost entirely because QTextDocument adds a 4 px margin on every side — setting a
+        smaller font ALONE leaves it at 23 px. Font 9 pt + documentMargin 0 gives ~15 px."""
+        txt = pg.TextItem(self._breath_label(num),
+                          color=self._breath_label_color(ignored), anchor=(0.5, 1.0))
+        f = QFont(); f.setPointSizeF(9.0)
+        txt.setFont(f)
+        txt.textItem.document().setDocumentMargin(0)
+        txt.updateTextPos()
+        return txt
+
+    @staticmethod
+    def _label_px(texts, default=25.0, margin=4.0):
+        """The tallest breath label's rendered height in pixels (+ a little breathing room),
+        measured rather than assumed — a TextItem is taller than its font size."""
+        try:
+            h = max(t.boundingRect().height() for t in (texts.values() if hasattr(texts, "values") else texts))
+            return float(h) + margin if h > 0 else default + margin
+        except Exception:                        # noqa: BLE001 — cosmetic
+            return default + margin
+
+    def _label_headroom(self, plot, label_px=25.0, frac=0.22):
         """Expand the label-carrying plot's y range upward so breath labels sit clearly
         above the signal — the short mechanics channel plots would otherwise clip them.
         Re-fits y to the DATA first so repeated repaints of a persistent plot (detail /
-        result) don't compound the headroom."""
+        result) don't compound the headroom.
+
+        The headroom is sized in PIXELS, not as a fraction of the data span: a TextItem is
+        a fixed pixel height whatever the scale, so a fixed fraction clips it on a short
+        plot (five stacked mechanics channels leave each ~70 px, where 22% ≈ 15 px — less
+        than the label). Solving ``new_span = span + label_px * new_span / height_px`` for
+        the exact expansion makes the label occupy ``label_px`` at the top at any height;
+        ``frac`` is only the fallback when the plot has no laid-out height yet."""
         try:
             vb = plot.getViewBox()
             vb.enableAutoRange(y=True)           # snap y back to the data extent…
             vb.updateAutoRange()                 # …(not the previous, already-expanded view)
             (x0, x1), (y0, y1) = vb.viewRange()
             span = y1 - y0
-            if span > 0:
-                vb.setYRange(y0, y1 + frac * span, padding=0)   # (this disables y auto again)
+            if span <= 0:
+                return
+            h_px = float(vb.height() or 0.0)
+            extra = (span * (label_px / (h_px - label_px))
+                     if h_px > label_px + 6 else frac * span)
+            vb.setYRange(y0, y1 + extra, padding=0)   # (this disables y auto again)
         except Exception:                        # noqa: BLE001 — cosmetic
             pass
 
@@ -1728,13 +1766,13 @@ class PreviewScreen(QWidget):
                 self._breath_regions[n].append(reg)
                 plot.addLine(x=t0, pen=pg.mkPen(sep, width=1, style=Qt.DashLine))
             if self._channel_plots:
-                txt = pg.TextItem(self._breath_label(n),
-                                  color=self._breath_label_color(ignored), anchor=(0.5, 1.0))
+                txt = self._breath_text(n, ignored)
                 txt.setPos((t0 + t1) / 2.0, label_y)
                 self._channel_plots[0].addItem(txt)
                 self._breath_texts[n] = txt
         if self._channel_plots and self._breath_texts:
-            self._label_headroom(self._channel_plots[0])   # keep the labels above the signal
+            # size the headroom from the label's REAL rendered height, not a guess
+            self._label_headroom(self._channel_plots[0], label_px=self._label_px(self._breath_texts))
 
     def _breath_at(self, t):
         for n, (t0, t1) in self._breath_spans.items():
@@ -1868,12 +1906,11 @@ class PreviewScreen(QWidget):
                 items.append((p, reg)); reg_map.setdefault(num, []).append(reg)
                 line = p.addLine(x=a, pen=pg.mkPen(sep, width=1, style=Qt.DashLine))
                 items.append((p, line))
-            txt = pg.TextItem(self._breath_label(num),
-                              color=self._breath_label_color(ignored), anchor=(0.5, 1.0))
+            txt = self._breath_text(num, ignored)
             txt.setPos((a + b) / 2.0, label_y)
             plot_items[0].addItem(txt)
             items.append((plot_items[0], txt)); txt_map[num] = txt
-        self._label_headroom(plot_items[0])       # keep the labels above the signal
+        self._label_headroom(plot_items[0], label_px=self._label_px(txt_map))   # labels above the signal
 
     def _repaint_view_breaths(self, view):
         """Repaint one EMG view IF it has rendered real data (label_y sentinel set)."""
