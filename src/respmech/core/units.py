@@ -66,10 +66,6 @@ def unit_for(column: str) -> str:
     return ""
 
 
-def units_row(columns) -> list[str]:
-    """Units aligned to ``columns`` (for a second header row / a Units sheet)."""
-    return [unit_for(c) for c in columns]
-
 
 def units_map(columns) -> dict[str, str]:
     """{column: unit} keeping only the columns that resolved to a real unit."""

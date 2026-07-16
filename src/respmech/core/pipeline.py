@@ -5,7 +5,7 @@ This is the seam that makes the CLI and the Qt GUI share one engine: the core em
 :class:`ProgressEvent` objects (via a callback); the CLI prints them, the GUI turns
 them into Qt signals. The core performs **no file writing and no plotting** — those
 are consumers of the returned results (see ``respmech.core.io.writers`` and
-``respmech.plots``).
+``respmech.core.plots``).
 
 Bug fixes applied here vs legacy ``analyse`` (documented):
 * #1 the always-on EMG diagnostic plot (which crashed on excluded breaths) is not in
