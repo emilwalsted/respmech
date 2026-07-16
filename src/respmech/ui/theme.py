@@ -482,6 +482,13 @@ QPushButton[compact="true"] {
     font-weight: 600;
 }
 
+/* ---- glyph-only stepper buttons (◀ ▶): the default 16px side padding is
+       wider than the button itself, which clips the arrow away entirely ---- */
+QPushButton[nav="true"] {
+    padding: 6px 0;
+    min-width: 0;
+}
+
 /* ---- numeric fields: keep them tidy, not full-width ------------------ */
 QAbstractSpinBox { max-width: 150px; }
 
