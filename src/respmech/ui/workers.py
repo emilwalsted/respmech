@@ -116,7 +116,6 @@ def _load_and_condition(settings: Settings, s, file_path: str, cancel_check=None
     ``(raw[n,nch], conditioned[n,nch], ecg_applied, ecg_error)`` so a caller that mutates
     the conditioned matrix in place (the per-channel noise apply) cannot corrupt the
     cached entry."""
-    import os as _os  # noqa: PLC0415
     from respmech.ui.screens import _preview_cache as _pc
 
     def _compute():

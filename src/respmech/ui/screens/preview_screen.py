@@ -42,9 +42,6 @@ import pyqtgraph as pg
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
-from respmech.core.io.loaders import load  # noqa: F401 (re-exported for tests/back-compat)
-from respmech.core.pipeline import run_batch
-from respmech.core._legacy_ns import to_legacy_ns  # noqa: F401 (back-compat import)
 from respmech.core.settings import ExcludeEntry
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip

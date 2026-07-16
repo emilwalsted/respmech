@@ -21,8 +21,6 @@ Public API:
     apply_theme(app)        -> str   # applies palette + QSS; returns "light"/"dark"
     style_pyqtgraph()               # global pyqtgraph config (no-op if absent)
     style_matplotlib()              # scientific rcParams (no-op if absent)
-    set_status(label, kind)         # toggle a QLabel status variant + repolish
-    apply_plot_style(plot_item)     # optional per-plot pyqtgraph grid/axis helper
     PALETTE, ACCENT, OK, WARN, ERROR, MUTED, INFO   # semantic colour constants
 """
 from __future__ import annotations
@@ -111,10 +109,6 @@ _PLOT_DARK = {
 
 # Whether the most-recently-applied theme is the dark variant (drives the plots).
 _IS_DARK = False
-
-# Back-compat aliases (historical constants) — the light plot ground/foreground.
-PG_BACKGROUND = _PLOT_LIGHT["bg"]
-PG_FOREGROUND = _PLOT_LIGHT["fg"]
 
 
 def plot_palette() -> dict:
@@ -567,7 +561,6 @@ def apply_theme(app) -> str:
 
         # Comfortable base font size without forcing a (possibly missing) family.
         try:
-            from PySide6.QtGui import QFont  # noqa: F401,PLC0415
             f = app.font()
             if f.pointSizeF() > 0:
                 f.setPointSizeF(max(f.pointSizeF(), 10.5))
@@ -618,34 +611,6 @@ def style_pyqtgraph() -> None:
                 pg.setConfigOption(key, val)
             except Exception:
                 pass
-
-
-def apply_plot_style(plot_item, grid_alpha: float = 0.12) -> None:
-    """Optional helper: give a pyqtgraph ``PlotItem`` a subtle grid and quiet
-    axes consistent with the theme. Screens may call this per plot. Never raises."""
-    fg = (_PLOT_DARK if _IS_DARK else _PLOT_LIGHT)["fg"]
-    try:
-        plot_item.showGrid(x=True, y=True, alpha=grid_alpha)
-        for edge in ("left", "bottom", "right", "top"):
-            try:
-                ax = plot_item.getAxis(edge)
-                if ax is not None:
-                    ax.setPen(fg)
-                    ax.setTextPen(fg)
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-
-def plot_pen(width: int = 1):
-    """Return a pyqtgraph pen in the accent colour (or ``None`` if pyqtgraph is
-    unavailable) so channel traces share the theme's accent."""
-    try:
-        import pyqtgraph as pg  # noqa: PLC0415
-        return pg.mkPen(ACCENT, width=width)
-    except Exception:
-        return None
 
 
 def style_matplotlib() -> None:
@@ -719,16 +684,6 @@ def _repolish(widget) -> None:
     except Exception:
         pass
 
-
-def set_status(label, kind: str = "muted") -> None:
-    """Set a ``QLabel``'s status variant (``"info"``/``"ok"``/``"warn"``/
-    ``"error"``/``"muted"``) and re-polish so the new QSS takes effect. Passing
-    ``None`` or ``""`` clears the variant back to a plain label. Never raises."""
-    try:
-        label.setProperty("status", kind or "")
-        _repolish(label)
-    except Exception:
-        pass
 
 
 def make_primary(button) -> None:

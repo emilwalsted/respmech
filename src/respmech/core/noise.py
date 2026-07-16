@@ -20,7 +20,6 @@ import warnings
 from dataclasses import dataclass, field
 
 import numpy as np
-import scipy as sp
 from scipy import signal as _sig
 
 from respmech.core.emg import _amp_to_db, _db_to_amp, _stft, _istft
@@ -31,7 +30,6 @@ DEFAULT_N_FFT = 256
 DEFAULT_HOP = 64
 DEFAULT_WIN = 256
 DEFAULT_N_STD = 1.0
-DEFAULT_PROP = 0.6
 DEFAULT_FIDELITY_TARGET = 0.8
 EMG_BAND = (20.0, 250.0)
 

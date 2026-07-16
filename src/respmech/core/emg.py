@@ -2,7 +2,7 @@
 
 Faithful port of the validated legacy ``emg.py`` compute functions:
 RMS + integrated EMG, ECG removal (averaged-template subtraction) and spectral
-noise reduction. Plotting/sound export live elsewhere (``respmech.plots``).
+noise reduction. Plotting/sound export live elsewhere (``respmech.core.plots``).
 
 One deliberate, documented change vs legacy ``master``:
 * ``scipy.integrate.simpson`` is called with the keyword ``x=`` (positional ``x`` is

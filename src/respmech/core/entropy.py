@@ -2,7 +2,6 @@
 
 from __future__ import unicode_literals
 
-import itertools
 import numpy as np
 from math import factorial
 
@@ -31,36 +30,6 @@ def _embed(x, order=3, delay=1):
     for i in range(order):
         Y[i] = x[i * delay:i * delay + Y.shape[1]]
     return Y.T
-
-
-def util_pattern_space(time_series, lag, dim):
-    """Create a set of sequences with given lag and dimension
-
-    Args:
-       time_series: Vector or string of the sample data
-       lag: Lag between beginning of sequences
-       dim: Dimension (number of patterns)
-
-    Returns:
-        2D array of vectors
-    """
-    n = len(time_series)
-
-    if lag * dim > n:
-        raise Exception('Result matrix exceeded size limit, try to change lag or dim.')
-    elif lag < 1:
-        raise Exception('Lag should be greater or equal to 1.')
-
-    pattern_space = np.empty((n - lag * (dim - 1), dim))
-    for i in range(n - lag * (dim - 1)):
-        for j in range(dim):
-            pattern_space[i][j] = time_series[i + j * lag]
-
-    return pattern_space
-
-
-def util_standardize_signal(time_series):
-    return (time_series - np.mean(time_series)) / np.std(time_series)
 
 
 def util_granulate_time_series(time_series, scale):
