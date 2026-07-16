@@ -60,6 +60,29 @@ def _provenance_rows(settings, when):
         columns=["Key", "Value"])
 
 
+_WEBSITE = "https://github.com/emilwalsted/respmech"
+
+
+def _autofit(writer):
+    """Cosmetic, golden-safe polish (audit #29): size each column to its widest cell and
+    turn the website value into a clickable hyperlink. Only touches presentation — cell
+    VALUES are unchanged, so the golden (which reads values via pandas) is unaffected."""
+    from openpyxl.utils import get_column_letter
+    for ws in writer.book.worksheets:
+        widths = {}
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.value is None:
+                    continue
+                text = str(cell.value)
+                widths[cell.column] = max(widths.get(cell.column, 0), len(text))
+                if text == _WEBSITE and not cell.hyperlink:
+                    cell.hyperlink = _WEBSITE
+                    cell.style = "Hyperlink"
+        for col, w in widths.items():
+            ws.column_dimensions[get_column_letter(col)].width = min(w + 2, 80)
+
+
 def _write_xlsx(df: pd.DataFrame, path: str, settings=None, when=None, extra_sheets=None):
     """Write a Data sheet plus Units, any extra sheets, Provenance and Version.
 
@@ -73,6 +96,7 @@ def _write_xlsx(df: pd.DataFrame, path: str, settings=None, when=None, extra_she
         if settings is not None:
             _provenance_rows(settings, when).to_excel(writer, sheet_name="Provenance", index=False)
         _version_df().to_excel(writer, sheet_name="Version", index=False)
+        _autofit(writer)
 
 
 def write_batch(result, settings, outputfolder: str, when: datetime | None = None) -> list[str]:
