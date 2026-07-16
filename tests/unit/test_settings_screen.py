@@ -138,15 +138,17 @@ def test_advanced_panel_roundtrips_toml_only_knobs(qapp, tmp_path):
     s.processing.entropy.epochs = 3
     s.processing.emg.noise.n_fft = 512
     s.input.format.matlab_variant = "windows"
-    s.processing.breath_counts = [BreathCountEntry("a.csv", 12)]
+    # a filename containing a comma must survive the round-trip (one entry per line)
+    s.processing.breath_counts = [BreathCountEntry("a,b.txt", 12)]
     win = MainWindow(AppState(s)); sc = win.settings_screen
     assert sc.seg_buffer.value() == 640 and sc.avg_resamp.value() == 750
     assert sc.noise_nfft.value() == 512 and sc.matlab_variant.currentData() == "windows"
-    assert sc.breath_counts_edit.text() == "a.csv=12"
+    assert sc.breath_counts_edit.toPlainText() == "a,b.txt = 12"
+    assert [(e.file, e.count) for e in sc.to_state().processing.breath_counts] == [("a,b.txt", 12)]
     # edit + write back
     sc.seg_buffer.setValue(900); sc.ent_epochs.setValue(4)
     sc.matlab_variant.setCurrentIndex(sc.matlab_variant.findData("mac"))
-    sc.breath_counts_edit.setText("x.txt=5, y.txt=9")
+    sc.breath_counts_edit.setPlainText("x.txt = 5\ny.txt = 9")
     out = sc.to_state()
     assert out.processing.segmentation.buffer == 900 and out.processing.entropy.epochs == 4
     assert out.input.format.matlab_variant == "mac"

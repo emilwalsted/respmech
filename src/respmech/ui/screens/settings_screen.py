@@ -14,8 +14,8 @@ import traceback
 
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
-                               QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea,
-                               QSpinBox, QVBoxLayout, QWidget)
+                               QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
+                               QScrollArea, QSpinBox, QVBoxLayout, QWidget)
 from PySide6.QtCore import Signal, QTimer
 
 from respmech.core.settings import BreathCountEntry, Settings, SettingsError
@@ -295,25 +295,25 @@ class SettingsScreen(QWidget):
         self._row(fa, "Breath peak — min height", self.peak_height, "processing.segmentation.peak.height",
                   "Minimum peak height for breath detection (used for volume-based separation).")
         self.peak_distance = QDoubleSpinBox(); self.peak_distance.setRange(0.0, 60.0)
-        self.peak_distance.setDecimals(3); self.peak_distance.setSingleStep(0.05); self.peak_distance.setSuffix(" s")
+        self.peak_distance.setDecimals(4); self.peak_distance.setSingleStep(0.05); self.peak_distance.setSuffix(" s")
         self._row(fa, "Breath peak — min distance", self.peak_distance, "processing.segmentation.peak.distance_s",
                   "Minimum time between detected breath peaks.")
         self.peak_width = QDoubleSpinBox(); self.peak_width.setRange(0.0, 60.0)
-        self.peak_width.setDecimals(3); self.peak_width.setSingleStep(0.05); self.peak_width.setSuffix(" s")
+        self.peak_width.setDecimals(4); self.peak_width.setSingleStep(0.05); self.peak_width.setSuffix(" s")
         self._row(fa, "Breath peak — min width", self.peak_width, "processing.segmentation.peak.width_s",
                   "Minimum width of a detected breath peak.")
         self.avg_resamp = QSpinBox(); self.avg_resamp.setRange(10, 100_000)
         self._row(fa, "Average-breath resampling points", self.avg_resamp, "processing.wob.avg_resampling_obs",
                   "Points each breath is resampled to when building the average breath / WOB.")
         self.ptp_baseline = QDoubleSpinBox(); self.ptp_baseline.setRange(0.0, 1.0)
-        self.ptp_baseline.setDecimals(3); self.ptp_baseline.setSingleStep(0.01); self.ptp_baseline.setSuffix(" s")
+        self.ptp_baseline.setDecimals(4); self.ptp_baseline.setSingleStep(0.01); self.ptp_baseline.setSuffix(" s")
         self._row(fa, "PTP baseline window", self.ptp_baseline, "processing.ptp.baseline_window_s",
                   "End-expiratory window whose mean is the pressure-time-product baseline.")
         self.ent_epochs = QSpinBox(); self.ent_epochs.setRange(1, 100)
         self._row(fa, "Entropy — embedding (m)", self.ent_epochs, "processing.entropy.epochs",
                   "Embedding dimension (m) for sample entropy.")
         self.ent_tol = QDoubleSpinBox(); self.ent_tol.setRange(0.0, 10.0)
-        self.ent_tol.setDecimals(3); self.ent_tol.setSingleStep(0.05)
+        self.ent_tol.setDecimals(4); self.ent_tol.setSingleStep(0.05)
         self._row(fa, "Entropy — tolerance (r)", self.ent_tol, "processing.entropy.tolerance",
                   "Matching tolerance (r) for sample entropy.")
         self.noise_nfft = QSpinBox(); self.noise_nfft.setRange(16, 8192)
@@ -324,11 +324,13 @@ class SettingsScreen(QWidget):
         self.matlab_variant.addItem("MATLAB (Unix/Mac)", "mac")
         self._row(fa, "MATLAB file variant", self.matlab_variant, "input.format.matlab_variant",
                   "Variant/byte-order for .mat input files (ignored for CSV/Excel/text).")
-        self.breath_counts_edit = QLineEdit()
-        self.breath_counts_edit.setPlaceholderText("filename=count, filename=count")
+        # one entry per line (not comma-separated) so filenames containing a comma survive
+        self.breath_counts_edit = QPlainTextEdit()
+        self.breath_counts_edit.setPlaceholderText("one 'filename = count' per line")
+        self.breath_counts_edit.setFixedHeight(64)
         self._row(fa, "Breath-count overrides", self.breath_counts_edit, "processing.breath_counts",
-                  "Per-file override of the breath count used for per-minute rate scaling, e.g. "
-                  "'RIU_H5_40W.txt=12'. Leave blank to use each file's detected breath count.")
+                  "Per-file override of the breath count used for per-minute rate scaling — one "
+                  "'filename = count' per line, e.g. 'RIU_H5_40W.txt = 12'. Blank = each file's detected count.")
         root.addWidget(gadv)
 
         # Status text is shown in the window's bottom status bar (see main_window). This
@@ -485,8 +487,8 @@ class SettingsScreen(QWidget):
             self.noise_nfft.setValue(n.n_fft)
             _mi = self.matlab_variant.findData(s.input.format.matlab_variant)
             self.matlab_variant.setCurrentIndex(_mi if _mi >= 0 else 0)
-            self.breath_counts_edit.setText(
-                ", ".join(f"{e.file}={e.count}" for e in s.processing.breath_counts))
+            self.breath_counts_edit.setPlainText(
+                "\n".join(f"{e.file} = {e.count}" for e in s.processing.breath_counts))
             self._sync_widgets()
         finally:
             self._loading = prev
@@ -554,11 +556,11 @@ class SettingsScreen(QWidget):
         n.n_fft = self.noise_nfft.value()
         s.input.format.matlab_variant = self.matlab_variant.currentData()
         bcs = []
-        for part in self.breath_counts_edit.text().split(","):
-            part = part.strip()
-            if not part or "=" not in part:
+        for line in self.breath_counts_edit.toPlainText().splitlines():
+            line = line.strip()
+            if not line or "=" not in line:
                 continue
-            fpart, _, cpart = part.rpartition("=")
+            fpart, _, cpart = line.rpartition("=")      # split on the LAST '=' (filenames may contain '=')
             try:
                 cnt = int(cpart.strip())
             except ValueError:
@@ -625,9 +627,9 @@ class SettingsScreen(QWidget):
         self.in_folder.editingFinished.connect(self._on_inputs_changed)
         self.in_files.editingFinished.connect(self._on_inputs_changed)
         self.cols_emg.editingFinished.connect(self._on_emg_cols_changed)
-        for le in (self.cols_entropy, self.out_folder, self.noise_ref, self.group_regex,
-                   self.breath_counts_edit):
+        for le in (self.cols_entropy, self.out_folder, self.noise_ref, self.group_regex):
             le.editingFinished.connect(self._on_field_changed)
+        self.breath_counts_edit.textChanged.connect(self._on_field_changed)   # QPlainTextEdit: no editingFinished
         for sb in (self.samp_freq, self.col_flow, self.col_volume, self.col_poes,
                    self.col_pgas, self.col_pdi, self.resample_hz,
                    self.seg_buffer, self.avg_resamp, self.ent_epochs, self.noise_nfft):
