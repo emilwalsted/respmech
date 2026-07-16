@@ -268,8 +268,9 @@ def _volume_correction(fr, fname, path):
         return None
     rows = [("Flow (L/s)", sig.get("flow")),
             ("Uncorrected volume (L)", sig.get("vol_uncorrected")),
-            ("Zeroed volume (L)", sig.get("vol_zeroed")),
-            ("Linear drift-corrected (L)", sig.get("vol_drift"))]
+            ("Zeroed volume (L)", sig.get("vol_zeroed"))]
+    if sig.get("drift_on"):        # off ⇒ vol_drift == vol_zeroed; don't imply a stage that didn't run
+        rows.append(("Linear drift-corrected (L)", sig.get("vol_drift")))
     if sig.get("trend_on"):
         rows.append(("Trend-adjusted volume (L)", sig.get("vol_final")))
     rows = [(lbl, y) for lbl, y in rows if y is not None and len(y)]

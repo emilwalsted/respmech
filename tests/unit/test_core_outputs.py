@@ -171,6 +171,26 @@ def test_emg_figures_wav_cohort_and_metrics(tmp_path):
     assert "DIAGNOSTICS" in txt and "prop_decrease" in txt and "R-peaks" in txt
 
 
+def test_volume_correction_figure_omits_drift_panel_when_drift_off(tmp_path, monkeypatch):
+    """The staged volume-correction figure must not show a 'drift-corrected' panel that is
+    byte-identical to 'zeroed' when drift correction is off (review nit)."""
+    from respmech.core.pipeline import run_batch
+    from respmech.core import plots
+    s = synth_settings(tmp_path)
+    s.processing.volume.correct_drift = False
+    for flag in ("save_pv_average", "save_pv_individual", "save_raw", "save_trimmed", "save_emg"):
+        setattr(s.output.diagnostics, flag, False)
+    s.output.diagnostics.save_drift = True
+    result = run_batch(s)
+    fr = next(iter(result.ok_files.values()))
+    rows = []
+    monkeypatch.setattr(plots, "_save", lambda fig, path: (rows.append([ax.get_ylabel() for ax in fig.axes]), path)[1])
+    plots._volume_correction(fr, "f", "/tmp/vc.pdf")
+    labels = rows[0]
+    assert "Linear drift-corrected (L)" not in labels          # skipped when drift is off
+    assert "Zeroed volume (L)" in labels
+
+
 def test_save_emg_flag_gates_emg_figures(tmp_path):
     from respmech.core.pipeline import run_batch
     from respmech.core import plots
