@@ -30,7 +30,7 @@ class StartupDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("RespMech — get started")
+        self.setWindowTitle("RespMech — Get started")
         self.setModal(True)
         self.mode = "new"
         self.path = None

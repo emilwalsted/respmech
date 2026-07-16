@@ -475,7 +475,7 @@ class PreviewScreen(QWidget):
 
     # -- construction -------------------------------------------------------
     def _build(self):
-        root = QVBoxLayout(self)
+        root = QVBoxLayout(self); root.setContentsMargins(11, 11, 11, 11)   # deterministic, matches Setup
         bar = QHBoxLayout()
         self.file_combo = QComboBox()
         # P27: step through files without leaving the plots — buttons + PageUp/PageDown.
@@ -741,11 +741,11 @@ class PreviewScreen(QWidget):
         split = QSplitter(Qt.Vertical)
         top = QSplitter(Qt.Horizontal)
         top.addWidget(self._titled("Raw EMG channels", self.emg_raw_plots))
-        top.addWidget(self._titled("Detail channel — raw ▸ ECG-removed ▸ noise-reduced",
+        top.addWidget(self._titled("Detail channel",       # pipeline stages are in the plot legend
                                    self.emg_plots, corner=self.emg_channel))
         split.addWidget(top)
         mid = QSplitter(Qt.Horizontal)
-        mid.addWidget(self._titled("Conditioned result (selected channels)",
+        mid.addWidget(self._titled("Conditioned result",   # the corner picker names the channels
                                    self.emg_result_plots, corner=self.result_checks_holder))
         mid.addWidget(self._titled("Detail PSD", self.emg_psd_canvas))
         self._emg_mid = mid
@@ -842,7 +842,7 @@ class PreviewScreen(QWidget):
         self.ecg_capture_channel.blockSignals(True)
         self.ecg_capture_channel.clear()
         for c in cols:
-            self.ecg_capture_channel.addItem(f"EMGdi col {c}")
+            self.ecg_capture_channel.addItem(f"EMG col {c}")
         if cols:
             self.ecg_capture_channel.setCurrentIndex(max(0, min(int(e.detect_channel), len(cols) - 1)))
         self.ecg_capture_channel.blockSignals(False)
@@ -977,7 +977,9 @@ class PreviewScreen(QWidget):
         """A titled panel. ``corner`` is an optional widget pinned to the top-right of
         the title row (e.g. the detail-channel dropdown or the result-channel picker)."""
         box = QWidget(); lay = QVBoxLayout(box); lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(2)
-        header = QHBoxLayout(); header.setContentsMargins(0, 0, 0, 0); header.setSpacing(8)
+        # a little left/right air so the title isn't glued to the panel edge and the
+        # right-pinned corner widget (channel selectors) doesn't butt against the next panel
+        header = QHBoxLayout(); header.setContentsMargins(0, 0, 8, 0); header.setSpacing(8)
         lab = QLabel(title); lab.setProperty("status", "muted")
         header.addWidget(lab); header.addStretch(1)
         if corner is not None:
@@ -1018,7 +1020,7 @@ class PreviewScreen(QWidget):
         self.emg_channel.blockSignals(True)
         self.emg_channel.clear()
         for c in cols:
-            self.emg_channel.addItem(f"EMGdi col {c}")
+            self.emg_channel.addItem(f"EMG col {c}")
         if 0 <= cur < self.emg_channel.count():
             self.emg_channel.setCurrentIndex(cur)
         self.emg_channel.blockSignals(False)
@@ -1706,48 +1708,15 @@ class PreviewScreen(QWidget):
             pass
 
     @staticmethod
-    def _breath_label(num, short):
-        """The breath label: full 'Breath #N', or the compact '#N' when full labels
-        would overlap (dense breaths)."""
-        return f"#{num}" if short else f"Breath #{num}"
-
-    @staticmethod
-    def _labels_would_overlap(centers, seconds_per_pixel, label_px=72.0):
-        """True if full 'Breath #N' labels placed at these x-centres would collide at
-        the given seconds-per-pixel scale (``label_px`` ≈ a full label's pixel width)."""
-        if len(centers) < 2 or not seconds_per_pixel or seconds_per_pixel <= 0:
-            return False
-        cs = sorted(centers)
-        min_gap = min(b - a for a, b in zip(cs, cs[1:]))
-        return min_gap < label_px * seconds_per_pixel
-
-    def _breath_labels_short(self, plot, centers):
-        """Decide whether ``plot`` should use the compact '#N' breath label — yes when
-        the full labels would overlap at the plot's current x scale."""
-        try:
-            vb = plot.getViewBox()
-            if vb is None:
-                return False
-            # a freshly-created plot still sits at the default [0,1] range until its first
-            # paint; flush the pending auto-range so the scale reflects the real data
-            if any(ax is not False for ax in vb.autoRangeEnabled()):
-                vb.updateAutoRange()
-            px = vb.viewPixelSize()[0]
-            if px and np.isfinite(px) and px > 0:
-                spp = float(px)
-            else:                                # not laid out yet -> assume a ~600px plot
-                xr = vb.viewRange()[0]
-                spp = abs((xr[1] - xr[0]) or 1.0) / 600.0
-        except Exception:                        # noqa: BLE001 — labels are cosmetic
-            return False
-        return self._labels_would_overlap(centers, spp)
+    def _breath_label(num):
+        """The per-breath number label, e.g. '#3'. The word 'breath' is intentionally
+        omitted from per-breath numbering — it is implicit from context on every graph."""
+        return f"#{num}"
 
     def _draw_breath_overlays(self, spans, label_y=0.0):
         self._breath_spans = {n: (t0, t1) for (n, t0, t1, _ig) in spans}
         self._breath_regions = {n: [] for (n, _0, _1, _ig) in spans}
         self._breath_texts = {}
-        centers = [(t0 + t1) / 2.0 for (_n, t0, t1, _ig) in spans]
-        short = bool(self._channel_plots) and self._breath_labels_short(self._channel_plots[0], centers)
         sep = _plot_pal()["separator"]
         for n, t0, t1, ignored in spans:
             for plot in self._channel_plots:
@@ -1758,7 +1727,7 @@ class PreviewScreen(QWidget):
                 self._breath_regions[n].append(reg)
                 plot.addLine(x=t0, pen=pg.mkPen(sep, width=1, style=Qt.DashLine))
             if self._channel_plots:
-                txt = pg.TextItem(self._breath_label(n, short),
+                txt = pg.TextItem(self._breath_label(n),
                                   color=self._breath_label_color(ignored), anchor=(0.5, 1.0))
                 txt.setPos((t0 + t1) / 2.0, label_y)
                 self._channel_plots[0].addItem(txt)
@@ -1886,8 +1855,6 @@ class PreviewScreen(QWidget):
         excl = self._excluded_now()
         reg_map = self._bov[view]["regions"]; txt_map = self._bov[view]["texts"]
         items = self._bov[view]["items"]
-        centers = [(t0 + t1) / 2.0 + offset for (_n, t0, t1, _ig) in self._breaths]
-        short = self._breath_labels_short(plot_items[0], centers)
         sep = _plot_pal()["separator"]
         for (num, t0, t1, _ig) in self._breaths:
             ignored = num in excl
@@ -1900,7 +1867,7 @@ class PreviewScreen(QWidget):
                 items.append((p, reg)); reg_map.setdefault(num, []).append(reg)
                 line = p.addLine(x=a, pen=pg.mkPen(sep, width=1, style=Qt.DashLine))
                 items.append((p, line))
-            txt = pg.TextItem(self._breath_label(num, short),
+            txt = pg.TextItem(self._breath_label(num),
                               color=self._breath_label_color(ignored), anchor=(0.5, 1.0))
             txt.setPos((a + b) / 2.0, label_y)
             plot_items[0].addItem(txt)
@@ -2305,7 +2272,7 @@ class PreviewScreen(QWidget):
             props = sorted(frontier)
             nch = len(next(iter(frontier.values())))
             for ch in range(nch):
-                lbl = f"EMGdi col {emg_cols[ch]}" if ch < len(emg_cols) else f"EMG ch {ch + 1}"
+                lbl = f"EMG col {emg_cols[ch]}" if ch < len(emg_cols) else f"EMG ch {ch + 1}"
                 ax.plot(props, [frontier[p][ch] for p in props], marker="o", ms=3, label=lbl)
             ax.axhline(target, color=pal["mpl_target"], ls=":", lw=1)
             if chosen is not None:

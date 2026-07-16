@@ -52,7 +52,7 @@ class SettingsScreen(QWidget):
     # -- UI construction ----------------------------------------------------
     def _build(self):
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setContentsMargins(11, 11, 11, 11)   # one shared inset for action bar + form + QC strip
 
         # Action bar stays pinned above the scroll area so it is always reachable.
         # "Analysis" is the user-facing name for a settings file (never "TOML"); "Open
@@ -77,11 +77,12 @@ class SettingsScreen(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         content = QWidget()
-        root = QVBoxLayout(content)
+        root = QVBoxLayout(content); root.setContentsMargins(0, 0, 0, 0)   # align groups to the 11px inset
 
         # Input ------------------------------------------------------------
         gin = QGroupBox("Input")
         f = QFormLayout(gin)
+        f.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
         self.in_folder = QLineEdit()
         self.in_files = QLineEdit()
         self.samp_freq = QSpinBox(); self.samp_freq.setRange(1, 1_000_000); self.samp_freq.setSuffix(" Hz")
@@ -101,6 +102,7 @@ class SettingsScreen(QWidget):
         # Output (second in the flow: an analysis reads as Input -> Output -> rest) --
         gout = QGroupBox("Output")
         fo = QFormLayout(gout)
+        fo.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
         self.out_folder = QLineEdit()
         self._browse_row(fo, "Output folder", self.out_folder, "output.folder",
                          "Where results are saved; files are written to a 'data' subfolder inside it; defaults to 'output'.", folder=True)
@@ -109,6 +111,7 @@ class SettingsScreen(QWidget):
         # Channels ---------------------------------------------------------
         gch = QGroupBox("Channels — 1-based column numbers in the data file")
         fc = QFormLayout(gch)
+        fc.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
         self.btn_assign_channels = QPushButton("Assign channels from data…")
         self.btn_assign_channels.setToolTip(
             "Open a visual picker: plot every column of your data and pick what each one is.")
@@ -137,8 +140,11 @@ class SettingsScreen(QWidget):
         # Processing — breath mechanics ------------------------------------
         gpr = QGroupBox("Processing")
         fp = QFormLayout(gpr)
-        self.seg_method = QComboBox(); self.seg_method.addItems(["flow", "volume"])
-        self.wob_from = QComboBox(); self.wob_from.addItems(["average", "individual"])
+        fp.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
+        self.seg_method = QComboBox()
+        self.seg_method.addItem("Flow", "flow"); self.seg_method.addItem("Volume", "volume")
+        self.wob_from = QComboBox()
+        self.wob_from.addItem("Average", "average"); self.wob_from.addItem("Individual", "individual")
         self.integrate = QCheckBox("Calculate volume from flow")
         self._row(fp, "Signal used to split breaths", self.seg_method, "processing.segmentation.method",
                   "Which signal marks where each breath begins and ends — flow (the default) or volume.")
@@ -151,11 +157,14 @@ class SettingsScreen(QWidget):
         #    area and therefore WOB, so they are surfaced (not left to hidden model defaults);
         #    correct_drift in particular defaults ON. --
         _vsub = QLabel("Volume and drift corrections"); _vsub.setProperty("status", "muted")
+        _vsub.setContentsMargins(0, 8, 0, 0)
         fp.addRow(_vsub)
         self.correct_drift = QCheckBox("Correct volume drift")
         self.correct_trend = QCheckBox("Correct end-expiratory trend")
         self.trend_method = QComboBox()
-        self.trend_method.addItems(["linear", "nearest", "cubic", "quadratic", "previous", "next"])
+        for _lbl, _tok in (("Linear", "linear"), ("Nearest", "nearest"), ("Cubic", "cubic"),
+                           ("Quadratic", "quadratic"), ("Previous", "previous"), ("Next", "next")):
+            self.trend_method.addItem(_lbl, _tok)
         self.inverse_flow = QCheckBox("Invert the flow signal")
         self.inverse_volume = QCheckBox("Invert the volume signal")
         self.resample = QCheckBox("Resample before analysis")
@@ -184,6 +193,7 @@ class SettingsScreen(QWidget):
         gemg = QGroupBox("EMG — RMS envelope")
         gemg.setToolTip("How the diaphragm-EMG amplitude is quantified for each breath.")
         fe = QFormLayout(gemg)
+        fe.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
         self.emg_rms_window = QDoubleSpinBox()
         self.emg_rms_window.setRange(0.01, 0.5); self.emg_rms_window.setSingleStep(0.01)
         self.emg_rms_window.setDecimals(3); self.emg_rms_window.setSuffix(" s")
@@ -219,8 +229,10 @@ class SettingsScreen(QWidget):
         gns = QGroupBox("EMG — noise reduction (shared profile)")
         gns.setToolTip("One shared noise profile + one parameter set are built from the "
                        "reference and applied IDENTICALLY to every file in the test. "
-                       "Tune the noise window visually in Preview ▸ EMG processing.")
+                       "Tune the noise window visually on the Preview screen's "
+                       "› EMG – noise reduction tab.")
         fn = QFormLayout(gns)
+        fn.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
         self.remove_noise = QCheckBox("Reduce EMG background noise")
         self.noise_ref = QLineEdit()
         self.noise_use_exp = QCheckBox("Build noise profile from expiration (recommended)")
@@ -231,8 +243,8 @@ class SettingsScreen(QWidget):
                          folder=False)
         self._check_row(fn, self.noise_use_exp, "processing.emg.noise.use_expiration",
                         "Samples the noise profile from the reference's expiratory phase, which is EMG-free and more stable; on by default.")
-        hint = QLabel("Noise-window options (suppression, fidelity target) are in "
-                      "Preview ▸ EMG processing, active once a reference file is set.")
+        hint = QLabel("Noise-window options (suppression, fidelity target) are on the Preview "
+                      "screen's › EMG – noise reduction tab, active once a reference file is set.")
         hint.setWordWrap(True); hint.setProperty("status", "muted")
         fn.addRow("", hint)
         root.addWidget(gns)
@@ -243,6 +255,7 @@ class SettingsScreen(QWidget):
         # to just the folder.
         gsave = QGroupBox("Output — what to save")
         fsv = QFormLayout(gsave)
+        fsv.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
         self.save_average = QCheckBox("Average breath-data workbook")
         self.save_bbb = QCheckBox("Breath-by-breath workbook (per file)")
         self.save_processed = QCheckBox("Processed-signal CSV (per file)")
@@ -253,7 +266,7 @@ class SettingsScreen(QWidget):
         self.save_trimmed_fig = QCheckBox("Trimmed-signal figures")
         self.save_drift_fig = QCheckBox("Drift-correction figures")
         self.save_emg_fig = QCheckBox("EMG channel overviews")
-        _lt = QLabel("Tables"); _lt.setProperty("status", "muted"); fsv.addRow(_lt)
+        _lt = QLabel("Tables"); _lt.setProperty("status", "muted"); _lt.setContentsMargins(0, 8, 0, 0); fsv.addRow(_lt)
         for cb, var, tip in (
                 (self.save_average, "output.data.save_average", "The across-breath average workbook."),
                 (self.save_bbb, "output.data.save_breath_by_breath", "A per-file breath-by-breath workbook."),
@@ -262,7 +275,7 @@ class SettingsScreen(QWidget):
                  "Include the breaths you've excluded in the per-file processed-signal CSV only. "
                  "Excluded breaths are always left out of the averages and workbooks; this does not change them.")):
             self._check_row(fsv, cb, var, tip)
-        _lf = QLabel("Diagnostic figures"); _lf.setProperty("status", "muted"); fsv.addRow(_lf)
+        _lf = QLabel("Diagnostic figures"); _lf.setProperty("status", "muted"); _lf.setContentsMargins(0, 8, 0, 0); fsv.addRow(_lf)
         for cb, var, tip in (
                 (self.save_pv_avg, "output.diagnostics.save_pv_average", "The averaged Campbell (pressure–volume) diagram."),
                 (self.save_pv_ind, "output.diagnostics.save_pv_individual", "A Campbell diagram per individual breath."),
@@ -273,7 +286,7 @@ class SettingsScreen(QWidget):
                  "Per-channel EMG overview figures (raw / ECG-removed / noise-reduced) with the flow "
                  "reference and R-peak capture markers.")):
             self._check_row(fsv, cb, var, tip)
-        _lg = QLabel("Cohort summary"); _lg.setProperty("status", "muted"); fsv.addRow(_lg)
+        _lg = QLabel("Cohort summary"); _lg.setProperty("status", "muted"); _lg.setContentsMargins(0, 8, 0, 0); fsv.addRow(_lg)
         self.group_regex = QLineEdit()
         self.group_regex.setPlaceholderText("leading filename token (e.g. P03_120W → P03)")
         self._row(fsv, "Group files by", self.group_regex, "output.group_regex",
@@ -287,6 +300,7 @@ class SettingsScreen(QWidget):
         # --- Advanced (rarely changed): knobs that were previously TOML-only (audit #16/17/22-26)
         gadv = QGroupBox("Advanced (rarely changed)")
         fa = QFormLayout(gadv)
+        fa.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
         self.seg_buffer = QSpinBox(); self.seg_buffer.setRange(0, 100_000)
         self._row(fa, "Breath-separation buffer", self.seg_buffer, "processing.segmentation.buffer",
                   "Guard samples added around each detected breath boundary during segmentation.")
@@ -439,12 +453,15 @@ class SettingsScreen(QWidget):
             self.col_pdi.setValue(ch.pdi or 1)
             self.cols_emg.setText(",".join(map(str, ch.emg)))
             self.cols_entropy.setText(",".join(map(str, ch.entropy)))
-            self.seg_method.setCurrentText(s.processing.segmentation.method)
-            self.wob_from.setCurrentText(s.processing.wob.calc_from)
+            _si = self.seg_method.findData(s.processing.segmentation.method)
+            self.seg_method.setCurrentIndex(_si if _si >= 0 else 0)
+            _wi = self.wob_from.findData(s.processing.wob.calc_from)
+            self.wob_from.setCurrentIndex(_wi if _wi >= 0 else 0)
             self.integrate.setChecked(s.processing.volume.integrate_from_flow)
             self.correct_drift.setChecked(s.processing.volume.correct_drift)
             self.correct_trend.setChecked(s.processing.volume.correct_trend)
-            self.trend_method.setCurrentText(s.processing.volume.trend_method)
+            _ti = self.trend_method.findData(s.processing.volume.trend_method)
+            self.trend_method.setCurrentIndex(_ti if _ti >= 0 else 0)
             self.inverse_flow.setChecked(s.processing.volume.inverse_flow)
             self.inverse_volume.setChecked(s.processing.volume.inverse_volume)
             self.resample.setChecked(s.processing.sampling.resample)
@@ -508,12 +525,12 @@ class SettingsScreen(QWidget):
         ch.pdi = self.col_pdi.value()
         ch.emg = _parse_ints(self.cols_emg.text())
         ch.entropy = _parse_ints(self.cols_entropy.text())
-        s.processing.segmentation.method = self.seg_method.currentText()
-        s.processing.wob.calc_from = self.wob_from.currentText()
+        s.processing.segmentation.method = self.seg_method.currentData()
+        s.processing.wob.calc_from = self.wob_from.currentData()
         s.processing.volume.integrate_from_flow = self.integrate.isChecked()
         s.processing.volume.correct_drift = self.correct_drift.isChecked()
         s.processing.volume.correct_trend = self.correct_trend.isChecked()
-        s.processing.volume.trend_method = self.trend_method.currentText()
+        s.processing.volume.trend_method = self.trend_method.currentData()
         s.processing.volume.inverse_flow = self.inverse_flow.isChecked()
         s.processing.volume.inverse_volume = self.inverse_volume.isChecked()
         s.processing.sampling.resample = self.resample.isChecked()

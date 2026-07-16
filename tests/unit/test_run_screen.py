@@ -37,8 +37,8 @@ def test_per_file_results_table(qapp, tmp_path):
     rows = {rn.files_table.item(r, 0).text(): (rn.files_table.item(r, 1).text(),
                                                rn.files_table.item(r, 2).text())
             for r in range(2)}
-    assert rows["synth_case_A.csv"] == ("ok", "2")
-    assert rows["synth_case_B.csv"][0] == "failed"
+    assert rows["synth_case_A.csv"] == ("OK", "2")
+    assert rows["synth_case_B.csv"][0] == "Failed"
     win.close()
 
 

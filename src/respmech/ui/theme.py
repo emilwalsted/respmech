@@ -324,7 +324,8 @@ QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QAbstractSpinBox {
     color: $text;
     border: 1px solid $border;
     border-radius: 7px;
-    padding: 6px 8px;
+    padding: 7px 8px;
+    min-height: 18px;                 /* match the Browse/action buttons' height in picker rows */
     selection-background-color: $accent;
     selection-color: $accent_fg;
 }
