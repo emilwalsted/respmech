@@ -798,3 +798,32 @@ def test_no_button_label_is_clipped_by_theme_padding(qapp, tmp_path):
             clipped.append((b.text(), b.maximumWidth(), b.sizeHint().width()))
     assert clipped == [], f"buttons whose label cannot fit their fixed width: {clipped}"
     win.close()
+
+
+def test_breath_labels_fit_inside_the_short_channel_plots(qapp, tmp_path):
+    """The breath '#N' labels were clipped on the mechanics tab: the headroom was a fixed
+    FRACTION of the data span (22%), but a TextItem is a fixed PIXEL height — on the five
+    stacked channel plots (~46 px of data area each) 22% is less than the label. Headroom
+    is now derived from the label's measured pixel height, and the label box itself is
+    compact (QTextDocument's default 4 px margin, not the font, made it 23 px)."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    win.resize(1360, 880); win.show(); qapp.processEvents()
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_combo.setCurrentIndex(0); pv._preview()
+    for _ in range(10):
+        qapp.processEvents()
+    assert pv._breath_texts, "no breath labels drawn"
+    vb = pv._channel_plots[0].getViewBox()
+    (_x0, _x1), (y0, y1) = vb.viewRange()
+    h_px = vb.height()
+    assert h_px > 0 and y1 > y0
+    dy_per_px = (y1 - y0) / h_px
+    label_h = max(t.boundingRect().height() for t in pv._breath_texts.values())
+    label_y = max(t.pos().y() for t in pv._breath_texts.values())
+    headroom_px = (y1 - label_y) / dy_per_px
+    assert label_h <= 18, f"breath label box grew to {label_h}px (documentMargin/font regressed?)"
+    assert headroom_px >= label_h, f"label ({label_h}px) clipped: only {headroom_px:.1f}px of headroom"
+    # ...and the signal must still get most of the plot, not be squashed to fit the label
+    assert (label_y - y0) / dy_per_px >= 0.45 * h_px
+    win.close()
