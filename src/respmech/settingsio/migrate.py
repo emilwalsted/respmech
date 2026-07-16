@@ -247,7 +247,7 @@ def migrate_dict(legacy: dict) -> tuple[Settings, MigrationReport]:
             "save_average": odata.get("saveaveragedata", True),
             "save_breath_by_breath": odata.get("savebreathbybreathdata", True),
             "save_processed": odata.get("saveprocesseddata", False),
-            "include_ignored_breaths": odata.get("includeignoredbreaths", True),
+            "include_ignored_breaths": odata.get("includeignoredbreaths", False),
         },
         "diagnostics": {
             "save_pv_average": odiag.get("savepvaverage", True),

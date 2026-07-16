@@ -4,26 +4,20 @@ Faithful port of the validated legacy ``emg.py`` compute functions:
 RMS + integrated EMG, ECG removal (averaged-template subtraction) and spectral
 noise reduction. Plotting/sound export live elsewhere (``respmech.plots``).
 
-Two deliberate, documented changes vs legacy ``master``:
-* ``reducenoise`` passes ``win_length=len(noise)**2`` to ``removeNoise`` — the newer
-  noise-reduction variant from the ``resampling-options`` line (Emil confirmed the
-  canonical newest EMG/noise baseline is master + resampling-options).
+One deliberate, documented change vs legacy ``master``:
 * ``scipy.integrate.simpson`` is called with the keyword ``x=`` (positional ``x`` is
   removed in SciPy >= 1.14) — numerically identical (legacy bug #4).
 
-Noise reduction adapted, with permission, from code by Tim Sainburg
-(https://timsainburg.com). Requires ``librosa``.
+The spectral noise-reduction helpers below (adapted, with permission, from code by
+Tim Sainburg, https://timsainburg.com; require ``librosa``) are shared with the live
+shared-profile path in ``core.noise``.
 """
-import sys
-import os
 import numpy as np
 import scipy as sp
 from scipy import signal
 
-from respmech.core._compat import complex_sign_v1 as _complex_sign_v1
-
-# librosa is only needed when noise reduction is used; import lazily inside
-# reducenoise so ECG removal / RMS work without it.
+# librosa is only needed when noise reduction is used; the STFT helpers import it
+# lazily so ECG removal / RMS work without it.
 np.float = float  # compat shim for older third-party code paths
 
 
@@ -358,57 +352,7 @@ def _db_to_amp(x):
     return librosa.core.db_to_amplitude(x, ref=1.0)
 
 
-def removeNoise(audio_clip, noise_clip, n_grad_freq=0, n_grad_time=4, n_fft=2048,
-                win_length=2048, hop_length=512, n_std_thresh=2, prop_decrease=1):
-    """Spectral-gating noise reduction. Plotting/verbose paths from the legacy
-    version are removed (they never ran in the compute path)."""
-    noise_stft = _stft(noise_clip, n_fft, hop_length, win_length)
-    noise_stft_db = _amp_to_db(np.abs(noise_stft))
-    mean_freq_noise = np.mean(noise_stft_db, axis=1)
-    std_freq_noise = np.std(noise_stft_db, axis=1)
-    noise_thresh = mean_freq_noise + std_freq_noise * n_std_thresh
-    sig_stft = _stft(audio_clip, n_fft, hop_length, win_length)
-    sig_stft_db = _amp_to_db(np.abs(sig_stft))
-    mask_gain_dB = np.min(_amp_to_db(np.abs(sig_stft)))
-    smoothing_filter = np.outer(
-        np.concatenate([
-            np.linspace(0, 1, n_grad_freq + 1, endpoint=False),
-            np.linspace(1, 0, n_grad_freq + 2),
-        ])[1:-1],
-        np.concatenate([
-            np.linspace(0, 1, n_grad_time + 1, endpoint=False),
-            np.linspace(1, 0, n_grad_time + 2),
-        ])[1:-1],
-    )
-    smoothing_filter = smoothing_filter / np.sum(smoothing_filter)
-    db_thresh = np.repeat(
-        np.reshape(noise_thresh, [1, len(mean_freq_noise)]),
-        np.shape(sig_stft_db)[1], axis=0,
-    ).T
-    sig_mask = sig_stft_db < db_thresh
-    sig_mask = sp.signal.fftconvolve(sig_mask, smoothing_filter, mode="same")
-    sig_mask = sig_mask * prop_decrease
-    sig_stft_db_masked = (
-        sig_stft_db * (1 - sig_mask)
-        + np.ones(np.shape(mask_gain_dB)) * mask_gain_dB * sig_mask
-    )
-    sig_imag_masked = np.imag(sig_stft) * (1 - sig_mask)
-    sig_stft_amp = (_db_to_amp(sig_stft_db_masked) * _complex_sign_v1(sig_stft)) + (1j * sig_imag_masked)
-    recovered_signal = _istft(sig_stft_amp, n_fft, hop_length, win_length)
-    return recovered_signal
-
-
-def reducenoise(emgchannel, noiseprofile, noiseprofilecolumn, samplingfrequency):
-    if len(noiseprofilecolumn) == 0:
-        noiseprofilecolumn = emgchannel
-    noise = np.array(noiseprofilecolumn[int(noiseprofile[0] * samplingfrequency):int(noiseprofile[1] * samplingfrequency)])
-    # win_length=len(noise)**2: the newer noise-reduction variant (resampling-options).
-    saved = sys.stdout
-    sys.stdout = open(os.devnull, "w")
-    try:
-        output = removeNoise(audio_clip=emgchannel, noise_clip=noise,
-                             n_fft=len(noise) ** 2, win_length=len(noise) ** 2)
-    finally:
-        sys.stdout.close()
-        sys.stdout = saved
-    return np.array(output)
+# NOTE: the legacy per-call `removeNoise`/`reducenoise` spectral-gating pair (which tied
+# `n_fft`/`win_length` to the noise-clip length — the `len(noise)**2` bug) has been removed.
+# The live, shared-profile spectral path is `core.noise.NoiseProfile` (reuses the STFT
+# helpers above). See docs/NOISE_ECG_OPTIMIZATION.md.

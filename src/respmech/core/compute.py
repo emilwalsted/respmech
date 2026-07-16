@@ -7,8 +7,9 @@ Faithful port of the validated legacy ``respmech.py`` calculation functions
   reported by the pipeline via events.
 * ``scipy.integrate.simpson`` is called with keyword ``x=`` (positional removed in
   SciPy >= 1.14) — numerically identical (legacy bug #4).
-* **PTP baseline is preserved exactly** (`calcptp` keeps ``- pressure[0]``): parked
-  for a post-refactor review per Emil; not changed here.
+* **PTP baseline is a short end-expiratory window mean** (`calcptp`, default 0.05 s
+  via ``ptp.baseline_window_s``) — a deliberate, golden-locked change from legacy's
+  single-sample ``- pressure[0]``, made after the review in ``docs/PTP_INVESTIGATION.md``.
 
 Settings are read via the legacy attribute shape (see ``_legacy_ns``) to keep the
 numerics byte-identical to the golden reference.
