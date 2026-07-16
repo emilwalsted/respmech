@@ -94,15 +94,20 @@ def test_startup_dialog_open_cancelled_keeps_chooser_open(qapp, monkeypatch):
 # --------------------------------------------------------------------------- #
 # Terminology + default access
 # --------------------------------------------------------------------------- #
-def test_action_bar_uses_analysis_terminology_not_toml(qapp):
+def test_analysis_menu_uses_analysis_terminology_not_toml(qapp):
+    """The analysis-file actions live in the header's Analysis menu — not under Setup — so
+    they are reachable from every tab. "Analysis" is the user-facing name, never "TOML"."""
     from PySide6.QtWidgets import QPushButton
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState())
-    labels = [b.text() for b in win.settings_screen.findChildren(QPushButton)]
+    labels = [a.text() for a in win.analysis_btn.menu().actions()]
     assert "New analysis" in labels
     assert "Open analysis…" in labels
     assert "Save analysis…" in labels
     assert not any("TOML" in t or "legacy .py" in t for t in labels)
+    # and they are gone from the Setup step's own buttons
+    setup = [b.text() for b in win.settings_screen.findChildren(QPushButton)]
+    assert not any(t in setup for t in ("New analysis", "Open analysis…", "Save analysis…", "Validate"))
     win.close()
 
 
@@ -605,13 +610,13 @@ def test_new_analysis_confirm_declined_is_noop_accepted_resets(qapp, tmp_path, m
     # decline -> nothing changes
     monkeypatch.setattr(ss.QMessageBox, "question",
                         staticmethod(lambda *a, **k: ss.QMessageBox.No))
-    sc._new_analysis()
+    sc.new_analysis()
     assert sc.in_folder.text() == kept and sc._mode == "full"
 
     # accept -> reset into a fresh guided flow with blanked folders
     monkeypatch.setattr(ss.QMessageBox, "question",
                         staticmethod(lambda *a, **k: ss.QMessageBox.Yes))
-    sc._new_analysis()
+    sc.new_analysis()
     assert sc._mode == "new"
     assert sc.in_folder.text() == "" and sc.out_folder.text() == ""
     assert not win.tabs.isTabEnabled(win._i_preview)

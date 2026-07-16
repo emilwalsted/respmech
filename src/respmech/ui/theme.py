@@ -469,6 +469,27 @@ QFrame#appHeader {
 QLabel#appTitle { font-size: 17px; font-weight: 700; color: $accent; }
 QLabel#appSubtitle { color: $text_muted; font-size: 11px; }
 
+/* ---- the header's Analysis menu -------------------------------------
+   right-padding leaves room for the drop-down indicator: styling the button
+   without it makes Qt draw the arrow ON TOP of the last letter. */
+QToolButton#appMenuButton {
+    padding: 5px 24px 5px 10px;
+    border: 1px solid $border;
+    border-radius: 4px;
+    background-color: transparent;
+    color: $text;
+    font-weight: 600;
+}
+QToolButton#appMenuButton:hover { background-color: $surface_alt; border-color: $border_strong; }
+QToolButton#appMenuButton:pressed,
+QToolButton#appMenuButton:open { background-color: $accent_soft; border-color: $accent; color: $accent; }
+QToolButton#appMenuButton:disabled { color: $disabled_fg; border-color: $border; }
+QToolButton#appMenuButton::menu-indicator {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    right: 8px;
+}
+
 /* ---- compact icon-ish buttons (file pickers, small actions) ---------- */
 QPushButton[compact="true"] {
     padding: 6px 12px;
@@ -483,8 +504,20 @@ QPushButton[nav="true"] {
     min-width: 0;
 }
 
-/* ---- numeric fields: keep them tidy, not full-width ------------------ */
+/* ---- form fields: keep them tidy, not full-width ---------------------
+   Fusion's QFormLayout grows every uncapped field to the full form width
+   (fieldGrowthPolicy defaults to AllNonFixedFieldsGrow), so a field with no cap
+   stretches across the whole window while its spin-box siblings sit at ~150px.
+   These are MAXIMA, not fixed widths: the field still shrinks with the window.
+   Opt in via setProperty("formField", ...) so combos elsewhere (Preview, the
+   channel/noise dialogs) keep sizing themselves.
+   The tokens describe how much room the CONTENT needs, not the widget type:
+   "compact" shares the spin boxes' column; "wide" is for fields whose longest
+   content would elide there (the EMG-normalisation choices, a 'filename = count'
+   line). Check a new field's sizeHint against the cap before picking. */
 QAbstractSpinBox { max-width: 150px; }
+*[formField="compact"] { max-width: 150px; }   /* same column as the spin boxes */
+*[formField="wide"]    { max-width: 320px; }   /* content that will not fit the column */
 
 /* ---- inner (sub-)tab bars read a touch smaller ----------------------- */
 QTabBar::tab { min-width: 40px; }

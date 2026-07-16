@@ -7,7 +7,8 @@ Qt dependencies. A status bar mirrors each screen's status line.
 from __future__ import annotations
 
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
-                               QMainWindow, QTabWidget, QVBoxLayout, QWidget)
+                               QMainWindow, QMenu, QTabWidget, QToolButton,
+                               QVBoxLayout, QWidget)
 
 from respmech import __version__
 from respmech.ui.state import AppState
@@ -129,12 +130,17 @@ class MainWindow(QMainWindow):
 
     def _on_run_started(self):
         self.settings_screen.setEnabled(False)
+        # the Analysis menu lives in the header, OUTSIDE the screen being locked, so it
+        # needs locking too — otherwise Open/New could swap the settings out from under
+        # the running worker, which is exactly what disabling the screen prevents.
+        self.analysis_btn.setEnabled(False)
 
     def _on_run_finished(self):
         self.settings_screen.setEnabled(True)
+        self.analysis_btn.setEnabled(True)
 
     def _make_header(self) -> QFrame:
-        """A calm application header bar (title + subtitle) above the tabs."""
+        """A calm application header bar (brand · Analysis menu · subtitle) above the tabs."""
         header = QFrame()
         header.setObjectName("appHeader")
         h = QHBoxLayout(header)
@@ -144,13 +150,35 @@ class MainWindow(QMainWindow):
         sub = QLabel("Respiratory mechanics · work of breathing · diaphragm EMG")
         sub.setObjectName("appSubtitle")
         h.addWidget(title)
-        h.addSpacing(12)
+        h.addSpacing(16)
+        h.addWidget(self._make_analysis_menu())     # right of the brand, on every tab
+        h.addSpacing(16)
         h.addWidget(sub)
         h.addStretch(1)
         ver = QLabel(f"v{__version__}")
         ver.setObjectName("appSubtitle")
         h.addWidget(ver)
         return header
+
+    def _make_analysis_menu(self) -> QToolButton:
+        """The analysis-file actions as one real menu in the header.
+
+        These belong to the window, not to the Setup step: which analysis is open is not a
+        setting, and the user must be able to save from any tab. One menu (rather than the
+        row of buttons Setup used to carry) also keeps the header calm as actions are added.
+        """
+        sc = self.settings_screen
+        menu = QMenu(self)
+        menu.addAction("New analysis", sc.new_analysis)
+        menu.addAction("Open analysis…", sc.open_analysis_dialog)
+        menu.addSeparator()
+        menu.addAction("Save analysis…", sc.save_analysis)
+        self.analysis_btn = QToolButton()
+        self.analysis_btn.setObjectName("appMenuButton")
+        self.analysis_btn.setText("Analysis")
+        self.analysis_btn.setMenu(menu)
+        self.analysis_btn.setPopupMode(QToolButton.InstantPopup)   # a menu, not a button
+        return self.analysis_btn
 
     def _fit_to_screen(self, desired_w: int = 1180, desired_h: int = 820,
                        fraction: float = 0.92) -> None:

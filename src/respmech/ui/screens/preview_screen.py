@@ -78,7 +78,7 @@ _TAB_MECH = "Mechanics"
 _TAB_ECG = "› EMG – ECG reduction"
 _TAB_NOISE = "› EMG – noise reduction"
 
-_PANELS = {"mech": ["channels", "raw"], "batch": ["campbell"],
+_PANELS = {"mech": ["channels", "raw"], "batch": ["table", "campbell"],
            "ecg": ["ecg_capture", "ecg_stack"],
            "emg_all": ["result"], "emg_detail": ["detail", "detail_psd"], "noise": ["fidelity"]}
 _SPIN_TEXT = {"mech": "Loading channels…", "batch": "Running test…",
@@ -518,7 +518,10 @@ class PreviewScreen(QWidget):
         # one spinner overlay per panel (each fed by exactly one job kind)
         self._overlays = {
             "channels": BusyOverlay(self.plots),
-            "campbell": BusyOverlay(self._mech_lower),
+            # one overlay per REAL panel: parenting this to the lower splitter instead put a
+            # single spinner across the table+Campbell pair, reading as a third panel.
+            "table": BusyOverlay(self.table),
+            "campbell": BusyOverlay(self.campbell),
             "ecg_capture": BusyOverlay(self.ecg_capture_plot),
             "ecg_stack": BusyOverlay(self.ecg_processed_plots),
             "raw": BusyOverlay(self.emg_raw_plots),
@@ -558,7 +561,6 @@ class PreviewScreen(QWidget):
         lower.addWidget(self.table)
         self.campbell = FigureCanvasQTAgg(Figure(figsize=(4, 4)))
         lower.addWidget(self.campbell)
-        self._mech_lower = lower
         # the per-breath table takes ~3/4 of the width; the Campbell diagram ~1/4 (default)
         lower.setStretchFactor(0, 3); lower.setStretchFactor(1, 1)
         lower.setSizes([720, 240])
@@ -733,7 +735,7 @@ class PreviewScreen(QWidget):
         self._style_legend(self.emg_result_plots.addLegend())
         self.emg_result_plots.setBackground(_bg)
         self.emg_result_plots.setLabel("bottom", "Time (s)")
-        self.emg_result_plots.setLabel("left", "Conditioned EMG (a.u.)")
+        self.emg_result_plots.setLabel("left", "EMG (a.u.)")   # "Conditioned" is in the panel title
         self.emg_plots = pg.PlotWidget()
         self._style_legend(self.emg_plots.addLegend())
         self.emg_plots.setBackground(_bg)
@@ -753,7 +755,7 @@ class PreviewScreen(QWidget):
         self._emg_mid = mid
         split.addWidget(mid)
         self.fidelity_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 3)))
-        split.addWidget(self._titled("Noise fidelity frontier", self.fidelity_canvas))
+        split.addWidget(self._titled("Noise fidelity frontier (1 = untouched)", self.fidelity_canvas))
         v.addWidget(split, 1)
         # clicking a numbered breath in any EMG plot toggles its exclusion too
         self.emg_raw_plots.scene().sigMouseClicked.connect(self._on_emg_raw_clicked)
@@ -825,7 +827,11 @@ class PreviewScreen(QWidget):
 
         _bg = _plot_pal()["bg"]
         self.ecg_capture_plot = pg.PlotWidget(); self.ecg_capture_plot.setBackground(_bg)
-        self.ecg_capture_plot.setLabel("bottom", "Time (s)"); self.ecg_capture_plot.setLabel("left", "Capture channel (a.u.)")
+        self.ecg_capture_plot.setLabel("bottom", "Time (s)")
+        # Just the unit: this panel is the 1/4-height slot of the splitter below (stretch 1:3,
+        # ~71px of viewbox at the default window), and a pyqtgraph left label is rotated, so
+        # its LENGTH runs along that height. The panel title names the channel.
+        self.ecg_capture_plot.setLabel("left", "a.u.")
         self.ecg_processed_plots = pg.GraphicsLayoutWidget(); self.ecg_processed_plots.setBackground(_bg)
         split = QSplitter(Qt.Vertical)
         split.addWidget(self._titled("Raw capture channel — detected R-peaks (▼)", self.ecg_capture_plot))
@@ -978,10 +984,11 @@ class PreviewScreen(QWidget):
     def _titled(title, widget, corner=None):
         """A titled panel. ``corner`` is an optional widget pinned to the top-right of
         the title row (e.g. the detail-channel dropdown or the result-channel picker)."""
-        box = QWidget(); lay = QVBoxLayout(box); lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(2)
-        # a little left/right air so the title isn't glued to the panel edge and the
-        # right-pinned corner widget (channel selectors) doesn't butt against the next panel
-        header = QHBoxLayout(); header.setContentsMargins(0, 0, 8, 0); header.setSpacing(8)
+        # The panel's own margin is the single source of air: it keeps the title, the plot
+        # and the right-pinned corner widget (channel selectors) all off the panel edge, so
+        # nothing butts against the neighbouring panel or the nav.
+        box = QWidget(); lay = QVBoxLayout(box); lay.setContentsMargins(8, 4, 8, 6); lay.setSpacing(2)
+        header = QHBoxLayout(); header.setContentsMargins(0, 0, 0, 0); header.setSpacing(8)
         lab = QLabel(title); lab.setProperty("status", "muted")
         header.addWidget(lab); header.addStretch(1)
         if corner is not None:
@@ -2316,9 +2323,11 @@ class PreviewScreen(QWidget):
             if chosen is not None:
                 ax.axvline(chosen, color=pal["mpl_error"], ls="--", lw=1.2, label=f"chosen = {chosen}")
             ax.set_xlabel("Noise-suppression strength (prop_decrease, 0–1)")
-            ax.set_ylabel("EMG fidelity retained (1 = untouched)")
+            # Rotated, the y-label's length runs along the axes HEIGHT (~206px in a 300px
+            # panel), so a wordy one overflows. The panel header carries the title and the
+            # "1 = untouched" scale hint horizontally, where there is room for them.
+            ax.set_ylabel("Fidelity retained")
             ax.set_ylim(0, 1.02)
-            ax.set_title("EMG noise: fidelity frontier")
             ax.legend(fontsize=7)
         fig.tight_layout()
         self.fidelity_canvas.draw()

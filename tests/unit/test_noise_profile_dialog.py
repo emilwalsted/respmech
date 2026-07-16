@@ -63,6 +63,36 @@ def test_reversed_drag_is_normalised(qapp):
     dlg.deleteLater()
 
 
+def test_double_click_resets_zoom_but_keeps_the_marked_region(qapp):
+    """Qt delivers a double-click as Press-Release-DblClick-Release; the leading Release runs
+    the click-to-clear path. Resetting the zoom must NOT cost the user the rest region they
+    marked (and must leave 'Set noise profile' enabled), so the double-click restores it."""
+    from PySide6.QtCore import QPointF, QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    from respmech.ui.noise_profile_dialog import NoiseProfileDialog
+    raw, t, fs, cols = _data()
+    dlg = NoiseProfileDialog(raw, t, fs, cols)
+    dlg.resize(800, 400); dlg.show(); qapp.processEvents()
+
+    dlg._set_selection(0.20, 0.50)                       # user marks a rest region
+    dlg._plots[0].getViewBox().setXRange(0.30, 0.45, padding=0)   # ...then zooms in
+    dlg._zoomed = True
+
+    vp = dlg.glw.viewport()
+    pt = QPointF(vp.width() / 2, vp.height() / 2)        # one stationary point for the whole gesture
+    seq = (QEvent.MouseButtonPress, QEvent.MouseButtonRelease,
+           QEvent.MouseButtonDblClick, QEvent.MouseButtonRelease)
+    for etype in seq:
+        buttons = Qt.LeftButton if etype in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick) else Qt.NoButton
+        dlg.eventFilter(vp, QMouseEvent(etype, pt, Qt.LeftButton, buttons, Qt.NoModifier))
+
+    assert dlg.selected_region() == (0.20, 0.50)         # region survived the double-click
+    assert dlg.btn_ok.isEnabled() is True                # ...and OK is still usable
+    lo, hi = dlg._plots[0].getViewBox().viewRange()[0]   # ...and the zoom is back to the whole recording
+    assert lo <= float(t[0]) + 1e-6 and hi >= float(t[-1]) - 1e-6
+    dlg.close(); dlg.deleteLater()
+
+
 def test_click_with_jitter_clears_but_a_real_drag_selects(qapp):
     """A 'click to dismiss' must survive a pixel of pointer jitter (pixel-space test),
     while a genuine drag past the drag threshold marks a region."""

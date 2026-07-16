@@ -760,6 +760,37 @@ def test_detail_job_covers_both_time_and_psd_panels(qapp, tmp_path):
     win.close()
 
 
+def test_titled_panels_keep_their_contents_off_the_edge(qapp):
+    """The EMG panels used to run their plots and right-pinned selectors flush to the panel
+    edge, so they butted against the neighbouring panel/nav. The panel's own margin is the
+    single source of that air — it must stay non-zero on every side."""
+    from PySide6.QtWidgets import QComboBox, QLabel
+    from respmech.ui.screens.preview_screen import PreviewScreen
+    box = PreviewScreen._titled("Raw EMG channels", QLabel("plot"), corner=QComboBox())
+    m = box.layout().contentsMargins()
+    assert min(m.left(), m.top(), m.right(), m.bottom()) >= 4
+    # the header must not re-add its own right inset on top of the panel's
+    header = box.layout().itemAt(0).layout()
+    assert header.contentsMargins().right() == 0
+
+
+def test_batch_spinner_sits_on_the_two_result_panels(qapp, tmp_path):
+    """The batch job fills the per-breath table AND the Campbell diagram, so each must carry
+    its own overlay. Parenting one overlay to the lower splitter instead painted a single
+    'Running test…' band across the pair, which read as a third panel appearing mid-refresh."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.screens.preview_screen import _PANELS
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    assert _PANELS["batch"] == ["table", "campbell"]
+    assert pv._overlays["table"].parent() is pv.table          # the real panels, not their splitter
+    assert pv._overlays["campbell"].parent() is pv.campbell
+    for p in _PANELS["batch"]:
+        pv._overlays[p].start("Running test…")
+    assert {"table", "campbell"} <= pv.busy_panels()
+    win.close()
+
+
 def test_mechanics_batch_snapshot_is_mechanics_only(qapp, tmp_path, monkeypatch):
     """The automatic mechanics test run must NOT do EMG/ECG/noise work: the batch worker
     is built from a snapshot with the EMG channels dropped."""

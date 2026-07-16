@@ -90,19 +90,21 @@ def _wave(x0, x1, y0, amp, cyc, ph, n=220):
 
 def _emg_di(x0, x1, mid, amp, cyc, ph, carrier, n=760):
     """A clean diaphragm-EMG trace whose baseline sits on the flow's 0-flow line
-    (``mid`` — halfway between the flow peak and nadir). It is flat on that line,
-    and each burst runs from the DESCENDING zero-crossing (where the flow crosses
-    the 0-line just after a peak, θ=π) to the following NADIR (θ=3π/2), as a smooth
-    crescendo-decrescendo oscillation about the 0-line. Assumes the flow is
-    ``mid - A·sin(2π·cyc·x + ph)`` (peak at the top)."""
+    (``mid`` — halfway between the flow peak and nadir). It is flat on that line, and
+    each burst spans the WHOLE inspiration: flow is negative on inspiration, so with
+    ``mid - A·sin(2π·cyc·x + ph)`` (peak at the top) that is the nadir half — from the
+    DESCENDING zero-crossing (θ=π, inspiration starts) through the NADIR (θ=3π/2) to the
+    ASCENDING zero-crossing (θ=2π, inspiration ends). The envelope is a smooth
+    crescendo-decrescendo peaking at u=0.5, i.e. mid-inspiration (the nadir). The carrier
+    is a function of x only, so the oscillation frequency is unaffected by the window."""
     tau = 2.0 * math.pi
     pts = []
     for i in range(n + 1):
         x = x0 + (x1 - x0) * i / n
         theta = (tau * cyc * i / n + ph) % tau
-        if math.pi <= theta <= 1.5 * math.pi:           # descending crossing -> nadir
-            u = (theta - math.pi) / (0.5 * math.pi)      # 0..1 across the burst
-            env = math.sin(math.pi * u)                  # smooth 0 -> 1 -> 0
+        if math.pi <= theta <= tau:                     # inspiration: 0-crossing -> nadir -> 0-crossing
+            u = (theta - math.pi) / math.pi             # 0..1 across the whole inspiration
+            env = math.sin(math.pi * u)                 # 0 -> 1 (mid-inspiration) -> 0
         else:
             env = 0.0
         y = mid - amp * env * math.sin(tau * carrier * i / n)
@@ -178,7 +180,7 @@ def build_splash_svg(width: int = 780, height: int = 460, version: str | None = 
   <!-- one wavy ventilation / flow breath (blue): peak at top, nadir at bottom -->
   <polyline points="{_wave(0, w, 352, -34, 1.0, 0.0)}" fill="none" stroke="{_AZURE_SOFT}"
             stroke-width="3" stroke-opacity="0.7" stroke-linecap="round" stroke-linejoin="round"/>
-  <!-- diaphragm EMG (orange): baseline on the 0-flow line, burst 0-crossing->nadir -->
+  <!-- diaphragm EMG (orange): baseline on the 0-flow line, burst spanning the whole inspiration -->
   <polyline points="{_emg_di(0, w, 352, 24, 1.0, 0.0, 30)}" fill="none" stroke="{_ORANGE}"
             stroke-width="1.7" stroke-opacity="0.92" stroke-linecap="round" stroke-linejoin="round"/>
 
