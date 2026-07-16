@@ -1,259 +1,177 @@
-# Respiratory mechanics, work of breathing and EMG entropy calculations
------------------------------------------------------------------------- 
-_(c) Copyright 2019 Emil Schwarz Walsted (emilwalsted@gmail.com), ORCID [0000-0002-6640-7175](https://orcid.org/0000-0002-6640-7175)_
+# RespMech — respiratory mechanics, work of breathing and diaphragm EMG
+
+_(c) Copyright 2019–2026 Emil Schwarz Walsted (emilwalsted@gmail.com), ORCID [0000-0002-6640-7175](https://orcid.org/0000-0002-6640-7175)_
 
 [![DOI](https://zenodo.org/badge/191052676.svg)](https://zenodo.org/badge/latestdoi/191052676)
 
-** Current version: v1.0.0 ** 
+RespMech analyses a time series of respiratory physiological recordings (e.g. exported from
+LabChart) breath by breath, and calculates:
 
-![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/githubimage.png)
+* **respiratory mechanics**
+* **inspiratory and expiratory work of breathing** (Campbell diagram)
+* **diaphragm EMG** — RMS envelope, ECG-artefact removal, spectral noise reduction
+* **Sample Entropy**<sup>[1](#sampenref1),[2](#sampenref2)</sup> (e.g. of diaphragm EMG)
 
-# About RespMech
-This is a port/rewrite of my MATLAB code from 2016, with some changes and additions. The code calculates 
+Version 2 is a desktop application with a guided setup, a live preview/QC screen and a batch
+runner. The physiology is a faithful port of the original v1 code and is locked by
+golden/characterisation tests — see [Correctness](#correctness).
 
-* respiratory mechanics
-* in- and expiratory work of breathing 
-* Sample Entropy (e.g. from diaphragm EMG)
-
-from a time series of recordings (e.g. obtained via LabChart).
+![RespMech — Setup](docs/img/setup.png)
 
 ---
 
-## 🚀 Version 2 (2026): installable package, CLI & desktop GUI
+## Install
 
-RespMech is being refactored into a production-ready, installable package with a
-clean calculation core, a real command-line tool, and a **PySide6 desktop GUI**.
-The physiology is unchanged and locked by golden/characterisation tests.
+**Recommended — the desktop app.** Download the installer for your platform from the
+[latest release](https://github.com/emilwalsted/respmech/releases): a `.dmg` (macOS) or `.msi`
+(Windows). It bundles its own Python — nothing else to install.
 
-**Install & use** (see [docs/INSTALL.md](docs/INSTALL.md)):
+**From source** (developers, or to use the CLI):
+
 ```bash
-pipx install respmech                 # command-line tool
-pip install "respmech[gui]"           # + desktop GUI  (respmech-gui)
-
-respmech migrate old_settings.py -o settings.toml   # convert v1 settings (no code run)
-respmech validate settings.toml
-respmech run settings.toml            # batch;  --dry-run to compute without writing
-respmech-gui                          # GUI: Settings → Preview & tuning → Run
+git clone https://github.com/emilwalsted/respmech.git
+cd respmech
+pip install -e ".[dev,gui]"      # gui = PySide6 desktop app;  dev adds the test stack
+respmech-gui                     # launch the desktop app
 ```
 
-Settings are now declarative **TOML** (no longer an executable `.py`); the
-`migrate` command converts old settings files and prints a report of every field
-moved/renamed/dropped. The section below documents the original v1 workflow, which
-still describes the analysis; the migrator maps it onto the new format.
+Extras: `gui` (desktop app), `emg` (librosa — spectral noise reduction), `plots` (matplotlib
+diagnostic figures), `dev` (tests). See [docs/INSTALL.md](docs/INSTALL.md) for details.
 
-- Design & rationale: [docs/PLAN.md](docs/PLAN.md)
-- How the calculations work (formulas/units): [docs/REVERSE_ENGINEERING.md](docs/REVERSE_ENGINEERING.md)
-- Correctness tests: [tests/golden/](tests/golden/)
+## Using the app
+
+```bash
+respmech-gui
+```
+
+Three screens, in the order you work:
+
+| Screen | What you do |
+|---|---|
+| **Setup** | Point at your recordings, map the data columns to channels, choose what to save. Assign channels visually from the data if you prefer. |
+| **Preview & QC** | See the analysis on one file *before* running the batch: breath segmentation, Campbell loops, and dedicated tabs to tune **EMG – ECG reduction** and **EMG – noise reduction** against the live signal. Click a breath to exclude it. |
+| **Run & results** | Run the batch, watch progress per file, and open the output folder. |
+
+![RespMech — Preview & QC](docs/img/preview-mechanics.png)
+
+Settings are stored as a declarative **TOML** *analysis* file (no longer an executable `.py`).
+
+## Command line
+
+```bash
+respmech run settings.toml            # process a batch  (--dry-run computes without writing)
+respmech validate settings.toml       # check the settings and the input files
+respmech migrate old_settings.py -o settings.toml   # convert a v1 settings file (runs no v1 code)
+```
+
+`migrate` prints a report of every field moved, renamed or dropped.
 
 ---
 
-# Prerequisites
-The code runs on Python 3.6+. If you don't have Python installed, I would recommend that you download and install the free [Anaconda](https://www.anaconda.com/distribution/) – An all-inclusive package for scientists that contains everything you need. I prefer running/editing with Spyder (choose from the Anaconda main menu).
+## Data recording requirements
 
-# Getting started
-The file **respmech.py** contains the actual analysis code. Start by downloading it. You should then create another Python file for each setting/project which contains the analysis settings for that particular project (i.e. points to input files etc.). Make a copy of the template project file **example.py** and rename/modify to reflect your setup and analysis (see below).
+Input data do *not* need to be a specific length, but because some outputs are per-time
+(e.g. minute ventilation) you must specify the **sampling frequency** of the recording.
 
-Specifically, Input and Output location details must be provided in the settings template in order to render the code functional (see details below). Additional details (e.g. samplingfrequency; file format) are used to further tailor the code to the settings of your data acquisition file and resulting exported analysis files.
+The code analyses data breath by breath, and it is imperative that the recording
+**starts with the last part of an expiration and ends with the first part of an inspiration**.
+The recording is trimmed automatically to start at exactly the first inspiration and end at
+exactly the last expiration.
 
-### Running the code
-You can run your analysis by opening your modified **example.py** in e.g. Spyder (from within the Anaconda main menu) and selecting "Run". If you prefer running the code in a command line window, type
+Breaths are segmented by joining an inspiration with the following expiration, using the **flow**
+signal to find the transition. A *breath-separation buffer* absorbs "wobbly" flow around zero
+(common in quiet breathing); its length depends on your sampling and breathing frequency.
 
-_Windows:_
-```
-python C:\path\to\my-settings-file.py
-```
-_Mac/Linux:_
-```
-python /path/to/my-settings-file.py
-```
+**Flow and volume conventions.** The analysis assumes flow is **negative on inspiration** and
+positive on expiration — invert it in Setup if your recording is the other way around. Volume
+must be **inspired volume**; it can be inverted, or integrated from the flow signal if your
+recording has no volume channel. **Volume drift** (common when integrating from flow) is
+corrected automatically, with an optional trend adjustment on top.
 
-## Input and Output: Data locations and format
-Currently, supported input formats are: MATLAB, Excel and CSV. You can extend this yourself by modifying the _load()_ function in **respmech.py**.
-
-First, you need to modify the settings file path below to point to **respmech.py**. This is to ensure that you are in control of exactly which version of the analysis code you use. _Note: the examples below use Unix-style paths – if you are on Windows, use 'C:\\\\folder\\\\folder...' style. NOTE: Backslashes __must__ be double._
-
-```
-#Modify to the location of your respmech.py:
-spec = importlib.util.spec_from_file_location("analyse", "/Users/emilwalsted/Documents/Respiratory mechanics/respmech.py")
-```
-
-Next, specify input folder and file mask, and the output path where the results of the analysis will be saved. 
-
-```
-'inputfolder': "/Users/emilwalsted/Documents/Respiratory mechanics/test/input/MATLAB Mac",
-'files': "*.mat",
-    
-'outputfolder': "/Users/emilnielsen/Documents/Medicin/Forskning/Code/Respiratory mechanics/test/output", 
-```
-The output folder must have two subfolders named 'data' and 'plots', respectively.
-
-_Note for MATLAB input format:_ MATLAB format files exported from Windows and Macintosh versions of LabChart have different formats. You must specify if the input files were created using a Windows or Macintosh version:
-```
-    'matlabfileformat': 2,  #Only relevant if input data are in MATLAB format. 1=MATLAB for Windows, 2=MATLAB for Mac.
-```
-
-## Data recording requirements: 
-The respmech.py code analyses a time series of respiratory physiological measurements. Your input data do _not_ need to be a specific length of time, but as some output values are calculated as per-time (e.g. minute ventilation), you must specify the sampling frequency of the input data for the calculations to be correct:
-
-```
-'samplingfrequency': 4000, #No. of data recordings per second
-```
-
-The code analyses data breath-by-breath and it is imperative that input data **starts with the last part of an expiration and end with the first bit of an inspiration**. The data recording is automatically trimmed at the beginning and end, to start at exactly the first inspiration and end at exactly the last expiration. 
-
-
-![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/datatrim1.png)
-
-
-Breath segmenting is performed automatically by joining an inspiration with the following expiration. The _flow_ signal is used to determine the transition between inspiration and expiration. To allow for a bit of "wobbly" flow around 0 (as it often happens in quiet breathing), a buffer mechanism mitigates these artefacts. You can adjust the buffer length (i.e. in how many observations the "wobbling" could take place - value will vary based on sampling frequency and breathing frequency):
-
-```
-'breathseparationbuffer': 800,
-```
-**Flow and volume adjustments**
-For correct analysis the code assumes that the flow signal is negative on inspiration and positive on expiration. Should your data recording have it the other way around, you can use the setting _inverseflow_ to inverse the input signal:
-
-```
-'inverseflow': False, #True: For calculations, inspired flow should be negative. This setting inverses the input flow signal. Default is False.
-```
-
-If your input data do not contain a volume signal, RespMech.py can integrate the flow signal for you:
-
-```
-'integratevolumefromflow': True, #True: Creates the volume signal by integrating the (optionally reversed) flow signal. False: Volume is specified in input data.
-```
-
-If your input data does contain a volume signal, it must be _inspired volume_ for analysis. If your volume signal is expired volume, you can inverse this using the setting
-
-```
-'inversevolume': False, #True: For calculations, inspired volume should be positive and expired should be negative. This setting inverses the volume input signal. Default is False.
-```
-
-***Volume drift*** (often as a result of integrating volume from flow) can be automatically corrected by the respmech.py by specifying 
-
-```
-'correctvolumedrift': True, #True: Correct volume drift. False: Do not correct volume drift. Default is True
-```
-
-A flow- and volume corrections overview for each file is created in the output/plots folder, allowing you to visually verify the corrections made:
-
-![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/volumedrift1.png)
-
-## Specifying input columns
-You need to specify in your settings which columns in your data contain the required individual physiological measurements:
-```
-    'column_poes': 8,     #Column number containing oesophageal pressure
-    'column_pgas': 9,    #Column number containing gastric pressure
-    'column_pdi': 6,     #Column number containing transdiaphragmatic pressure
-    'column_volume': 23, #Column number containing (inspired) volume, BTPS
-    'column_flow': 20,   #Column number containing flow
-    'columns_entropy': [1,2,3,4,5],   #The data columns containing EMG signals to calculate EMG entropy from, e.g. [4,5,6,7,8]. Leave as [] to skip EMG calculation.
-
-```
+Supported input formats: **MATLAB**, **Excel**, **CSV/text**. (MATLAB files exported from the
+Windows and macOS versions of LabChart differ — pick the variant in Setup ▸ Advanced.)
 
 ## Work of breathing
-Two options are available for calculating WOB: Breath-by-breath, calculation WOB from individual breath Campbell diagrams which are then averaged or, alternatively, first create an averaged pressure/volume loop of the breaths in the file, then calculate WOB from a Campbell diagram made from the averaged p/v loop. The two methods give quite similar results but in the case of irregular breaths the latter might be more robust. Also, you can specify the number of observations for resampling when averaging the loop. Unless each breath is very short or your sampling frequency very low, you can leave this at 500.
 
-```
-'calcwobfromaverage': True, #False: calculates WOB for each breath, then averages. True: Averages breaths to produce an averaged Campbell diagram, from which WOB is calculated.
-'avgresamplingobs': 500, #Downsampling to # of observations for breath P/V averaging. A good default would be sampling frequency divided by 8-10. Must be lower than the lowest # of observation in any inspiration or expiration in the file.
-```
+Two options: calculate WOB from each breath's Campbell diagram and average the results, or first
+build an averaged pressure/volume loop and calculate WOB from that. The two give similar results,
+but with irregular breaths the averaged loop is more robust. The number of resampling points used
+when averaging the loop is configurable (a good default is the sampling frequency ÷ 8–10; it must
+be lower than the shortest inspiration or expiration in the file).
 
-## Entropy calculation
-Sample Entropy<sup>[1](#sampenref1),[2](#sampenref2)</sup> here is calculated for the selected input columns/channels on a per-breath basis, and averaged as the other measurements. If you selected to calculate entropy for one or more columns, you must specify the parameters for entropy calculation in your settings:
+## Entropy
 
-```
-'entropy_epochs': 2, #Epoch parameter (m) to use with entropy calculation. Default is 2.
-'entropy_tolerance': 0.1, #Tolerance (r) parameter to use with entropy calculation. This value is multiplied with the SD of the data. Default is 0.1.
-```
+Sample Entropy is calculated per breath for the selected channels and averaged like the other
+measurements. The embedding (*m*) and tolerance (*r*, multiplied by the SD of the data)
+parameters are configurable in Setup ▸ Advanced.
 
 _<a name="sampenref1">1</a>) Lozano-García M, Leonardo, Moxham J, Rafferty F., Torres A, Jolley CJ, Jané R. Assessment of Inspiratory Muscle Activation using Surface Diaphragm Mechanomyography and Crural Diaphragm Electromyography. doi:10.1109/EMBC.2018.8513046._
 
-_<a name="sampenref2">2</a>) Aboy M, David, Austin D, Pau. Characterization of Sample Entropy in the Context of Biomedical  Signal Analysis. 2007. doi:10.1109/IEMBS.2007.4353701._
+_<a name="sampenref2">2</a>) Aboy M, David, Austin D, Pau. Characterization of Sample Entropy in the Context of Biomedical Signal Analysis. 2007. doi:10.1109/IEMBS.2007.4353701._
 
+---
 
+## Output
 
-## Output data
-Output data are saved as Excel spreadsheets in the _'data'_ subfolder of the output fold    er, while diagnostic plots are saved in the _‘plots’_ subfolder of the output folder. 
+Everything lands in the output folder you choose:
 
-### Numeric Data
-There are two options for numeric data output: The overall averages from each file, merged together in a single spreadsheet, and the individual breath-by-breath values for each file are saved in a separate spreadsheet per input file. You can turn these outputs on/off using these settings and choose to output both or either option:
-```
-# Data input/output
-'saveaveragedata': True, #False: don't save, True: save.
-'savebreathbybreathdata': True, #False: don't save, True: save.
-```
+* **`data/`** — Excel workbooks: the across-file averages, and (optionally) breath-by-breath
+  values per file, plus a cohort summary. Each workbook carries its own Units and Provenance
+  sheets.
+* **`diagnostics/`** — vector **PDF** figures per file: Campbell/PV loops (averaged and
+  per breath), the analysed and raw signals, the staged volume correction, and per-channel
+  EMG overviews at each conditioning stage (raw → ECG-removed → noise-reduced). Optionally the
+  EMG channels as WAV.
+* **`analysis-used.toml`** and **`run-report.txt`** — the exact settings and a log of what was
+  read, kept, excluded and written, so a folder of results carries its own recipe.
 
-![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/outputdata.png)
+Use the diagnostic figures (or the Preview screen) to spot breaths to exclude — e.g. IC
+manoeuvres or coughs — then exclude them by clicking them in Preview.
 
-A detailed description of the output variables and how they are calculated is available here: [Output variable description (TODO)](http://TODO).
+![RespMech — Run & results](docs/img/run.png)
 
+## Correctness
 
-### Diagnostic plots
-A number of diagnostic plots allows you to interrogate the basis and validity of the calculations. For example, your recordings might include breaths that you wish to exclude from analysis (e.g. IC manoeuvres or coughs). The diagnostic plots are saved in the output folder, in the _'plots'_ subfolder. The following plots are available for each input file:
+The v2 engine is a port of the original v1 monolith. Golden/characterisation tests pin the
+output byte-for-byte against references baked from the original implementation, which is kept
+frozen in [`legacy/`](legacy/README.md) for exactly that purpose.
 
-* Raw data plot of Flow, Volume, Pes, Pga, and Pdi.
-* Trimmed data plot of the above
-* Volume drift correction plot (as shown above)
-* Breath-by-breath Campbell diagrams 
-
-Using these diagnostic plots you can then determine the breath numbers you wish to exclude (if any), and enter this in the exclusion list:
-
-```
-#Exclude individual breaths from analysis, if appropriate. Takes input in the format [['file1.mat', [04, 07]], ['file2.mat', [01]]]. If no breaths should be excluded, set to []. NOTE: File name is case sensitive!
-'excludebreaths': [
-                  ['Testsubject - Rest.mat', [5,7]],
-                  ['Testsubject - 000W.mat', [2]],
-                  ['Testsubject - 020W.mat', [2,3,4,10]],
-                  ['Testsubject - 040W.mat', []],
-                  ['Testsubject - 060W.mat', [1,4,5,6,7]], 
-                  ['Testsubject - 080W.mat', [1,2,7,9]],
-                  ['Testsubject - 100W.mat', [6,7]],
-                  ['Testsubject - 120W.mat', [1,2,3,11]],
-                  ['Testsubject - 140W.mat', [3,10,11,13]],
-                  ['Testsubject - 160W.mat', [1,3,11]],
-                  ['Testsubject - 180W.mat', [1,6,16]],
-                  ['Testsubject - 200W.mat', []],
-                  ['Testsubject - 220W.mat', []]                       
-                  ],
-```
-
-This is an example of the individual breaths Campbell diagrams, including breaths excluded from analysis:
-
-![Data trimming](https://github.com/emilwalsted/respmechdocs/blob/master/img/campbell.png)
-
-
-In some instances (i.e. irregular breaths), the automatic breath count might not be accurate. In this case you can override the automatically detected breath count, to allow for correct calculation of per-time based output variables (such as minute ventilation (VE)):
-
-```
-'breathcounts': [
-                ['Testsubject - Rest.mat', 5],
-                ['Testsubject - 140W.mat', 11]            
-                ],
-```
-
+* How the calculations work (formulas and units): [docs/REVERSE_ENGINEERING.md](docs/REVERSE_ENGINEERING.md)
+* Design and rationale: [docs/PLAN.md](docs/PLAN.md)
+* The tests: [tests/golden/](tests/golden/)
 
 ---
 
 # License and usage
-This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
- 
-This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+This program is free software: you can redistribute it and/or modify it under the terms of the
+GNU General Public License as published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+General Public License for more details.
 
 [Read the entire licence here.](LICENSE)
 
+Sample entropy is vendored from pyEntropy — see [`LICENSE pyentrp`](LICENSE%20pyentrp).
+
 ## Note to respiratory scientists
-I created this code for the purpose of my own work and shared it hoping that other researchers working with respiratory physiology  might find it useful. If you have any questions or suggestions that will make the code more useful to you or generally, please drop me an email.
 
-### How do I cite this code in scientific papers – and should I?
-It is up to you, really. Personally I am a fan of transparency and Open Source / Open Science and I would appreciate a mention. This will also make readers of your papers aware that this code exists – if you found it useful, perhaps they will too.
+I created this code for my own work and shared it hoping that other researchers working with
+respiratory physiology might find it useful. If you have questions or suggestions that would make
+it more useful, please drop me an email.
 
-Every released version of the code has its own individual DOI you can use for citation. You can reference the latest version by using this DOI: [![DOI](https://zenodo.org/badge/191052676.svg)](https://zenodo.org/badge/latestdoi/191052676) or a specific version using the DOI of that version. Click the DOI button to see a list of all available versions with a DOI.
+### How do I cite this code in scientific papers – and should I?
 
-An example of a citation could look like this:
+It is up to you, really. Personally I am a fan of transparency and Open Source / Open Science and
+I would appreciate a mention. This will also make readers of your papers aware that this code
+exists – if you found it useful, perhaps they will too.
 
-_[...] were calculated using the Python package RespMech (ES Walsted, RespMech v1.0, 2019, https://github.com/emilwalsted/respmech/, DOI: 10.5281/zenodo.3270826) [...]_
+Every released version has its own DOI. Reference the latest via
+[![DOI](https://zenodo.org/badge/191052676.svg)](https://zenodo.org/badge/latestdoi/191052676),
+or cite a specific version using that version's DOI (click the badge for the list).
 
-## Note to software engineers/computer scientists
-This code is far from as concise or computationally efficient as it could be. This is in part because it is a port of old code I wrote just for myself back in the day. I have since come to realise that my code has 'travelled' among researchers and although this is flattering, I would prefer that everyone also got the fixes, updates and improvements, and also proper instructions for usage. This is the first step towards a more generally useful code library and I have focused on some degree of readability in an attempt to enable respiratory scientists with basic programming skills to understand, debug and modify/extend the code themselves. Future versions might be properly restructured and offered as a PIP package but for now, this is good enough for jazz.
+An example citation:
+
+_[...] were calculated using the Python package RespMech (ES Walsted, RespMech v2.1, 2026, https://github.com/emilwalsted/respmech/, DOI: 10.5281/zenodo.3270826) [...]_
