@@ -350,8 +350,11 @@ class BusyOverlay(QWidget):
             "#busyLabel, #errLabel { color: palette(window-text); font-weight: 600; }"
             "#errIcon { color: #E08A4F; font-size: 17px; font-weight: 700; }"
             "#errHint { color: rgba(147,164,183,0.95); font-size: 11px; }"
+            # padding/min-* MUST be reset: the global QPushButton padding (7px 16px) is
+            # wider than this 24x24 circle and would clip the 'i' away entirely.
             "#infoBtn { background-color: " + acc + "; color: " + acc_fg + "; border: none;"
-            " border-radius: 12px; font-weight: 700; font-style: italic; }"
+            " border-radius: 12px; font-weight: 700; font-style: italic;"
+            " padding: 0; min-width: 0; min-height: 0; }"
             "#infoBtn:hover { background-color: " + acc_hover + "; }")
         panel.installEventFilter(self)
         self.setGeometry(panel.rect())
@@ -483,6 +486,7 @@ class PreviewScreen(QWidget):
         self.btn_next_file = QPushButton("▶")
         for b, tip in ((self.btn_prev_file, "Previous file (PgUp)"),
                        (self.btn_next_file, "Next file (PgDn)")):
+            b.setProperty("nav", True)      # drop the 16px side padding so the arrow has room
             b.setFixedWidth(30); b.setToolTip(tip)
         self.btn_prev_file.clicked.connect(lambda: self._step_file(-1))
         self.btn_next_file.clicked.connect(lambda: self._step_file(+1))

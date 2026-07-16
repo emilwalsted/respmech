@@ -778,3 +778,23 @@ def test_mechanics_batch_snapshot_is_mechanics_only(qapp, tmp_path, monkeypatch)
     assert snap.processing.emg.noise.enabled is False
     assert list(s.input.channels.emg) == [2, 3, 4]   # the real settings are untouched
     win.close()
+
+
+def test_no_button_label_is_clipped_by_theme_padding(qapp, tmp_path):
+    """Regression: the theme's QPushButton padding (7px 16px + borders = 34px) is WIDER
+    than the app's fixed-size glyph buttons, so their labels were clipped to nothing —
+    the ◀/▶ file steppers (30px) and the error-card 'i' (24px) both rendered blank on
+    macOS. Any fixed-width button needing more than its fixed width hides its label."""
+    from PySide6.QtWidgets import QPushButton
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    win.resize(1400, 900); win.show(); qapp.processEvents()
+    clipped = []
+    for b in win.findChildren(QPushButton):
+        if not b.text():
+            continue
+        fixed = b.minimumWidth() == b.maximumWidth() and b.maximumWidth() < 16777215
+        if fixed and b.sizeHint().width() > b.maximumWidth():
+            clipped.append((b.text(), b.maximumWidth(), b.sizeHint().width()))
+    assert clipped == [], f"buttons whose label cannot fit their fixed width: {clipped}"
+    win.close()
