@@ -210,7 +210,7 @@ def _write_run_report(result, settings, outputfolder: str,
              + (f" (→ {samp.resample_to_frequency} Hz)" if samp.resample else ""))
     L.append(f"  Breath separation:       by {seg.method}, buffer {seg.buffer}")
     L.append(f"  ECG removal:             {_yn(emg.remove_ecg)}")
-    L.append(f"  EMG noise removal:       {_yn(emg.remove_noise)}")
+    L.append(f"  EMG noise removal:       {_yn(emg.noise.enabled)}")
     L.append(f"  EMG normalisation:       {emg.normalization}")
     L.append("")
 

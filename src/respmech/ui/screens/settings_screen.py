@@ -242,7 +242,7 @@ class SettingsScreen(QWidget):
         self.save_average = QCheckBox("Average breath-data workbook")
         self.save_bbb = QCheckBox("Breath-by-breath workbook (per file)")
         self.save_processed = QCheckBox("Processed-signal CSV (per file)")
-        self.include_ignored = QCheckBox("Include excluded breaths in the averages")
+        self.include_ignored = QCheckBox("Include excluded breaths in the processed CSV")
         self.save_pv_avg = QCheckBox("Campbell / PV diagram — averaged")
         self.save_pv_ind = QCheckBox("Campbell / PV diagram — individual breaths")
         self.save_raw_fig = QCheckBox("Raw-signal figures")
@@ -254,7 +254,8 @@ class SettingsScreen(QWidget):
                 (self.save_bbb, "output.data.save_breath_by_breath", "A per-file breath-by-breath workbook."),
                 (self.save_processed, "output.data.save_processed", "The processed signal as a CSV per file."),
                 (self.include_ignored, "output.data.include_ignored_breaths",
-                 "Include excluded breaths when computing the exported averages (materially changes them).")):
+                 "Include the breaths you've excluded in the per-file processed-signal CSV only. "
+                 "Excluded breaths are always left out of the averages and workbooks; this does not change them.")):
             self._check_row(fsv, cb, var, tip)
         _lf = QLabel("Diagnostic figures"); _lf.setProperty("status", "muted"); fsv.addRow(_lf)
         for cb, var, tip in (

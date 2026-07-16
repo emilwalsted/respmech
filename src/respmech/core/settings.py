@@ -188,7 +188,9 @@ class DataOutput:
     save_average: bool = True
     save_breath_by_breath: bool = True
     save_processed: bool = False
-    include_ignored_breaths: bool = True
+    # Only affects the per-file processed-signal CSV (results.py); excluded breaths are
+    # ALWAYS left out of the averages/workbooks. Legacy default was off.
+    include_ignored_breaths: bool = False
 
 
 @dataclass
