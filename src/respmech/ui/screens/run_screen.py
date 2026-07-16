@@ -12,7 +12,7 @@ import os
 
 from PySide6.QtCore import Signal, QThread, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMessageBox, QProgressBar,
+from PySide6.QtWidgets import (QHBoxLayout, QHeaderView, QLabel, QMessageBox, QProgressBar,
                                QPushButton, QTableWidget, QTableWidgetItem,
                                QPlainTextEdit, QVBoxLayout, QWidget)
 
@@ -51,7 +51,7 @@ class RunScreen(QWidget):
         self.refresh_actions()
 
     def _build(self):
-        root = QVBoxLayout(self)
+        root = QVBoxLayout(self); root.setContentsMargins(11, 11, 11, 11)   # deterministic, matches Setup
         bar = QHBoxLayout()
         self.btn_run = QPushButton("Run batch")
         self.btn_dry = QPushButton("Dry run (no files written)")
@@ -85,6 +85,10 @@ class RunScreen(QWidget):
         # P20: per-file results — status + breath count; double-click drills into Preview
         self.files_table = QTableWidget(0, 3)
         self.files_table.setHorizontalHeaderLabels(["File", "Status", "Breaths"])
+        _hh = self.files_table.horizontalHeader()
+        _hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)             # File fills the width
+        _hh.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        _hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.files_table.setToolTip("Double-click a file to open it in Preview & QC.")
         self.files_table.verticalHeader().setVisible(False)
         self.files_table.setEditTriggers(self.files_table.EditTrigger.NoEditTriggers)
@@ -402,16 +406,14 @@ class RunScreen(QWidget):
         self.files_table.setRowCount(len(files))
         for r, (fname, fr) in enumerate(files.items()):
             err = getattr(fr, "error", None)
-            status = "failed" if err else "ok"
+            status = "Failed" if err else "OK"
             bt = getattr(fr, "breaths_table", None)
             nb = "" if err else str(len(bt) if bt is not None else 0)
             name_item = QTableWidgetItem(fname)
-            if err:
-                name_item.setToolTip(str(err))
+            name_item.setToolTip(str(err) if err else fname)   # full name recoverable if the column elides
             self.files_table.setItem(r, 0, name_item)
             self.files_table.setItem(r, 1, QTableWidgetItem(status))
             self.files_table.setItem(r, 2, QTableWidgetItem(nb))
-        self.files_table.resizeColumnsToContents()
 
     def _on_file_row_activated(self, row, _col):
         item = self.files_table.item(row, 0)

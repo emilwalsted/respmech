@@ -165,7 +165,7 @@ def _pv_individual(fr, fname, path, cols, rows):
         return None
     return _pv_grid(bs, f"{fname} — Campbell diagrams", path, cols, rows,
                     "volume", "poes", "eilv", "eelv",
-                    lambda b: f"Breath #{b.get('number', '?')}")
+                    lambda b: f"#{b.get('number', '?')}")
 
 
 def _pv_cohort(result, path, cols, rows):
@@ -346,7 +346,7 @@ def _drift(fr, fname, path):
     ax = fig.add_subplot(111)
     ax.plot(x, eilv, "o-", color=_BRAND, label="end-inspiratory volume")
     ax.plot(x, eelv, "o-", color=_ACCENT, label="end-expiratory volume")
-    ax.set_xlabel("Breath #")
+    ax.set_xlabel("Breath number")
     ax.set_ylabel("Lung volume (L)")
     ax.set_title(f"{fname} — volume endpoints across breaths (drift check)")
     ax.legend(loc="best", frameon=False)

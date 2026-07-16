@@ -563,8 +563,8 @@ def test_save_open_roundtrip_preserves_surfaced_fields(qapp, tmp_path):
     _fill_valid_input(sc); _fill_valid_output(sc, tmp_path); _fill_valid_channels(sc)
     # set non-defaults across the groups
     sc.cols_entropy.setText("10,11,12")
-    sc.seg_method.setCurrentText("volume")
-    sc.wob_from.setCurrentText("individual")
+    sc.seg_method.setCurrentText("Volume")        # display text; canonical token "volume" is userData
+    sc.wob_from.setCurrentText("Individual")
     sc.emg_rms_window.setValue(0.1)
     sc.emg_outlier_sd.setValue(2.5)
     # ECG removal moved from the Settings screen to the Preview "› EMG – ECG reduction" tab;
@@ -580,8 +580,8 @@ def test_save_open_roundtrip_preserves_surfaced_fields(qapp, tmp_path):
     sc2 = win2.settings_screen
     assert sc2.open_analysis(str(p)) is True
     assert sc2.cols_entropy.text().replace(" ", "") == "10,11,12"
-    assert sc2.seg_method.currentText() == "volume"
-    assert sc2.wob_from.currentText() == "individual"
+    assert sc2.seg_method.currentData() == "volume"      # model token restored via userData
+    assert sc2.wob_from.currentData() == "individual"
     assert abs(sc2.emg_rms_window.value() - 0.1) < 1e-9
     assert abs(sc2.emg_outlier_sd.value() - 2.5) < 1e-9
     e2 = sc2.state.settings.processing.emg          # ECG params persist at the model level

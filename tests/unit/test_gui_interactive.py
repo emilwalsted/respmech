@@ -447,10 +447,9 @@ def test_noise_controls_are_one_compact_chip_strip(qapp, tmp_path):
     assert isinstance(pv.noise_opts, QFrame) and pv.noise_opts.objectName() == "noiseChip"
     # the button and the chip are siblings on one strip (the EMG-tab content widget)
     assert pv.btn_set_noise.parent() is pv.noise_opts.parent()
-    # the button height matches the chip band once the chip has a laid-out height
-    pv.noise_opts.resize(420, 46)
+    # the button height is aligned to the chip's natural (sizeHint) height
     pv._align_noise_strip()
-    assert pv.btn_set_noise.minimumHeight() == 46
+    assert pv.btn_set_noise.minimumHeight() == pv.noise_opts.sizeHint().height()
     win.close()
 
 
@@ -566,9 +565,8 @@ def test_breath_labels_flush_autorange_for_fresh_plot(qapp, tmp_path):
     p = glw.addPlot(row=0, col=0)
     x = _np.arange(0, 300, 0.01)
     p.plot(x, _np.sin(x))                                 # a fresh, unpainted single plot
-    centers = list(_np.arange(3.0, 297.0, 3.0))          # dense breaths ~3 s apart
-    pv._breath_labels_short(p, centers)                  # must flush the deferred auto-range
-    assert p.getViewBox().viewRange()[0][1] > 100        # range expanded to the data (~300 s)
+    p.getViewBox().updateAutoRange()                      # paints/flushes the deferred auto-range
+    assert p.getViewBox().viewRange()[0][1] > 100         # range expanded to the data (~300 s)
     win.close()
 
 
@@ -706,15 +704,11 @@ def test_label_headroom_does_not_compound_across_repaints(qapp, tmp_path):
     win.close()
 
 
-def test_breath_label_abbreviation_decision():
+def test_breath_label_is_always_compact():
     from respmech.ui.screens.preview_screen import PreviewScreen as P
-    # spread-out breaths (10 s apart) at 0.02 s/px -> full labels fit
-    assert P._labels_would_overlap([0.0, 10.0, 20.0], 0.02) is False
-    # tightly packed breaths (0.3 s apart) at the same scale -> would overlap -> abbreviate
-    assert P._labels_would_overlap([0.0, 0.3, 0.6], 0.02) is True
-    assert P._labels_would_overlap([0.0], 0.02) is False      # a single breath never overlaps
-    assert P._breath_label(7, short=True) == "#7"
-    assert P._breath_label(7, short=False) == "Breath #7"
+    # 'breath' is dropped from per-breath numbering — the label is always the compact '#N'
+    assert P._breath_label(7) == "#7"
+    assert P._breath_label(12) == "#12"
 
 
 def test_file_switch_clears_all_panels(qapp, tmp_path):

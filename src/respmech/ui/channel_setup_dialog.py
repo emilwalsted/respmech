@@ -141,6 +141,7 @@ class ChannelSetupDialog(QDialog):
         for f in self._files:
             self.file_combo.addItem(os.path.basename(f))
         self.file_combo.setCurrentIndex(start)          # default to the first loadable file
+        self.file_combo.setToolTip(self.file_combo.currentText())   # recover a name elided at 440px
         self.file_combo.currentIndexChanged.connect(self._on_file_changed)
         frow.addWidget(flab); frow.addWidget(self.file_combo); frow.addStretch(1)
         v.addLayout(frow)
@@ -248,6 +249,7 @@ class ChannelSetupDialog(QDialog):
             self.info.setText("Could not read that file.")
             return
         self._file_idx = idx
+        self.file_combo.setToolTip(self.file_combo.currentText())
         self._names = list(names)
         t = np.arange(matrix.shape[0], dtype=float) / self._fs
         for i in range(self._ncols):
