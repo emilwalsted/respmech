@@ -214,6 +214,28 @@ def _write_run_report(result, settings, outputfolder: str,
     L.append(f"  EMG normalisation:       {emg.normalization}")
     L.append("")
 
+    # ECG / noise numeric diagnostics (audit #14): persist the R-peak counts, suppression,
+    # chosen prop_decrease and per-channel fidelity/ΔSNR — previously only shown in-app.
+    nr = getattr(result, "noise_report", None)
+    ecg_files = [(f, fr.ecg) for f, fr in ok.items() if getattr(fr, "ecg", None)]
+    if nr or ecg_files:
+        L.append("DIAGNOSTICS")
+        if ecg_files:
+            L.append("  ECG removal (R-peaks captured / peak-window RMS suppression):")
+            for f, d in ecg_files:
+                supp = d.get("suppression", float("nan"))
+                supp_s = f"{supp:.0%}" if supp == supp else "n/a"
+                L.append(f"    {f}: {d.get('n_peaks', 0)} peaks (channel {d.get('detect_channel')}), "
+                         f"suppression {supp_s}")
+        if nr:
+            L.append(f"  Noise reduction: prop_decrease {nr.get('prop_decrease')} "
+                     f"(fidelity target {nr.get('fidelity_target')})")
+            for ch in nr.get("channels", []):
+                fid, dsnr = ch.get("fidelity"), ch.get("delta_snr_db")
+                if fid is not None and dsnr is not None:
+                    L.append(f"    channel {ch.get('channel')}: fidelity {fid:.3f}, ΔSNR {dsnr:+.1f} dB")
+        L.append("")
+
     L.append(f"OUTPUTS WRITTEN ({len(written) + 1} files)")
     for p in written:
         try:

@@ -38,8 +38,8 @@ def test_run_batch_and_write(tmp_path):
                  "data/Cohort summary.xlsx",              # P8/P15 cohort aggregation
                  "analysis-used.toml", "run-report.txt"):  # P7 provenance
         assert os.path.isfile(os.path.join(tmp_path, name)), f"missing {name}"
-    # P11 diagnostic figures land under diagnostics/
-    assert any(p.endswith(".png") for p in written)
+    # P11 diagnostic figures land under diagnostics/ (vector PDF)
+    assert any(p.endswith(".pdf") and os.sep + "diagnostics" + os.sep in p for p in written)
     avg = pd.read_excel(os.path.join(tmp_path, "data", "Average breathdata.xlsx"), sheet_name="Data")
     assert list(avg["file"]) == ["synth_case_A.csv", "synth_case_B.csv"]
     assert "wobtotal" in avg.columns
