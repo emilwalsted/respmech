@@ -55,6 +55,8 @@ LEAD_S = 1.0                   # quiet rest lead-in (EMG- and ECG-free) for the 
 N_EMG = 3
 EMG_SCALE = (0.85, 1.0, 0.90)  # per-channel EMG amplitude (centre-weighted)
 ECG_SCALE = (0.55, 1.0, 0.70)  # per-channel ECG prominence (strongest on the middle electrode)
+ECG_R_OVER_EMG = 5.0           # R-wave peak as a multiple of the EMG burst peak (real: 5–20×);
+                               # this is why removal matters — an R-wave inflates the EMG RMS
 FILENAME = "sample_recording.csv"
 DETECT_CHANNEL = 1             # 0-based index of the strongest-ECG EMG channel
 
@@ -189,13 +191,16 @@ def _signals():
     # + the heartbeat artefact (centre-weighted) + a coloured noise floor
     burst_peak = 0.06
     tonic = 0.15
+    # The band-limited-noise carrier peaks at ~3× its RMS, so the instantaneous EMG burst
+    # peak on the strongest channel is ~3·burst_peak; the R-wave is ECG_R_OVER_EMG× that,
+    # i.e. it dwarfs the EMG (the whole point of ECG removal).
+    r_peak = ECG_R_OVER_EMG * 3.0 * burst_peak
     emg = []
     for ch in range(N_EMG):
         carrier = _emg_carrier(n, rng)
         amp = EMG_SCALE[ch] * burst_peak * (tonic * breathing + (1.0 - tonic) * env)
         floor = _coloured_noise(n, rng, amp=0.12 * EMG_SCALE[ch] * burst_peak)
-        r_amp = 3.0 * EMG_SCALE[ch] * burst_peak                   # R clearly above the burst
-        emg.append(amp * carrier + floor + ECG_SCALE[ch] * r_amp * ecg)
+        emg.append(amp * carrier + floor + ECG_SCALE[ch] * r_peak * ecg)
 
     # pressures: elastic + resistive, a smooth cardiac ripple, and low-frequency wander
     poes = poes_el + RESISTANCE * flow + 0.7 * cardiac + _physio_noise(n, rng, amp=0.6)
@@ -254,5 +259,7 @@ def build_sample_settings(desc: dict, output_folder: str):
     e.noise.use_expiration = False
     e.noise.reference_intervals = [desc["reference_interval"]]
     e.noise.auto_prop = True
+    e.plot_yscale = []          # auto-scale the diagnostic EMG figures: the raw stage is
+                                # dominated by the R-waves, the conditioned stages are ~5× smaller
     s.output.folder = output_folder
     return s
