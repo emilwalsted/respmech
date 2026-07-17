@@ -83,13 +83,20 @@ exactly the last expiration.
 
 Breaths are segmented by joining an inspiration with the following expiration, using the **flow**
 signal to find the transition. A *breath-separation buffer* absorbs "wobbly" flow around zero
-(common in quiet breathing); its length depends on your sampling and breathing frequency.
+(common in quiet breathing); its length depends on your sampling and breathing frequency. In
+Preview & QC you can click any breath — e.g. an IC manoeuvre or a cough — to drop it from the
+analysis:
+
+![Breath segmentation and exclusion](docs/img/breath-exclusion.png)
 
 **Flow and volume conventions.** The analysis assumes flow is **negative on inspiration** and
 positive on expiration — invert it in Setup if your recording is the other way around. Volume
 must be **inspired volume**; it can be inverted, or integrated from the flow signal if your
 recording has no volume channel. **Volume drift** (common when integrating from flow) is
-corrected automatically, with an optional trend adjustment on top.
+corrected automatically, with an optional trend adjustment on top — each breath's end-expiratory
+volume should return to the same baseline, and when it creeps the correction pulls it back:
+
+![Volume drift correction](docs/img/drift.png)
 
 Supported input formats: **MATLAB**, **Excel**, **CSV/text**. (MATLAB files exported from the
 Windows and macOS versions of LabChart differ — pick the variant in Setup ▸ Advanced.)
@@ -101,6 +108,22 @@ build an averaged pressure/volume loop and calculate WOB from that. The two give
 but with irregular breaths the averaged loop is more robust. The number of resampling points used
 when averaging the loop is configurable (a good default is the sampling frequency ÷ 8–10; it must
 be lower than the shortest inspiration or expiration in the file).
+
+<p align="center"><img src="docs/img/campbell.png" alt="Campbell / PV loop" width="480"></p>
+
+The enclosed area of the oesophageal-pressure–volume loop is the inspiratory work of breathing:
+the faint loops are the individual breaths, the bold one their average, the diagonal the passive
+elastic-recoil line, and the shaded triangle the elastic component.
+
+## Diaphragm EMG
+
+When EMG channels are present, each is conditioned in steps before its RMS envelope and (optionally)
+sample entropy are measured. The heartbeat (**ECG**) artefact is detected on the clearest channel
+and subtracted, then **spectral noise reduction** — trained on a diaphragm-quiet reference — cleans
+the residual noise floor while preserving the inspiratory burst. Both steps are tuned against the
+live signal on the Preview screen's EMG tabs, and every stage is written to the diagnostic figures:
+
+![Diaphragm EMG conditioning stages](docs/img/emg-stages.png)
 
 ## Entropy
 
