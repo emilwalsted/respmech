@@ -48,13 +48,16 @@ Three screens, in the order you work:
 
 | Screen | What you do |
 |---|---|
-| **Setup** | Point at your recordings, map the data columns to channels, choose what to save. Assign channels visually from the data if you prefer. |
-| **Preview & QC** | See the analysis on one file *before* running the batch: breath segmentation, Campbell loops, and dedicated tabs to tune **EMG – ECG reduction** and **EMG – noise reduction** against the live signal. Click a breath to exclude it. |
-| **Run & results** | Run the batch, watch progress per file, and open the output folder. |
+| **Setup** | Point at your recordings, map the data columns to channels, choose what to save. Assign channels visually from the data if you prefer. Settings validate as you type — the status bar flags anything inconsistent. |
+| **Preview & QC** | See the analysis on one file *before* running the batch: breath segmentation, the Campbell loop and the per-breath table, and dedicated tabs to tune **EMG – ECG reduction** and **EMG – noise reduction** against the live signal. Click a breath to exclude it. |
+| **Run & results** | Run the batch, watch progress per file, review the per-file status and averaged metrics, and open the output folder. |
 
 ![RespMech — Preview & QC](docs/img/preview-mechanics.png)
 
 Settings are stored as a declarative **TOML** *analysis* file (no longer an executable `.py`).
+Open, save and switch between analyses — including your recently opened files — from the
+**Analysis** menu in the header, which is available on every screen; RespMech marks unsaved
+edits in the title bar and asks before discarding them.
 
 ## Command line
 
@@ -174,4 +177,4 @@ or cite a specific version using that version's DOI (click the badge for the lis
 
 An example citation:
 
-_[...] were calculated using the Python package RespMech (ES Walsted, RespMech v2.1, 2026, https://github.com/emilwalsted/respmech/, DOI: 10.5281/zenodo.3270826) [...]_
+_[...] were calculated using the Python package RespMech (ES Walsted, RespMech v2.2, 2026, https://github.com/emilwalsted/respmech/, DOI: 10.5281/zenodo.3270826) [...]_
