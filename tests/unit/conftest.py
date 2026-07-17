@@ -105,16 +105,28 @@ def _close_top_level_windows():
     app = QApplication.instance()
     if app is None:
         return
+    # Reap any widget torn down during the test BEFORE scanning: the test's local vars
+    # are gone by now, so an unreferenced window's C++ half may be mid-destruction, and
+    # topLevelWidgets() SEGFAULTS while wrapping such a pointer on py3.11 (py3.12's GC
+    # timing hides it) — before any per-widget isValid check can run. A gc pass finalises
+    # the dropped wrappers and a DeferredDelete-only dispatch drains the resulting
+    # deleteLater's, so topLevelWidgets() then returns only live windows. DeferredDelete
+    # is dispatched alone (not processEvents) so the timers this net exists to stop never
+    # fire.
+    import gc  # noqa: PLC0415
+    from PySide6.QtCore import QEvent  # noqa: PLC0415
+    gc.collect()
+    try:
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    except Exception:                       # pragma: no cover - defensive
+        pass
     try:
         import shiboken6  # noqa: PLC0415
         _alive = shiboken6.isValid
     except Exception:                       # pragma: no cover - shiboken ships with PySide6
         _alive = lambda _w: True            # noqa: E731
     for w in list(app.topLevelWidgets()):
-        # topLevelWidgets() can still list widgets whose C++ half is mid-destruction
-        # (deleteLater'd during the test); touching one is a hard SEGFAULT on the
-        # macOS/py3.11 CI runner, which no try/except can catch.
-        if not _alive(w):
+        if not _alive(w):                   # belt-and-braces after the reap above
             continue
         try:
             # Hide BEFORE closing: this net is plumbing, not a user closing a window, and
