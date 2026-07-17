@@ -140,7 +140,16 @@ def _one_breath(rng, T, vt):
     flow = -dvdt                                                   # inspiration → flow negative
     poes_el = POES_EE - ELASTANCE * vol - ELASTANCE_CURV * vol ** 2
     pgas = PGAS_EE + (PGAS_SWING / vt) * vol
-    env = np.clip(np.sin(np.pi * t / T), 0, None) ** 1.2           # inspiratory-weighted burst
+    # EMG burst confined to INSPIRATION (the negative-flow first half): it rises from
+    # inspiration onset, crescendos to a peak late in inspiration, decrescendos back to
+    # near-silent by end-inspiration, and is quiet through expiration — so successive
+    # bursts sit over the inspirations with a clear gap (the expiration) between them,
+    # coordinated with flow (hence with the Poes/Pgas swings built from the same breath).
+    u = t / (0.5 * T)                                             # 0..1 over inspiration, >1 after
+    up = 0.65                                                     # burst peaks late in inspiration
+    rise = np.clip(u / up, 0, 1) ** 1.3
+    fall = np.clip((1.0 - u) / (1.0 - up), 0, 1) ** 1.6
+    env = np.where(u <= 1.0, np.where(u < up, rise, fall), 0.0)
     return vol, flow, poes_el, pgas, env
 
 
@@ -165,9 +174,12 @@ def _signals():
     poes_el = np.concatenate(poesel_all); pgas = np.concatenate(pgas_all)
     env = np.concatenate(env_all)
     n = len(flow)
-
-    # the neural drive leads the flow slightly — advance the burst envelope by ~80 ms
-    env = np.roll(env, -int(0.08 * FS)); env[-int(0.08 * FS):] = 0.0
+    # the neural drive leads the flow slightly — advance the burst envelope by ~50 ms
+    lead = int(0.05 * FS)
+    env = np.roll(env, -lead); env[-lead:] = 0.0
+    # the tonic (between-burst) EMG floor is present only while breathing; the rest lead-in
+    # stays pure noise so [0, LEAD_S] is a clean reference for spectral noise reduction
+    breathing = np.ones(n); breathing[:nlead] = 0.0
 
     beats = _heartbeat_impulses(n, rng)                            # one shared cardiac clock
     ecg = _ecg_signal(beats, n)                                    # sharp QRS on the EMG
@@ -176,11 +188,11 @@ def _signals():
     # EMG channels: band-limited-noise carrier, inspiratory burst over a tonic floor,
     # + the heartbeat artefact (centre-weighted) + a coloured noise floor
     burst_peak = 0.06
-    tonic = 0.18
+    tonic = 0.15
     emg = []
     for ch in range(N_EMG):
         carrier = _emg_carrier(n, rng)
-        amp = EMG_SCALE[ch] * burst_peak * (tonic + (1.0 - tonic) * env)
+        amp = EMG_SCALE[ch] * burst_peak * (tonic * breathing + (1.0 - tonic) * env)
         floor = _coloured_noise(n, rng, amp=0.12 * EMG_SCALE[ch] * burst_peak)
         r_amp = 3.0 * EMG_SCALE[ch] * burst_peak                   # R clearly above the burst
         emg.append(amp * carrier + floor + ECG_SCALE[ch] * r_amp * ecg)
