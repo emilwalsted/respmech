@@ -128,8 +128,10 @@ amplitude, so if left in it dominates the signal and badly inflates the RMS — 
 clearest channel and subtracted first. Then **spectral noise reduction** — trained on a
 diaphragm-quiet reference — cleans the residual noise floor while preserving the inspiratory burst.
 Both steps are tuned against the live signal on the Preview screen's EMG tabs, and every stage is
-written to the diagnostic figures (all three rows below share one scale — the R-waves are so much
-larger than the EMG that they run off the top of the raw row):
+written to the diagnostic figures. The bold envelope below is the **RMS** the analysis actually
+measures: the raw one is dominated by the heartbeat (the R-waves run off the shared scale), and
+removing the ECG then reducing the noise drops the between-breath floor while keeping the bursts —
+the signal-to-noise of the inspiratory pattern roughly doubles from step 2 to step 3:
 
 ![Diaphragm EMG conditioning stages](docs/img/emg-stages.png)
 

@@ -203,7 +203,7 @@ def _signals():
     for ch in range(N_EMG):
         carrier = _emg_carrier(n, rng)
         amp = EMG_SCALE[ch] * burst_peak * (tonic * breathing + (1.0 - tonic) * env)
-        floor = _instrument_noise(n, rng, amp=0.6 * EMG_SCALE[ch] * burst_peak)
+        floor = _instrument_noise(n, rng, amp=0.35 * EMG_SCALE[ch] * burst_peak)
         emg.append(amp * carrier + floor + ECG_SCALE[ch] * r_peak * ecg)
 
     # pressures: elastic + resistive, a smooth cardiac ripple, and low-frequency wander

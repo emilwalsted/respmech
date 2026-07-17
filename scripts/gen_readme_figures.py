@@ -80,26 +80,38 @@ def _emg_stages(sig, path):
     # positions are marked ▼) — they don't need their full height to make the point
     ymax = 1.05 * max(np.max(np.abs(ecgr[m])), np.max(np.abs(noi[m])))
 
-    fig = Figure(figsize=(9.2, 5.2), dpi=140)
+    def rms(y):                                  # the 50 ms RMS envelope the analysis measures
+        w = int(0.05 * 1000); k = np.ones(w) / w
+        return np.sqrt(np.convolve(y ** 2, k, mode="same"))
+
+    _RMS = "#E08A2E"                             # amber — distinct from the blue signal and red ▼
+    fig = Figure(figsize=(9.2, 5.6), dpi=140)
     FigureCanvasAgg(fig)
     rows = [("1 · Raw EMG — heartbeat (ECG) R-waves run off-scale (detected R-peaks ▼)", raw, True),
             ("2 · ECG removed", ecgr, False),
             ("3 · ECG removed + spectral noise reduced", noi, False)]
     for i, (label, y, mark) in enumerate(rows):
         ax = fig.add_subplot(3, 1, i + 1)
-        ax.plot(t[m], y[m], color=_BRAND, lw=0.7)
+        ax.plot(t[m], y[m], color=_BRAND, lw=0.5, alpha=0.45,
+                label="signal" if i == 0 else None)
+        r = rms(y)[m]
+        ax.plot(t[m], r, color=_RMS, lw=1.5, label="RMS envelope" if i == 0 else None)
+        ax.plot(t[m], -r, color=_RMS, lw=1.5)
         ax.set_ylim(-ymax, ymax); ax.set_xlim(t0, t0 + 7.0)
         ax.set_ylabel("EMG (a.u.)", fontsize=8)
         ax.tick_params(labelsize=7); ax.grid(True, color=_MUTED, alpha=0.2)
-        ax.text(0.010, 0.94, label, transform=ax.transAxes, fontsize=9.5, va="top", ha="left",
-                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=_MUTED, alpha=0.85))
+        ax.text(0.010, 0.95, label, transform=ax.transAxes, fontsize=9.5, va="top", ha="left",
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=_MUTED, alpha=0.9))
         if mark and pk.size:
             ax.scatter(pk, np.full(pk.size, ymax * 0.90), s=24, c=_CAPTURE, marker="v",
                        zorder=6, clip_on=False)
+        if i == 0:
+            ax.legend(loc="upper right", fontsize=7.5, frameon=True, framealpha=0.9, ncol=2)
         if i < 2:
             ax.set_xticklabels([])
     fig.axes[-1].set_xlabel("Time (s)")
-    fig.suptitle("Diaphragm EMG conditioning — one channel, step by step", fontsize=12)
+    fig.suptitle("Diaphragm EMG conditioning — signal and its RMS envelope, step by step",
+                 fontsize=12)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     fig.savefig(path, bbox_inches="tight", facecolor="white")
 
