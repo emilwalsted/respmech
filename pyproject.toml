@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "respmech"
-version = "2.1.1"
+version = "2.2.0"
 description = "Respiratory mechanics, work of breathing and diaphragm EMG entropy analysis"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -66,7 +66,7 @@ addopts = "--import-mode=importlib"
 [tool.briefcase]
 project_name = "RespMech"
 bundle = "dk.respmech"                       # reverse-domain id (brand domain respmech.dk)
-version = "2.1.1"
+version = "2.2.0"
 url = "https://github.com/emilwalsted/respmech"
 license = "GPL-3.0-or-later"
 author = "Emil Schwarz Walsted"
