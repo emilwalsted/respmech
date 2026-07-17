@@ -65,8 +65,14 @@ def qapp():
     depending test when the GUI stack is unavailable."""
     pytest.importorskip("PySide6")
     pytest.importorskip("pyqtgraph")
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
     from respmech.ui import theme
+    # Native file dialogs are OS panels that ignore the offscreen platform: a test (or a
+    # crashed test's teardown) reaching an unmocked QFileDialog would pop a REAL macOS
+    # save panel on the developer's screen and block the suite until a human dismisses
+    # it. Widget-based dialogs stay inside the (offscreen) app instead.
+    QApplication.setAttribute(Qt.AA_DontUseNativeDialogs, True)
     app = QApplication.instance() or QApplication([])
     theme.apply_theme(app)
     return app
@@ -101,20 +107,39 @@ def _close_top_level_windows():
         return
     for w in list(app.topLevelWidgets()):
         try:
+            # Hide BEFORE closing: this net is plumbing, not a user closing a window, and
+            # MainWindow.closeEvent only asks about unsaved edits when the window is
+            # visible. A test that left a shown, dirty window behind would otherwise pop a
+            # REAL modal here — after monkeypatch teardown restored the real QMessageBox —
+            # and hang the whole run with nobody to answer it.
+            w.hide()
             w.close()
         except Exception:                   # pragma: no cover - defensive; never fail teardown
             pass
 
 
+@pytest.fixture(autouse=True)
+def _prefs_never_touch_real_settings(monkeypatch):
+    """EVERY test runs against a throwaway prefs scope. This is autouse because the damage
+    mode is silent and real: any test that opens or saves an analysis writes recents /
+    last-folder / last-rig through ui.prefs, and without isolation those writes land in the
+    USER'S real QSettings — a suite run once left pytest tmp paths in the developer's
+    actual recents menu and replaced their remembered rig with the synth test rig."""
+    try:
+        from respmech.ui import prefs  # noqa: PLC0415
+    except Exception:                   # pragma: no cover - respmech.ui always importable here
+        return
+    monkeypatch.setattr(prefs, "ORG", "RespMechTest")
+    monkeypatch.setattr(prefs, "APP", "RespMechTestSuite")
+
+
 @pytest.fixture
-def isolated_prefs(monkeypatch):
-    """Point ``ui.prefs`` (QSettings) at a throwaway scope so tests never touch — or
-    persist into — the real user preferences."""
+def isolated_prefs(_prefs_never_touch_real_settings):
+    """The throwaway prefs scope (see the autouse isolation above), CLEARED around the
+    test — for tests that assert on prefs contents and need a clean slate."""
     pytest.importorskip("PySide6")
     from PySide6.QtCore import QSettings
     from respmech.ui import prefs
-    monkeypatch.setattr(prefs, "ORG", "RespMechTest")
-    monkeypatch.setattr(prefs, "APP", "RespMechTestSuite")
     QSettings("RespMechTest", "RespMechTestSuite").clear()
     yield prefs
     QSettings("RespMechTest", "RespMechTestSuite").clear()

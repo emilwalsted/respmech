@@ -2,6 +2,8 @@
 window title + guarded New (P6), the live QC caution strip (P9), the surfaced signal
 transforms (P3), the output "what to save" checklist (P4) and the detected-format
 read-out (P28). Previously split across test_review_wave1/2/6.py."""
+import os
+
 import pytest
 
 from respmech.ui.state import AppState
@@ -47,9 +49,9 @@ def test_dirty_flag_and_window_title(qapp, tmp_path):
     assert "new analysis" in win.windowTitle().lower()
     sc.samp_freq.setValue(1234); sc._on_field_changed()  # a real edit
     assert sc.is_dirty()
-    assert win.windowTitle().rstrip().endswith("•")      # dirty bullet
+    assert win.windowTitle().rstrip().endswith("* (modified)")
     sc._mark_clean()
-    assert not sc.is_dirty() and not win.windowTitle().rstrip().endswith("•")
+    assert not sc.is_dirty() and "(modified)" not in win.windowTitle()
     win.close()
 
 
@@ -59,7 +61,7 @@ def test_new_analysis_only_confirms_when_dirty(qapp, monkeypatch):
     win = MainWindow(AppState()); sc = win.settings_screen
     calls = []
     monkeypatch.setattr(ss.QMessageBox, "question",
-                        staticmethod(lambda *a, **k: calls.append(1) or ss.QMessageBox.Yes))
+                        staticmethod(lambda *a, **k: calls.append(1) or ss.QMessageBox.Discard))
     sc.new_analysis()                                   # not dirty -> no confirmation
     assert calls == []
     sc.samp_freq.setValue(999); sc._on_field_changed()   # now dirty
@@ -171,14 +173,25 @@ def test_form_fields_are_bounded_and_never_elide(qapp, tmp_path):
     win.resize(1700, 950); win.show(); qapp.processEvents()
     column = sc.seg_buffer.width()                       # the QSS-capped numeric column
     for w in (sc.seg_method, sc.wob_from, sc.trend_method, sc.matlab_variant,
-              sc.emg_norm, sc.breath_counts_edit):
+              sc.emg_norm, sc.breath_counts_edit,
+              sc.in_files, sc.cols_emg, sc.cols_entropy, sc.group_regex):
         assert w.width() < win.width() / 3, f"{w} stretched to {w.width()}"
         assert w.width() >= w.sizeHint().width(), f"{w} elides its own text"
     # word-length choices share the spin column exactly; sentence-length ones get more room
-    for w in (sc.seg_method, sc.wob_from, sc.trend_method, sc.matlab_variant):
+    for w in (sc.seg_method, sc.wob_from, sc.trend_method, sc.matlab_variant,
+              sc.in_files, sc.cols_emg, sc.cols_entropy):
         assert w.width() == column
-    for w in (sc.emg_norm, sc.breath_counts_edit):
+    for w in (sc.emg_norm, sc.breath_counts_edit, sc.group_regex):
         assert column < w.width() <= 2.5 * column
+    # A QLineEdit's sizeHint ignores its placeholder (it stays 141px with or without one),
+    # so the no-elide assertion above cannot catch a clipped placeholder — check the pixel
+    # width against the contents box (widget width minus the QSS 2*8px padding + 2*1px border).
+    from PySide6.QtGui import QFontMetrics
+    fm = QFontMetrics(sc.group_regex.font())
+    assert fm.horizontalAdvance(sc.group_regex.placeholderText()) <= sc.group_regex.width() - 18
+    # the browse-row paths (in/out folder, noise reference) legitimately stay full width:
+    # they hold absolute paths and share their row with the Browse button
+    assert sc.in_folder.width() > win.width() / 2
     win.close()
 
 
@@ -196,6 +209,229 @@ def test_open_reconciles_clamped_form_values_into_state(qapp, tmp_path):
     assert sc.state.settings.input.format.sampling_frequency == 0   # ...but state still diverges
     sc.enter_open_mode()                             # the open path must reconcile the two
     assert sc.state.settings.input.format.sampling_frequency == 2000
+    win.close()
+
+
+def test_save_writes_back_to_the_opened_file_after_confirming(qapp, tmp_path, monkeypatch):
+    """'Save' overwrites the analysis that was opened — no chooser — but only after the user
+    confirms, because it replaces a file they may share. Declining must write nothing."""
+    from PySide6.QtWidgets import QMessageBox
+    from respmech.ui.main_window import MainWindow
+    p = tmp_path / "study.toml"
+    win = MainWindow(AppState(synth_settings(str(tmp_path))))
+    sc = win.settings_screen
+    sc.state.save_toml(str(p)); before = p.read_text()
+    sc.state.settings_path = str(p)
+    sc.samp_freq.setValue(1234); sc._on_field_changed()       # an edit to save
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: (asked.append(a[1]), QMessageBox.No)[1])
+    assert sc.save_analysis() is False                        # declined
+    assert asked and p.read_text() == before                  # ...nothing written
+    assert sc.is_dirty()                                      # ...and still dirty
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    assert sc.save_analysis() is True
+    assert "1234" in p.read_text() and not sc.is_dirty()      # written to the SAME file
+    win.close()
+
+
+def test_save_is_refused_while_the_settings_are_invalid(qapp, tmp_path, monkeypatch):
+    """Only valid settings may be saved. Validity here is the SETTINGS' own — a missing
+    input folder is about the machine, not the analysis, and must not hold the file
+    hostage (that would block saving an hour's work over an unmounted drive)."""
+    from PySide6.QtWidgets import QMessageBox
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(str(tmp_path))))
+    sc = win.settings_screen
+    assert sc.can_save()
+    sc.col_flow.setValue(5); sc.col_poes.setValue(5)          # one column, two signals
+    sc._on_field_changed()
+    assert not sc.can_save() and sc._save_blocker()
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.append(a[1]))
+    assert sc.save_analysis_as() is False and warned          # refused, with a reason
+    # a path problem is NOT a save blocker: the analysis itself is still coherent
+    sc.col_poes.setValue(7); sc._on_field_changed()
+    sc.state.settings.input.folder = str(tmp_path / "unmounted")
+    assert sc.can_save()
+    win.close()
+
+
+def test_closing_with_unsaved_changes_offers_to_save(qapp, tmp_path, monkeypatch):
+    """A dirty analysis must be rescued before the window goes. Cancel aborts the close and
+    must leave the window fully live — the prompt therefore runs BEFORE worker teardown."""
+    from PySide6.QtGui import QCloseEvent
+    from PySide6.QtWidgets import QMessageBox
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(str(tmp_path))))
+    win.show()                                                # the prompt is for USER closes:
+    sc = win.settings_screen                                  # a hidden window never asks
+    sc.samp_freq.setValue(1234); sc._on_field_changed()
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Cancel)
+    ev = QCloseEvent(); win.closeEvent(ev)
+    assert not ev.isAccepted()                                # close aborted
+    assert win.preview_screen.isEnabled()                     # ...and nothing was torn down
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Discard)
+    ev = QCloseEvent(); win.closeEvent(ev)
+    assert ev.isAccepted()
+    # a clean analysis is never asked about
+    win2 = MainWindow(AppState(synth_settings(str(tmp_path))))
+    win2.show()
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: pytest.fail("clean analysis must not prompt"))
+    ev = QCloseEvent(); win2.closeEvent(ev)
+    assert ev.isAccepted()
+    # a never-shown window's close is programmatic (scripting, headless tests): even a
+    # DIRTY one must not pop a modal — there is nobody to answer it, so it would hang
+    win3 = MainWindow(AppState(synth_settings(str(tmp_path))))
+    win3.settings_screen.samp_freq.setValue(999); win3.settings_screen._on_field_changed()
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: pytest.fail("hidden window must not prompt"))
+    ev = QCloseEvent(); win3.closeEvent(ev)
+    assert ev.isAccepted()
+
+
+def test_analysis_menu_lists_five_recents_and_guards_opening_them(qapp, tmp_path, isolated_prefs, monkeypatch):
+    """The Analysis menu shows the 5 most recent analyses (of the 8 prefs stores), rebuilt
+    on every drop-down; each carries the full path as tooltip; opening one over unsaved
+    edits goes through the same Save/Discard/Cancel guard as closing. Save is offered only
+    for a dirty analysis with a file to overwrite; Save as… only needs savable settings."""
+    from PySide6.QtWidgets import QMessageBox
+    from respmech.ui.main_window import MainWindow
+    paths = []
+    for i in range(7):                                    # more than the menu shows
+        p = tmp_path / f"study_{i}.toml"; p.write_text("# analysis"); paths.append(str(p))
+        isolated_prefs.add_recent_analysis(str(p))
+    win = MainWindow(AppState(synth_settings(str(tmp_path))))
+    win._refresh_analysis_menu()                          # what aboutToShow triggers
+    assert len(win._recent_actions) == 5
+    assert win._recent_actions[0].toolTip() == paths[-1]  # most recent first, full path
+    assert "study_6.toml" in win._recent_actions[0].text()
+    assert win._recent_sep.isVisible()
+    # rebuilding must not accumulate: same 5 actions, and the removed ones are deleted
+    win._refresh_analysis_menu()
+    assert len(win._recent_actions) == 5
+    # Save/Save as enable matrix: Save is offered when the analysis is NEW or DIRTY
+    sc = win.settings_screen
+    assert win._act_save.isEnabled()                      # new (no file yet) -> Save works
+    assert win._act_save_as.isEnabled()
+    sc.samp_freq.setValue(1234); sc._on_field_changed()   # dirty, still no settings_path
+    win._refresh_analysis_menu()
+    assert win._act_save.isEnabled() and win._act_save_as.isEnabled()
+    sc.state.settings_path = paths[0]
+    win._refresh_analysis_menu()
+    assert win._act_save.isEnabled()                      # dirty + a file to overwrite
+    sc._mark_clean()
+    win._refresh_analysis_menu()
+    assert not win._act_save.isEnabled()                  # clean opened file: nothing to save
+    assert win._act_save_as.isEnabled()
+    # opening a recent over a DIRTY analysis honours the guard: Cancel aborts
+    sc.samp_freq.setValue(777); sc._on_field_changed()    # dirty again for the guard test
+    opened = []
+    monkeypatch.setattr(sc, "open_analysis", lambda p: opened.append(p) or True)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Cancel)
+    win._open_recent(paths[-1])
+    assert opened == []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Discard)
+    win._open_recent(paths[-1])
+    assert opened == [paths[-1]]
+    win.close()
+
+
+def test_save_as_writes_the_picked_file_and_a_failed_save_stays_dirty(qapp, tmp_path, monkeypatch):
+    """The save flow's remaining paths: 'Save' with no associated file falls through to
+    Save as…; Save as… writes the chooser-picked file and marks the analysis clean; a
+    FAILED write must leave it dirty so the edits are not silently lost."""
+    from PySide6.QtWidgets import QFileDialog
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(str(tmp_path))))
+    sc = win.settings_screen
+    sc.samp_freq.setValue(1234); sc._on_field_changed()
+    assert sc.state.settings_path is None
+    picked = str(tmp_path / "picked.toml")
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: (picked, "")))
+    assert sc.save_analysis() is True                     # no path -> falls through to Save as…
+    assert os.path.exists(picked) and not sc.is_dirty()
+    assert "picked.toml" in win.windowTitle()
+    # a failed write keeps the dirty flag (the edits are still only in the form)
+    sc.samp_freq.setValue(4321); sc._on_field_changed()
+    monkeypatch.setattr(sc.state, "save_toml",
+                        lambda p: (_ for _ in ()).throw(OSError("disk full")))
+    monkeypatch.setattr(sc, "_report_error", lambda *a: None)   # swallow the error dialog
+    assert sc.save_analysis_as() is False
+    assert sc.is_dirty()
+    win.close()
+
+
+def test_discard_guard_is_reentrant_safe_and_hides_save_when_unsavable(qapp, tmp_path, monkeypatch):
+    """Two properties of the unsaved-changes guard that keep cocoa's modal sessions in
+    order: a re-entrant call (Cmd+Q while another guard prompt is up) aborts the NEW
+    action instead of stacking a second window-modal box, and Save is only offered while
+    the settings can actually be saved — so _refuse_save's warning can never chain onto
+    the prompt (and the choice matrix matches the Analysis menu's Save gating)."""
+    from PySide6.QtWidgets import QMessageBox
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(str(tmp_path))))
+    sc = win.settings_screen
+    sc.samp_freq.setValue(1234); sc._on_field_changed()   # dirty
+    seen = []
+
+    def fake_question(parent, title, text, buttons=None, default=None):
+        seen.append((title, buttons))
+        # re-enter while the prompt is "up": the nested call must refuse, not prompt
+        if len(seen) == 1:
+            assert sc.confirm_discard_changes("Close RespMech") is False
+        return QMessageBox.Cancel
+
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(fake_question))
+    assert sc.confirm_discard_changes("Open analysis") is False
+    assert len(seen) == 1                                 # exactly ONE box, no stacking
+    assert seen[0][1] & QMessageBox.Save                  # savable settings offer Save
+    # unsavable settings must not offer Save at all
+    sc.col_flow.setValue(5); sc.col_poes.setValue(5); sc._on_field_changed()
+    assert not sc.can_save()
+    seen.clear()
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda p, t, x, buttons=None, default=None:
+                                     seen.append(buttons) or QMessageBox.Cancel))
+    sc.confirm_discard_changes("Close RespMech")
+    assert seen and not (seen[0] & QMessageBox.Save)
+    assert seen[0] & QMessageBox.Discard and seen[0] & QMessageBox.Cancel
+    win.close()
+
+
+def test_preview_owned_settings_mark_the_analysis_dirty(qapp, tmp_path):
+    """Noise/ECG params and breath exclusions are edited on the Preview screen but land in
+    the saved .toml, so a user edit there must dirty the analysis exactly like a Setup
+    edit — the title, the close guard and Save-gating all read the same flag. Programmatic
+    fills must NOT dirty (loading an analysis would otherwise immediately mark it edited)."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(str(tmp_path))))
+    sc, pv = win.settings_screen, win.preview_screen
+
+    # programmatic fill: syncing widgets FROM settings is not an edit
+    sc._mark_clean()
+    pv._load_noise_params(); pv._load_ecg_params()
+    assert not sc.is_dirty()
+
+    # a user noise-param edit dirties (the spinbox slot writes into state.settings)
+    pv.noise_prop.setValue(0.42); pv._on_noise_param_changed()
+    assert sc.is_dirty()
+    assert win.windowTitle().rstrip().endswith("* (modified)")
+
+    # a user ECG-param edit dirties
+    sc._mark_clean(); assert not sc.is_dirty()
+    pv._on_ecg_param_changed()
+    assert sc.is_dirty()
+
+    # toggling a breath exclusion dirties (exclude_breaths is saved state)
+    sc._mark_clean()
+    pv.file_combo.blockSignals(True); pv.file_combo.addItem("synth_case_A.csv")
+    pv.file_combo.setCurrentText("synth_case_A.csv"); pv.file_combo.blockSignals(False)
+    pv._breath_spans = {1: (0.0, 1.0)}
+    pv._toggle_breath(1)
+    assert sc.is_dirty()
     win.close()
 
 

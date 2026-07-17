@@ -443,21 +443,26 @@ QLabel[role="heading"] { font-size: 15px; font-weight: 600; color: $text; }
 QLabel[status="muted"] { color: $text_muted; }
 /* a disabled label (e.g. a caption inside a disabled group) greys with its controls */
 QLabel:disabled, QLabel[status="muted"]:disabled { color: $disabled_fg; }
+/* A banner's BOX (padding/border) hangs off the never-changing 'banner' property, not off
+   'status': Qt bakes a QLabel's QSS box into its contentsMargins at the widget's FIRST
+   polish and never recomputes it, so a box carried by a 'status' rule is lost forever on
+   any banner whose first status has no box (e.g. "muted", which every banner starts empty
+   in). 'status' therefore only ever swaps COLOURS, which re-polishing does honour. */
+QLabel[banner="true"] {
+    border-style: solid; border-width: 1px; border-color: transparent;
+    border-radius: 6px; padding: 5px 10px;
+}
 QLabel[status="info"] {
-    color: $st_info_fg; background-color: $st_info_bg;
-    border: 1px solid $st_info_bd; border-radius: 6px; padding: 5px 10px;
+    color: $st_info_fg; background-color: $st_info_bg; border-color: $st_info_bd;
 }
 QLabel[status="ok"] {
-    color: $st_ok_fg; background-color: $st_ok_bg;
-    border: 1px solid $st_ok_bd; border-radius: 6px; padding: 5px 10px;
+    color: $st_ok_fg; background-color: $st_ok_bg; border-color: $st_ok_bd;
 }
 QLabel[status="warn"] {
-    color: $st_warn_fg; background-color: $st_warn_bg;
-    border: 1px solid $st_warn_bd; border-radius: 6px; padding: 5px 10px;
+    color: $st_warn_fg; background-color: $st_warn_bg; border-color: $st_warn_bd;
 }
 QLabel[status="error"] {
-    color: $st_error_fg; background-color: $st_error_bg;
-    border: 1px solid $st_error_bd; border-radius: 6px; padding: 5px 10px;
+    color: $st_error_fg; background-color: $st_error_bg; border-color: $st_error_bd;
 }
 
 /* ---- application header bar ------------------------------------------- */
@@ -498,9 +503,14 @@ QPushButton[compact="true"] {
 }
 
 /* ---- glyph-only stepper buttons (◀ ▶): the default 16px side padding is
-       wider than the button itself, which clips the arrow away entirely ---- */
+       wider than the glyph, which clips the arrow away entirely; 6px keeps the
+       button compact while giving the arrow air. min-width:0 means the rendered
+       width simply tracks sizeHint (this QSS minimum overwrites any code-side
+       setFixedWidth minimum at polish), so the glyph can never be clipped —
+       but do not push the padding past ~9px without re-checking the buttons'
+       34px maximum in preview_screen. ---- */
 QPushButton[nav="true"] {
-    padding: 6px 0;
+    padding: 6px 6px;
     min-width: 0;
 }
 

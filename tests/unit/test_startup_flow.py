@@ -103,11 +103,11 @@ def test_analysis_menu_uses_analysis_terminology_not_toml(qapp):
     labels = [a.text() for a in win.analysis_btn.menu().actions()]
     assert "New analysis" in labels
     assert "Open analysis…" in labels
-    assert "Save analysis…" in labels
+    assert "Save" in labels and "Save as…" in labels
     assert not any("TOML" in t or "legacy .py" in t for t in labels)
     # and they are gone from the Setup step's own buttons
     setup = [b.text() for b in win.settings_screen.findChildren(QPushButton)]
-    assert not any(t in setup for t in ("New analysis", "Open analysis…", "Save analysis…", "Validate"))
+    assert not any(t in setup for t in ("New analysis", "Open analysis…", "Save", "Save as…", "Validate"))
     win.close()
 
 
@@ -607,15 +607,15 @@ def test_new_analysis_confirm_declined_is_noop_accepted_resets(qapp, tmp_path, m
     _fill_valid_input(sc); _fill_valid_output(sc, tmp_path); _fill_valid_channels(sc)
     kept = sc.in_folder.text()
 
-    # decline -> nothing changes
+    # cancel -> nothing changes (the guard offers Save/Discard/Cancel like every sibling)
     monkeypatch.setattr(ss.QMessageBox, "question",
-                        staticmethod(lambda *a, **k: ss.QMessageBox.No))
+                        staticmethod(lambda *a, **k: ss.QMessageBox.Cancel))
     sc.new_analysis()
     assert sc.in_folder.text() == kept and sc._mode == "full"
 
-    # accept -> reset into a fresh guided flow with blanked folders
+    # discard -> reset into a fresh guided flow with blanked folders
     monkeypatch.setattr(ss.QMessageBox, "question",
-                        staticmethod(lambda *a, **k: ss.QMessageBox.Yes))
+                        staticmethod(lambda *a, **k: ss.QMessageBox.Discard))
     sc.new_analysis()
     assert sc._mode == "new"
     assert sc.in_folder.text() == "" and sc.out_folder.text() == ""

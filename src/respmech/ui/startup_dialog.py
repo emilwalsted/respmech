@@ -17,9 +17,13 @@ import os
 from PySide6.QtWidgets import (QCommandLinkButton, QDialog, QFileDialog,
                                QHBoxLayout, QLabel, QPushButton, QVBoxLayout)
 
-# File-dialog filter used both here and by the Settings screen's "Open analysis…".
-OPEN_FILTER = ("Analysis files (*.toml *.py);;Saved analysis (*.toml);;"
-               "Legacy setup (*.py);;All files (*)")
+# File-dialog filters, shared with the Settings screen's Open/Save analysis actions so every
+# chooser names the kinds identically. "Analysis" is the user-facing name for a settings file;
+# the word "TOML" never appears. Qt preselects the FIRST entry, so the both-kinds one leads.
+TOML_FILTER = "RespMech analysis settings (*.toml)"
+LEGACY_FILTER = "Legacy RespMech (1.x) settings (*.py)"
+OPEN_FILTER = (f"All analysis settings (*.toml *.py);;{TOML_FILTER};;"
+               f"{LEGACY_FILTER};;All files (*)")
 
 
 class StartupDialog(QDialog):

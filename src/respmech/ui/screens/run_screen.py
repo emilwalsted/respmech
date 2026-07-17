@@ -10,7 +10,7 @@ from __future__ import annotations
 import copy
 import os
 
-from PySide6.QtCore import Signal, QThread, QUrl
+from PySide6.QtCore import Qt, Signal, QThread, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QHBoxLayout, QHeaderView, QLabel, QMessageBox, QProgressBar,
                                QPushButton, QTableWidget, QTableWidgetItem,
@@ -240,10 +240,14 @@ class RunScreen(QWidget):
                                    only_files=self._only_files)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
-        self._worker.progress.connect(self._on_progress)
-        self._worker.file_failed.connect(self._on_file_failed)   # bound -> GUI thread
-        self._worker.failed.connect(self._on_fatal)
-        self._worker.finished.connect(self._on_finished)
+        # Explicitly queued (see preview_screen's worker connects): AutoConnection can
+        # resolve to DIRECT under a fast-emit race, which would drive the progress bar
+        # and status bar from the batch worker thread — a cross-thread QBasicTimer on
+        # cocoa — and run _on_finished's thread.wait() ON the thread being waited for.
+        self._worker.progress.connect(self._on_progress, Qt.QueuedConnection)
+        self._worker.file_failed.connect(self._on_file_failed, Qt.QueuedConnection)
+        self._worker.failed.connect(self._on_fatal, Qt.QueuedConnection)
+        self._worker.finished.connect(self._on_finished, Qt.QueuedConnection)
         self._thread.start()
 
     def _on_file_failed(self, f, e):

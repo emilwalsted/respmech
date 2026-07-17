@@ -154,6 +154,7 @@ class ChannelSetupDialog(QDialog):
         nfiles = len(self._files)
         banner = QLabel(f"This mapping is applied to all {nfiles} file"
                         f"{'s' if nfiles != 1 else ''} in the batch.")
+        banner.setProperty("banner", True)
         banner.setProperty("status", "info"); banner.setWordWrap(True)
         v.addWidget(banner)
 

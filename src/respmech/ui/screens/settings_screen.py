@@ -21,7 +21,7 @@ from PySide6.QtCore import Signal, QTimer
 from respmech.core.settings import BreathCountEntry, Settings, SettingsError
 from respmech.ui.dialogs import open_error_dialog, short_error
 from respmech.ui.help_text import tooltip as _tip
-from respmech.ui.startup_dialog import OPEN_FILTER
+from respmech.ui.startup_dialog import LEGACY_FILTER, OPEN_FILTER, TOML_FILTER
 from respmech.ui.validation import matching_files
 
 # the guided-flow default file mask (multi-pattern; narrowed to the found extension on the
@@ -74,8 +74,9 @@ class SettingsScreen(QWidget):
         gin = QGroupBox("Input")
         f = QFormLayout(gin)
         f.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
-        self.in_folder = QLineEdit()
+        self.in_folder = QLineEdit()   # absolute path + Browse button: full width is the point
         self.in_files = QLineEdit()
+        self.in_files.setProperty("formField", "compact")   # a short glob mask, not a path (theme.py)
         self.samp_freq = QSpinBox(); self.samp_freq.setRange(1, 1_000_000); self.samp_freq.setSuffix(" Hz")
         self._browse_row(f, "Recordings folder", self.in_folder, "input.folder",
                          "Folder containing the recording files to analyse; defaults to 'input'.", folder=True)
@@ -86,6 +87,7 @@ class SettingsScreen(QWidget):
         # P28: a live read-out of what was actually detected in the chosen recordings.
         self.format_readout = QLabel("")
         self.format_readout.setWordWrap(True)
+        self.format_readout.setProperty("banner", True)   # box baked at first polish (theme.py)
         self.format_readout.setProperty("status", "muted")
         f.addRow("", self.format_readout)
         root.addWidget(gin)
@@ -111,6 +113,8 @@ class SettingsScreen(QWidget):
         self.col_flow = self._spin(); self.col_volume = self._spin(allow_zero=True)
         self.col_poes = self._spin(); self.col_pgas = self._spin(); self.col_pdi = self._spin()
         self.cols_emg = QLineEdit(); self.cols_entropy = QLineEdit()
+        for _cols in (self.cols_emg, self.cols_entropy):
+            _cols.setProperty("formField", "compact")   # short column lists ('2,3,4') share the spin column
         self._row(fc, "Flow signal column", self.col_flow, "input.channels.flow",
                   "Column number (counting from 1) holding the airflow signal, which reads negative during inspiration.")
         self._row(fc, "Volume signal column", self.col_volume, "input.channels.volume",
@@ -283,11 +287,17 @@ class SettingsScreen(QWidget):
             self._check_row(fsv, cb, var, tip)
         _lg = QLabel("Cohort summary"); _lg.setProperty("status", "muted"); _lg.setContentsMargins(0, 8, 0, 0); fsv.addRow(_lg)
         self.group_regex = QLineEdit()
+        # 'wide', not 'compact': the placeholder below measures 281px at the 13pt macOS
+        # font — it fits the 320px 'wide' contents box but would elide in the spin column,
+        # and a QLineEdit's sizeHint ignores its placeholder, so no sizeHint check catches
+        # a clipped one.
+        self.group_regex.setProperty("formField", "wide")
         self.group_regex.setPlaceholderText("leading filename token (e.g. P03_120W → P03)")
         self._row(fsv, "Group files by", self.group_regex, "output.group_regex",
                   "How files are grouped (subject / condition) for the by-group summary. Leave blank to use "
                   "the leading filename token; or enter a regular expression whose first capture group is the key.")
         self.save_preview = QLabel(""); self.save_preview.setWordWrap(True)
+        self.save_preview.setProperty("banner", True)
         self.save_preview.setProperty("status", "info")
         fsv.addRow("You will get", self.save_preview)
         root.addWidget(gsave)
@@ -360,7 +370,7 @@ class SettingsScreen(QWidget):
         # glance, so a first-timer sees them the moment they appear.
         self.qc = QLabel("")
         self.qc.setWordWrap(True)
-        self.qc.setContentsMargins(2, 2, 2, 2)
+        self.qc.setProperty("banner", True)   # the box comes from the QSS, not extra margins
         outer.addWidget(self.qc)
 
         # --- progressive-disclosure stages (used only in guided "new analysis" mode) -
@@ -601,6 +611,7 @@ class SettingsScreen(QWidget):
             self._loading = prev
         self.to_state()
         self._sync_widgets()
+        self._mark_dirty()   # a graph-chosen noise reference is a user edit that lands in the .toml
         self._set_status(f"Noise reference set from graph selection: {file}")
 
     # -- helpers ------------------------------------------------------------
@@ -853,14 +864,48 @@ class SettingsScreen(QWidget):
             self._report_error("Explore sample data", traceback.format_exc())
             return False
 
+    def confirm_discard_changes(self, title="RespMech", question="Save them before closing?"):
+        """Offer to save before an action that would drop unsaved edits. Returns True to
+        proceed, False to abort the action. A clean analysis never asks — a warning that
+        fires when nothing is at stake trains the user to click through it. ``question``
+        names the pending action, so an open-flow never asks about "closing".
+
+        Re-entrant calls return False (the NEW action is aborted, the first prompt stays):
+        a second window-modal box over the first — e.g. Cmd+Q arriving while an open-flow
+        prompt is up — is cocoa's "modalSession exited prematurely" recipe. Save is only
+        offered while the settings CAN be saved; otherwise the choice is Discard/Cancel,
+        matching the menu, and no _refuse_save warning can stack onto this prompt."""
+        if not self._dirty:
+            return True
+        if getattr(self, "_discard_prompt_up", False):
+            return False
+        savable = self.can_save()
+        buttons = (QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel) if savable \
+            else (QMessageBox.Discard | QMessageBox.Cancel)
+        self._discard_prompt_up = True
+        try:
+            ans = QMessageBox.question(
+                self, title,
+                f"This analysis has unsaved changes.\n\n{question}",
+                buttons, QMessageBox.Save if savable else QMessageBox.Cancel)
+        finally:
+            self._discard_prompt_up = False
+        if ans == QMessageBox.Cancel:
+            return False
+        if ans == QMessageBox.Discard:
+            return True
+        # The user just picked "Save" in THIS dialog — that is the overwrite consent, so
+        # save_analysis's own confirm is skipped: it would be modal-after-modal in one
+        # call stack, which cocoa's session cleanup can end out of order.
+        return self.save_analysis(confirm_overwrite=False)   # a refused save aborts the action too
+
     def new_analysis(self):
         """Analysis > 'New analysis': discard the current settings for a fresh set and
-        re-enter the guided flow. Only confirm when there are REAL unsaved edits, so the
-        warning means something instead of training the user to click through it."""
-        if self._dirty and QMessageBox.question(
-                self, "New analysis",
-                "You have unsaved changes. Start a new analysis and discard them?"
-                ) != QMessageBox.Yes:
+        re-enter the guided flow. Guarded like every other action that would drop unsaved
+        edits (open, recents, close) — the guard only asks when there are REAL edits, and
+        offers Save rather than a bare discard."""
+        if not self.confirm_discard_changes(
+                "New analysis", question="Save them before starting a new analysis?"):
             return
         self.state.settings = Settings()
         self.state.settings_path = None
@@ -870,7 +915,12 @@ class SettingsScreen(QWidget):
 
     def open_analysis_dialog(self):
         """Analysis > 'Open analysis…': pick a saved .toml analysis or a legacy .py setup
-        (routed by extension). "Analysis" is the user-facing name — never "TOML"."""
+        (routed by extension). "Analysis" is the user-facing name — never "TOML". Guarded
+        like every other way of opening over unsaved edits (recents, close): opening
+        replaces state.settings and marks it clean, which silently destroys the edits."""
+        if not self.confirm_discard_changes(
+                "Open analysis", question="Save them before opening another analysis?"):
+            return
         p, _ = QFileDialog.getOpenFileName(self, "Open analysis", ".", OPEN_FILTER)
         if p:
             self.open_analysis(p)
@@ -1240,7 +1290,7 @@ class SettingsScreen(QWidget):
         rolled back, so the caller (open_analysis) can gate the mode transition."""
         from respmech.ui import prefs  # noqa: PLC0415
         p = path or QFileDialog.getOpenFileName(
-            self, "Open analysis", prefs.last_folder("analysis", "."), "Saved analysis (*.toml)")[0]
+            self, "Open analysis", prefs.last_folder("analysis", "."), TOML_FILTER)[0]
         if not p:
             return False
         prior, prior_path = self.state.settings, self.state.settings_path
@@ -1262,30 +1312,96 @@ class SettingsScreen(QWidget):
         self.settings_changed.emit()
         return True
 
-    def save_analysis(self):
-        """Analysis > 'Save analysis…': write the current settings to a .toml analysis."""
+    def can_save(self):
+        """Whether the current settings may be written to an analysis file."""
+        return self._save_blocker() is None
+
+    def _save_blocker(self):
+        """A short, human reason the analysis may not be saved, or None.
+
+        The SETTINGS must be internally valid, but the filesystem is deliberately NOT
+        consulted: an analysis file is a portable document, and one whose input folder is
+        momentarily unmounted (or belongs to a colleague's machine) is still a legitimate
+        thing to save. Runnability is the stricter, path-aware _all_ok(), which already
+        gates Preview/Run and is reported in the status bar.
+        """
+        collision = self._channel_collision()
+        if collision:
+            return collision
+        try:
+            self.state.settings.validate()
+        except SettingsError as e:
+            return str(e)
+        except Exception:                       # noqa: BLE001 — an unexpected fault is not savable
+            return short_error(traceback.format_exc())
+        return None
+
+    def _refuse_save(self, blocker):
+        self._set_status(f"Cannot save — {blocker}")
+        QMessageBox.warning(self, "Save analysis",
+                            f"This analysis cannot be saved yet:\n\n{blocker}")
+        return False
+
+    def _write_analysis(self, p):
+        """Write the settings to `p` and record it as the saved analysis. A failed write
+        leaves the analysis dirty, so the edits are never silently lost."""
         from respmech.ui import prefs  # noqa: PLC0415
-        self.to_state()
-        p, _ = QFileDialog.getSaveFileName(
-            self, "Save analysis", os.path.join(prefs.last_folder("analysis", "."), "analysis.toml"),
-            "Saved analysis (*.toml)")
-        if not p:
-            return
         try:
             self.state.save_toml(p)
         except Exception:                       # noqa: BLE001
             self._report_error("Save analysis", traceback.format_exc())
-            return
+            return False
         self._set_status(f"Saved {p}")
         self._mark_clean()
         prefs.add_recent_analysis(p)                 # P26 recent analyses
         prefs.set_last_folder("analysis", p)
         prefs.save_rig(self.state.settings)          # P25 remember the rig
+        return True
+
+    def save_analysis(self, confirm_overwrite=True):
+        """Analysis > 'Save': overwrite the analysis file that was opened. Confirms first —
+        this replaces a file the user may share with collaborators, and the menu item sits
+        one slot from 'Save as…'. The unsaved-changes guard passes confirm_overwrite=False:
+        there the user has JUST answered "Save" in a modal, so a second "overwrite?" box
+        would be redundant — and opening it in the same call stack the first modal returned
+        from is the one place cocoa can end the two NSModalSessions out of order (the
+        one-off "modalSession has been exited prematurely" stderr noise). With no file
+        associated yet there is nothing to overwrite, so a new analysis falls through to
+        Save as…. Returns True iff saved."""
+        self.to_state()
+        p = self.state.settings_path
+        if not p:
+            return self.save_analysis_as()
+        blocker = self._save_blocker()
+        if blocker:
+            return self._refuse_save(blocker)
+        if confirm_overwrite and QMessageBox.question(
+                self, "Save analysis",
+                f"Save the changes to\n\n{p}\n\noverwriting the file?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return False
+        return self._write_analysis(p)
+
+    def save_analysis_as(self):
+        """Analysis > 'Save as…': write the current settings to a chosen analysis file. The
+        chooser asks before overwriting, so unlike Save it needs no extra confirmation.
+        Returns True iff saved."""
+        from respmech.ui import prefs  # noqa: PLC0415
+        self.to_state()
+        blocker = self._save_blocker()
+        if blocker:
+            return self._refuse_save(blocker)
+        start = self.state.settings_path or os.path.join(
+            prefs.last_folder("analysis", "."), "analysis.toml")
+        p, _ = QFileDialog.getSaveFileName(self, "Save analysis as", start, TOML_FILTER)
+        if not p:
+            return False
+        return self._write_analysis(p)
 
     def _import(self, path=None):
         """Import a legacy .py setup (runs the migrator). Returns True on success, False
         if cancelled or rolled back, so open_analysis can gate the mode transition."""
-        p = path or QFileDialog.getOpenFileName(self, "Open legacy analysis (.py)", ".", "Legacy setup (*.py)")[0]
+        p = path or QFileDialog.getOpenFileName(self, "Open legacy analysis (.py)", ".", LEGACY_FILTER)[0]
         if not p:
             return False
         prior, prior_path = self.state.settings, self.state.settings_path

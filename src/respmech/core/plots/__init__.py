@@ -34,6 +34,8 @@ import os
 
 import numpy as np
 
+from respmech.core import plot_style
+
 _BRAND = "#2C6E9B"
 _ACCENT = "#5CA9DD"
 _MUTED = "#8894A0"
@@ -444,7 +446,16 @@ def _write_emg_audio(fr, fname, fs, figdir):
 def write_figures(result, settings, outputfolder: str) -> tuple[list, list]:
     """Write every enabled diagnostic figure (and WAV export). Returns (written_paths,
     failures) where failures is a list of ``(name, error)`` — a bad figure is skipped,
-    not fatal, so a run always finishes even if one plot cannot be drawn."""
+    not fatal, so a run always finishes even if one plot cannot be drawn.
+
+    Figures are written in the light style whatever theme the GUI is wearing: the GUI's
+    dark theme installs its colours into global matplotlib rcParams, which the figures
+    below would otherwise inherit at Figure()/add_subplot()/savefig() time."""
+    with plot_style.light_rc_context():
+        return _write_figures_impl(result, settings, outputfolder)
+
+
+def _write_figures_impl(result, settings, outputfolder: str) -> tuple[list, list]:
     dg = settings.output.diagnostics
     emg = settings.processing.emg
     cols, rows = dg.pv_columns, dg.pv_rows

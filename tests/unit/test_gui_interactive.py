@@ -425,16 +425,30 @@ def test_toolbar_slimmed_and_status_moved_to_bottom(qapp, tmp_path):
     win.close()
 
 
-def test_detail_and_result_panels_swapped_with_inline_controls(qapp, tmp_path):
+def test_conditioned_result_spans_the_width_above_the_diagnostics(qapp, tmp_path):
+    """Conditioned result is EMG against time, so width is what makes it readable: it spans
+    the tab and sits above the two compact diagnostics (fidelity frontier + PSD), which
+    share the bottom row and gain nothing from the extra width."""
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
-    # after the swap the mid splitter holds the Conditioned-result panel (not the detail)
-    assert _under(pv.emg_result_plots, pv._emg_mid)
-    assert not _under(pv.emg_plots, pv._emg_mid)     # detail moved up to the top row
+    win.resize(1400, 900); win.show()
+    win.tabs.setCurrentWidget(pv)
+    for i in range(pv.subtabs.count()):                    # front the EMG noise sub-tab:
+        if "noise" in pv.subtabs.tabText(i):               # unshown widgets keep their
+            pv.subtabs.setCurrentIndex(i); break           # constructor sizes, which would
+    qapp.processEvents()                                   # satisfy the ratio vacuously
+    # the result panel is NOT in a shared row — it is a full-width band of its own
+    assert not _under(pv.emg_result_plots, pv._emg_diag_row)
+    assert _under(pv.fidelity_canvas, pv._emg_diag_row)
+    assert _under(pv.emg_psd_canvas, pv._emg_diag_row)
+    assert not _under(pv.emg_plots, pv._emg_diag_row)      # detail stays in the top row
+    # ...and, laid out, it really spans the row the diagnostics split between them
+    assert pv.emg_result_plots.width() > 1.5 * pv.fidelity_canvas.width()
+    assert pv.emg_result_plots.width() > 1000               # full band at a 1400px window
     # the detail dropdown and the result picker live inside their panels (not a toolbar)
     assert _under(pv.emg_channel, pv._emg_tab)
-    assert _under(pv.result_checks_holder, pv._emg_mid)   # picker sits in the result panel
+    assert _under(pv.result_checks_holder, pv._emg_tab)
     win.close()
 
 
@@ -760,6 +774,115 @@ def test_detail_job_covers_both_time_and_psd_panels(qapp, tmp_path):
     win.close()
 
 
+def test_file_strip_sizes_to_content_not_window(qapp, tmp_path):
+    """The file selector sizes to the recording names instead of swallowing the row's
+    stretch; the ◀/▶ glyphs keep side air and can never clip (width tracks sizeHint —
+    the QSS min-width:0 makes any code-side fixed width a dead letter); Refresh sits
+    just right of ▶ at its natural size, with the slack parked in a trailing stretch."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    win.resize(1400, 900); win.show()
+    win.tabs.setCurrentWidget(pv); pv._refresh_files(); qapp.processEvents()
+    assert pv.file_combo.count() > 0                     # the guard is meaningless when empty
+    assert pv.file_combo.width() < win.width() / 3       # was 1222px of 1400 before the fix
+    assert pv.file_combo.width() >= min(pv.file_combo.sizeHint().width(), 338)
+    for b in (pv.btn_prev_file, pv.btn_next_file):
+        assert b.width() >= b.sizeHint().width()         # the historical clipped-glyph mode
+        assert b.width() > 20                            # air exists (13px before the fix)
+    # Refresh keeps its natural size (the slack lives in the stretch, not the buttons)...
+    assert pv.btn_refresh_all.width() <= 1.5 * pv.btn_refresh_all.sizeHint().width()
+    # ...and sits just right of ▶ with a little air
+    gap = pv.btn_refresh_all.x() - (pv.btn_next_file.x() + pv.btn_next_file.width())
+    assert 8 <= gap <= 40
+    win.close()
+
+
+def test_campbell_legend_sits_bottom_left_in_the_preview_only(qapp):
+    """The preview plots Poes on x and volume on y, which leaves the bottom-LEFT corner
+    empty (the loop's EELV end is bottom-right). The output PDF transposes those axes, so
+    its legend must NOT follow: "lower left" there lands on the loop's EILV tip. Its
+    loc="best" already places it clear of the data."""
+    import inspect
+    from respmech.ui.screens import preview_screen as ps
+    from respmech.core import plots
+    assert 'loc="lower left"' in inspect.getsource(ps.PreviewScreen._overlay_campbell_work)
+    # the PDF's Campbell keeps auto-placement — its axes are transposed
+    assert 'loc="best"' in inspect.getsource(plots._pv_average)
+    assert 'loc="lower left"' not in inspect.getsource(plots._pv_average)
+
+
+def test_breath_labels_stay_pinned_to_the_view_top_under_zoom(qapp, tmp_path):
+    """The breath numbers behave like the red capture marks: pinned to the TOP of the
+    visible view instead of zooming/panning away with the data. They are added with
+    ignoreBounds so the pinned position can never re-inflate autorange (runaway top)."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    win.resize(1400, 900); win.show(); qapp.processEvents()
+    pv._refresh_files(); pv.file_combo.setCurrentIndex(0)
+    pv._preview(); qapp.processEvents()
+    vb = pv._channel_plots[0].getViewBox()
+    texts = list(pv._breath_texts.values())
+    assert len(texts) >= 2
+
+    def pinned():
+        top = vb.viewRange()[1][1]
+        return all(abs(t.pos().y() - top) < 1e-9 for t in texts)
+
+    assert pinned()                                    # placed at the view top initially
+    y0, y1 = vb.viewRange()[1]
+    vb.setYRange(y0, y0 + (y1 - y0) * 0.4, padding=0); qapp.processEvents()
+    assert pinned()                                    # zoomed in -> labels follow the new top
+    vb.setYRange(y0 - (y1 - y0) * 0.3, y0 + (y1 - y0) * 0.1, padding=0); qapp.processEvents()
+    assert pinned()                                    # panned -> still at the top
+    # ...and the pinned labels never feed autorange (the runaway-top regression)
+    vb.enableAutoRange(y=True); vb.updateAutoRange(); qapp.processEvents()
+    tops = []
+    for _ in range(5):
+        vb.updateAutoRange(); qapp.processEvents()
+        tops.append(round(vb.viewRange()[1][1], 6))
+    assert len(set(tops)) == 1
+    win.close()
+
+
+def test_emg_legends_are_a_single_row_at_the_top(qapp):
+    """The pipeline-stage / channel legends read as one line at the top of the plot. The
+    column count must be re-applied on EVERY render, not just at construction: clear()
+    empties the legend and the entry count varies (the detail plot gains 'noise-reduced'
+    only when noise conditioning ran; the result plot has one entry per ticked channel)."""
+    import numpy as np
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings("")
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    win.resize(1400, 900); win.show(); qapp.processEvents()
+    t = np.linspace(0, 1, 500); raw = np.sin(2 * np.pi * 50 * t)
+
+    def one_row(plot):
+        p = plot.getPlotItem()
+        leg = p.legend
+        assert len(leg.items) >= 2                      # a 1-entry legend proves nothing
+        assert leg.columnCount == len(leg.items)
+        assert leg.layout.rowCount() == 1               # the real grid, not the bookkeeping attr
+        gap = leg.sceneBoundingRect().top() - p.getViewBox().sceneBoundingRect().top()
+        assert gap <= 8                                 # "foroven": tucked under the top edge
+
+    # detail plot, both entry counts (4 with noise reduction, 3 without)
+    pv.render_emg_time({"t": t, "raw": raw, "ecg": raw * .9, "noise": raw * .8, "noise_applied": True})
+    qapp.processEvents(); one_row(pv.emg_plots)
+    pv.render_emg_time({"t": t, "raw": raw, "ecg": raw * .9, "noise_applied": False})
+    qapp.processEvents(); one_row(pv.emg_plots)
+
+    # result plot, and it must survive a channel being unticked and re-ticked
+    cols = list(s.input.channels.emg)
+    pv._emg_all = {"t": t, "cols": cols,
+                   "conditioned": [raw * (1 - .1 * i) for i in range(len(cols))], "flow": None}
+    pv._render_emg_result(); qapp.processEvents(); one_row(pv.emg_result_plots)
+    pv.result_checks[0][1].setChecked(False); qapp.processEvents(); one_row(pv.emg_result_plots)
+    pv.result_checks[0][1].setChecked(True); qapp.processEvents(); one_row(pv.emg_result_plots)
+    win.close()
+
+
 def test_titled_panels_keep_their_contents_off_the_edge(qapp):
     """The EMG panels used to run their plots and right-pinned selectors flush to the panel
     edge, so they butted against the neighbouring panel/nav. The panel's own margin is the
@@ -845,16 +968,23 @@ def test_breath_labels_fit_inside_the_short_channel_plots(qapp, tmp_path):
     for _ in range(10):
         qapp.processEvents()
     assert pv._breath_texts, "no breath labels drawn"
+    import numpy as np
     vb = pv._channel_plots[0].getViewBox()
     (_x0, _x1), (y0, y1) = vb.viewRange()
     h_px = vb.height()
     assert h_px > 0 and y1 > y0
     dy_per_px = (y1 - y0) / h_px
     label_h = max(t.boundingRect().height() for t in pv._breath_texts.values())
-    label_y = max(t.pos().y() for t in pv._breath_texts.values())
-    headroom_px = (y1 - label_y) / dy_per_px
     assert label_h <= 18, f"breath label box grew to {label_h}px (documentMargin/font regressed?)"
-    assert headroom_px >= label_h, f"label ({label_h}px) clipped: only {headroom_px:.1f}px of headroom"
+    # the labels are pinned AT the view top (hanging down into the view)...
+    for t in pv._breath_texts.values():
+        assert abs(t.pos().y() - y1) < 1e-9
+    # ...so in the initial view the band _label_headroom reserves above the DATA must fit
+    # the hanging label, or it would sit on the signal
+    data_top = max(float(np.nanmax(c.yData))
+                   for c in pv._channel_plots[0].listDataItems() if c.yData is not None)
+    headroom_px = (y1 - data_top) / dy_per_px
+    assert headroom_px >= label_h, f"label ({label_h}px) covers data: only {headroom_px:.1f}px of band"
     # ...and the signal must still get most of the plot, not be squashed to fit the label
-    assert (label_y - y0) / dy_per_px >= 0.45 * h_px
+    assert (data_top - y0) / dy_per_px >= 0.45 * h_px
     win.close()

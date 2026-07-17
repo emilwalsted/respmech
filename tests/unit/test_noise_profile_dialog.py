@@ -5,6 +5,7 @@ The mouse interaction itself needs a real event loop; the selection STATE
 of the handlers so it is exercised headless here.
 """
 import numpy as np  # qapp fixture comes from conftest
+import pytest
 
 
 def _data(nch=3, n=2000, fs=1000):
@@ -61,6 +62,68 @@ def test_reversed_drag_is_normalised(qapp):
     dlg._set_selection(0.8, 0.3)                          # dragged right-to-left
     assert dlg.selected_region() == (0.3, 0.8)
     dlg.deleteLater()
+
+
+def test_dialog_opens_showing_the_whole_recording(qapp):
+    """The first view is the full recording with the pan bar disabled. pyqtgraph's padded
+    first auto-range gets clamped against the xMax limit and, via the x-link chain, locks
+    a rightward drift in — the dialog then opened with the start cropped off-screen and
+    the scrollbar already at max. The x view is therefore explicit, never auto-ranged."""
+    from respmech.ui.noise_profile_dialog import NoiseProfileDialog
+    for nch in (1, 2, 3, 5):
+        raw, t, fs, cols = _data(nch=nch, n=4000)
+        dlg = NoiseProfileDialog(raw, t, fs, cols)
+        dlg.resize(940, 580); dlg.show(); qapp.processEvents()
+        lo, hi = dlg._plots[0].getViewBox().viewRange()[0]
+        assert lo <= float(t[0]) + 1e-6, f"nch={nch}: start cropped, view begins at {lo:.3f}"
+        assert hi >= float(t[-1]) - 1e-6, f"nch={nch}: end cropped at {hi:.3f}"
+        assert not dlg.scroll.isEnabled()                 # nothing hidden -> nothing to pan
+        assert dlg.scroll.value() == 0
+        dlg.close(); dlg.deleteLater()
+
+
+def test_zoom_cannot_escape_the_dataset(qapp):
+    """The view is bounded to the recording. The limit must be on EVERY ViewBox, not just
+    the first: the plots are x-linked in a chain, so a wheel over channel 3 originates the
+    range change at ITS ViewBox — an unlimited one scales freely and only the far end of
+    the chain clamps, which desyncs the stack instead of stopping the zoom."""
+    from respmech.ui.noise_profile_dialog import NoiseProfileDialog
+    raw, t, fs, cols = _data()
+    dlg = NoiseProfileDialog(raw, t, fs, cols)
+    dlg.resize(900, 500); dlg.show(); qapp.processEvents()
+    t0, t1 = float(t[0]), float(t[-1])
+    for i in range(len(dlg._plots)):                  # drive it from each channel in turn
+        dlg._plots[i].getViewBox().setXRange(-50, 50, padding=0)
+        qapp.processEvents()
+        lo, hi = dlg._plots[0].getViewBox().viewRange()[0]
+        assert lo >= t0 - 1e-6 and hi <= t1 + 1e-6, f"escaped via channel {i}: {lo}..{hi}"
+        spans = {tuple(round(v, 3) for v in p.getViewBox().viewRange()[0]) for p in dlg._plots}
+        assert len(spans) == 1, f"channels desynced via channel {i}: {spans}"
+    dlg.close(); dlg.deleteLater()
+
+
+def test_scrollbar_pans_every_channel_and_keeps_the_zoom(qapp):
+    """Left-drag belongs to the region picker, so the scrollbar is the only way to move
+    through a zoomed recording. It pans all channels (they are x-linked) without changing
+    the zoom width, and is disabled while the whole recording already fits."""
+    from respmech.ui.noise_profile_dialog import NoiseProfileDialog
+    raw, t, fs, cols = _data()
+    dlg = NoiseProfileDialog(raw, t, fs, cols)
+    dlg.resize(900, 500); dlg.show(); qapp.processEvents()
+    t0, t1 = float(t[0]), float(t[-1])
+    dlg._plots[0].getViewBox().setXRange(t0, t1, padding=0); qapp.processEvents()
+    assert not dlg.scroll.isEnabled()                 # nothing hidden -> nothing to scroll
+    dlg._plots[0].getViewBox().setXRange(0.40, 0.60, padding=0); qapp.processEvents()
+    assert dlg.scroll.isEnabled()
+    assert dlg.scroll.maximum() == pytest.approx(round((t1 - t0 - 0.20) * 1000), abs=2)
+    dlg.scroll.setValue(1000)                         # drag to t = 1.000 s
+    qapp.processEvents()
+    lo, hi = dlg._plots[0].getViewBox().viewRange()[0]
+    assert lo == pytest.approx(1.0, abs=1e-3) and (hi - lo) == pytest.approx(0.20, abs=1e-3)
+    spans = {tuple(round(v, 3) for v in p.getViewBox().viewRange()[0]) for p in dlg._plots}
+    assert len(spans) == 1                            # every channel followed
+    assert dlg.scroll.value() == 1000                 # the two-way wiring did not oscillate
+    dlg.close(); dlg.deleteLater()
 
 
 def test_double_click_resets_zoom_but_keeps_the_marked_region(qapp):
