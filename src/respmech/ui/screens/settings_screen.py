@@ -840,21 +840,13 @@ class SettingsScreen(QWidget):
         and open it in full mode — a no-setup door for first-time users. Returns True on
         success. The sample lives in a temp folder (throwaway)."""
         import tempfile  # noqa: PLC0415
-        from respmech.core.sample import write_sample_recording  # noqa: PLC0415
-        from respmech.core.settings import Settings  # noqa: PLC0415
+        from respmech.core.sample import write_sample_recording, build_sample_settings  # noqa: PLC0415
         try:
             base = os.path.join(tempfile.gettempdir(), "respmech_sample")
             desc = write_sample_recording(os.path.join(base, "input"))
-            s = Settings()
-            s.input.folder = desc["folder"]
-            s.input.files = desc["filename"]
-            s.input.format.sampling_frequency = desc["sampling_frequency"]
-            m, ch = desc["mapping"], s.input.channels
-            ch.flow, ch.volume = m["flow"], m["volume"]
-            ch.poes, ch.pgas, ch.pdi = m["poes"], m["pgas"], m["pdi"]
-            ch.emg, ch.entropy = list(m["emg"]), list(m["entropy"])
-            s.processing.segmentation.buffer = 200
-            s.output.folder = os.path.join(base, "output")
+            # the sample carries an ECG artefact and EMG noise, so the ready analysis
+            # switches on ECG removal + noise reduction to demonstrate the full pipeline
+            s = build_sample_settings(desc, os.path.join(base, "output"))
             self.state.settings, self.state.settings_path = s, None
             self.from_state()
             self.enter_open_mode()

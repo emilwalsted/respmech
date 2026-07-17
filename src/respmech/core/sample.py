@@ -1,25 +1,34 @@
 """A small but physiologically realistic synthetic recording, generated on demand for
 the "Explore sample data" onboarding door (feature P23).
 
-Real recordings are large and cannot ship in the package, so instead we synthesise a
-short breathing trace from a simple respiratory-mechanics model whenever a first-time
-user asks to explore. The layout matches a typical LabChart export so the standard
-channel mapping applies:
+Real recordings are large (and are patient data), so instead we synthesise a short
+breathing trace from a respiratory-mechanics model whenever a first-time user asks to
+explore. The layout matches a typical LabChart export so the standard channel mapping
+applies:
 
-    col 1 time · 2–4 EMG · 5 flow · 6 volume · 7 Poes · 8 Pgas · 9 Pdi
+    col 1 time · 2–4 diaphragm EMG · 5 flow · 6 volume · 7 Poes · 8 Pgas · 9 Pdi
 
-The model is what makes the Campbell (Poes–Volume) loop look real. Oesophageal
-pressure is the sum of an **elastic** term (proportional to lung volume) and a
-**resistive** term (proportional to flow):
+The model's parameters are anchored to statistics measured from real oesophageal
+recordings (moderate loaded breathing), so the traces *look* real without reproducing
+any patient data:
 
-    Poes(t) = Poes₀ − V/C + R·flow
+* **Mechanics.** Oesophageal pressure is an **elastic** term (rising with lung volume,
+  with a gentle curvature) plus a **resistive** term (proportional to flow):
+  ``Poes = Poes₀ − E·V − E₂·V² + R·flow``. Because inspiratory and expiratory flow have
+  opposite sign, at any given volume the two limbs sit ``2·R·flow`` apart, so the
+  Campbell (Poes–volume) loop **opens** into a leaf whose area is the resistive work of
+  breathing. Elastance and tidal volume are chosen so the loop is a realistic open leaf
+  rather than a steep sliver. Gastric pressure rises with inspiration (diaphragm
+  descent); Pdi = Pgas − Poes. A slow downward **volume drift** (integration bias) is
+  baked in for the drift-correction demo.
 
-Because inspiratory and expiratory flow have opposite sign, at any given volume the
-two limbs sit at different pressures, so the loop **opens** — its enclosed area is the
-resistive work of breathing. A modest airway resistance (as in mildly loaded
-breathing) is used so the loop is clearly visible. Gastric pressure rises with
-inspiration (diaphragm descent); transdiaphragmatic pressure Pdi = Pgas − Poes.
-Diaphragm EMG bursts during inspiration, band-limited to the EMG range.
+* **Diaphragm EMG.** Each channel is **band-limited noise** centred near 30 Hz (the
+  measured diaphragm-EMG band, not a pure tone), amplitude-modulated by an
+  inspiratory-weighted burst over a low tonic floor, plus a coloured noise floor. A
+  **heartbeat (ECG) artefact** — a sharp triphasic QRS at ~72 bpm — is superimposed,
+  strongest on the middle electrode (its natural detection channel) and weakest on the
+  outer ones, so the sample exercises ECG removal and spectral noise reduction. The same
+  cardiac clock ripples the pressures.
 
 Deterministic (fixed seed) so the sample is identical every time. Computation only —
 no file I/O beyond the single CSV it writes, and no Qt.
@@ -30,94 +39,208 @@ import os
 
 import numpy as np
 
-FS = 500                       # Hz
-N_BREATHS = 8
-PERIOD_S = 4.0                 # ~15 breaths/min
-VT_L = 0.6                     # tidal volume (L)
-RESISTANCE = 6.5               # cmH₂O/(L/s) → a visibly open (mildly loaded) loop
+FS = 1000                      # Hz — covers the diaphragm-EMG band (<~250 Hz) and a crisp QRS
+N_BREATHS = 9
+PERIOD_S = 3.2                 # ~19 breaths/min
+VT_L = 1.0                     # tidal volume (L)
+RESISTANCE = 2.0               # cmH₂O/(L/s) — opens the loop to ~half its elastic height
+ELASTANCE = 6.0                # cmH₂O/L — pleural pressure per litre (real loaded ~4–6)
+ELASTANCE_CURV = 1.5           # cmH₂O/L² — gentle bow on the elastic axis
 POES_EE = -5.0                 # end-expiratory pleural pressure (cmH₂O)
 PGAS_EE = 8.0                  # end-expiratory gastric pressure (cmH₂O)
-ELASTIC_SWING = 8.0            # cmH₂O elastic recoil over a tidal breath
+PGAS_SWING = 6.0               # gastric-pressure rise over a tidal breath (cmH₂O)
+VOL_DRIFT_L = -0.4             # slow downward integration drift over the record (L)
+HR_HZ = 1.2                    # heart rate (72 bpm)
+LEAD_S = 1.0                   # quiet rest lead-in (EMG- and ECG-free) for the noise reference
+N_EMG = 3
+EMG_SCALE = (0.85, 1.0, 0.90)  # per-channel EMG amplitude (centre-weighted)
+ECG_SCALE = (0.55, 1.0, 0.70)  # per-channel ECG prominence (strongest on the middle electrode)
 FILENAME = "sample_recording.csv"
+DETECT_CHANNEL = 1             # 0-based index of the strongest-ECG EMG channel
 
 
 def _physio_noise(n, rng, amp, smooth_s=0.35):
-    """Low-frequency, physiological-looking noise (a smooth wander), not white fuzz:
-    white noise low-passed by a Hann window so it varies over ~a third of a second
-    rather than sample-to-sample, then scaled to ``amp`` (cmH₂O). This is what gives the
-    Campbell loops natural breath-to-breath spread instead of a hairline of jitter."""
+    """Low-frequency, physiological-looking wander (not white fuzz): white noise
+    low-passed by a Hann window so it varies over ~a third of a second, scaled to
+    ``amp`` (cmH₂O). Gives the Campbell loops a natural breath-to-breath spread."""
     w = np.hanning(max(3, int(smooth_s * FS)))
     w = w / w.sum()
     x = np.convolve(rng.standard_normal(n + w.size), w, mode="same")[:n]
     return amp * x / (x.std() or 1.0)
 
 
+def _coloured_noise(n, rng, amp, smooth_s=0.004):
+    """Broadband but mildly low-passed noise (coloured, like the real EMG floor — power
+    falls with frequency), scaled to std ``amp``. This is what spectral noise reduction
+    acts on; real recordings have no white fuzz or mains line."""
+    w = np.hanning(max(3, int(smooth_s * FS)))
+    w = w / w.sum()
+    y = np.convolve(rng.standard_normal(n + w.size), w, mode="same")[:n]
+    return amp * y / (y.std() or 1.0)
+
+
+def _emg_carrier(n, rng):
+    """Unit-RMS band-limited noise shaped to the diaphragm-EMG spectrum (peak ~30 Hz,
+    rolling off above ~50 Hz, band-limited 20–250 Hz) — the measured shape, not a tone."""
+    x = np.fft.rfft(rng.standard_normal(n))
+    f = np.fft.rfftfreq(n, 1.0 / FS)
+    h = np.where((f >= 20.0) & (f <= 250.0), (f / 30.0) * np.exp(-f / 45.0), 0.0)
+    y = np.fft.irfft(x * h, n=n)
+    return y / (y.std() or 1.0)
+
+
+def _qrs():
+    """A short triphasic QRS complex (~40 ms): small Q dip, tall R spike, deep S trough —
+    the measured morphology of the cardiac artefact on oesophageal EMG."""
+    m = int(0.05 * FS)
+    t = (np.arange(m) - m // 2) / FS
+    def g(a, mu, sig):
+        return a * np.exp(-0.5 * ((t - mu) / sig) ** 2)
+    return g(1.0, 0.0, 0.003) + g(-0.25, -0.008, 0.002) + g(-0.70, 0.015, 0.004)
+
+
+def _heartbeat_impulses(n, rng):
+    """An impulse train at ~HR (mild beat-to-beat variation), with no beats during the
+    quiet lead-in. One shared clock so the EMG artefact and the pressure ripple align."""
+    train = np.zeros(n + int(0.05 * FS))
+    t = LEAD_S + 0.15 + 0.02 * rng.standard_normal()
+    while int(t * FS) < n:
+        train[int(t * FS)] += 1.0
+        t += (1.0 / HR_HZ) * (1.0 + 0.08 * rng.standard_normal())
+    return train
+
+
+def _unit(x):
+    peak = np.max(np.abs(x))
+    return x / (peak or 1.0)
+
+
+def _ecg_signal(train, n):
+    """The sharp triphasic QRS artefact seen on the EMG (unit R-amplitude)."""
+    return _unit(np.convolve(train, _qrs(), mode="same")[:n])
+
+
+def _cardiac_pressure(train, n):
+    """The smooth pulsatile cardiac oscillation seen on the PRESSURES — the heart pushing
+    on the oesophageal balloon, not a sharp QRS — so the Poes/Pgas ripple is rounded."""
+    m = int(0.12 * FS)
+    t = (np.arange(m) - m // 2) / FS
+    pulse = np.exp(-0.5 * (t / 0.03) ** 2) - 0.35 * np.exp(-0.5 * ((t - 0.05) / 0.035) ** 2)
+    return _unit(np.convolve(train, pulse, mode="same")[:n])
+
+
 def _one_breath(rng, T, vt):
-    """One breath on the sin² volume model (segments reliably), with Poes built from an
-    elastic term (∝ volume) plus a resistive term (∝ flow) so the loop opens. Pressure
-    noise is added later, continuously across the whole recording (see _signals); the EMG
-    carrier is genuinely high-frequency, so its measurement noise stays white here."""
+    """One breath on the sin² volume model (segments reliably): volume 0→VT→0, flow the
+    negative derivative (negative on inspiration), and the elastic Poes/Pgas terms. The
+    resistive Poes term and the EMG are added later, continuously across the record."""
     n = int(round(T * FS))
     t = np.arange(n) / FS
     vol = vt * np.sin(np.pi * t / T) ** 2                          # 0 → VT → 0
-    dvdt = vt * (np.pi / T) * np.sin(2 * np.pi * t / T)            # +insp… −exp
+    dvdt = vt * (np.pi / T) * np.sin(2 * np.pi * t / T)            # +insp … −exp
     flow = -dvdt                                                   # inspiration → flow negative
-
-    # Poes = baseline − elastic recoil (∝ volume) + resistive (∝ flow). The resistive
-    # term has opposite sign on the two limbs, which is what opens the Campbell loop.
-    poes = POES_EE - (ELASTIC_SWING / vt) * vol + RESISTANCE * flow
-    pgas = PGAS_EE + (3.0 / vt) * vol
-
-    env = np.clip(np.sin(np.pi * t / T), 0, None)                 # inspiratory-weighted burst
-    emg = []
-    for ch in range(3):
-        carrier = np.sin(2 * np.pi * (70 + 20 * ch) * t) + 0.6 * np.sin(2 * np.pi * (140 + 25 * ch) * t)
-        emg.append(0.03 * (1.0 + 0.2 * ch) * env * carrier + 0.006 * rng.standard_normal(n))
-    return vol, flow, poes, pgas, emg
+    poes_el = POES_EE - ELASTANCE * vol - ELASTANCE_CURV * vol ** 2
+    pgas = PGAS_EE + (PGAS_SWING / vt) * vol
+    env = np.clip(np.sin(np.pi * t / T), 0, None) ** 1.2           # inspiratory-weighted burst
+    return vol, flow, poes_el, pgas, env
 
 
 def _signals():
     rng = np.random.default_rng(20260711)
-    vol_all, flow_all, poes_all, pgas_all, emg_all = [], [], [], [], [[], [], []]
-    # a short resting expiratory lead-in so the first breath starts cleanly
-    nlead = int(0.6 * FS)
+    nlead = int(LEAD_S * FS)
     tl = np.arange(nlead) / FS
-    vol_all.append(np.zeros(nlead))
-    flow_all.append(0.3 * np.sin(np.pi * tl / (nlead / FS)))       # gentle expiratory hump
-    poes_all.append(np.full(nlead, POES_EE))
-    pgas_all.append(np.full(nlead, PGAS_EE))
-    for ch in range(3):
-        emg_all[ch].append(0.006 * rng.standard_normal(nlead))
+    # a gentle resting expiratory lead-in (EMG- and ECG-free) so the first breath starts
+    # cleanly and [0, ~LEAD_S] is a quiet reference for noise reduction
+    vol_all = [np.zeros(nlead)]
+    flow_all = [0.15 * np.sin(np.pi * tl / LEAD_S)]
+    poesel_all = [np.full(nlead, POES_EE)]
+    pgas_all = [np.full(nlead, PGAS_EE)]
+    env_all = [np.zeros(nlead)]
     for b in range(N_BREATHS):
-        T = PERIOD_S * (1.0 + 0.06 * np.sin(1.3 * b))               # breath-to-breath variation
+        T = PERIOD_S * (1.0 + 0.10 * np.sin(1.3 * b + 0.4))         # breath-to-breath variation
         vt = VT_L * (1.0 + 0.10 * np.sin(0.7 * b + 0.5))
-        vol, flow, poes, pgas, emg = _one_breath(rng, T, vt)
-        vol_all.append(vol); flow_all.append(flow); poes_all.append(poes); pgas_all.append(pgas)
-        for ch in range(3):
-            emg_all[ch].append(emg[ch])
+        vol, flow, poes_el, pgas, env = _one_breath(rng, T, vt)
+        vol_all.append(vol); flow_all.append(flow); poesel_all.append(poes_el)
+        pgas_all.append(pgas); env_all.append(env)
     vol = np.concatenate(vol_all); flow = np.concatenate(flow_all)
-    poes = np.concatenate(poes_all); pgas = np.concatenate(pgas_all)
-    emg = [np.concatenate(c) for c in emg_all]
-    vol = vol + np.linspace(0, 0.12, len(vol))                     # slow baseline drift to correct
-    # continuous low-frequency wander on the pressures (physiological variation, not fuzz)
-    poes = poes + _physio_noise(len(poes), rng, amp=0.6)
-    pgas = pgas + _physio_noise(len(pgas), rng, amp=0.4)
-    pdi = pgas - poes                                              # transdiaphragmatic
+    poes_el = np.concatenate(poesel_all); pgas = np.concatenate(pgas_all)
+    env = np.concatenate(env_all)
+    n = len(flow)
+
+    # the neural drive leads the flow slightly — advance the burst envelope by ~80 ms
+    env = np.roll(env, -int(0.08 * FS)); env[-int(0.08 * FS):] = 0.0
+
+    beats = _heartbeat_impulses(n, rng)                            # one shared cardiac clock
+    ecg = _ecg_signal(beats, n)                                    # sharp QRS on the EMG
+    cardiac = _cardiac_pressure(beats, n)                          # smooth pulse on the pressures
+
+    # EMG channels: band-limited-noise carrier, inspiratory burst over a tonic floor,
+    # + the heartbeat artefact (centre-weighted) + a coloured noise floor
+    burst_peak = 0.06
+    tonic = 0.18
+    emg = []
+    for ch in range(N_EMG):
+        carrier = _emg_carrier(n, rng)
+        amp = EMG_SCALE[ch] * burst_peak * (tonic + (1.0 - tonic) * env)
+        floor = _coloured_noise(n, rng, amp=0.12 * EMG_SCALE[ch] * burst_peak)
+        r_amp = 3.0 * EMG_SCALE[ch] * burst_peak                   # R clearly above the burst
+        emg.append(amp * carrier + floor + ECG_SCALE[ch] * r_amp * ecg)
+
+    # pressures: elastic + resistive, a smooth cardiac ripple, and low-frequency wander
+    poes = poes_el + RESISTANCE * flow + 0.7 * cardiac + _physio_noise(n, rng, amp=0.6)
+    pgas = pgas + 0.4 * cardiac + _physio_noise(n, rng, amp=0.4)
+    vol = vol + np.linspace(0.0, VOL_DRIFT_L, n)                   # slow integration drift
+    pdi = pgas - poes                                             # transdiaphragmatic
     return flow, vol, poes, pgas, pdi, emg
 
 
 def write_sample_recording(folder: str) -> dict:
     """Write the sample CSV into ``folder`` and return a descriptor with the file path,
-    the 1-based channel mapping and the sampling frequency, ready to build Settings."""
+    the 1-based channel mapping, the sampling frequency and the strongest-ECG channel,
+    ready to build Settings."""
     os.makedirs(folder, exist_ok=True)
     flow, vol, poes, pgas, pdi, emg = _signals()
     n = len(flow)
     time = np.arange(n) / FS
-    cols = [time, emg[0], emg[1], emg[2], flow, vol, poes, pgas, pdi]
-    header = "time,EMG1,EMG2,EMG3,flow,volume,poes,pgas,pdi"
+    cols = [time] + list(emg) + [flow, vol, poes, pgas, pdi]
+    emg_hdr = ",".join(f"EMG{i + 1}" for i in range(N_EMG))
+    header = f"time,{emg_hdr},flow,volume,poes,pgas,pdi"
     path = os.path.join(folder, FILENAME)
-    np.savetxt(path, np.column_stack(cols), delimiter=",", header=header, comments="")
+    # %.5g keeps the CSV a few MB at 1 kHz (full precision would be >10 MB)
+    np.savetxt(path, np.column_stack(cols), delimiter=",", header=header,
+               comments="", fmt="%.5g")
+    emg_cols = list(range(2, 2 + N_EMG))
     return {"path": path, "folder": folder, "filename": FILENAME,
             "sampling_frequency": FS,
-            "mapping": {"flow": 5, "volume": 6, "poes": 7, "pgas": 8, "pdi": 9,
-                        "emg": [2, 3, 4], "entropy": []}}
+            "detect_channel": DETECT_CHANNEL,
+            "reference_interval": [0.1, LEAD_S - 0.1],
+            "mapping": {"flow": 2 + N_EMG, "volume": 3 + N_EMG, "poes": 4 + N_EMG,
+                        "pgas": 5 + N_EMG, "pdi": 6 + N_EMG,
+                        "emg": emg_cols, "entropy": []}}
+
+
+def build_sample_settings(desc: dict, output_folder: str):
+    """A ready ``Settings`` for the sample recording, with the full EMG pipeline — ECG
+    removal (on the strongest-ECG channel) and spectral noise reduction (referenced to
+    the quiet rest lead-in) — enabled, so "Explore sample data" demonstrates them out of
+    the box. Shared by the onboarding door and the README-figure generator."""
+    from respmech.core.settings import Settings  # noqa: PLC0415
+    s = Settings()
+    s.input.folder = desc["folder"]
+    s.input.files = desc["filename"]
+    s.input.format.sampling_frequency = desc["sampling_frequency"]
+    m, ch = desc["mapping"], s.input.channels
+    ch.flow, ch.volume = m["flow"], m["volume"]
+    ch.poes, ch.pgas, ch.pdi = m["poes"], m["pgas"], m["pdi"]
+    ch.emg, ch.entropy = list(m["emg"]), list(m["entropy"])
+    s.processing.segmentation.buffer = 200
+    e = s.processing.emg
+    e.remove_ecg = True
+    e.detect_channel = desc["detect_channel"]
+    e.remove_noise = True
+    e.noise.enabled = True
+    e.noise.reference_file = desc["filename"]
+    e.noise.use_expiration = False
+    e.noise.reference_intervals = [desc["reference_interval"]]
+    e.noise.auto_prop = True
+    s.output.folder = output_folder
+    return s
