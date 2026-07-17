@@ -105,7 +105,17 @@ def _close_top_level_windows():
     app = QApplication.instance()
     if app is None:
         return
+    try:
+        import shiboken6  # noqa: PLC0415
+        _alive = shiboken6.isValid
+    except Exception:                       # pragma: no cover - shiboken ships with PySide6
+        _alive = lambda _w: True            # noqa: E731
     for w in list(app.topLevelWidgets()):
+        # topLevelWidgets() can still list widgets whose C++ half is mid-destruction
+        # (deleteLater'd during the test); touching one is a hard SEGFAULT on the
+        # macOS/py3.11 CI runner, which no try/except can catch.
+        if not _alive(w):
+            continue
         try:
             # Hide BEFORE closing: this net is plumbing, not a user closing a window, and
             # MainWindow.closeEvent only asks about unsaved edits when the window is

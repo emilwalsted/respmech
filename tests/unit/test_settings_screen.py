@@ -172,21 +172,35 @@ def test_form_fields_are_bounded_and_never_elide(qapp, tmp_path):
     sc = win.settings_screen
     win.resize(1700, 950); win.show(); qapp.processEvents()
     column = sc.seg_buffer.width()                       # the QSS-capped numeric column
+    # "Does the text fit?" is measured with FONT METRICS against the widget's contents
+    # box, never against Qt's sizeHint: sizeHint folds in style/version-specific minimums
+    # (a combo's on the Windows runners exceeds the cap while its text fits fine), which
+    # made a correct layout fail CI on font-metric trivia.
+    from PySide6.QtGui import QFontMetrics
+    from PySide6.QtWidgets import QComboBox
+
+    def longest_text_px(w):
+        fm = QFontMetrics(w.font())
+        if isinstance(w, QComboBox):
+            return max((fm.horizontalAdvance(w.itemText(i)) for i in range(w.count())),
+                       default=0)
+        return fm.horizontalAdvance(w.text() if hasattr(w, "text") else w.toPlainText())
+
     for w in (sc.seg_method, sc.wob_from, sc.trend_method, sc.matlab_variant,
               sc.emg_norm, sc.breath_counts_edit,
               sc.in_files, sc.cols_emg, sc.cols_entropy, sc.group_regex):
         assert w.width() < win.width() / 3, f"{w} stretched to {w.width()}"
-        assert w.width() >= w.sizeHint().width(), f"{w} elides its own text"
-    # word-length choices share the spin column exactly; sentence-length ones get more room
-    for w in (sc.seg_method, sc.wob_from, sc.trend_method, sc.matlab_variant,
+        arrow = 24 if isinstance(w, QComboBox) else 0    # drop-down indicator zone
+        box = w.width() - 18 - arrow                     # QSS 2*8px padding + 2*1px border
+        assert longest_text_px(w) <= box, f"{w} clips its text ({longest_text_px(w)}px > {box}px)"
+    # word-length choices share the spin column exactly; longer content gets the wide band
+    for w in (sc.seg_method, sc.wob_from, sc.trend_method,
               sc.in_files, sc.cols_emg, sc.cols_entropy):
         assert w.width() == column
-    for w in (sc.emg_norm, sc.breath_counts_edit, sc.group_regex):
+    for w in (sc.emg_norm, sc.breath_counts_edit, sc.group_regex, sc.matlab_variant):
         assert column < w.width() <= 2.5 * column
-    # A QLineEdit's sizeHint ignores its placeholder (it stays 141px with or without one),
-    # so the no-elide assertion above cannot catch a clipped placeholder — check the pixel
-    # width against the contents box (widget width minus the QSS 2*8px padding + 2*1px border).
-    from PySide6.QtGui import QFontMetrics
+    # a placeholder is not text(), so the loop above cannot catch a clipped placeholder —
+    # check its pixels against the contents box too
     fm = QFontMetrics(sc.group_regex.font())
     assert fm.horizontalAdvance(sc.group_regex.placeholderText()) <= sc.group_regex.width() - 18
     # the browse-row paths (in/out folder, noise reference) legitimately stay full width:

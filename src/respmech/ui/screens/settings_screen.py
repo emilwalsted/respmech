@@ -339,7 +339,10 @@ class SettingsScreen(QWidget):
         self._row(fa, "Noise STFT window (n_fft)", self.noise_nfft, "processing.emg.noise.n_fft",
                   "FFT window length (samples) for the spectral noise gate; a power of two.")
         self.matlab_variant = QComboBox()
-        self.matlab_variant.setProperty("formField", "compact")   # share the spin boxes' column (theme.py)
+        # 'wide', not 'compact': "MATLAB (Unix/Mac)" plus the drop-down arrow outgrows the
+        # 150px column on wider fonts (measured 131px of text against the column's 126px
+        # text box on the CI runners' fonts) — the cap must never clip its own content.
+        self.matlab_variant.setProperty("formField", "wide")
         self.matlab_variant.addItem("MATLAB (Windows)", "windows")
         self.matlab_variant.addItem("MATLAB (Unix/Mac)", "mac")
         self._row(fa, "MATLAB file variant", self.matlab_variant, "input.format.matlab_variant",
