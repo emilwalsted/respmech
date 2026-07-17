@@ -8,6 +8,10 @@ profile can slow processing markedly. The selection persists until a new drag or
 plain click clears it. "Set noise profile" (enabled only once a region is marked)
 accepts the dialog; "Annullér" rejects it without touching the settings.
 
+The wheel zooms the time axis for all channels together (they are x-linked, and the
+view is bounded to the recording); a bottom scrollbar pans the zoomed view, and a
+double-click resets it — restoring the marked region its own leading click cleared.
+
 The selection state (``_set_selection`` / ``_clear_selection`` / ``_maybe_warn`` /
 ``selected_region``) is factored out of the mouse handling so it is testable headless.
 """
@@ -16,7 +20,7 @@ from __future__ import annotations
 import numpy as np
 from PySide6.QtCore import Qt, QEvent
 from PySide6.QtWidgets import (QApplication, QDialog, QHBoxLayout, QLabel,
-                               QPushButton, QVBoxLayout)
+                               QPushButton, QScrollBar, QVBoxLayout)
 
 import pyqtgraph as pg
 
@@ -28,8 +32,21 @@ except Exception:  # pragma: no cover
     _theme = None
 
 _WARN_SECONDS = 0.5
+_TIME_STEPS = 1000.0                   # scrollbar ticks per second: QScrollBar is integer-only
+_GLW_MARGIN = 10                       # GraphicsLayoutWidget's own margin around the plots
 _REGION_BRUSH = (255, 152, 0, 60)      # brand orange, semi-transparent
 _ACCENT = (255, 152, 0)
+
+
+def _axis_width():
+    """The pinned left-axis width the stacked plots share, so the scrollbar can be inset to
+    sit under the DATA area rather than under the y-axis labels."""
+    if _theme is not None:
+        try:
+            return int(_theme.PLOT_AXIS_WIDTH)
+        except Exception:  # pragma: no cover - defensive
+            pass
+    return 68
 
 
 def _plot_pal():
@@ -61,11 +78,14 @@ class NoiseProfileDialog(QDialog):
         self._sel_before_press = None      # selection as it was at the last press, so a double-
                                            # click (whose leading click clears it) can restore it
         self._label_plot = None            # the plot the cursor label currently lives on
+        self._syncing = False              # scrollbar <-> ViewBox are wired BOTH ways, so each
+                                           # must refuse to answer the other's update
 
         v = QVBoxLayout(self)
         hint = QLabel("Hover to read the time; click-drag over a quiet (EMG-free) span to "
                       "mark the rest region on all channels. Click once to clear it. "
-                      "Scroll to zoom the time axis (all channels together); double-click to reset.")
+                      "Scroll to zoom the time axis (all channels together); double-click to reset. "
+                      "Use the bar below the plots to move through the recording when zoomed in.")
         hint.setProperty("status", "muted"); hint.setWordWrap(True)
         v.addWidget(hint)
 
@@ -96,6 +116,14 @@ class NoiseProfileDialog(QDialog):
             # the ViewBox can pan on them.
             vb.setMouseEnabled(x=True, y=False)
             vb.setMenuEnabled(False)
+            # Bound the time axis to the recording: the view can never zoom or pan outside
+            # the data. xMin/xMax bound the RANGE, not merely the pan, so no maxXRange is
+            # needed. This must be set on EVERY ViewBox, not just the first: the plots are
+            # x-linked in a chain, so a wheel over channel 3 originates the range change at
+            # ITS ViewBox. An unlimited ViewBox scales freely and only the far end of the
+            # chain clamps, which desyncs the stack instead of stopping the zoom.
+            if self._t.size > 1:
+                vb.setLimits(xMin=float(self._t[0]), xMax=float(self._t[-1]))
             if prev is not None:
                 p.setXLink(prev)
             prev = p
@@ -105,8 +133,28 @@ class NoiseProfileDialog(QDialog):
                                       brush=pg.mkBrush(*_REGION_BRUSH), pen=pg.mkPen(_ACCENT, width=1))
             reg.setZValue(-5); reg.setVisible(False); p.addItem(reg)
             self._plots.append(p); self._vlines.append(vl); self._regions.append(reg)
+        # The x view is EXPLICIT, never auto-ranged: pyqtgraph's padded first auto-range
+        # gets clamped against the xMax limit and, through the x-link chain, locks a
+        # rightward drift in — the dialog then opens with the start of the recording
+        # cropped off-screen and the pan bar already at its maximum. y stays auto per
+        # channel (their scales differ wildly).
+        if self._plots and self._t.size > 1:
+            for p in self._plots:
+                p.getViewBox().enableAutoRange(x=False)
+            self._plots[0].getViewBox().setXRange(
+                float(self._t[0]), float(self._t[-1]), padding=0)
         self._label = pg.TextItem("", color=pal["fg"], anchor=(0, 1))
         self._label.setZValue(50)
+
+        # Pan control for the zoomed time axis. Left-drag belongs to the region picker (the
+        # eventFilter consumes it before the ViewBox can pan), so this is the ONLY way to
+        # move through the recording once zoomed. Inset to sit under the data, not the axis.
+        self.scroll = QScrollBar(Qt.Horizontal)
+        self.scroll.setEnabled(False)
+        _sr = QHBoxLayout()
+        _sr.setContentsMargins(_axis_width() + _GLW_MARGIN, 0, _GLW_MARGIN, 0)
+        _sr.addWidget(self.scroll)
+        v.addLayout(_sr)
 
         self.warn = QLabel(""); self.warn.setObjectName("noiseWarn")
         self.warn.setWordWrap(True); self.warn.setVisible(False)
@@ -125,6 +173,12 @@ class NoiseProfileDialog(QDialog):
         vp = self.glw.viewport()
         vp.installEventFilter(self)
         vp.setMouseTracking(True)
+
+        self.scroll.valueChanged.connect(self._scroll_to)
+        if self._plots:
+            _vb0 = self._plots[0].getViewBox()
+            _vb0.sigXRangeChanged.connect(self._sync_scroll)
+            self._sync_scroll(_vb0, _vb0.viewRange()[0])    # seed range/enabled state
 
     # -- coordinate mapping -------------------------------------------------
     def _scene_x(self, view_pos):
@@ -180,6 +234,43 @@ class NoiseProfileDialog(QDialog):
             except Exception:                          # noqa: BLE001 — interaction is cosmetic
                 pass
         return super().eventFilter(obj, ev)
+
+    # -- time scrollbar -----------------------------------------------------
+    def _scroll_to(self, value):
+        """Scrollbar moved -> pan the view, preserving the current zoom width."""
+        if self._syncing or not self._plots or not self._t.size:
+            return
+        vb = self._plots[0].getViewBox()
+        lo, hi = vb.viewRange()[0]
+        span = hi - lo                       # read live: panning must never change the zoom
+        x0 = float(self._t[0]) + value / _TIME_STEPS
+        self._syncing = True
+        try:
+            vb.setXRange(x0, x0 + span, padding=0)   # x-linked -> every channel follows
+        finally:
+            self._syncing = False
+
+    def _sync_scroll(self, vb, rng):
+        """View changed (wheel zoom, double-click reset) -> match the scrollbar to it.
+
+        Disabled rather than hidden when the whole recording is visible: hiding it would
+        make the plot stack jump by the scrollbar's height on every zoom in and out.
+        """
+        if self._syncing or not self._t.size:
+            return
+        lo, hi = float(rng[0]), float(rng[1])
+        t0, t1 = float(self._t[0]), float(self._t[-1])
+        span = max(1e-9, hi - lo)
+        hidden = max(0.0, (t1 - t0) - span)          # how much time is off-screen
+        self._syncing = True
+        try:
+            self.scroll.setRange(0, int(round(hidden * _TIME_STEPS)))
+            self.scroll.setPageStep(max(1, int(round(span * _TIME_STEPS))))
+            self.scroll.setSingleStep(max(1, int(round(span * _TIME_STEPS / 10.0))))
+            self.scroll.setValue(int(round((lo - t0) * _TIME_STEPS)))
+            self.scroll.setEnabled(hidden > 1.0 / _TIME_STEPS)
+        finally:
+            self._syncing = False
 
     def _reset_zoom(self):
         """Back to the whole recording. The plots are x-linked, so setting one resets all."""

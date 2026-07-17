@@ -17,6 +17,25 @@ from respmech.ui.screens.preview_screen import PreviewScreen
 from respmech.ui.screens.run_screen import RunScreen
 
 
+# The menu shows fewer recents than prefs stores: a header menu has to stay glanceable.
+_MENU_RECENTS = 5
+
+
+def _recent_label(path: str, max_dir: int = 34) -> str:
+    """Label one recent analysis: the file name plus just enough of its folder to tell two
+    same-named analyses apart. Bare basenames collide across studies (every study has an
+    "analysis.toml"); full paths are unreadable at menu width. The folder is elided at its
+    HEAD — the leaf folder is the one that names the study."""
+    import os  # noqa: PLC0415
+    folder, name = os.path.split(path)
+    home = os.path.expanduser("~")
+    if folder.startswith(home):
+        folder = "~" + folder[len(home):]
+    if len(folder) > max_dir:
+        folder = "…" + folder[-max_dir:]
+    return f"{name}  —  {folder}" if folder else name
+
+
 class MainWindow(QMainWindow):
     def __init__(self, state: AppState | None = None):
         super().__init__()
@@ -62,6 +81,10 @@ class MainWindow(QMainWindow):
         self._update_window_title()
         # a noise reference chosen on the Preview graph (feature B) mirrors into Settings
         pv.noise_reference_changed.connect(sc.set_noise_reference)
+        # Preview-owned settings (noise/ECG params, breath exclusions) land in the saved
+        # .toml too, so a user edit there must dirty the analysis like any Setup edit —
+        # the title, the close guard and Save-gating all read the same flag.
+        pv.settings_edited.connect(sc._mark_dirty)
         # P19: "Process & write this file" on Preview → run just that file on the Run screen
         pv.process_file_requested.connect(self._process_single_file)
         # P20: double-clicking a file in the Run results drills back into Preview
@@ -106,12 +129,14 @@ class MainWindow(QMainWindow):
             self.tabs.setTabToolTip(i, hint)
 
     def _update_window_title(self):
-        """Name the active analysis in the title bar and flag unsaved edits with a bullet,
-        so it is obvious which analysis is loaded and whether it has been saved."""
+        """Name the active analysis in the title bar and flag unsaved edits, so it is
+        obvious which analysis is loaded and whether it has been saved. The unsaved
+        analysis is named "new analysis", not "new analysis (unsaved)": the modified
+        marker already carries that, and both would say it twice."""
         import os  # noqa: PLC0415
         path = getattr(self.state, "settings_path", None)
-        name = os.path.basename(path) if path else "new analysis (unsaved)"
-        dirty = " •" if self.settings_screen.is_dirty() else ""
+        name = os.path.basename(path) if path else "new analysis"
+        dirty = " * (modified)" if self.settings_screen.is_dirty() else ""
         self.setWindowTitle(f"RespMech {__version__} — {name}{dirty}")
 
     def _process_single_file(self, filename: str):
@@ -172,13 +197,63 @@ class MainWindow(QMainWindow):
         menu.addAction("New analysis", sc.new_analysis)
         menu.addAction("Open analysis…", sc.open_analysis_dialog)
         menu.addSeparator()
-        menu.addAction("Save analysis…", sc.save_analysis)
+        self._act_save = menu.addAction("Save", sc.save_analysis)
+        self._act_save_as = menu.addAction("Save as…", sc.save_analysis_as)
+        # The recents and the Save enable-state both depend on live state, so they are
+        # rebuilt each time the menu drops down. Reading prefs at show time cannot go stale;
+        # listening to a screen signal would (analysis_state_changed is emitted BEFORE
+        # prefs.add_recent_analysis in _load, so it would read the list one open behind).
+        self._recent_sep = menu.addSeparator()
+        self._recent_actions = []
+        menu.setToolTipsVisible(True)       # the full path lives in each recent's tooltip
+        menu.aboutToShow.connect(self._refresh_analysis_menu)
+        self.analysis_menu = menu
         self.analysis_btn = QToolButton()
         self.analysis_btn.setObjectName("appMenuButton")
         self.analysis_btn.setText("Analysis")
         self.analysis_btn.setMenu(menu)
         self.analysis_btn.setPopupMode(QToolButton.InstantPopup)   # a menu, not a button
         return self.analysis_btn
+
+    def _refresh_analysis_menu(self):
+        """Recompute the parts of the Analysis menu that depend on live state."""
+        sc = self.settings_screen
+        savable = sc.can_save()
+        # Save is offered when the analysis is NEW (no file yet — the command falls through
+        # to Save as…) or DIRTY (edits to write back); a clean opened file has nothing to
+        # save. Save as… always names a new file, so it only needs savable settings.
+        new = not getattr(self.state, "settings_path", None)
+        self._act_save.setEnabled(savable and (sc.is_dirty() or new))
+        self._act_save_as.setEnabled(savable)
+        self._rebuild_recent_analyses()
+
+    def _rebuild_recent_analyses(self):
+        """Replace the menu's recents section with the current list (P26). Only the tracked
+        recent actions are removed, so New/Open/Save keep their identity — and their
+        shortcuts and enable-state — across rebuilds."""
+        from respmech.ui import prefs  # noqa: PLC0415
+        for act in self._recent_actions:
+            self.analysis_menu.removeAction(act)
+            act.deleteLater()      # addAction parented it to the menu; removeAction only
+                                   # detaches it, so without this every menu-open leaks 5
+        self._recent_actions = []
+        # prefs.recent_analyses() already drops files that no longer exist: a dead menu
+        # entry is noise, not information.
+        recents = prefs.recent_analyses()[:_MENU_RECENTS]
+        self._recent_sep.setVisible(bool(recents))
+        for i, path in enumerate(recents, 1):
+            act = self.analysis_menu.addAction(f"&{i}  {_recent_label(path)}")
+            act.setToolTip(path)                       # the exact path, unelided
+            act.triggered.connect(lambda _=False, p=path: self._open_recent(p))
+            self._recent_actions.append(act)
+
+    def _open_recent(self, path: str):
+        """Open a recent analysis, honouring the same unsaved-changes guard as any other
+        action that would discard edits."""
+        if not self.settings_screen.confirm_discard_changes(
+                "Open analysis", question="Save them before opening another analysis?"):
+            return
+        self.settings_screen.open_analysis(path)
 
     def _fit_to_screen(self, desired_w: int = 1180, desired_h: int = 820,
                        fraction: float = 0.92) -> None:
@@ -209,6 +284,18 @@ class MainWindow(QMainWindow):
         pass
 
     def closeEvent(self, ev):
+        # Ask about unsaved edits BEFORE tearing anything down: a cancelled close must
+        # leave a fully live window, not one whose workers have already been joined.
+        # Only a VISIBLE window asks — its close is a user action with someone there to
+        # answer. A never-shown window closes programmatically (scripting, headless
+        # tests), where a modal prompt would block forever with nobody to dismiss it.
+        # A close arriving while ANY discard prompt is already up (close-over-close,
+        # or Cmd+Q on top of an open-flow prompt) is aborted by the guard's own
+        # re-entrancy latch — stacked window-modal boxes are cocoa's
+        # "modalSession exited prematurely" recipe.
+        if self.isVisible() and not self.settings_screen.confirm_discard_changes("Close RespMech"):
+            ev.ignore()
+            return
         # join every worker thread (Preview reactive jobs + a running batch) so none
         # outlives the window and gets destroyed while running
         for screen in (self.preview_screen, self.run_screen):

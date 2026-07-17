@@ -281,3 +281,45 @@ def test_sample_recording_is_analysable(tmp_path):
     result = run_batch(s)
     fr = next(iter(result.ok_files.values()))
     assert len([b for b in fr.breaths.values() if not b["ignored"]]) >= 4   # real breaths detected
+
+
+def test_output_pdfs_are_always_light(monkeypatch):
+    """An output figure is a document that leaves the app, not a view of it. The GUI's dark
+    theme installs its colours into GLOBAL matplotlib rcParams, which core.plots would
+    otherwise inherit at Figure()/savefig() time — so a dark UI must not bleed into a
+    written PDF, and rendering must not leave the GUI's own canvases light afterwards."""
+    import matplotlib as mpl
+    from respmech.core import plot_style
+    from respmech.ui import theme
+    # install the DARK theme's rcParams the way a running GUI does
+    monkeypatch.setattr(theme, "_IS_DARK", True)
+    theme.style_matplotlib()
+    dark_ground = mpl.rcParams["axes.facecolor"]
+    assert dark_ground != "#FFFFFF"                              # the leak source is armed
+
+    with plot_style.light_rc_context():                           # what write_figures wraps in
+        assert mpl.rcParams["axes.facecolor"] == "#FFFFFF"
+        assert mpl.rcParams["figure.facecolor"] == "#FFFFFF"
+        assert mpl.rcParams["text.color"] == "#33404D"
+    assert mpl.rcParams["axes.facecolor"] == dark_ground          # GUI canvases stay dark
+
+    # ...and write_figures really RUNS inside that context — this is the wiring the whole
+    # fix hangs on, so pin it: spy on the impl and read the live rcParams from within.
+    from respmech.core import plots
+    seen = {}
+    monkeypatch.setattr(plots, "_write_figures_impl",
+                        lambda r, s, o: (seen.update(face=mpl.rcParams["axes.facecolor"]),
+                                         ([], []))[1])
+    assert plots.write_figures(None, None, "") == ([], [])
+    assert seen["face"] == "#FFFFFF"                              # light INSIDE the writer
+    assert mpl.rcParams["axes.facecolor"] == dark_ground          # ...dark restored after
+
+    # The light table must cover EVERY key the theme re-colours, or that key leaks through.
+    dark_rc = {k: mpl.rcParams[k] for k in plot_style.light_rc() if k != "axes.prop_cycle"}
+    monkeypatch.setattr(theme, "_IS_DARK", False)
+    theme.style_matplotlib()
+    light = plot_style.light_rc()
+    for key, dark_val in dark_rc.items():
+        if dark_val != mpl.rcParams[key]:                         # a key the theme re-colours
+            assert light[key] == mpl.rcParams[key], (
+                f"{key}: core's light table has drifted from the light theme")

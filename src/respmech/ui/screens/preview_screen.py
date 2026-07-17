@@ -414,6 +414,12 @@ class PreviewScreen(QWidget):
     status_changed = Signal(str)
     # emitted when a noise reference is chosen on the graph (feature B)
     noise_reference_changed = Signal(str, object, bool)
+    # emitted when the USER edits a Preview-owned setting that lands in the saved .toml
+    # (noise/ECG params, breath exclusions). main_window routes it to the Setup screen's
+    # dirty funnel so the title, close guard and Save all reflect the edit. Programmatic
+    # fills (_load_*_params, sync_from_settings, the detect_channel seed) and app-derived
+    # writes (the auto-picked prop_decrease) deliberately do NOT emit it.
+    settings_edited = Signal()
     # emitted to process AND write just the previewed file (P19)
     process_file_requested = Signal(str)
 
@@ -450,6 +456,7 @@ class PreviewScreen(QWidget):
         self._breath_spans = {}
         self._breath_regions = {}
         self._breath_texts = {}
+        self._mech_unpin = lambda: None   # detaches the mechanics label-pin slot
         # draggable noise-selection region (feature B)
         self._noise_region = None
         # staged all-channel EMG (result view)
@@ -479,13 +486,22 @@ class PreviewScreen(QWidget):
         root = QVBoxLayout(self); root.setContentsMargins(11, 11, 11, 11)   # deterministic, matches Setup
         bar = QHBoxLayout()
         self.file_combo = QComboBox()
+        # Size the selector to the recording names, not the window: names are short
+        # (~100px at 13pt), but a stretch-factor row hands an uncapped combo ALL the
+        # slack. "wide" caps the contents at 320px; a longer name elides in the closed
+        # field but shows in full in the popup.
+        self.file_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.file_combo.setProperty("formField", "wide")
         # P27: step through files without leaving the plots — buttons + PageUp/PageDown.
         self.btn_prev_file = QPushButton("◀")
         self.btn_next_file = QPushButton("▶")
         for b, tip in ((self.btn_prev_file, "Previous file (PgUp)"),
                        (self.btn_next_file, "Next file (PgDn)")):
-            b.setProperty("nav", True)      # drop the 16px side padding so the arrow has room
-            b.setFixedWidth(30); b.setToolTip(tip)
+            # The nav QSS gives the arrow 6px side air, and its min-width:0 overwrites
+            # any code-side minimum at polish — the width simply tracks sizeHint, so the
+            # glyph cannot clip. The max only stops layout slack ballooning the button.
+            b.setProperty("nav", True)
+            b.setMaximumWidth(34); b.setToolTip(tip)
         self.btn_prev_file.clicked.connect(lambda: self._step_file(-1))
         self.btn_next_file.clicked.connect(lambda: self._step_file(+1))
         # 'Refresh' recomputes every auto panel (not the test run); the file list itself
@@ -494,8 +510,12 @@ class PreviewScreen(QWidget):
         self.btn_refresh_all.setToolTip("Recompute all preview panels for the current file.")
         self.btn_refresh_all.clicked.connect(self._refresh_all)
         bar.addWidget(QLabel("File:")); bar.addWidget(self.btn_prev_file)
-        bar.addWidget(self.file_combo, 1); bar.addWidget(self.btn_next_file)
+        bar.addWidget(self.file_combo); bar.addWidget(self.btn_next_file)
+        bar.addSpacing(12)   # detach Refresh a little from the ◀ file ▶ cluster
         bar.addWidget(self.btn_refresh_all)
+        # park the slack AFTER Refresh: QPushButton's Minimum h-policy would otherwise
+        # let the buttons balloon to fill the row once the combo stops stretching
+        bar.addStretch(1)
         root.addLayout(bar)
         from PySide6.QtGui import QShortcut, QKeySequence  # noqa: PLC0415
         QShortcut(QKeySequence(Qt.Key_PageUp), self, activated=lambda: self._step_file(-1))
@@ -570,6 +590,7 @@ class PreviewScreen(QWidget):
         # P16/P17: a thin action bar — batch QC overview + crosshair read-out + export
         bar = QHBoxLayout()
         self.qc_overview = QLabel("")
+        self.qc_overview.setProperty("banner", True)   # box baked at first polish (theme.py)
         self.qc_overview.setProperty("status", "muted")
         self.qc_overview.setToolTip("Quality overview of the most recent test run.")
         self.crosshair_label = QLabel("")
@@ -725,9 +746,9 @@ class PreviewScreen(QWidget):
         strip.addStretch(1)
         v.addLayout(strip)
 
-        # plots — LEFT column: all-channel views (raw stack, conditioned result);
-        #         RIGHT column: single detail-channel views (time detail, its PSD).
-        # (Detail and Conditioned result are swapped vs. the old layout.)
+        # plots — three rows: raw stack | detail channel on top, the full-width
+        # conditioned result in the middle, the two small diagnostics below (see the
+        # splitter assembly further down for why each panel sits where it does).
         _bg = _plot_pal()["bg"]
         self.emg_raw_plots = pg.GraphicsLayoutWidget()
         self.emg_raw_plots.setBackground(_bg)
@@ -748,14 +769,17 @@ class PreviewScreen(QWidget):
         top.addWidget(self._titled("Detail channel",       # pipeline stages are in the plot legend
                                    self.emg_plots, corner=self.emg_channel))
         split.addWidget(top)
-        mid = QSplitter(Qt.Horizontal)
-        mid.addWidget(self._titled("Conditioned result",   # the corner picker names the channels
-                                   self.emg_result_plots, corner=self.result_checks_holder))
-        mid.addWidget(self._titled("Detail PSD", self.emg_psd_canvas))
-        self._emg_mid = mid
-        split.addWidget(mid)
+        # Conditioned result spans the full width: it is EMG against time, so width is what
+        # makes it readable. The two small diagnostics below share a row — the fidelity
+        # frontier and the PSD are compact curves that gain nothing from the extra width.
+        split.addWidget(self._titled("Conditioned result",   # the corner picker names the channels
+                                     self.emg_result_plots, corner=self.result_checks_holder))
         self.fidelity_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 3)))
-        split.addWidget(self._titled("Noise fidelity frontier (1 = untouched)", self.fidelity_canvas))
+        mid = QSplitter(Qt.Horizontal)
+        mid.addWidget(self._titled("Noise fidelity frontier (1 = untouched)", self.fidelity_canvas))
+        mid.addWidget(self._titled("Detail PSD", self.emg_psd_canvas))
+        self._emg_diag_row = mid          # the two small diagnostics share the bottom row
+        split.addWidget(mid)
         v.addWidget(split, 1)
         # clicking a numbered breath in any EMG plot toggles its exclusion too
         self.emg_raw_plots.scene().sigMouseClicked.connect(self._on_emg_raw_clicked)
@@ -881,6 +905,7 @@ class PreviewScreen(QWidget):
         e.ecg_min_width_s = float(self.ecg_min_width.value())
         e.ecg_window_s = float(self.ecg_window.value())
         e.detect_channel = max(0, self.ecg_capture_channel.currentIndex())
+        self.settings_edited.emit()      # ECG params land in the .toml -> mark dirty
         # ECG removal feeds the EMG/noise panels too, so recompute those alongside this tab.
         self._request_autorun({"ecg", "emg_all", "emg_detail", "noise"})
 
@@ -907,6 +932,7 @@ class PreviewScreen(QWidget):
         e.ecg_min_width_s = float(sug["ecg_min_width_s"])
         e.ecg_window_s = float(sug["ecg_window_s"])
         self._load_ecg_params()                        # reflect into the widgets (guarded)
+        self.settings_edited.emit()      # Auto-suggest rewrote the ECG settings -> mark dirty
         diag = sug.get("_diagnostics", {})
         cols = list(self.state.settings.input.channels.emg)
         col = cols[e.detect_channel] if e.detect_channel < len(cols) else e.detect_channel
@@ -962,6 +988,31 @@ class PreviewScreen(QWidget):
             self._set_status(f"ECG reduction — capture on col {col}: {short_error(data['ecg_error'])}")
         else:
             self._set_status(f"ECG reduction — capture on col {col}: {npk} R-peaks · {state}.")
+
+    @staticmethod
+    def _legend_one_row(plot, offset=(10, 4)):
+        """Lay a plot's legend out as a single horizontal row tucked under the top edge.
+
+        ``plot`` must be the PlotItem, never the PlotWidget: PlotWidget.__getattr__ only
+        forwards callables, so a widget yields legend=None and this silently does nothing.
+
+        The column count has to be re-applied on every render, not just at construction:
+        PlotItem.clear() removes each entry from the legend, the following plot(name=...)
+        calls re-add them, and the count varies (the detail plot gains 'noise-reduced' only
+        when noise conditioning ran; the result plot has one entry per ticked channel).
+        columnCount == entry count is what keeps it to one row.
+        """
+        leg = getattr(plot, "legend", None)
+        if leg is None:
+            return
+        try:
+            n = len(leg.items)
+            if not n:
+                return                       # setColumnCount(0) divides by zero
+            leg.setColumnCount(n)
+            leg.anchor(itemPos=(0, 0), parentPos=(0, 0), offset=offset)
+        except Exception:                    # noqa: BLE001 — legend chrome is cosmetic
+            pass
 
     @staticmethod
     def _style_legend(leg):
@@ -1078,6 +1129,7 @@ class PreviewScreen(QWidget):
         n.prop_decrease = self.noise_prop.value()
         n.fidelity_target = self.noise_target.value()
         n.n_std_thresh = self.noise_nstd.value()
+        self.settings_edited.emit()      # noise params land in the .toml -> mark dirty
         self._update_actions()
         self._request_autorun()          # re-condition with the new noise params
 
@@ -1402,15 +1454,19 @@ class PreviewScreen(QWidget):
         thread.started.connect(worker.run)
         job = _Job(kind, token, thread, worker)
         self._jobs[kind] = job
-        # Connect BOUND METHODS of self (a GUI-thread QObject), never lambdas: a
-        # lambda has no receiver QObject, so Qt cannot infer thread affinity and
-        # falls back to a DIRECT connection — which would run the render on the
-        # worker thread and crash Qt. Bound methods force a queued (GUI-thread)
-        # delivery. The emitting worker is recovered via sender().
-        worker.finished.connect(self._job_finished)
+        # Worker -> GUI delivery is EXPLICITLY queued. AutoConnection decides
+        # queued-vs-direct at emit time, and under a fast-emit race it can resolve a
+        # bound-method connection to DIRECT — running the render and the overlay
+        # stop()/hide() on the worker thread, which starts the spinner QProgressBar's
+        # style-animation timer cross-thread ("QBasicTimer::start: Timers cannot be
+        # started from another thread" on cocoa). Qt.QueuedConnection pins delivery to
+        # the GUI thread regardless of timing; sender() still resolves under it.
+        # (Receivers must still be bound methods of self, never lambdas — a lambda has
+        # no receiver QObject for the queued delivery to land on.)
+        worker.finished.connect(self._job_finished, Qt.QueuedConnection)
         if hasattr(worker, "failed"):
-            worker.failed.connect(self._job_failed_slot)
-        thread.finished.connect(self._release_thread)   # non-blocking cleanup when the thread exits exec()
+            worker.failed.connect(self._job_failed_slot, Qt.QueuedConnection)
+        thread.finished.connect(self._release_thread, Qt.QueuedConnection)   # non-blocking cleanup when the thread exits exec()
         self._launch_queue.append(job)                  # start it when a concurrency slot is free
         self._pump_pool()
         self._update_actions(status=False)
@@ -1709,7 +1765,7 @@ class PreviewScreen(QWidget):
         almost entirely because QTextDocument adds a 4 px margin on every side — setting a
         smaller font ALONE leaves it at 23 px. Font 9 pt + documentMargin 0 gives ~15 px."""
         txt = pg.TextItem(self._breath_label(num),
-                          color=self._breath_label_color(ignored), anchor=(0.5, 1.0))
+                          color=self._breath_label_color(ignored), anchor=(0.5, 0.0))
         f = QFont(); f.setPointSizeF(9.0)
         txt.setFont(f)
         txt.textItem.document().setDocumentMargin(0)
@@ -1727,17 +1783,18 @@ class PreviewScreen(QWidget):
             return default + margin
 
     def _label_headroom(self, plot, label_px=25.0, frac=0.22):
-        """Expand the label-carrying plot's y range upward so breath labels sit clearly
-        above the signal — the short mechanics channel plots would otherwise clip them.
-        Re-fits y to the DATA first so repeated repaints of a persistent plot (detail /
-        result) don't compound the headroom.
+        """Expand the label-carrying plot's y range upward so the breath labels — pinned
+        at the view top, hanging down into the view — start over an empty band instead of
+        sitting on the signal. Re-fits y to the DATA first so repeated repaints of a
+        persistent plot (detail / result) don't compound the headroom.
 
         The headroom is sized in PIXELS, not as a fraction of the data span: a TextItem is
-        a fixed pixel height whatever the scale, so a fixed fraction clips it on a short
-        plot (five stacked mechanics channels leave each ~70 px, where 22% ≈ 15 px — less
-        than the label). Solving ``new_span = span + label_px * new_span / height_px`` for
-        the exact expansion makes the label occupy ``label_px`` at the top at any height;
-        ``frac`` is only the fallback when the plot has no laid-out height yet."""
+        a fixed pixel height whatever the scale, so on a short plot a fixed fraction leaves
+        less band than the label needs (five stacked mechanics channels leave each ~70 px,
+        where 22% ≈ 15 px — less than the label). Solving
+        ``new_span = span + label_px * new_span / height_px`` for the exact expansion makes
+        the label occupy ``label_px`` at the top at any height; ``frac`` is only the
+        fallback when the plot has no laid-out height yet."""
         try:
             vb = plot.getViewBox()
             vb.enableAutoRange(y=True)           # snap y back to the data extent…
@@ -1753,6 +1810,40 @@ class PreviewScreen(QWidget):
         except Exception:                        # noqa: BLE001 — cosmetic
             pass
 
+    def _pin_breath_labels(self, plot, txt_map):
+        """Keep the breath-number labels pinned to the TOP of the visible view under
+        y-zoom/pan — the same behaviour as the red capture marks: a sigYRangeChanged
+        slot that only setPos()es the existing TextItems (wheel-zoom fires this
+        continuously, so nothing is re-created) and self-disconnects once its labels
+        leave the view. The labels MUST be added with ignoreBounds=True: a view-pinned
+        item that still fed childrenBounds would re-inflate every autorange pass.
+        Returns an unpin callable for eager teardown on repaint."""
+        vb = plot.getViewBox()
+        texts = list(txt_map.values())
+        if vb is None or not texts:
+            return lambda: None
+
+        def _unpin():
+            try:
+                vb.sigYRangeChanged.disconnect(_reposition)
+            except Exception:                          # noqa: BLE001
+                pass
+
+        def _reposition(*_):
+            try:
+                if texts[0].getViewBox() is None:      # repainted/cleared -> self-remove
+                    _unpin()
+                    return
+                top = vb.viewRange()[1][1]
+                for t in texts:
+                    t.setPos(t.pos().x(), top)
+            except Exception:                          # noqa: BLE001 — cosmetic
+                _unpin()
+
+        vb.sigYRangeChanged.connect(_reposition)
+        _reposition()                                  # place at the CURRENT view top now
+        return _unpin
+
     @staticmethod
     def _breath_label(num):
         """The per-breath number label, e.g. '#3'. The word 'breath' is intentionally
@@ -1760,6 +1851,7 @@ class PreviewScreen(QWidget):
         return f"#{num}"
 
     def _draw_breath_overlays(self, spans, label_y=0.0):
+        self._mech_unpin()               # the old labels are torn down with their pin slot
         self._breath_spans = {n: (t0, t1) for (n, t0, t1, _ig) in spans}
         self._breath_regions = {n: [] for (n, _0, _1, _ig) in spans}
         self._breath_texts = {}
@@ -1775,11 +1867,12 @@ class PreviewScreen(QWidget):
             if self._channel_plots:
                 txt = self._breath_text(n, ignored)
                 txt.setPos((t0 + t1) / 2.0, label_y)
-                self._channel_plots[0].addItem(txt)
+                self._channel_plots[0].addItem(txt, ignoreBounds=True)
                 self._breath_texts[n] = txt
         if self._channel_plots and self._breath_texts:
             # size the headroom from the label's REAL rendered height, not a guess
             self._label_headroom(self._channel_plots[0], label_px=self._label_px(self._breath_texts))
+            self._mech_unpin = self._pin_breath_labels(self._channel_plots[0], self._breath_texts)
 
     def _breath_at(self, t):
         for n, (t0, t1) in self._breath_spans.items():
@@ -1818,6 +1911,7 @@ class PreviewScreen(QWidget):
             entry.breaths = [b for b in entry.breaths if b != breath_no]
             if not entry.breaths:
                 excl.remove(entry)
+        self.settings_edited.emit()      # exclude_breaths lands in the .toml -> mark dirty
         for reg in self._breath_regions.get(breath_no, []):
             reg.setBrush(self._breath_brush(now_excluded)); reg.update()
         txt = self._breath_texts.get(breath_no)
@@ -1890,12 +1984,13 @@ class PreviewScreen(QWidget):
         first plot. Colour is taken from the LIVE exclusion set."""
         rec = self._bov.get(view)
         if rec:
+            rec.get("unpin", lambda: None)()           # detach the old pin slot eagerly
             for plot, item in rec.get("items", []):
                 try:
                     plot.removeItem(item)
                 except Exception:                      # noqa: BLE001
                     pass
-        self._bov[view] = {"items": [], "regions": {}, "texts": {}}
+        self._bov[view] = {"items": [], "regions": {}, "texts": {}, "unpin": lambda: None}
         if not plot_items or not self._breaths:
             return
         excl = self._excluded_now()
@@ -1915,9 +2010,10 @@ class PreviewScreen(QWidget):
                 items.append((p, line))
             txt = self._breath_text(num, ignored)
             txt.setPos((a + b) / 2.0, label_y)
-            plot_items[0].addItem(txt)
+            plot_items[0].addItem(txt, ignoreBounds=True)
             items.append((plot_items[0], txt)); txt_map[num] = txt
         self._label_headroom(plot_items[0], label_px=self._label_px(txt_map))   # labels above the signal
+        self._bov[view]["unpin"] = self._pin_breath_labels(plot_items[0], txt_map)
 
     def _repaint_view_breaths(self, view):
         """Repaint one EMG view IF it has rendered real data (label_y sentinel set)."""
@@ -1939,7 +2035,10 @@ class PreviewScreen(QWidget):
     def _reset_breath_state(self):
         """On a file change, drop stale overlays + spans so a new-file EMG job that
         finishes before the new mech never shows the previous file's numbers."""
+        self._mech_unpin()
+        self._mech_unpin = lambda: None
         for rec in self._bov.values():
+            rec.get("unpin", lambda: None)()
             for plot, item in rec.get("items", []):
                 try:
                     plot.removeItem(item)
@@ -2119,6 +2218,7 @@ class PreviewScreen(QWidget):
         # discrete full-length flow silhouette behind the EMG, to read bursts against respiration
         add_flow_background(self.emg_plots.getPlotItem(), t, data.get("flow"), pal)
         self.emg_plots.setLabel("bottom", "Time (s)"); self.emg_plots.setLabel("left", "EMG (a.u.)")
+        self._legend_one_row(self.emg_plots.getPlotItem())   # after every named plot() call
         self._limit_x(self.emg_plots.getPlotItem(), t)
         self._ensure_noise_region()
         self._detail_label_y = self._safe_top(
@@ -2175,7 +2275,8 @@ class PreviewScreen(QWidget):
         self.emg_result_plots.clear()
         if not data:
             self._result_label_y = None
-            self._bov["result"] = {"items": [], "regions": {}, "texts": {}}
+            self._bov.get("result", {}).get("unpin", lambda: None)()
+            self._bov["result"] = {"items": [], "regions": {}, "texts": {}, "unpin": lambda: None}
             return
         t = np.asarray(data["t"])
         cols = data.get("cols", [])
@@ -2188,6 +2289,8 @@ class PreviewScreen(QWidget):
                                        pen=_pen(cycle[i % len(cycle)]), name=f"col {c}")
         # discrete full-length flow silhouette behind the ticked EMG channels
         add_flow_background(self.emg_result_plots.getPlotItem(), t, data.get("flow"), _plot_pal())
+        # re-run per render: the entry count tracks the ticked channels
+        self._legend_one_row(self.emg_result_plots.getPlotItem())
         self._limit_x(self.emg_result_plots.getPlotItem(), t)
         self._result_label_y = self._safe_top(*[np.asarray(c) for c in data.get("conditioned", [])])
         self._repaint_view_breaths("result")
@@ -2295,7 +2398,10 @@ class PreviewScreen(QWidget):
                 ax.text(0.02, 0.98, f"WOB {wob['wobtotal']:.2f} J·min⁻¹",
                         transform=ax.transAxes, va="top", ha="left", fontsize=8,
                         color=pal["mpl_loop"])
-            ax.legend(loc="lower right", frameon=False, fontsize=7)
+            # Bottom-left: with Poes on x and volume on y that corner is empty (the loop's
+            # EELV end sits bottom-right). The output PDF transposes these axes, so its
+            # legend must NOT follow — see core/plots._pv_average.
+            ax.legend(loc="lower left", frameon=False, fontsize=7)
         except Exception:                       # pragma: no cover - overlay is best-effort
             pass
 
