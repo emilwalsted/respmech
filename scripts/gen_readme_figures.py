@@ -75,20 +75,17 @@ def _emg_stages(sig, path):
     t0 = t[0] + 3.0
     m = (t >= t0) & (t <= t0 + 7.0)
     pk = peaks[(peaks >= t0) & (peaks <= t0 + 7.0)]
-    # the R-waves dwarf the EMG, so the raw row is drawn at full scale and the two
-    # conditioned rows are ZOOMED to the (much smaller) EMG level — otherwise the muscle
-    # signal would be an invisible squiggle along the axis
-    ymax_raw = 1.05 * np.max(np.abs(raw[m]))
-    ymax_emg = 1.05 * max(np.max(np.abs(ecgr[m])), np.max(np.abs(noi[m])))
+    # one shared y-scale at the EMG level so the three rows are directly comparable; the
+    # R-waves are several times bigger and simply run off the top of the raw row (their
+    # positions are marked ▼) — they don't need their full height to make the point
+    ymax = 1.05 * max(np.max(np.abs(ecgr[m])), np.max(np.abs(noi[m])))
 
     fig = Figure(figsize=(9.2, 5.2), dpi=140)
     FigureCanvasAgg(fig)
-    rows = [("1 · Raw EMG — the heartbeat (ECG) R-waves dwarf the EMG (detected R-peaks ▼)",
-             raw, True, ymax_raw),
-            (f"2 · ECG removed  (zoomed ~{ymax_raw / ymax_emg:.0f}× — the EMG is far smaller "
-             f"than the R-waves)", ecgr, False, ymax_emg),
-            ("3 · ECG removed + spectral noise reduced", noi, False, ymax_emg)]
-    for i, (label, y, mark, ymax) in enumerate(rows):
+    rows = [("1 · Raw EMG — heartbeat (ECG) R-waves run off-scale (detected R-peaks ▼)", raw, True),
+            ("2 · ECG removed", ecgr, False),
+            ("3 · ECG removed + spectral noise reduced", noi, False)]
+    for i, (label, y, mark) in enumerate(rows):
         ax = fig.add_subplot(3, 1, i + 1)
         ax.plot(t[m], y[m], color=_BRAND, lw=0.7)
         ax.set_ylim(-ymax, ymax); ax.set_xlim(t0, t0 + 7.0)
@@ -97,7 +94,7 @@ def _emg_stages(sig, path):
         ax.text(0.010, 0.94, label, transform=ax.transAxes, fontsize=9.5, va="top", ha="left",
                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=_MUTED, alpha=0.85))
         if mark and pk.size:
-            ax.scatter(pk, np.full(pk.size, ymax * 0.92), s=24, c=_CAPTURE, marker="v",
+            ax.scatter(pk, np.full(pk.size, ymax * 0.90), s=24, c=_CAPTURE, marker="v",
                        zorder=6, clip_on=False)
         if i < 2:
             ax.set_xticklabels([])

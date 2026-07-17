@@ -128,7 +128,8 @@ amplitude, so if left in it dominates the signal and badly inflates the RMS — 
 clearest channel and subtracted first. Then **spectral noise reduction** — trained on a
 diaphragm-quiet reference — cleans the residual noise floor while preserving the inspiratory burst.
 Both steps are tuned against the live signal on the Preview screen's EMG tabs, and every stage is
-written to the diagnostic figures (note the raw row's scale below — the R-waves dwarf the EMG):
+written to the diagnostic figures (all three rows below share one scale — the R-waves are so much
+larger than the EMG that they run off the top of the raw row):
 
 ![Diaphragm EMG conditioning stages](docs/img/emg-stages.png)
 
