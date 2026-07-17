@@ -70,18 +70,25 @@ def _emg_stages(sig, path):
     peaks = np.asarray(sig.get("emg_peaks", []), float)
     ch = DETECT_CHANNEL
     raw = np.asarray(st["raw"], float)[:, ch]
+    ecgr = np.asarray(st["ecg_removed"], float)[:, ch]
+    noi = np.asarray(st["noise_reduced"], float)[:, ch]
     t0 = t[0] + 3.0
     m = (t >= t0) & (t <= t0 + 7.0)
     pk = peaks[(peaks >= t0) & (peaks <= t0 + 7.0)]
-    ymax = 1.05 * np.max(np.abs(raw[m]))
+    # the R-waves dwarf the EMG, so the raw row is drawn at full scale and the two
+    # conditioned rows are ZOOMED to the (much smaller) EMG level — otherwise the muscle
+    # signal would be an invisible squiggle along the axis
+    ymax_raw = 1.05 * np.max(np.abs(raw[m]))
+    ymax_emg = 1.05 * max(np.max(np.abs(ecgr[m])), np.max(np.abs(noi[m])))
 
     fig = Figure(figsize=(9.2, 5.2), dpi=140)
     FigureCanvasAgg(fig)
-    rows = [("1 · Raw EMG — heartbeat (ECG) artefact, detected R-peaks ▼", "raw", True),
-            ("2 · ECG removed", "ecg_removed", False),
-            ("3 · ECG removed + spectral noise reduced", "noise_reduced", False)]
-    for i, (label, key, mark) in enumerate(rows):
-        y = np.asarray(st[key], float)[:, ch]
+    rows = [("1 · Raw EMG — the heartbeat (ECG) R-waves dwarf the EMG (detected R-peaks ▼)",
+             raw, True, ymax_raw),
+            (f"2 · ECG removed  (zoomed ~{ymax_raw / ymax_emg:.0f}× — the EMG is far smaller "
+             f"than the R-waves)", ecgr, False, ymax_emg),
+            ("3 · ECG removed + spectral noise reduced", noi, False, ymax_emg)]
+    for i, (label, y, mark, ymax) in enumerate(rows):
         ax = fig.add_subplot(3, 1, i + 1)
         ax.plot(t[m], y[m], color=_BRAND, lw=0.7)
         ax.set_ylim(-ymax, ymax); ax.set_xlim(t0, t0 + 7.0)

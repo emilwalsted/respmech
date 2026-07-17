@@ -123,10 +123,12 @@ elastic-recoil line, and the shaded triangle the elastic component.
 ## Diaphragm EMG
 
 When EMG channels are present, each is conditioned in steps before its RMS envelope and (optionally)
-sample entropy are measured. The heartbeat (**ECG**) artefact is detected on the clearest channel
-and subtracted, then **spectral noise reduction** — trained on a diaphragm-quiet reference — cleans
-the residual noise floor while preserving the inspiratory burst. Both steps are tuned against the
-live signal on the Preview screen's EMG tabs, and every stage is written to the diagnostic figures:
+sample entropy are measured. The heartbeat (**ECG**) R-wave is typically *several times* the EMG
+amplitude, so if left in it dominates the signal and badly inflates the RMS — it is detected on the
+clearest channel and subtracted first. Then **spectral noise reduction** — trained on a
+diaphragm-quiet reference — cleans the residual noise floor while preserving the inspiratory burst.
+Both steps are tuned against the live signal on the Preview screen's EMG tabs, and every stage is
+written to the diagnostic figures (note the raw row's scale below — the R-waves dwarf the EMG):
 
 ![Diaphragm EMG conditioning stages](docs/img/emg-stages.png)
 
