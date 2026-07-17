@@ -44,6 +44,11 @@ diagnostic figures), `dev` (tests). See [docs/INSTALL.md](docs/INSTALL.md) for d
 respmech-gui
 ```
 
+First time in? Choose **Explore with sample data** on the start screen to load a
+ready-made synthetic recording — the one shown in the figures below, complete with a
+heartbeat artefact on the EMG and a little volume drift, so every step has something to
+demonstrate.
+
 Three screens, in the order you work:
 
 | Screen | What you do |
