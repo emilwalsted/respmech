@@ -71,13 +71,15 @@ def _physio_noise(n, rng, amp, smooth_s=0.35):
     return amp * x / (x.std() or 1.0)
 
 
-def _coloured_noise(n, rng, amp, smooth_s=0.004):
-    """Broadband but mildly low-passed noise (coloured, like the real EMG floor — power
-    falls with frequency), scaled to std ``amp``. This is what spectral noise reduction
-    acts on; real recordings have no white fuzz or mains line."""
-    w = np.hanning(max(3, int(smooth_s * FS)))
-    w = w / w.sum()
-    y = np.convolve(rng.standard_normal(n + w.size), w, mode="same")[:n]
+def _instrument_noise(n, rng, amp):
+    """Broadband instrumentation noise weighted ABOVE the EMG's dominant band (it ramps in
+    from ~120 Hz), scaled to std ``amp``. Real diaphragm-EMG noise sits mostly higher than
+    the ~30 Hz signal peak, which is exactly what makes it separable — spectral noise
+    reduction gates it out while leaving the low-frequency burst, a clear before/after."""
+    x = np.fft.rfft(rng.standard_normal(n))
+    f = np.fft.rfftfreq(n, 1.0 / FS)
+    h = np.clip((f - 120.0) / 130.0, 0.0, 1.0)                    # ramp 120→250 Hz, flat above
+    y = np.fft.irfft(x * h, n=n)
     return amp * y / (y.std() or 1.0)
 
 
@@ -92,13 +94,15 @@ def _emg_carrier(n, rng):
 
 
 def _qrs():
-    """A short triphasic QRS complex (~40 ms): small Q dip, tall R spike, deep S trough —
-    the measured morphology of the cardiac artefact on oesophageal EMG."""
-    m = int(0.05 * FS)
+    """A triphasic QRS complex (~50 ms): small Q dip, tall R spike, deep S trough — the
+    measured morphology of the cardiac artefact on oesophageal EMG. The R is given a
+    realistic ~14 ms width (not a 1–2 sample spike) so averaged-template ECG removal can
+    align and cancel it cleanly, as it does on real recordings."""
+    m = int(0.06 * FS)
     t = (np.arange(m) - m // 2) / FS
     def g(a, mu, sig):
         return a * np.exp(-0.5 * ((t - mu) / sig) ** 2)
-    return g(1.0, 0.0, 0.003) + g(-0.25, -0.008, 0.002) + g(-0.70, 0.015, 0.004)
+    return g(1.0, 0.0, 0.006) + g(-0.22, -0.013, 0.004) + g(-0.55, 0.019, 0.007)
 
 
 def _heartbeat_impulses(n, rng):
@@ -199,7 +203,7 @@ def _signals():
     for ch in range(N_EMG):
         carrier = _emg_carrier(n, rng)
         amp = EMG_SCALE[ch] * burst_peak * (tonic * breathing + (1.0 - tonic) * env)
-        floor = _coloured_noise(n, rng, amp=0.12 * EMG_SCALE[ch] * burst_peak)
+        floor = _instrument_noise(n, rng, amp=0.6 * EMG_SCALE[ch] * burst_peak)
         emg.append(amp * carrier + floor + ECG_SCALE[ch] * r_peak * ecg)
 
     # pressures: elastic + resistive, a smooth cardiac ripple, and low-frequency wander
@@ -253,6 +257,8 @@ def build_sample_settings(desc: dict, output_folder: str):
     e = s.processing.emg
     e.remove_ecg = True
     e.detect_channel = desc["detect_channel"]
+    e.ecg_min_height = 0.4      # between the EMG/noise (~0.2) and the R-wave (~0.9) so the
+                                # detector locks onto the heartbeats, not EMG or noise peaks
     e.remove_noise = True
     e.noise.enabled = True
     e.noise.reference_file = desc["filename"]
