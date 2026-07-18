@@ -16,6 +16,31 @@ Download the installer for your platform from the
 
 Nothing else to install — the bundle carries its own Python and dependencies.
 
+## Python package (PyPI)
+
+Requires Python **3.11+**.
+
+```bash
+pip install respmech               # CLI + core analysis engine
+pip install "respmech[gui]"        # + the PySide6 desktop app (respmech-gui)
+pip install "respmech[gui,emg]"    # + spectral EMG noise reduction (librosa)
+```
+
+The base install gives you the `respmech` command-line tool and the analysis core (no Qt,
+no heavyweight audio stack). Add extras for more:
+
+| Extra | Adds |
+|---|---|
+| `gui` | desktop app — `PySide6`, `pyqtgraph`, `matplotlib` |
+| `emg` | EMG spectral noise reduction — `librosa` |
+| `plots` | diagnostic PDF figures — `matplotlib`, `seaborn` |
+
+```bash
+respmech --version
+respmech --help
+respmech-gui                       # needs the [gui] extra
+```
+
 ## From source
 
 Requires Python **3.11+**.
@@ -42,18 +67,17 @@ Install extras with `pip install -e ".[<extra>]"` from a source checkout:
 | `gui` | desktop app (`PySide6`, `pyqtgraph`, `matplotlib`) |
 | `dev` | the test stack |
 
-## Not yet published
+## Publishing
 
-These distribution channels are prepared but **not live** — the commands below do not
-work yet:
-
-- **PyPI** (`pipx install respmech` / `pip install respmech`): the package is not
-  published; there is no publish step in the release workflow.
+- **PyPI** — automated. Every `vX.Y.Z` tag publishes `respmech` to PyPI via GitHub Actions
+  **Trusted Publishing** (OIDC; no stored tokens) — see
+  [`.github/workflows/publish-pypi.yml`](../.github/workflows/publish-pypi.yml) and
+  [RELEASING.md](RELEASING.md). `pip install respmech` works from the first published
+  release onward.
 - **Homebrew** (`brew install emilwalsted/respmech/respmech`): the formula exists in
-  `packaging/homebrew/respmech.rb`, but the tap `emilwalsted/homebrew-respmech` is not
-  published. The formula's url/sha256 are placeholders pending a release.
-
-Until then, use the installer or a source checkout.
+  `packaging/homebrew/respmech.rb`, but the tap `emilwalsted/homebrew-respmech` is **not
+  yet published** — its url/sha256 are placeholders pending a release. Use PyPI, the
+  installer, or a source checkout for now.
 
 ## Usage
 
