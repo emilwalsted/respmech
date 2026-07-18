@@ -230,3 +230,28 @@ jobs:
             --prerelease \
             --notes-file notes.md \
             dist/*/*.msi dist/*/*.dmg
+
+      # Tell the website (emilwalsted/respmech-website) to re-publish so its
+      # download button / version labels pick up this release immediately. A
+      # release created by GITHUB_TOKEN does not trigger workflows elsewhere, so
+      # we ping it explicitly. Needs a PAT with contents:write on the website
+      # repo; if it is not set, this is skipped and the release is unaffected.
+      - name: Notify respmech.dk to publish the new version
+        env:
+          WEBSITE_DISPATCH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$WEBSITE_DISPATCH_TOKEN" ]; then
+            echo "::notice::WEBSITE_DISPATCH_TOKEN not set — skipping the respmech.dk publish trigger."
+            exit 0
+          fi
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $WEBSITE_DISPATCH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/emilwalsted/respmech-website/dispatches \
+            -d '{"event_type":"respmech-release"}')
+          if [ "$code" = "204" ]; then
+            echo "Triggered respmech-website publish (repository_dispatch: respmech-release)."
+          else
+            echo "::warning::respmech.dk publish trigger returned HTTP $code (check the WEBSITE_DISPATCH_TOKEN scope)."
+          fi
