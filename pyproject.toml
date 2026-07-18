@@ -108,7 +108,7 @@ addopts = "--import-mode=importlib"
 [tool.briefcase]
 project_name = "RespMech"
 bundle = "dk.respmech"                       # reverse-domain id (brand domain respmech.dk)
-version = "2.2.0"
+version = "2.2.1"
 url = "https://github.com/emilwalsted/respmech"
 license = "GPL-3.0-or-later"
 author = "Emil Schwarz Walsted"
