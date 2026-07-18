@@ -4,17 +4,43 @@ build-backend = "hatchling.build"
 
 [project]
 name = "respmech"
-version = "2.2.0"
+# Version is single-sourced from src/respmech/__init__.py (__version__) via hatchling's
+# dynamic version — see [tool.hatch.version]. (The [tool.briefcase] version below is a
+# separate, manual copy; briefcase can't read a dynamic version. Bump both together — see
+# RELEASING.md.)
+dynamic = ["version"]
 description = "Respiratory mechanics, work of breathing and diaphragm EMG entropy analysis"
-readme = "README.md"
+readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
 # PEP 639: SPDX expression + the license file. briefcase's Windows template requires
 # `license-files` to install a licence into the MSI (the macOS template does not enforce it).
 # NB briefcase treats each entry as a literal path, not a glob — list the file explicitly.
 license = "GPL-3.0-or-later"
-license-files = ["LICENSE"]
+# LICENSE = the project's GPL. "LICENSE pyentrp" = the MIT licence of the vendored
+# pyEntropy sample-entropy code (src/respmech/core/entropy.py), shipped for attribution.
+# briefcase reads each entry as a literal path (not a glob), so both are listed explicitly.
+license-files = ["LICENSE", "LICENSE pyentrp"]
 authors = [{ name = "Emil Schwarz Walsted", email = "emilwalsted@gmail.com" }]
-keywords = ["respiratory", "mechanics", "work-of-breathing", "EMG", "physiology"]
+maintainers = [{ name = "Emil Schwarz Walsted", email = "emilwalsted@gmail.com" }]
+keywords = [
+    "respiratory", "mechanics", "work-of-breathing", "campbell-diagram",
+    "EMG", "electromyography", "diaphragm", "physiology", "sample-entropy",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Healthcare Industry",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: OS Independent",
+    "Environment :: Console",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Natural Language :: English",
+]
 dependencies = [
     "numpy>=1.24",
     # >=1.11: scipy.integrate.simpson's default even-interval rule became the
@@ -46,9 +72,25 @@ respmech-gui = "respmech.ui.app:main"
 [project.urls]
 Homepage = "https://github.com/emilwalsted/respmech"
 Repository = "https://github.com/emilwalsted/respmech"
+Documentation = "https://github.com/emilwalsted/respmech/tree/master/docs"
+Issues = "https://github.com/emilwalsted/respmech/issues"
+"Release notes" = "https://github.com/emilwalsted/respmech/releases"
 
+# Single source of truth for the version: src/respmech/__init__.py's __version__.
+[tool.hatch.version]
+path = "src/respmech/__init__.py"
+
+# The wheel ships ONLY the importable package (src/respmech + its logo asset). No tests,
+# no data, no docs, no legacy monolith.
 [tool.hatch.build.targets.wheel]
 packages = ["src/respmech"]
+
+# The sdist is an explicit allow-list — a public-repo safety measure. It carries only the
+# source package, the licences and the README; it deliberately EXCLUDES tests/ (which
+# reference gitignored real research recordings under tests/golden/production/), legacy/,
+# docs/, installer/, packaging/ and scripts/. pyproject.toml is always included by hatchling.
+[tool.hatch.build.targets.sdist]
+only-include = ["src/respmech", "README.md", "LICENSE", "LICENSE pyentrp"]
 
 [tool.pytest.ini_options]
 # The package lives under src/ (the v1 monolith is frozen in legacy/, not importable).

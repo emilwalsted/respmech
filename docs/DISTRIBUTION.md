@@ -14,11 +14,21 @@ python -m venv /tmp/rmtest && /tmp/rmtest/bin/pip install dist/respmech-*.whl
 /tmp/rmtest/bin/respmech --version
 ```
 
-## 2. Publish to PyPI
-```bash
-python -m twine upload dist/*
-```
-Keep the Zenodo DOI workflow for citation (each release gets a DOI).
+## 2. Publish to PyPI — automated, no tokens
+
+Publishing is done by GitHub Actions via **Trusted Publishing (OIDC)**, not by hand.
+Pushing a `vX.Y.Z` tag runs [`.github/workflows/publish-pypi.yml`](../.github/workflows/publish-pypi.yml):
+test gate → build sdist+wheel → publish to PyPI. There is **no API token** stored anywhere;
+PyPI mints a short-lived credential only for a run whose identity matches the pending
+publisher you configure once (owner `emilwalsted`, repo `respmech`, workflow
+`publish-pypi.yml`, environment `pypi`). The full runbook is in [RELEASING.md](RELEASING.md).
+
+`python -m twine upload dist/*` is **not** the path anymore — do not upload by hand (it
+would need a long-lived token, which we deliberately avoid on a public repo). For a safe
+dry-run, trigger the workflow manually (Actions ▸ Publish to PyPI ▸ Run workflow) to publish
+to **TestPyPI**.
+
+Keep the Zenodo DOI workflow for citation (each GitHub release gets a DOI).
 
 ## 3. Homebrew tap
 The tap is a separate repo `emilwalsted/homebrew-respmech` with
@@ -45,5 +55,8 @@ compiler needed). Qt/PySide6 is large and not bundled; GUI users run
 Briefcase) can be added later for non-technical clinical users — see PLAN.md §7.
 
 ## 4. Versioning
-Bump `version` in `pyproject.toml` (single source of truth; `respmech.__version__`
-should track it). Tag the release `vX.Y.Z`.
+`src/respmech/__init__.py`'s `__version__` is the **single source of truth** — the PyPI
+package version is derived from it (hatchling dynamic version). Bump it, and keep the
+manual `[tool.briefcase] version` in `pyproject.toml` in sync (briefcase can't read the
+dynamic version). Then tag `vX.Y.Z` matching `__version__`. The publish workflow fails the
+build if the tag and the package version disagree. See [RELEASING.md](RELEASING.md).

@@ -26,6 +26,13 @@ golden/characterisation tests — see [Correctness](#correctness).
 [latest release](https://github.com/emilwalsted/respmech/releases): a `.dmg` (macOS) or `.msi`
 (Windows). It bundles its own Python — nothing else to install.
 
+**Python package** (CLI + core; the GUI is an extra):
+
+```bash
+pip install respmech            # command-line tool + analysis engine
+pip install "respmech[gui]"     # + the PySide6 desktop app (respmech-gui)
+```
+
 **From source** (developers, or to use the CLI):
 
 ```bash
