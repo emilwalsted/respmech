@@ -167,7 +167,7 @@ def build_splash_svg(width: int = 780, height: int = 460, version: str | None = 
             version = ""
     w, h = width, height
     footer_y = h - 34
-    credit = f"v{version} · Emil Walsted" if version else "Emil Walsted"
+    credit = f"v{version} · Emil Ingerslev Walsted" if version else "Emil Ingerslev Walsted"
     return f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}">
   <defs>
     <linearGradient id="veil" x1="0" y1="0" x2="0" y2="1">
