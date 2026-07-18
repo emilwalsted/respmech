@@ -1,6 +1,6 @@
 # RespMech — respiratory mechanics, work of breathing and diaphragm EMG
 
-_(c) Copyright 2019–2026 Emil Schwarz Walsted (emilwalsted@gmail.com), ORCID [0000-0002-6640-7175](https://orcid.org/0000-0002-6640-7175)_
+_(c) Copyright 2019–2026 Emil Ingerslev Walsted (emilwalsted@gmail.com), ORCID [0000-0002-6640-7175](https://orcid.org/0000-0002-6640-7175)_
 
 [![DOI](https://zenodo.org/badge/191052676.svg)](https://zenodo.org/badge/latestdoi/191052676)
 
@@ -217,4 +217,4 @@ or cite a specific version using that version's DOI (click the badge for the lis
 
 An example citation:
 
-_[...] were calculated using the Python package RespMech (ES Walsted, RespMech v2.2, 2026, https://github.com/emilwalsted/respmech/, DOI: 10.5281/zenodo.3270826) [...]_
+_[...] were calculated using the Python package RespMech (E Walsted, RespMech v2.2, 2026, https://github.com/emilwalsted/respmech/, DOI: 10.5281/zenodo.3270826) [...]_

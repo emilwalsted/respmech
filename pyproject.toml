@@ -20,8 +20,8 @@ license = "GPL-3.0-or-later"
 # pyEntropy sample-entropy code (src/respmech/core/entropy.py), shipped for attribution.
 # briefcase reads each entry as a literal path (not a glob), so both are listed explicitly.
 license-files = ["LICENSE", "LICENSE pyentrp"]
-authors = [{ name = "Emil Schwarz Walsted", email = "emilwalsted@gmail.com" }]
-maintainers = [{ name = "Emil Schwarz Walsted", email = "emilwalsted@gmail.com" }]
+authors = [{ name = "Emil Ingerslev Walsted", email = "emilwalsted@gmail.com" }]
+maintainers = [{ name = "Emil Ingerslev Walsted", email = "emilwalsted@gmail.com" }]
 keywords = [
     "respiratory", "mechanics", "work-of-breathing", "campbell-diagram",
     "EMG", "electromyography", "diaphragm", "physiology", "sample-entropy",
@@ -111,7 +111,7 @@ bundle = "dk.respmech"                       # reverse-domain id (brand domain r
 version = "2.2.2"
 url = "https://github.com/emilwalsted/respmech"
 license = "GPL-3.0-or-later"
-author = "Emil Schwarz Walsted"
+author = "Emil Ingerslev Walsted"
 author_email = "emilwalsted@gmail.com"
 
 [tool.briefcase.app.respmech]

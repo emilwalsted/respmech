@@ -2,7 +2,7 @@
 
 Project memory for **RespMech** — respiratory mechanics, work of breathing and
 diaphragm-EMG analysis. Public repo `emilwalsted/respmech` (GPL-3.0-or-later).
-Author: Emil Schwarz Walsted. See `README.md` and `docs/` for the full picture;
+Author: Emil Ingerslev Walsted. See `README.md` and `docs/` for the full picture;
 this file is the quick orientation plus the release/website setup.
 
 ## What it is
