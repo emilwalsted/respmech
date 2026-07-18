@@ -110,7 +110,10 @@ jobs:
           name: dist
           path: dist/
       - name: Publish to PyPI (Trusted Publishing)
-        uses: pypa/gh-action-pypi-publish@6733eb7d741f0b11ec6a39b58540dab7590f9b7d  # v1.14.0
+        # Pinned to the v1.14.0 release tag (NOT a commit SHA): this is a Docker-based
+        # action whose image is ghcr.io/pypa/gh-action-pypi-publish:<action_ref>, and pypa
+        # only publishes tag-named images — a SHA ref yields "manifest unknown".
+        uses: pypa/gh-action-pypi-publish@v1.14.0
 
   # ── 3b. Publish to TestPyPI (manual dry-run: workflow_dispatch only) ──────────────────
   publish-testpypi:
@@ -127,7 +130,10 @@ jobs:
           name: dist
           path: dist/
       - name: Publish to TestPyPI (Trusted Publishing)
-        uses: pypa/gh-action-pypi-publish@6733eb7d741f0b11ec6a39b58540dab7590f9b7d  # v1.14.0
+        # Pinned to the v1.14.0 release tag (NOT a commit SHA): this is a Docker-based
+        # action whose image is ghcr.io/pypa/gh-action-pypi-publish:<action_ref>, and pypa
+        # only publishes tag-named images — a SHA ref yields "manifest unknown".
+        uses: pypa/gh-action-pypi-publish@v1.14.0
         with:
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
