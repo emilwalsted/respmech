@@ -99,6 +99,26 @@ fi
 echo "==> Replacing the release asset with the signed MSI …"
 gh release upload "$TAG" -R "$REPO" "$MSI" --clobber
 
+# Reflect the now-signed MSI in the release notes. release.yml writes the notes at build time,
+# when the MSI is still UNSIGNED, so the Windows row carries no signing label (unlike the dmg,
+# which is signed in CI). Now that the MSI is Certum-signed, flip that row to match reality —
+# surgically (only the MSI token) and idempotently (a re-run is a no-op), and never fatally:
+# if the row can't be found the notes are left untouched with a warning.
+echo "==> Marking the MSI as signed in the release notes …"
+NOTES_BODY="$(gh release view "$TAG" -R "$REPO" --json body --jq .body 2>/dev/null | tr -d '\r' || true)"
+if [ -z "$NOTES_BODY" ]; then
+  echo "::warning::no release notes found for $TAG; nothing to update."
+elif printf '%s\n' "$NOTES_BODY" | grep -qE 'RespMech-\*\.msi`[[:space:]]*\(signed'; then
+  echo "    notes already mark the MSI as signed — nothing to do."
+elif printf '%s\n' "$NOTES_BODY" | grep -qF '`RespMech-*.msi`'; then
+  printf '%s\n' "$NOTES_BODY" \
+    | sed 's/`RespMech-\*\.msi`/`RespMech-*.msi` (signed + timestamped)/' > "$WORK/notes.md"
+  gh release edit "$TAG" -R "$REPO" --notes-file "$WORK/notes.md"
+  echo "    updated the Windows MSI row to '(signed + timestamped)'."
+else
+  echo "::warning::couldn't find the MSI row in the notes for $TAG; left notes unchanged."
+fi
+
 cat <<EOF
 
 ✅ Done — release $TAG now carries a Certum-signed MSI.
