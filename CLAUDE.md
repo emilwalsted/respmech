@@ -30,20 +30,22 @@ CLI (`respmech run/validate/migrate`). Settings are declarative **TOML**.
 
 - Trigger: push a `v*` tag (or manual dispatch). Builds a Windows **MSI** and a
   macOS **dmg** with briefcase, then (on a tag) the `publish-release` job creates
-  a GitHub **pre-release** with the installers attached.
+  a GitHub **release** (marked **Latest**) with the installers attached.
 - macOS signing is **secret-gated** (Developer ID + notarisation when the Apple
   secrets are present, else ad-hoc). The Windows MSI is built unsigned and
   **Certum-signed locally** after release (`scripts/sign-msi-certum.sh`); see
   `docs/SIGNING.md`.
-- Releases are marked **pre-release** ("installers for testers"). Keep tags clean
-  semver `vX.Y.Z` (no `-rc/-beta`) — the website picks the version that way.
+- Releases are full releases (the newest is marked **Latest**; `release.yml` passes
+  `--latest`). Keep tags clean semver `vX.Y.Z` (no `-rc/-beta`) — the website picks the
+  version that way.
 
 ## Website (respmech.dk)
 
 The marketing/info site lives in the **private** repo
 `emilwalsted/respmech-website` and deploys to https://www.respmech.dk. It names
 the current version on its download button / labels by resolving the **highest
-clean-semver, non-draft release** of this repo (so the pre-release flag is fine).
+clean-semver, non-draft release** of this repo (it also counts any pre-releases, so it
+keeps working regardless of the release/pre-release flag).
 
 **Release → website hook.** The last step of `publish-release`
 ("Notify respmech.dk…") sends a `repository_dispatch` (`event_type:
