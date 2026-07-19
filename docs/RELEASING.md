@@ -2,7 +2,7 @@
 
 One tag cuts everything: pushing `vX.Y.Z` triggers **both** workflows —
 [`release.yml`](../.github/workflows/release.yml) builds the signed macOS dmg + Windows MSI
-and attaches them to a GitHub pre-release, and
+and attaches them to a GitHub release (marked Latest), and
 [`publish-pypi.yml`](../.github/workflows/publish-pypi.yml) publishes the `respmech` package
 to PyPI via **Trusted Publishing (OIDC)** — no tokens anywhere.
 
@@ -56,7 +56,7 @@ environment (e.g. required reviewer, or restrict to tags) for a manual gate befo
 
 That is it. CI then: runs the test gate → builds sdist+wheel → checks the built version
 equals the tag → publishes to PyPI; and separately builds and attaches the installers to a
-GitHub pre-release. (The Windows MSI is Authenticode-signed locally afterwards — see
+GitHub release. (The Windows MSI is Authenticode-signed locally afterwards — see
 [SIGNING.md](SIGNING.md).)
 
 ## Dry-run to TestPyPI

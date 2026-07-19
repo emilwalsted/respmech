@@ -1,7 +1,7 @@
 name: Build installers
 
 # Builds the native desktop installers with briefcase: a Windows MSI and a macOS dmg,
-# uploaded as workflow artifacts and (on a v* tag) attached to a GitHub pre-release.
+# uploaded as workflow artifacts and (on a v* tag) attached to a GitHub release.
 # Run it by hand (Actions ▸ Build installers ▸ Run workflow) or by pushing a v* tag.
 #
 # macOS SIGNING IS OPTIONAL AND SECRET-GATED: with the Apple secrets present the dmg is
@@ -181,7 +181,7 @@ jobs:
           if-no-files-found: error
 
   publish-release:
-    name: Publish GitHub pre-release
+    name: Publish GitHub release
     needs: [windows-msi, macos-dmg]
     if: startsWith(github.ref, 'refs/tags/v')   # only on a v* tag, not on manual dispatch
     runs-on: ubuntu-latest
@@ -212,7 +212,7 @@ jobs:
             mac_install='- **macOS:** right-click ▸ **Open** the first time (or `xattr -dr com.apple.quarantine` the app).'
           fi
           {
-            echo "Desktop installers for testers — download below."
+            echo "Desktop installers — download below."
             echo
             echo "| Platform | File |"
             echo "|---|---|"
@@ -227,7 +227,7 @@ jobs:
           } > notes.md
           gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
             --title "RespMech $GITHUB_REF_NAME" \
-            --prerelease \
+            --latest \
             --notes-file notes.md \
             dist/*/*.msi dist/*/*.dmg
 
