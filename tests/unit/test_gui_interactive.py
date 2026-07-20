@@ -84,6 +84,7 @@ def test_stage_emg_channel_and_render(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     from respmech.ui.workers import stage_emg_channel
     s = _settings(str(tmp_path))
+    s.processing.emg.noise.enabled = True          # the staging honours this gate, as run_batch does
     s.processing.emg.noise.reference_file = "synth_case_A.csv"
     s.processing.emg.noise.use_expiration = False
     s.processing.emg.noise.reference_intervals = [[1.0, 5.0]]
@@ -101,6 +102,87 @@ def test_stage_emg_channel_and_render(qapp, tmp_path):
     assert len(pv.emg_psd_canvas.figure.axes) == 1
     # the dedicated PSD canvas is independent of the fidelity canvas (locked contract)
     assert pv.emg_psd_canvas is not pv.fidelity_canvas
+
+
+def _noise_settings(outdir):
+    """Settings with the noise stage fully configured AND enabled."""
+    s = _settings(outdir)
+    n = s.processing.emg.noise
+    n.enabled = True
+    n.reference_file = "synth_case_A.csv"
+    n.use_expiration = False
+    n.reference_intervals = [[1.0, 5.0]]
+    return s
+
+
+def test_preview_honours_the_noise_enabled_gate(tmp_path):
+    """The staging must gate on noise.enabled exactly as run_batch does. Gating on
+    reference_file alone showed a spectrally gated trace after the user switched noise
+    reduction OFF — a signal the run would never produce."""
+    import numpy as np
+    from respmech.ui.workers import stage_emg_all_channels
+    s = _noise_settings(str(tmp_path))
+    path = os.path.join(INPUT, "synth_case_A.csv")
+    on = stage_emg_all_channels(s, path)
+    s.processing.emg.noise.enabled = False            # reference_file deliberately still set
+    off = stage_emg_all_channels(s, path)
+    assert on["noise_applied"] is True and off["noise_applied"] is False
+    assert not all(np.array_equal(a, b)                # and the trace really changes
+                   for a, b in zip(on["conditioned"], off["conditioned"]))
+
+
+def test_preview_applies_the_auto_selected_suppression(tmp_path):
+    """Under auto_prop the run applies the value the fidelity sweep chose, not the stored
+    prop_decrease. The preview must apply the same one or it is tuned against a differently
+    gated signal."""
+    from respmech.ui.workers import stage_emg_all_channels, stage_noise_fidelity
+    s = _noise_settings(str(tmp_path))
+    s.processing.emg.noise.auto_prop = True
+    s.processing.emg.noise.prop_decrease = 0.6        # a snapshot value that must NOT be used
+    path = os.path.join(INPUT, "synth_case_A.csv")
+    chosen = stage_noise_fidelity(s).get("prop_decrease")
+    assert chosen is not None and abs(float(chosen) - 0.6) > 1e-9   # the sweep really differs
+    assert stage_emg_all_channels(s, path)["prop_decrease"] == pytest.approx(float(chosen))
+
+
+def test_noise_failure_leaves_no_channel_half_denoised(tmp_path):
+    """Applying in place left channels 0..i-1 denoised when channel i raised, while the
+    payload still said noise_applied=False — a mixed stack presented as ECG-only."""
+    import numpy as np
+    from respmech.core import noise as noiselib
+    from respmech.ui.workers import stage_emg_all_channels, stage_emg_channel
+    from respmech.ui.screens import _preview_cache as pc
+    s = _noise_settings(str(tmp_path))
+    s.processing.emg.noise.auto_prop = False
+    path = os.path.join(INPUT, "synth_case_A.csv")
+    orig, calls = noiselib.NoiseProfile.apply, {"n": 0}
+
+    def boom(self, sig, prop):
+        calls["n"] += 1
+        if calls["n"] == 2:                            # fail on the SECOND channel
+            raise RuntimeError("simulated per-channel failure")
+        return orig(self, sig, prop)
+
+    pc.clear_all()
+    noiselib.NoiseProfile.apply = boom
+    try:
+        part = stage_emg_all_channels(s, path)
+    finally:
+        noiselib.NoiseProfile.apply = orig
+    assert part["noise_applied"] is False
+    ecg_only = stage_emg_channel(s, path, 0)["ecg"]    # channel 0 must be untouched too
+    assert np.allclose(part["conditioned"][0], ecg_only)
+
+
+def test_out_of_range_ecg_detect_channel_is_rejected(tmp_path):
+    """The preview used to clamp an out-of-range capture channel to the last one while the
+    core indexes it straight — so a misconfiguration silently captured off the wrong channel
+    here and only failed in the run."""
+    from respmech.ui.workers import stage_ecg_reduction
+    s = _settings(str(tmp_path))
+    s.processing.emg.detect_channel = 99
+    with pytest.raises(ValueError, match="outside the"):
+        stage_ecg_reduction(s, os.path.join(INPUT, "synth_case_A.csv"))
 
 
 def test_emg_worker_runs_synchronously(qapp, tmp_path):

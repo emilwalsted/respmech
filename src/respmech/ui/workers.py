@@ -109,6 +109,51 @@ def _cached_reference_clip(settings: Settings, s, cancel_check=None):
                       lambda: _reference_noise_clip(settings, s, cancel_check=cancel_check))
 
 
+def _detect_channel(s, nch):
+    """The ECG capture channel index, validated.
+
+    The preview used to CLAMP an out-of-range index to the last channel while the core
+    indexes it straight (``emgcols[:, detect]``, pipeline._ecg_remove) — so a misconfigured
+    detect_channel silently captured off the wrong channel here and only blew up in the run.
+    Fail here too, with a message that says which setting is wrong."""
+    detect = int(s.processing.emg.column_detect)
+    if not (0 <= detect < nch):
+        raise ValueError(
+            f"ECG detection channel #{detect + 1} is outside the {nch} configured EMG "
+            f"channel{'s' if nch != 1 else ''}. Pick a capture channel that exists.")
+    return detect
+
+
+def _effective_prop(settings: Settings, s):
+    """The suppression strength the BATCH would apply, for the EMG preview panels.
+
+    Under ``auto_prop`` the run does not use ``cfg.prop_decrease`` at all — ``_build_noise_set``
+    picks the value with ``select_prop_decrease`` and applies that. The preview panels used to
+    apply their own snapshot value, so they showed a differently-gated signal than the run
+    (permanently so when the fidelity job failed, since only its success writes the chosen
+    value back into settings). Resolve it from the shared, already-computed noise report
+    instead — a pure cache LOOKUP, never a compute: if the report is not there yet the panels
+    fall back to the snapshot exactly as before, and the fidelity job's completion
+    re-dispatches them with the chosen value."""
+    cfg = settings.processing.emg.noise
+    if not cfg.auto_prop:
+        return float(cfg.prop_decrease)
+    try:
+        from respmech.core.pipeline import match_input_files          # noqa: PLC0415
+        from respmech.ui.screens import _preview_cache as _pc         # noqa: PLC0415
+        ref = cfg.reference_file
+        if not ref:
+            return float(cfg.prop_decrease)
+        ref_path = os.path.join(s.input.inputfolder, ref)
+        key = _pc.noise_report_key(settings, ref_path,
+                                   match_input_files(s.input.inputfolder, s.input.files))
+        report = _pc.NOISE_REPORT.get(key) if key is not None else None
+        chosen = (report or {}).get("prop_decrease")
+        return float(chosen) if chosen is not None else float(cfg.prop_decrease)
+    except Exception:                                # noqa: BLE001 — never fail a render over this
+        return float(cfg.prop_decrease)
+
+
 def _load_and_condition(settings: Settings, s, file_path: str, cancel_check=None):
     """Load a file's EMG matrix and ECG-remove ALL channels, memoised per (file freshness
     + load + ECG params) so emg_all and emg_detail share one ECG pass (the dominant EMG
@@ -133,7 +178,7 @@ def _load_and_condition(settings: Settings, s, file_path: str, cancel_check=None
         nch = emg.shape[1]
         if nch and settings.processing.emg.remove_ecg:
             try:
-                detect = max(0, min(int(s.processing.emg.column_detect), nch - 1))
+                detect = _detect_channel(s, nch)
                 proc, _w, _pk = emglib.remove_ecg(
                     np.array(emg), emg[:, detect], samplingfrequency=fs,
                     ecgminheight=s.processing.emg.minheight,
@@ -193,7 +238,12 @@ def stage_emg_channel(settings: Settings, file_path: str, channel_index: int,
     noise_out = ecg
     noise_applied = False
     noise_error = None
-    if cfg.reference_file:
+    prop = _effective_prop(settings, s)
+    # Gate exactly as run_batch does (pipeline: `noise.enabled and columns_emg`). Gating on
+    # reference_file alone meant unticking noise reduction still showed a spectrally gated
+    # trace — a signal the run would not produce, with the fidelity panel (which DOES honour
+    # `enabled`) gone from beside it.
+    if cfg.enabled and cfg.reference_file:
         try:
             clip = np.asarray(_cached_reference_clip(settings, s, cancel_check=cancel_check),
                               dtype=float)
@@ -204,7 +254,7 @@ def stage_emg_channel(settings: Settings, file_path: str, channel_index: int,
                 n_fft=cfg.n_fft, hop_length=cfg.hop_length, win_length=cfg.win_length,
                 n_std_thresh=cfg.n_std_thresh, n_grad_freq=cfg.n_grad_freq,
                 n_grad_time=cfg.n_grad_time)
-            noise_out = np.asarray(prof.apply(ecg, cfg.prop_decrease), dtype=float)
+            noise_out = np.asarray(prof.apply(ecg, prop), dtype=float)
             noise_applied = True
         except Exception:                              # noqa: BLE001 — e.g. clip too short
             noise_out = ecg
@@ -224,7 +274,7 @@ def stage_emg_channel(settings: Settings, file_path: str, channel_index: int,
         "channel": ch, "col": col, "fs": fs, "t": t,
         "raw": raw, "ecg": ecg, "noise": noise_out, "flow": flow_full,
         "freqs": freqs, "psd_raw": psd_raw, "psd_ecg": psd_ecg, "psd_noise": psd_noise,
-        "band": noiselib.EMG_BAND, "noise_applied": noise_applied,
+        "band": noiselib.EMG_BAND, "noise_applied": noise_applied, "prop_decrease": prop,
         "ecg_applied": ecg_applied, "ecg_error": ecg_error, "noise_error": noise_error,
     }
 
@@ -287,12 +337,18 @@ def stage_emg_all_channels(settings: Settings, file_path: str, cancel_check=None
     noise_applied = False
     noise_error = None
     cfg = settings.processing.emg.noise
-    if cfg.reference_file:
+    prop = _effective_prop(settings, s)
+    if cfg.enabled and cfg.reference_file:             # same gate as run_batch (see stage_emg_channel)
         try:
             clip = np.asarray(_cached_reference_clip(settings, s, cancel_check=cancel_check),
                               dtype=float)
             if clip.ndim == 1:
                 clip = clip[:, None]
+            # Denoise into a SCRATCH copy and adopt it only once EVERY channel has succeeded.
+            # Applying in place meant a failure partway (or a cancel) left channels 0..i-1
+            # denoised and the rest not, while the payload still said noise_applied=False —
+            # a mixed stack presented as ECG-only.
+            out = np.array(conditioned, dtype=float)
             for i in range(nch):
                 if cancel_check is not None and cancel_check():
                     from respmech.core._cancel import Cancelled
@@ -302,7 +358,8 @@ def stage_emg_all_channels(settings: Settings, file_path: str, cancel_check=None
                     n_fft=cfg.n_fft, hop_length=cfg.hop_length, win_length=cfg.win_length,
                     n_std_thresh=cfg.n_std_thresh, n_grad_freq=cfg.n_grad_freq,
                     n_grad_time=cfg.n_grad_time)
-                conditioned[:, i] = prof.apply(conditioned[:, i], cfg.prop_decrease)
+                out[:, i] = prof.apply(conditioned[:, i], prop)
+            conditioned = out
             noise_applied = True
         except Exception:                              # noqa: BLE001
             noise_error = traceback.format_exc()
@@ -312,7 +369,7 @@ def stage_emg_all_channels(settings: Settings, file_path: str, cancel_check=None
         "t": t, "fs": fs, "cols": cols, "flow": flow_full,
         "raw": [emg[:, i].astype(float) for i in range(nch)],
         "conditioned": [conditioned[:, i].astype(float) for i in range(nch)],
-        "noise_applied": noise_applied, "noise_error": noise_error,
+        "noise_applied": noise_applied, "noise_error": noise_error, "prop_decrease": prop,
         "ecg_applied": ecg_applied, "ecg_error": ecg_error,
     }
 
@@ -362,7 +419,7 @@ def stage_ecg_reduction(settings: Settings, file_path: str, cancel_check=None) -
         if nch == 0:
             raise ValueError("No EMG channels are configured for this file.")
         flow_full = np.asarray(flow, dtype=float).ravel()
-        detect = max(0, min(int(s.processing.emg.column_detect), nch - 1))
+        detect = _detect_channel(s, nch)
         t = np.arange(emg.shape[0], dtype=float) / fs
         remove = bool(settings.processing.emg.remove_ecg)
         ecg_error = None
@@ -397,7 +454,17 @@ def stage_ecg_reduction(settings: Settings, file_path: str, cancel_check=None) -
                 "raw_capture": emg[:, detect].astype(float), "processed": processed,
                 "peaks": peaks, "flow": flow_full, "ecg_applied": remove, "ecg_error": ecg_error}
 
-    return _pc.cached(_pc.ECG_REDUCTION, _pc.ecg_matrix_key(settings, file_path), _compute)
+    got = _pc.cached(_pc.ECG_REDUCTION, _pc.ecg_matrix_key(settings, file_path), _compute)
+    # Copy on return, the same contract _load_and_condition documents: this dict is a SHARED
+    # cache entry, and a renderer that ever normalised/decimated an array in place would
+    # silently poison every later hit.
+    out = dict(got)
+    for k in ("raw_capture", "flow", "t", "peaks"):
+        if isinstance(out.get(k), np.ndarray):
+            out[k] = np.array(out[k], dtype=float)
+    if isinstance(out.get("processed"), list):
+        out["processed"] = [np.array(a, dtype=float) for a in out["processed"]]
+    return out
 
 
 def load_raw_matrix(settings: Settings, file_path: str):
@@ -597,11 +664,21 @@ def stage_noise_fidelity(settings: Settings, cancel_check=None) -> dict:
 
     def _compute():
         clip = _cached_reference_clip(settings, s, cancel_check=cancel_check)  # shared clip build
+        # NB no `stft=` override here, unlike run_batch (pipeline: `_coupled_stft(...)` when a
+        # pre-analysis resample is on, which keeps the gate's TIME window fixed at the new
+        # rate). Correct today ONLY because the preview never resamples — `samplingfrequency_in`
+        # is set inside run_batch alone, so to_legacy_ns() here never carries it. Reviving
+        # resampling must thread the same override through this call, or the frontier the user
+        # tunes against silently stops matching the run.
         return _build_noise_set(settings, s, allfiles, clip=clip, cancel_check=cancel_check)[1]
 
     key = _pc.noise_report_key(settings, ref_path, allfiles) if ref_path else None
     try:
-        return _pc.cached(_pc.NOISE_REPORT, key, _compute)   # test-wide report; keyed on all-file tokens
+        # Copy on return: a shared cache entry, and _apply_noise_report reads it while the
+        # renderers hold on to the frontier lists (same contract as _load_and_condition).
+        import copy as _copy                                # noqa: PLC0415
+        return _copy.deepcopy(
+            _pc.cached(_pc.NOISE_REPORT, key, _compute))    # test-wide report; keyed on all-file tokens
     except (compute.TrimError, DataValidationError, FileNotFoundError, ImportError) as e:
         # A user-fixable precondition on the reference/input files — most often a misassigned or
         # inverted flow channel, so the reference has no segmentable breaths for the quiet-
