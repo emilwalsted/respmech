@@ -218,44 +218,6 @@ class SettingsScreen(QWidget):
         gecg.setProperty("status", "muted"); gecg.setWordWrap(True)
         root.addWidget(gecg)
 
-        # EMG — cardiac-gated peak (opt-in) --------------------------------
-        # Split like the noise feature: the decision + the one knob anyone realistically
-        # touches live here; the five quality guards sit in "Advanced". The dependency on
-        # ECG removal cannot be expressed by disabling anything, because remove_ecg has no
-        # widget on this screen (it is owned by the Preview ECG tab), so it is a muted
-        # pointer here plus a live caution in _science_note.
-        ggate = QGroupBox("EMG — cardiac-gated peak (opt-in)")
-        ggate.setToolTip("Reports the peak EMG from the parts of each breath that are free of "
-                         "heartbeats. Adds extra columns; the existing ones never change.")
-        fg = QFormLayout(ggate)
-        fg.setRowWrapPolicy(QFormLayout.WrapLongRows)
-        self.emg_gated = QCheckBox("Exclude heartbeats from the peak EMG")
-        self._check_row(fg, self.emg_gated, "processing.emg.robust_peak.enabled",
-                        "The reported peak EMG is the largest windowed value in the breath, which on a "
-                        "strongly heart-coupled recording is usually a leftover heartbeat rather than "
-                        "diaphragm activity. This blanks a window around every detected heartbeat and "
-                        "takes the peak of what survives, reported as extra 'gated' columns beside the "
-                        "existing ones; needs ECG removal switched on; off by default.")
-        self.emg_gate_width = QDoubleSpinBox()
-        self.emg_gate_width.setRange(0.02, 0.5); self.emg_gate_width.setSingleStep(0.01)
-        self.emg_gate_width.setDecimals(3); self.emg_gate_width.setSuffix(" s")
-        # "±" in both the label and the field: the stored value is a HALF-width, so a bare
-        # "0.120 s" reads as the whole blanked window and understates the discarded signal by
-        # a factor of two.
-        self.emg_gate_width.setPrefix("± ")
-        self._row(fg, "Blanked either side of each heartbeat", self.emg_gate_width,
-                  "processing.emg.robust_peak.gate_half_width_s",
-                  "Blanked either side of each detected heartbeat, so the default 0.120 discards a "
-                  "0.240 s window in total. It must cover the heartbeat's footprint in the RMS "
-                  "envelope, which is roughly the RMS window length plus the QRS duration.")
-        ghint = QLabel("Needs ECG removal on — it reuses the heartbeats found there, so switch it on "
-                       "under Preview & QC on the “› EMG – ECG reduction” tab. Where too little of a "
-                       "breath survives, or heartbeats are being missed, the gated columns are left "
-                       "blank rather than reporting a number that cannot be trusted.")
-        ghint.setWordWrap(True); ghint.setProperty("status", "muted")
-        fg.addRow("", ghint)
-        root.addWidget(ggate)
-
         # EMG — noise reduction (shared profile) ---------------------------
         gns = QGroupBox("EMG — noise reduction (shared profile)")
         gns.setToolTip("One shared noise profile + one parameter set are built from the "
@@ -393,49 +355,6 @@ class SettingsScreen(QWidget):
         # Cardiac-gated peak — the quality guards. Each decides when a gated value would be
         # untrustworthy and should be left blank instead; the defaults are the measured ones
         # (see docs/CARDIAC_GATED_PEAK_EMG.md) and are rarely worth changing.
-        self.rp_min_survival = QDoubleSpinBox()
-        self.rp_min_survival.setRange(0.0, 1.0); self.rp_min_survival.setDecimals(2)
-        self.rp_min_survival.setSingleStep(0.05)
-        self._row(fa, "Gated peak — least of each phase that must survive", self.rp_min_survival,
-                  "processing.emg.robust_peak.min_survival",
-                  "Fraction of a phase that must fall outside the blanked windows; below this its gated "
-                  "value is left blank. Tested separately for the whole breath, inspiration and "
-                  "expiration, so a blank inspiratory column beside a filled whole-breath one is "
-                  "expected, not a fault (default 0.40).")
-        self.rp_min_island = QDoubleSpinBox()
-        self.rp_min_island.setRange(0.0, 2.0); self.rp_min_island.setDecimals(3)
-        self.rp_min_island.setSingleStep(0.05); self.rp_min_island.setSuffix(" s")
-        self._row(fa, "Gated peak — shortest heartbeat-free stretch a phase must contain",
-                  self.rp_min_island, "processing.emg.robust_peak.min_island_s",
-                  "A phase must contain at least one unbroken heartbeat-free stretch this long, or its "
-                  "gated value is left blank. Shorter stretches are still measured — they just do not "
-                  "on their own qualify the phase. Tested separately for the whole breath, inspiration "
-                  "and expiration (default 0.20).")
-        self.rp_long_rr = QDoubleSpinBox()
-        self.rp_long_rr.setRange(1.1, 5.0); self.rp_long_rr.setDecimals(2)
-        self.rp_long_rr.setSingleStep(0.1)
-        self._row(fa, "Gated peak — missed-heartbeat factor", self.rp_long_rr,
-                  "processing.emg.robust_peak.long_rr_factor",
-                  "A gap between heartbeats this many times the typical one means a heartbeat was "
-                  "missed (default 1.6).")
-        self.rp_max_long_rr = QDoubleSpinBox()
-        self.rp_max_long_rr.setRange(0.0, 1.0); self.rp_max_long_rr.setDecimals(3)
-        self.rp_max_long_rr.setSingleStep(0.01)
-        self._row(fa, "Gated peak — missed heartbeats tolerated", self.rp_max_long_rr,
-                  "processing.emg.robust_peak.max_long_rr_frac",
-                  "Fraction of gaps that may look like missed heartbeats before the whole file's gated "
-                  "columns are left blank — a gate built from an incomplete set of heartbeats hides the "
-                  "ones it missed (default 0.02).")
-        self.rp_hr_margin = QDoubleSpinBox()
-        self.rp_hr_margin.setRange(0.0, 0.5); self.rp_hr_margin.setDecimals(2)
-        self.rp_hr_margin.setSingleStep(0.05)
-        self._row(fa, "Gated peak — heart-rate headroom", self.rp_hr_margin,
-                  "processing.emg.robust_peak.hr_ceiling_margin",
-                  "How close the heart rate may come to the highest the ECG detector can resolve before "
-                  "the gated columns are left blank. That ceiling is 60 ÷ the minimum beat distance set "
-                  "on Preview & QC ▸ › EMG – ECG reduction — so raising the beat rate a file may reach "
-                  "means lowering that distance there, not lowering this margin, which only admits files "
-                  "whose beat detection is already unreliable (default 0.10).")
         self.matlab_variant = QComboBox()
         # 'wide', not 'compact': "MATLAB (Unix/Mac)" plus the drop-down arrow outgrows the
         # 150px column on wider fonts (measured 131px of text against the column's 126px
@@ -491,7 +410,7 @@ class SettingsScreen(QWidget):
         self._stage_cards = [
             [gin],                                   # 0: Input (always shown)
             [gout],                                  # 1: Output (after Input is valid)
-            [gch, gpr, gemg, gecg, ggate, gns, gsave, gadv],  # 2: the rest (after Output is valid)
+            [gch, gpr, gemg, gecg, gns, gsave, gadv],  # 2: the rest (after Output is valid)
         ]
         # Cards whose relevance depends on the analysis itself. Deliberately NOT in
         # _stage_cards: that loop forces every registered card visible outside "new" mode, so
@@ -620,17 +539,6 @@ class SettingsScreen(QWidget):
             self.ent_epochs.setValue(s.processing.entropy.epochs)
             self.ent_tol.setValue(s.processing.entropy.tolerance)
             self.noise_nfft.setValue(n.n_fft)
-            # cardiac-gated peak; getattr so an Analysis file written before the feature
-            # existed still loads (its table is simply absent -> dataclass defaults)
-            rp = getattr(emg, "robust_peak", None)
-            if rp is not None:
-                self.emg_gated.setChecked(rp.enabled)
-                self.emg_gate_width.setValue(rp.gate_half_width_s)
-                self.rp_min_survival.setValue(rp.min_survival)
-                self.rp_min_island.setValue(rp.min_island_s)
-                self.rp_long_rr.setValue(rp.long_rr_factor)
-                self.rp_max_long_rr.setValue(rp.max_long_rr_frac)
-                self.rp_hr_margin.setValue(rp.hr_ceiling_margin)
             _mi = self.matlab_variant.findData(s.input.format.matlab_variant)
             self.matlab_variant.setCurrentIndex(_mi if _mi >= 0 else 0)
             self.breath_counts_edit.setPlainText(
@@ -698,17 +606,10 @@ class SettingsScreen(QWidget):
         s.processing.entropy.epochs = self.ent_epochs.value()
         s.processing.entropy.tolerance = self.ent_tol.value()
         n.n_fft = self.noise_nfft.value()
-        # Cardiac-gated peak. One field per widget and no legacy mirror: this has no v1
-        # ancestor, so the migrator never produces it and nothing else describes the same
-        # intent. Owned entirely by this screen — the Preview writes no robust_peak field.
-        rp = emg.robust_peak
-        rp.enabled = self.emg_gated.isChecked()
-        rp.gate_half_width_s = self.emg_gate_width.value()
-        rp.min_survival = self.rp_min_survival.value()
-        rp.min_island_s = self.rp_min_island.value()
-        rp.long_rr_factor = self.rp_long_rr.value()
-        rp.max_long_rr_frac = self.rp_max_long_rr.value()
-        rp.hr_ceiling_margin = self.rp_hr_margin.value()
+        # processing.emg.robust_peak is written ONLY by the Preview EMG tab, which is where
+        # its controls now live — beside the EMG they change, and one tab from the ECG removal
+        # they depend on. to_state runs on every tab change, so rewriting it from here would
+        # erase a gated-peak edit on the first switch to Setup.
         s.input.format.matlab_variant = self.matlab_variant.currentData()
         bcs = []
         for line in self.breath_counts_edit.toPlainText().splitlines():
@@ -757,11 +658,6 @@ class SettingsScreen(QWidget):
     # -- helpers ------------------------------------------------------------
     def _sync_widgets(self):
         self._refresh_noise_summary()
-        gated_on = self.emg_gated.isChecked()
-        self.emg_gate_width.setEnabled(gated_on)
-        for w in (self.rp_min_survival, self.rp_min_island, self.rp_long_rr,
-                  self.rp_max_long_rr, self.rp_hr_margin):
-            w.setEnabled(gated_on)          # the guards only ever apply to the gated columns
         self._refresh_channel_view()   # 'Volume: derived from flow' follows the checkbox
         self.trend_method.setEnabled(self.correct_trend.isChecked())
         self.resample_hz.setEnabled(self.resample.isChecked())
@@ -800,15 +696,13 @@ class SettingsScreen(QWidget):
                    self.seg_buffer, self.avg_resamp, self.ent_epochs, self.noise_nfft):
             sb.valueChanged.connect(self._on_field_changed)
         for dsb in (self.emg_rms_window, self.emg_outlier_sd, self.peak_height,
-                    self.peak_distance, self.peak_width, self.ptp_baseline, self.ent_tol,
-                    self.emg_gate_width, self.rp_min_survival, self.rp_min_island,
-                    self.rp_long_rr, self.rp_max_long_rr, self.rp_hr_margin):
+                    self.peak_distance, self.peak_width, self.ptp_baseline, self.ent_tol):
             dsb.valueChanged.connect(self._on_field_changed)
         for cb in (self.seg_method, self.wob_from, self.trend_method):
             cb.currentTextChanged.connect(self._on_field_changed)
         self.emg_norm.currentIndexChanged.connect(self._on_field_changed)
         self.matlab_variant.currentIndexChanged.connect(self._on_field_changed)
-        for chk in (self.integrate, self.remove_noise, self.emg_gated,
+        for chk in (self.integrate, self.remove_noise,
                     self.correct_drift, self.correct_trend, self.inverse_flow, self.inverse_volume,
                     self.resample, self.save_average, self.save_bbb, self.save_processed,
                     self.include_ignored, self.save_pv_avg, self.save_pv_ind, self.save_raw_fig,

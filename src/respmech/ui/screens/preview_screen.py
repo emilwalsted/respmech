@@ -85,6 +85,11 @@ NEEDS_ECG_HINT = ("Turn on 'Remove ECG' first: the noise profile is measured on 
                   "ECG-cleaned signal, so with the heartbeat still in the EMG it would be "
                   "modelled as steady background noise — which it is not.")
 
+#: why the gated peak is inert until ECG removal is on
+NEEDS_ECG_GATE_HINT = ("Turn on 'Remove ECG' first: the gate is built from the heartbeats "
+                       "the ECG stage detects, so with it off there are none to blank and "
+                       "the gated columns come back empty.")
+
 _PANELS = {"mech": ["channels", "raw"], "batch": ["table", "campbell"],
            "ecg": ["ecg_capture", "ecg_stack"],
            "emg_all": ["result"], "emg_detail": ["detail", "detail_psd"], "noise": ["fidelity"]}
@@ -578,6 +583,7 @@ class PreviewScreen(QWidget):
         self._refresh_ecg_channels()
         self._load_noise_params()
         self._load_ecg_params()
+        self._load_gated_params()
         self._ensure_noise_region()
         self._update_emg_tab_visibility()
 
@@ -763,10 +769,53 @@ class PreviewScreen(QWidget):
         nrow.addSpacing(10); nrow.addWidget(_cap("Keep ≥", self.noise_target.toolTip())); nrow.addWidget(self.noise_target)
         nrow.addSpacing(10); nrow.addWidget(_cap("Gate", self.noise_nstd.toolTip())); nrow.addWidget(self.noise_nstd)
 
+        # Cardiac-gated peak. It lives here, beside the EMG it changes, rather than on Setup:
+        # it is an EMG statistic, and its prerequisite (ECG removal) is one tab away rather
+        # than one screen away, so "needs Remove ECG" can be a real setEnabled with a tooltip
+        # instead of prose in three places and a caution that went stale.
+        self.emg_gated = QCheckBox("Gated peak")
+        self.emg_gated.setToolTip(_help_tip(
+            "processing.emg.robust_peak.enabled",
+            "The reported peak EMG is the largest windowed value in the breath, which on a "
+            "strongly heart-coupled recording is usually a leftover heartbeat rather than "
+            "diaphragm activity. This blanks a window around every detected heartbeat and "
+            "takes the peak of what survives, reported as extra 'gated' columns beside the "
+            "existing ones; the existing columns never change."))
+        self.emg_gate_width = QDoubleSpinBox()
+        self.emg_gate_width.setRange(0.02, 0.5); self.emg_gate_width.setSingleStep(0.01)
+        self.emg_gate_width.setDecimals(3); self.emg_gate_width.setSuffix(" s")
+        # "±" in the field: the stored value is a HALF-width, so a bare "0.120 s" reads as
+        # the whole blanked window and understates the discarded signal by a factor of two.
+        self.emg_gate_width.setPrefix("± ")
+        self.emg_gate_width.setToolTip(_help_tip(
+            "processing.emg.robust_peak.gate_half_width_s",
+            "Blanked either side of each detected heartbeat, so the default 0.120 discards a "
+            "0.240 s window in total. It must cover the heartbeat's footprint in the RMS "
+            "envelope, which is roughly the RMS window length plus the QRS duration."))
+        self.emg_gated.toggled.connect(self._on_gated_param_changed)
+        self.emg_gate_width.valueChanged.connect(self._on_gated_param_changed)
+
+        self.gate_opts = QFrame(); self.gate_opts.setObjectName("gateChip")
+        self.gate_opts.setStyleSheet(
+            "#gateChip { border: 1px solid rgba(128, 128, 128, 0.30); border-radius: 8px; }")
+        self.gate_opts.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        grow = QHBoxLayout(self.gate_opts); grow.setContentsMargins(11, 3, 11, 3); grow.setSpacing(4)
+        grow.addWidget(self.emg_gated)
+        grow.addSpacing(10); grow.addWidget(_cap("Blank", self.emg_gate_width.toolTip()))
+        grow.addWidget(self.emg_gate_width)
+
+        self.btn_emg_advanced = QPushButton("Advanced…")
+        self.btn_emg_advanced.setProperty("compact", True)
+        self.btn_emg_advanced.setToolTip("Spectral-gate internals, the gated-peak quality "
+                                         "guards and the diagnostic exports.")
+        self.btn_emg_advanced.clicked.connect(self._open_emg_advanced)
+
         strip = QHBoxLayout(); strip.setSpacing(10)
         strip.addWidget(self.btn_set_noise)
         strip.addWidget(self.noise_opts)
+        strip.addWidget(self.gate_opts)
         strip.addStretch(1)
+        strip.addWidget(self.btn_emg_advanced)
         v.addLayout(strip)
 
         # plots — three rows: raw stack | detail channel on top, the full-width
@@ -943,6 +992,125 @@ class PreviewScreen(QWidget):
         # them greyed out immediately after the user has turned Remove ECG on.
         self._update_actions(status=False)
         # ECG removal feeds the EMG/noise panels too, so recompute those alongside this tab.
+        self._request_autorun({"ecg", "emg_all", "emg_detail", "noise"})
+
+    def _load_gated_params(self):
+        rp = self.state.settings.processing.emg.robust_peak
+        self._loading_gated = True
+        try:
+            self.emg_gated.setChecked(rp.enabled)
+            self.emg_gate_width.setValue(rp.gate_half_width_s)
+        finally:
+            self._loading_gated = False
+
+    def _on_gated_param_changed(self, *_):
+        if getattr(self, "_loading_gated", False):
+            return
+        rp = self.state.settings.processing.emg.robust_peak
+        rp.enabled = self.emg_gated.isChecked()
+        rp.gate_half_width_s = float(self.emg_gate_width.value())
+        self.settings_edited.emit()
+        self._update_actions(status=False)
+        # The gated columns are written by the batch, not drawn by any preview panel — see
+        # _kinds_for_settings_path, which maps robust_peak.* to no kinds at all. Scheduling
+        # anything here would re-run four panels for a setting none of them show.
+
+    def _open_emg_advanced(self):
+        """Spectral-gate internals, the gated-peak quality guards, and the two diagnostic
+        exports that never had a control at all.
+
+        n_fft / win_length / hop_length are exposed SEPARATELY rather than collapsed into one
+        "window" control. Collapsing them would change computed output for any analysis where
+        they disagree — and the goldens use the defaults, so the goldens could not catch it.
+        The coupling is communicated instead, in milliseconds at the current rate, because
+        256 samples means something different at 1000 Hz and at 2000 Hz."""
+        from respmech.ui.advanced_dialog import AdvancedDialog, Field, apply_values
+        e = self.state.settings.processing.emg
+        n, rp = e.noise, e.robust_peak
+        fs = self.state.settings.input.format.sampling_frequency or 1000
+
+        noise_fields = [
+            Field("n_std_thresh", "Spectral gate threshold", "float",
+                  "processing.emg.noise.n_std_thresh",
+                  "How many standard deviations above the noise profile a frequency bin must "
+                  "be to survive. The default of 1.0 is essentially never changed.",
+                  lo=0.0, hi=10.0, step=0.1, decimals=1),
+            Field("n_fft", "STFT length (n_fft)", "int", "processing.emg.noise.n_fft",
+                  "FFT length in samples for the spectral gate; a power of two.",
+                  lo=16, hi=8192, step=16),
+            Field("win_length", "STFT window", "int", "processing.emg.noise.win_length",
+                  "Analysis window in samples. Kept separate from n_fft on purpose: writing "
+                  "both from one control would change the output of any analysis where they "
+                  "differ.", lo=16, hi=8192, step=16),
+            Field("hop_length", "STFT hop", "int", "processing.emg.noise.hop_length",
+                  "Advance between successive windows, in samples.", lo=1, hi=8192, step=8),
+            Field("n_grad_freq", "Mask smoothing — frequency", "int",
+                  "processing.emg.noise.n_grad_freq",
+                  "Frequency bins the suppression mask is smoothed over.", lo=0, hi=64),
+            Field("n_grad_time", "Mask smoothing — time", "int",
+                  "processing.emg.noise.n_grad_time",
+                  "Time frames the suppression mask is smoothed over.", lo=0, hi=64),
+        ]
+        gate_fields = [
+            Field("min_survival", "Least of each phase that must survive", "float",
+                  "processing.emg.robust_peak.min_survival",
+                  "Below this fraction the gated value is left blank rather than reported "
+                  "from a sliver of breath. Measured default 0.40.",
+                  lo=0.0, hi=1.0, step=0.05, decimals=2),
+            Field("min_island_s", "Shortest usable stretch between beats", "float",
+                  "processing.emg.robust_peak.min_island_s",
+                  "Gaps shorter than this cannot hold a full RMS window, so they are ignored.",
+                  lo=0.0, hi=2.0, step=0.05, decimals=3, suffix=" s"),
+            Field("long_rr_factor", "Missed-heartbeat factor", "float",
+                  "processing.emg.robust_peak.long_rr_factor",
+                  "A gap this many times the median R-R is treated as a missed heartbeat.",
+                  lo=1.1, hi=5.0, step=0.1, decimals=2),
+            Field("max_long_rr_frac", "Missed heartbeats tolerated", "float",
+                  "processing.emg.robust_peak.max_long_rr_frac",
+                  "Above this fraction of long gaps the detection is not trusted and the "
+                  "gated columns are left blank.", lo=0.0, hi=1.0, step=0.01, decimals=3),
+            Field("hr_ceiling_margin", "Heart-rate ceiling margin", "float",
+                  "processing.emg.robust_peak.hr_ceiling_margin",
+                  "How close the detected rate may come to the ceiling implied by Min gap "
+                  "before the result is distrusted. If this is firing, the fix is usually to "
+                  "lower Min gap on the › EMG – ECG reduction tab, not to raise this.",
+                  lo=0.0, hi=0.5, step=0.05, decimals=2),
+        ]
+        out_fields = [
+            Field("save_sound", "Export each EMG stage as WAV", "bool",
+                  "processing.emg.save_sound",
+                  "Writes an audio file per channel per conditioning stage. Diagnostic; off "
+                  "by default.",
+                  note="Adds several files per recording."),
+        ]
+
+        def _ms(v):
+            return (f"At {fs} Hz: window {1000 * v['win_length'] / fs:.0f} ms, "
+                    f"hop {1000 * v['hop_length'] / fs:.0f} ms, "
+                    f"n_fft {1000 * v['n_fft'] / fs:.0f} ms.")
+
+        prefixed = ([("noise", f) for f in noise_fields]
+                    + [("robust_peak", f) for f in gate_fields]
+                    + [("emg", f) for f in out_fields])
+        owner = {"noise": n, "robust_peak": rp, "emg": e}
+        values = {f.key: getattr(owner[grp], f.key) for grp, f in prefixed}
+        dlg = AdvancedDialog(
+            "EMG — advanced", [f for _g, f in prefixed], values, parent=self,
+            intro="Suppression strength and the fidelity target are on the strip. These "
+                  "shape HOW the gate is computed, and are rarely the right thing to change.",
+            derived=_ms)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        staged = dlg.values()
+        changed = False
+        for grp, f in prefixed:
+            if apply_values(owner[grp], {f.key: staged[f.key]}):
+                changed = True
+        if not changed:
+            return                       # OK without an edit: no dirty flag, no recompute
+        self._load_noise_params()
+        self._load_gated_params()
+        self.settings_edited.emit()
         self._request_autorun({"ecg", "emg_all", "emg_detail", "noise"})
 
     def _open_ecg_advanced(self):
@@ -1254,6 +1422,7 @@ class PreviewScreen(QWidget):
         self._refresh_ecg_channels()
         self._load_noise_params()
         self._load_ecg_params()
+        self._load_gated_params()
         self._update_emg_tab_visibility()
         self._update_actions()
         # Dependency-scoped invalidation: diff the settings against the last-synced snapshot
@@ -1321,6 +1490,13 @@ class PreviewScreen(QWidget):
         self.noise_opts.setEnabled(bool(has_emg and ecg_on and noise_on and ref))
         for w in (self.btn_set_noise, self.noise_opts):
             w.setToolTip("" if ecg_on else NEEDS_ECG_HINT)
+        # The gated peak reuses the heartbeats the ECG stage detects; with ECG removal off
+        # there are none and its columns come back blank. On Setup this could only ever be a
+        # caution, because the control it names lived on another screen. Here it is one strip
+        # away, so it can be a real gate.
+        self.gate_opts.setEnabled(has_emg and ecg_on)
+        self.gate_opts.setToolTip("" if ecg_on else NEEDS_ECG_GATE_HINT)
+        self.emg_gate_width.setEnabled(has_emg and ecg_on and self.emg_gated.isChecked())
         if noise_on:
             self.noise_prop.setEnabled(bool(ref) and ecg_on and not self.noise_auto.isChecked())
         if not status:

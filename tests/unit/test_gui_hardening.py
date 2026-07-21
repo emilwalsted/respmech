@@ -149,18 +149,13 @@ def test_settings_widgets_expose_varpath_and_description_on_hover(qapp, tmp_path
         sc.noise_summary: "processing.emg.noise.reference_file",
         sc.out_folder: "output.folder",
         sc.integrate: "processing.volume.integrate_from_flow",
-        sc.emg_gated: "processing.emg.robust_peak.enabled",
-        sc.emg_gate_width: "processing.emg.robust_peak.gate_half_width_s",
-        sc.rp_min_survival: "processing.emg.robust_peak.min_survival",
-        sc.rp_min_island: "processing.emg.robust_peak.min_island_s",
-        sc.rp_long_rr: "processing.emg.robust_peak.long_rr_factor",
-        sc.rp_max_long_rr: "processing.emg.robust_peak.max_long_rr_frac",
-        sc.rp_hr_margin: "processing.emg.robust_peak.hr_ceiling_margin",
     }
     for w, var in checks.items():
         tip = w.toolTip()
         assert var in tip, f"{var} missing from tooltip: {tip!r}"
         assert len(tip) > len(var) + 15, f"no description for {var}: {tip!r}"
+    # the gated-peak controls moved to the Preview EMG tab (test_robust_peak_ui.py) and
+    # its five guards into the EMG Advanced modal (test_advanced_dialog.py)
     # the channel columns have no fields any more: their settings paths moved onto the
     # read-only summary rows, covered exhaustively by test_channel_summary.py
     # visible labels are human, never the raw variable name
