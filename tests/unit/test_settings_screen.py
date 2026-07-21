@@ -461,3 +461,4 @@ def test_run_lock_covers_the_header_analysis_menu(qapp, tmp_path):
     win._on_run_finished()
     assert win.settings_screen.isEnabled() and win.analysis_btn.isEnabled()
     win.close()
+
