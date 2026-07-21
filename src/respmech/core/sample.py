@@ -259,7 +259,6 @@ def build_sample_settings(desc: dict, output_folder: str):
     e.detect_channel = desc["detect_channel"]
     e.ecg_min_height = 0.4      # between the EMG/noise (~0.2) and the R-wave (~0.9) so the
                                 # detector locks onto the heartbeats, not EMG or noise peaks
-    e.remove_noise = True
     e.noise.enabled = True
     e.noise.reference_file = desc["filename"]
     e.noise.use_expiration = False

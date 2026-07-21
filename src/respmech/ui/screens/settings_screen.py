@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import traceback
 
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
                                QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
                                QScrollArea, QSpinBox, QVBoxLayout, QWidget)
@@ -49,6 +49,9 @@ class SettingsScreen(QWidget):
         self._build()
         self.from_state()
         self._wire_reactivity()
+        # conditional cards default to visible as built, so settle them once against the
+        # analysis we just loaded rather than waiting for the first edit
+        self._apply_card_visibility()
         self._loading = False
 
     # -- UI construction ----------------------------------------------------
@@ -92,6 +95,15 @@ class SettingsScreen(QWidget):
         self.format_readout.setProperty("banner", True)   # box baked at first polish (theme.py)
         self.format_readout.setProperty("status", "muted")
         f.addRow("", self.format_readout)
+        self.matlab_variant = QComboBox()
+        # 'wide', not 'compact': "MATLAB (Unix/Mac)" plus the drop-down arrow outgrows the
+        # 150px column on wider fonts (measured 131px of text against the column's 126px
+        # text box on the CI runners' fonts) — the cap must never clip its own content.
+        self.matlab_variant.setProperty("formField", "wide")
+        self.matlab_variant.addItem("MATLAB (Windows)", "windows")
+        self.matlab_variant.addItem("MATLAB (Unix/Mac)", "mac")
+        self._row(f, "MATLAB file variant", self.matlab_variant, "input.format.matlab_variant",
+                  "Variant/byte-order for .mat input files (ignored for CSV/Excel/text).")
         root.addWidget(gin)
 
         # Output (second in the flow: an analysis reads as Input -> Output -> rest) --
@@ -124,7 +136,7 @@ class SettingsScreen(QWidget):
         root.addWidget(gch)
 
         # Processing — breath mechanics ------------------------------------
-        gpr = QGroupBox("Processing")
+        gpr = QGroupBox("Mechanics")
         fp = QFormLayout(gpr)
         fp.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
         self.seg_method = QComboBox()
@@ -176,6 +188,15 @@ class SettingsScreen(QWidget):
                          "energy and degrades RMS / entropy / noise reduction.")
         _rshint.setWordWrap(True); _rshint.setProperty("status", "muted")
         fp.addRow("", _rshint)
+        self.btn_mech_advanced = QPushButton("Advanced…")
+        self.btn_mech_advanced.setProperty("compact", True)
+        self.btn_mech_advanced.setToolTip("Breath-detection tuning, the averaging grid, the "
+                                          "PTP baseline and per-file breath-count overrides.")
+        self.btn_mech_advanced.clicked.connect(self._open_mech_advanced)
+        _mrow = QWidget(); _ml = QHBoxLayout(_mrow)
+        _ml.setContentsMargins(0, 0, 0, 0)
+        _ml.addWidget(self.btn_mech_advanced); _ml.addStretch(1)
+        fp.addRow("", _mrow)
         root.addWidget(gpr)
 
         # EMG — RMS envelope -----------------------------------------------
@@ -215,44 +236,6 @@ class SettingsScreen(QWidget):
         gecg.setProperty("status", "muted"); gecg.setWordWrap(True)
         root.addWidget(gecg)
 
-        # EMG — cardiac-gated peak (opt-in) --------------------------------
-        # Split like the noise feature: the decision + the one knob anyone realistically
-        # touches live here; the five quality guards sit in "Advanced". The dependency on
-        # ECG removal cannot be expressed by disabling anything, because remove_ecg has no
-        # widget on this screen (it is owned by the Preview ECG tab), so it is a muted
-        # pointer here plus a live caution in _science_note.
-        ggate = QGroupBox("EMG — cardiac-gated peak (opt-in)")
-        ggate.setToolTip("Reports the peak EMG from the parts of each breath that are free of "
-                         "heartbeats. Adds extra columns; the existing ones never change.")
-        fg = QFormLayout(ggate)
-        fg.setRowWrapPolicy(QFormLayout.WrapLongRows)
-        self.emg_gated = QCheckBox("Exclude heartbeats from the peak EMG")
-        self._check_row(fg, self.emg_gated, "processing.emg.robust_peak.enabled",
-                        "The reported peak EMG is the largest windowed value in the breath, which on a "
-                        "strongly heart-coupled recording is usually a leftover heartbeat rather than "
-                        "diaphragm activity. This blanks a window around every detected heartbeat and "
-                        "takes the peak of what survives, reported as extra 'gated' columns beside the "
-                        "existing ones; needs ECG removal switched on; off by default.")
-        self.emg_gate_width = QDoubleSpinBox()
-        self.emg_gate_width.setRange(0.02, 0.5); self.emg_gate_width.setSingleStep(0.01)
-        self.emg_gate_width.setDecimals(3); self.emg_gate_width.setSuffix(" s")
-        # "±" in both the label and the field: the stored value is a HALF-width, so a bare
-        # "0.120 s" reads as the whole blanked window and understates the discarded signal by
-        # a factor of two.
-        self.emg_gate_width.setPrefix("± ")
-        self._row(fg, "Blanked either side of each heartbeat", self.emg_gate_width,
-                  "processing.emg.robust_peak.gate_half_width_s",
-                  "Blanked either side of each detected heartbeat, so the default 0.120 discards a "
-                  "0.240 s window in total. It must cover the heartbeat's footprint in the RMS "
-                  "envelope, which is roughly the RMS window length plus the QRS duration.")
-        ghint = QLabel("Needs ECG removal on — it reuses the heartbeats found there, so switch it on "
-                       "under Preview & QC on the “› EMG – ECG reduction” tab. Where too little of a "
-                       "breath survives, or heartbeats are being missed, the gated columns are left "
-                       "blank rather than reporting a number that cannot be trusted.")
-        ghint.setWordWrap(True); ghint.setProperty("status", "muted")
-        fg.addRow("", ghint)
-        root.addWidget(ggate)
-
         # EMG — noise reduction (shared profile) ---------------------------
         gns = QGroupBox("EMG — noise reduction (shared profile)")
         gns.setToolTip("One shared noise profile + one parameter set are built from the "
@@ -262,17 +245,25 @@ class SettingsScreen(QWidget):
         fn = QFormLayout(gns)
         fn.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
         self.remove_noise = QCheckBox("Reduce EMG background noise")
-        self.noise_ref = QLineEdit()
-        self.noise_use_exp = QCheckBox("Build noise profile from expiration (recommended)")
         self._check_row(fn, self.remove_noise, "processing.emg.noise.enabled",
                         "Subtracts a shared spectral noise profile, built from a rest reference, from every EMG channel; off by default.")
-        self._browse_row(fn, "Noise reference recording", self.noise_ref, "processing.emg.noise.reference_file",
-                         "Rest or baseline recording whose EMG-free portion defines the noise profile applied to every file in the test.",
-                         folder=False)
-        self._check_row(fn, self.noise_use_exp, "processing.emg.noise.use_expiration",
-                        "Samples the noise profile from the reference's expiratory phase, which is EMG-free and more stable; on by default.")
-        hint = QLabel("Noise-window options (suppression, fidelity target) are on the Preview "
-                      "screen's › EMG – noise reduction tab, active once a reference file is set.")
+        # READ-ONLY. The reference used to be settable here as well as in the picker, and the
+        # two disagreed in both directions: Browse stored an ABSOLUTE path (so the analysis
+        # stopped being portable, and only worked at all because os.path.join ignores its base
+        # when the second argument is absolute) while the picker stores a bare file name; and
+        # the "from expiration" checkbox here was silently unticked by the picker whenever a
+        # span was marked, then — re-ticked — silently made that span inert. The picker owns
+        # both halves now, and this says what it chose.
+        self.noise_summary = QLabel("")
+        self.noise_summary.setWordWrap(True)
+        self.noise_summary.setToolTip(_tip(
+            "processing.emg.noise.reference_file",
+            "The rest recording, and which part of it, that defines the noise profile applied "
+            "to every file in the test. Chosen with 'Set noise profile' on the Preview "
+            "screen's › EMG – noise reduction tab."))
+        fn.addRow("Reference", self.noise_summary)
+        hint = QLabel("Pick the reference — and the suppression and fidelity target — with "
+                      "'Set noise profile' on the Preview screen's › EMG – noise reduction tab.")
         hint.setWordWrap(True); hint.setProperty("status", "muted")
         fn.addRow("", hint)
         root.addWidget(gns)
@@ -281,6 +272,25 @@ class SettingsScreen(QWidget):
         # defaults (only the folder was surfaced); this makes every workbook/CSV/figure an
         # explicit, per-run choice. Lives in the 'rest' stage so the guided Output step stays
         # to just the folder.
+        # Entropy ----------------------------------------------------------
+        # Shown only when a column is actually assigned to entropy — see _cond_cards. Its two
+        # parameters are meaningless otherwise, and burying them in "Advanced (rarely
+        # changed)" hid them from the users who DO compute entropy.
+        gent = QGroupBox("Sample entropy")
+        fent = QFormLayout(gent)
+        fent.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        self.ent_epochs = QSpinBox(); self.ent_epochs.setRange(1, 100)
+        self._row(fent, "Embedding (m)", self.ent_epochs, "processing.entropy.epochs",
+                  "Embedding dimension (m) for sample entropy; 2 by convention.")
+        self.ent_tol = QDoubleSpinBox(); self.ent_tol.setRange(0.0, 10.0)
+        self.ent_tol.setDecimals(4); self.ent_tol.setSingleStep(0.05)
+        self._row(fent, "Tolerance (r)", self.ent_tol, "processing.entropy.tolerance",
+                  "Matching tolerance (r) for sample entropy; 0.1 by convention.")
+        _enthint = QLabel("Computed on the columns ticked as Entropy in the channel picker.")
+        _enthint.setWordWrap(True); _enthint.setProperty("status", "muted")
+        fent.addRow("", _enthint)
+        root.addWidget(gent)
+
         gsave = QGroupBox("Output — what to save")
         fsv = QFormLayout(gsave)
         fsv.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
@@ -332,105 +342,24 @@ class SettingsScreen(QWidget):
         root.addWidget(gsave)
 
         # --- Advanced (rarely changed): knobs that were previously TOML-only (audit #16/17/22-26)
-        gadv = QGroupBox("Advanced (rarely changed)")
-        fa = QFormLayout(gadv)
-        fa.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
+        # The Mechanics "Advanced…" settings keep their widgets — from_state/to_state still
+        # round-trip through them, which is what keeps the analysis file honest — but they are
+        # no longer laid out anywhere. The modal edits its own copies and commits into these,
+        # so Cancel costs nothing and the commit funnel is unchanged.
         self.seg_buffer = QSpinBox(); self.seg_buffer.setRange(0, 100_000)
-        self._row(fa, "Breath-separation buffer", self.seg_buffer, "processing.segmentation.buffer",
-                  "Guard samples added around each detected breath boundary during segmentation.")
         self.peak_height = QDoubleSpinBox(); self.peak_height.setRange(0.0, 1_000_000.0)
         self.peak_height.setDecimals(4); self.peak_height.setSingleStep(0.01)
-        self._row(fa, "Breath peak — min height", self.peak_height, "processing.segmentation.peak.height",
-                  "Minimum peak height for breath detection (used for volume-based separation).")
         self.peak_distance = QDoubleSpinBox(); self.peak_distance.setRange(0.0, 60.0)
         self.peak_distance.setDecimals(4); self.peak_distance.setSingleStep(0.05); self.peak_distance.setSuffix(" s")
-        self._row(fa, "Breath peak — min distance", self.peak_distance, "processing.segmentation.peak.distance_s",
-                  "Minimum time between detected breath peaks.")
         self.peak_width = QDoubleSpinBox(); self.peak_width.setRange(0.0, 60.0)
         self.peak_width.setDecimals(4); self.peak_width.setSingleStep(0.05); self.peak_width.setSuffix(" s")
-        self._row(fa, "Breath peak — min width", self.peak_width, "processing.segmentation.peak.width_s",
-                  "Minimum width of a detected breath peak.")
         self.avg_resamp = QSpinBox(); self.avg_resamp.setRange(10, 100_000)
-        self._row(fa, "Average-breath resampling points", self.avg_resamp, "processing.wob.avg_resampling_obs",
-                  "Points each breath is resampled to when building the average breath / WOB.")
         self.ptp_baseline = QDoubleSpinBox(); self.ptp_baseline.setRange(0.0, 1.0)
         self.ptp_baseline.setDecimals(4); self.ptp_baseline.setSingleStep(0.01); self.ptp_baseline.setSuffix(" s")
-        self._row(fa, "PTP baseline window", self.ptp_baseline, "processing.ptp.baseline_window_s",
-                  "End-expiratory window whose mean is the pressure-time-product baseline.")
-        self.ent_epochs = QSpinBox(); self.ent_epochs.setRange(1, 100)
-        self._row(fa, "Entropy — embedding (m)", self.ent_epochs, "processing.entropy.epochs",
-                  "Embedding dimension (m) for sample entropy.")
-        self.ent_tol = QDoubleSpinBox(); self.ent_tol.setRange(0.0, 10.0)
-        self.ent_tol.setDecimals(4); self.ent_tol.setSingleStep(0.05)
-        self._row(fa, "Entropy — tolerance (r)", self.ent_tol, "processing.entropy.tolerance",
-                  "Matching tolerance (r) for sample entropy.")
-        self.noise_nfft = QSpinBox(); self.noise_nfft.setRange(16, 8192)
-        self._row(fa, "Noise STFT window (n_fft)", self.noise_nfft, "processing.emg.noise.n_fft",
-                  "FFT window length (samples) for the spectral noise gate; a power of two.")
-        # Cardiac-gated peak — the quality guards. Each decides when a gated value would be
-        # untrustworthy and should be left blank instead; the defaults are the measured ones
-        # (see docs/CARDIAC_GATED_PEAK_EMG.md) and are rarely worth changing.
-        self.rp_min_survival = QDoubleSpinBox()
-        self.rp_min_survival.setRange(0.0, 1.0); self.rp_min_survival.setDecimals(2)
-        self.rp_min_survival.setSingleStep(0.05)
-        self._row(fa, "Gated peak — least of each phase that must survive", self.rp_min_survival,
-                  "processing.emg.robust_peak.min_survival",
-                  "Fraction of a phase that must fall outside the blanked windows; below this its gated "
-                  "value is left blank. Tested separately for the whole breath, inspiration and "
-                  "expiration, so a blank inspiratory column beside a filled whole-breath one is "
-                  "expected, not a fault (default 0.40).")
-        self.rp_min_island = QDoubleSpinBox()
-        self.rp_min_island.setRange(0.0, 2.0); self.rp_min_island.setDecimals(3)
-        self.rp_min_island.setSingleStep(0.05); self.rp_min_island.setSuffix(" s")
-        self._row(fa, "Gated peak — shortest heartbeat-free stretch a phase must contain",
-                  self.rp_min_island, "processing.emg.robust_peak.min_island_s",
-                  "A phase must contain at least one unbroken heartbeat-free stretch this long, or its "
-                  "gated value is left blank. Shorter stretches are still measured — they just do not "
-                  "on their own qualify the phase. Tested separately for the whole breath, inspiration "
-                  "and expiration (default 0.20).")
-        self.rp_long_rr = QDoubleSpinBox()
-        self.rp_long_rr.setRange(1.1, 5.0); self.rp_long_rr.setDecimals(2)
-        self.rp_long_rr.setSingleStep(0.1)
-        self._row(fa, "Gated peak — missed-heartbeat factor", self.rp_long_rr,
-                  "processing.emg.robust_peak.long_rr_factor",
-                  "A gap between heartbeats this many times the typical one means a heartbeat was "
-                  "missed (default 1.6).")
-        self.rp_max_long_rr = QDoubleSpinBox()
-        self.rp_max_long_rr.setRange(0.0, 1.0); self.rp_max_long_rr.setDecimals(3)
-        self.rp_max_long_rr.setSingleStep(0.01)
-        self._row(fa, "Gated peak — missed heartbeats tolerated", self.rp_max_long_rr,
-                  "processing.emg.robust_peak.max_long_rr_frac",
-                  "Fraction of gaps that may look like missed heartbeats before the whole file's gated "
-                  "columns are left blank — a gate built from an incomplete set of heartbeats hides the "
-                  "ones it missed (default 0.02).")
-        self.rp_hr_margin = QDoubleSpinBox()
-        self.rp_hr_margin.setRange(0.0, 0.5); self.rp_hr_margin.setDecimals(2)
-        self.rp_hr_margin.setSingleStep(0.05)
-        self._row(fa, "Gated peak — heart-rate headroom", self.rp_hr_margin,
-                  "processing.emg.robust_peak.hr_ceiling_margin",
-                  "How close the heart rate may come to the highest the ECG detector can resolve before "
-                  "the gated columns are left blank. That ceiling is 60 ÷ the minimum beat distance set "
-                  "on Preview & QC ▸ › EMG – ECG reduction — so raising the beat rate a file may reach "
-                  "means lowering that distance there, not lowering this margin, which only admits files "
-                  "whose beat detection is already unreliable (default 0.10).")
-        self.matlab_variant = QComboBox()
-        # 'wide', not 'compact': "MATLAB (Unix/Mac)" plus the drop-down arrow outgrows the
-        # 150px column on wider fonts (measured 131px of text against the column's 126px
-        # text box on the CI runners' fonts) — the cap must never clip its own content.
-        self.matlab_variant.setProperty("formField", "wide")
-        self.matlab_variant.addItem("MATLAB (Windows)", "windows")
-        self.matlab_variant.addItem("MATLAB (Unix/Mac)", "mac")
-        self._row(fa, "MATLAB file variant", self.matlab_variant, "input.format.matlab_variant",
-                  "Variant/byte-order for .mat input files (ignored for CSV/Excel/text).")
-        # one entry per line (not comma-separated) so filenames containing a comma survive
         self.breath_counts_edit = QPlainTextEdit()
         self.breath_counts_edit.setProperty("formField", "wide")   # holds 'filename = count' lines (theme.py)
         self.breath_counts_edit.setPlaceholderText("one 'filename = count' per line")
         self.breath_counts_edit.setFixedHeight(64)
-        self._row(fa, "Breath-count overrides", self.breath_counts_edit, "processing.breath_counts",
-                  "Per-file override of the breath count used for per-minute rate scaling — one "
-                  "'filename = count' per line, e.g. 'RIU_H5_40W.txt = 12'. Blank = each file's detected count.")
-        root.addWidget(gadv)
 
         # Status text is shown in the window's bottom status bar (see main_window). This
         # label is kept only as a hidden text holder mirroring that message — showing it
@@ -468,7 +397,15 @@ class SettingsScreen(QWidget):
         self._stage_cards = [
             [gin],                                   # 0: Input (always shown)
             [gout],                                  # 1: Output (after Input is valid)
-            [gch, gpr, gemg, gecg, ggate, gns, gsave, gadv],  # 2: the rest (after Output is valid)
+            [gch, gpr, gemg, gecg, gns, gsave],  # 2: the rest (after Output is valid)
+        ]
+        # Cards whose relevance depends on the analysis itself. Deliberately NOT in
+        # _stage_cards: that loop forces every registered card visible outside "new" mode, so
+        # a predicate there would be overwritten on the next keystroke — and
+        # test_startup_flow's "open mode reveals everything" walk would fail on a default
+        # AppState. Kept separate, ANDed in its own pass.
+        self._cond_cards = [
+            (gent, lambda: bool(self.state.settings.input.channels.entropy)),
         ]
         self._stage_gate = [self._input_stage_ok, self._output_stage_ok]
         self._mode = "full"          # "full" = every card+tab visible (default/open); "new" = guided
@@ -576,8 +513,7 @@ class SettingsScreen(QWidget):
             # Noise reduction (enable + reference file; tuning lives in the EMG tab). ECG
             # removal is tuned on the Preview "› EMG – ECG reduction" tab, not here.
             self.remove_noise.setChecked(n.enabled)               # rebind to the real gate
-            self.noise_ref.setText(n.reference_file or "")
-            self.noise_use_exp.setChecked(n.use_expiration)
+            self._refresh_noise_summary()
             self.out_folder.setText(s.output.folder)
             # Advanced (rarely changed)
             seg, peak = s.processing.segmentation, s.processing.segmentation.peak
@@ -589,18 +525,6 @@ class SettingsScreen(QWidget):
             self.ptp_baseline.setValue(s.processing.ptp.baseline_window_s)
             self.ent_epochs.setValue(s.processing.entropy.epochs)
             self.ent_tol.setValue(s.processing.entropy.tolerance)
-            self.noise_nfft.setValue(n.n_fft)
-            # cardiac-gated peak; getattr so an Analysis file written before the feature
-            # existed still loads (its table is simply absent -> dataclass defaults)
-            rp = getattr(emg, "robust_peak", None)
-            if rp is not None:
-                self.emg_gated.setChecked(rp.enabled)
-                self.emg_gate_width.setValue(rp.gate_half_width_s)
-                self.rp_min_survival.setValue(rp.min_survival)
-                self.rp_min_island.setValue(rp.min_island_s)
-                self.rp_long_rr.setValue(rp.long_rr_factor)
-                self.rp_max_long_rr.setValue(rp.max_long_rr_frac)
-                self.rp_hr_margin.setValue(rp.hr_ceiling_margin)
             _mi = self.matlab_variant.findData(s.input.format.matlab_variant)
             self.matlab_variant.setCurrentIndex(_mi if _mi >= 0 else 0)
             self.breath_counts_edit.setPlainText(
@@ -653,9 +577,10 @@ class SettingsScreen(QWidget):
         # "› EMG – ECG reduction" tab, not here — leave those model fields untouched.
         # Noise reduction (enable + reference file; tuning owned by the EMG tab)
         n.enabled = self.remove_noise.isChecked()
-        emg.remove_noise = self.remove_noise.isChecked()      # keep legacy mirror so TOML round-trips
-        n.reference_file = self.noise_ref.text().strip() or None
-        n.use_expiration = self.noise_use_exp.isChecked()
+        # reference_file / use_expiration / reference_intervals are written ONLY by the
+        # noise picker (preview_screen._apply_noise_reference / _apply_noise_expiration).
+        # to_state runs on every tab change, so rewriting them from here — where they have no
+        # widget — would erase the choice on the first switch away from Setup.
         s.output.folder = self.out_folder.text()
         # Advanced (rarely changed)
         s.processing.segmentation.buffer = self.seg_buffer.value()
@@ -666,18 +591,13 @@ class SettingsScreen(QWidget):
         s.processing.ptp.baseline_window_s = self.ptp_baseline.value()
         s.processing.entropy.epochs = self.ent_epochs.value()
         s.processing.entropy.tolerance = self.ent_tol.value()
-        n.n_fft = self.noise_nfft.value()
-        # Cardiac-gated peak. One field per widget and no legacy mirror: this has no v1
-        # ancestor, so the migrator never produces it and nothing else describes the same
-        # intent. Owned entirely by this screen — the Preview writes no robust_peak field.
-        rp = emg.robust_peak
-        rp.enabled = self.emg_gated.isChecked()
-        rp.gate_half_width_s = self.emg_gate_width.value()
-        rp.min_survival = self.rp_min_survival.value()
-        rp.min_island_s = self.rp_min_island.value()
-        rp.long_rr_factor = self.rp_long_rr.value()
-        rp.max_long_rr_frac = self.rp_max_long_rr.value()
-        rp.hr_ceiling_margin = self.rp_hr_margin.value()
+        # noise.n_fft is written by the Preview EMG tab's Advanced modal, alongside
+        # win_length and hop_length. Keeping a second writer here silently reverted it
+        # on the next tab change — measured.
+        # processing.emg.robust_peak is written ONLY by the Preview EMG tab, which is where
+        # its controls now live — beside the EMG they change, and one tab from the ECG removal
+        # they depend on. to_state runs on every tab change, so rewriting it from here would
+        # erase a gated-peak edit on the first switch to Setup.
         s.input.format.matlab_variant = self.matlab_variant.currentData()
         bcs = []
         for line in self.breath_counts_edit.toPlainText().splitlines():
@@ -697,34 +617,35 @@ class SettingsScreen(QWidget):
         return s
 
     def set_noise_reference(self, file, intervals, use_expiration):
-        """Apply a noise reference chosen on the Preview graph (feature B) so the
-        Settings form and shared state stay coherent. ``reference_intervals`` has no
-        widget, so it is written straight to state (and survives ``to_state``, which
-        does not touch it); the file + use_expiration mirror into the widgets and are
-        committed via ``to_state``. Guarded against reactive feedback with ``_loading``."""
-        prev, self._loading = self._loading, True
-        try:
-            self.noise_ref.setText(file or "")
-            self.noise_use_exp.setChecked(bool(use_expiration))
-            self.state.settings.processing.emg.noise.reference_intervals = list(intervals or [])
-        finally:
-            self._loading = prev
-        self.to_state()
-        self._sync_widgets()
-        self._mark_dirty()   # a graph-chosen noise reference is a user edit that lands in the .toml
-        self._set_status(f"Noise reference set from graph selection: {file}")
+        """Reflect a noise reference chosen in the picker. The picker has already written all
+        three fields into state — it is their only writer — so this just re-renders the
+        read-only summary and records that the analysis changed."""
+        self._refresh_noise_summary()
+        self._mark_dirty()   # a picked noise reference is a user edit that lands in the .toml
+        where = "every expiration" if use_expiration else "a marked rest span"
+        self._set_status(f"Noise reference set from {file}: {where}.")
+
+    def _refresh_noise_summary(self):
+        """What the picker chose, in words. Empty is a real state and says so, because the
+        alternative — a blank line beside a ticked 'Reduce EMG background noise' — reads as
+        configured when nothing will run."""
+        n = self.state.settings.processing.emg.noise
+        if not n.reference_file:
+            self.noise_summary.setText("Not set — noise reduction will not run.")
+            self.noise_summary.setProperty("status", "muted")
+        elif n.use_expiration or not n.reference_intervals:
+            self.noise_summary.setText(f"{n.reference_file} · every expiration")
+            self.noise_summary.setProperty("status", None)
+        else:
+            spans = ", ".join(f"{a:.2f}–{b:.2f} s" for a, b in n.reference_intervals)
+            self.noise_summary.setText(f"{n.reference_file} · marked span {spans}")
+            self.noise_summary.setProperty("status", None)
+        self.noise_summary.style().unpolish(self.noise_summary)
+        self.noise_summary.style().polish(self.noise_summary)
 
     # -- helpers ------------------------------------------------------------
     def _sync_widgets(self):
-        noise_on = self.remove_noise.isChecked()
-        self.noise_ref.setEnabled(noise_on)
-        # "use expiration" only makes sense once a reference file is chosen
-        self.noise_use_exp.setEnabled(noise_on and bool(self.noise_ref.text().strip()))
-        gated_on = self.emg_gated.isChecked()
-        self.emg_gate_width.setEnabled(gated_on)
-        for w in (self.rp_min_survival, self.rp_min_island, self.rp_long_rr,
-                  self.rp_max_long_rr, self.rp_hr_margin):
-            w.setEnabled(gated_on)          # the guards only ever apply to the gated columns
+        self._refresh_noise_summary()
         self._refresh_channel_view()   # 'Volume: derived from flow' follows the checkbox
         self.trend_method.setEnabled(self.correct_trend.isChecked())
         self.resample_hz.setEnabled(self.resample.isChecked())
@@ -756,22 +677,20 @@ class SettingsScreen(QWidget):
     def _wire_reactivity(self):
         self.in_folder.editingFinished.connect(self._on_inputs_changed)
         self.in_files.editingFinished.connect(self._on_inputs_changed)
-        for le in (self.out_folder, self.noise_ref, self.group_regex):
+        for le in (self.out_folder, self.group_regex):
             le.editingFinished.connect(self._on_field_changed)
         self.breath_counts_edit.textChanged.connect(self._on_field_changed)   # QPlainTextEdit: no editingFinished
         for sb in (self.samp_freq, self.resample_hz,
-                   self.seg_buffer, self.avg_resamp, self.ent_epochs, self.noise_nfft):
+                   self.seg_buffer, self.avg_resamp, self.ent_epochs):
             sb.valueChanged.connect(self._on_field_changed)
         for dsb in (self.emg_rms_window, self.emg_outlier_sd, self.peak_height,
-                    self.peak_distance, self.peak_width, self.ptp_baseline, self.ent_tol,
-                    self.emg_gate_width, self.rp_min_survival, self.rp_min_island,
-                    self.rp_long_rr, self.rp_max_long_rr, self.rp_hr_margin):
+                    self.peak_distance, self.peak_width, self.ptp_baseline, self.ent_tol):
             dsb.valueChanged.connect(self._on_field_changed)
         for cb in (self.seg_method, self.wob_from, self.trend_method):
             cb.currentTextChanged.connect(self._on_field_changed)
         self.emg_norm.currentIndexChanged.connect(self._on_field_changed)
         self.matlab_variant.currentIndexChanged.connect(self._on_field_changed)
-        for chk in (self.integrate, self.remove_noise, self.noise_use_exp, self.emg_gated,
+        for chk in (self.integrate, self.remove_noise,
                     self.correct_drift, self.correct_trend, self.inverse_flow, self.inverse_volume,
                     self.resample, self.save_average, self.save_bbb, self.save_processed,
                     self.include_ignored, self.save_pv_avg, self.save_pv_ind, self.save_raw_fig,
@@ -1024,6 +943,79 @@ class SettingsScreen(QWidget):
         self._open_channel_setup(initial={})     # fresh analysis -> no pre-selection
         self._update_disclosure()                # reveal the rest (OK applied, or cancelled)
 
+    def _open_mech_advanced(self):
+        """Breath detection, the averaging grid, the PTP baseline and the per-file breath
+        counts. Real settings, but not ones anyone sets while getting a result out.
+
+        The screen's own widgets still exist and still round-trip through from_state/to_state
+        — they are simply not laid out any more. The dialog edits its own copies and commits
+        into them, so Cancel costs nothing and the commit funnel below is the same one an
+        ordinary field edit uses, which is what keeps the dirty flag and the recompute scope
+        right without repeating either here."""
+        from respmech.ui.advanced_dialog import AdvancedDialog, Field
+        fields = [
+            Field("seg_buffer", "Breath-separation buffer", "int",
+                  "processing.segmentation.buffer",
+                  "Guard samples added around each detected breath boundary.",
+                  lo=0, hi=100_000, step=10),
+            Field("peak_height", "Breath peak — minimum height", "float",
+                  "processing.segmentation.peak.height",
+                  "Minimum peak height for breath detection (volume-based separation).",
+                  lo=0.0, hi=1_000_000.0, step=0.01, decimals=4),
+            Field("peak_distance", "Breath peak — minimum distance", "float",
+                  "processing.segmentation.peak.distance_s",
+                  "Minimum time between detected breath peaks.",
+                  lo=0.0, hi=60.0, step=0.05, decimals=4, suffix=" s"),
+            Field("peak_width", "Breath peak — minimum width", "float",
+                  "processing.segmentation.peak.width_s",
+                  "Minimum width of a detected breath peak.",
+                  lo=0.0, hi=60.0, step=0.05, decimals=4, suffix=" s"),
+            Field("avg_resamp", "Average-breath resampling points", "int",
+                  "processing.wob.avg_resampling_obs",
+                  "Points each breath is resampled to when building the average breath / WOB.",
+                  lo=10, hi=100_000, step=10),
+            Field("ptp_baseline", "PTP baseline window", "float",
+                  "processing.ptp.baseline_window_s",
+                  "End-expiratory window whose mean is the pressure-time-product baseline.",
+                  lo=0.0, hi=1.0, step=0.01, decimals=4, suffix=" s"),
+            Field("breath_counts", "Breath-count overrides", "text",
+                  "processing.breath_counts",
+                  "Per-file override of the breath count used for per-minute rate scaling — "
+                  "one 'filename = count' per line, e.g. 'RIU_H5_40W.txt = 12'. Blank means "
+                  "each file's detected count.",
+                  placeholder="one 'filename = count' per line"),
+        ]
+        current = {
+            "seg_buffer": self.seg_buffer.value(),
+            "peak_height": self.peak_height.value(),
+            "peak_distance": self.peak_distance.value(),
+            "peak_width": self.peak_width.value(),
+            "avg_resamp": self.avg_resamp.value(),
+            "ptp_baseline": self.ptp_baseline.value(),
+            "breath_counts": self.breath_counts_edit.toPlainText(),
+        }
+        dlg = AdvancedDialog("Mechanics — advanced", fields, current, parent=self,
+                             intro="Breath detection and the averaging grid. The defaults "
+                                   "suit ordinary recordings; reach for these when a "
+                                   "recording is segmenting badly.")
+        if dlg.exec() != QDialog.Accepted:
+            return
+        staged = dlg.values()
+        if staged == current:
+            return                      # OK without an edit: no dirty flag, no recompute
+        prev, self._loading = self._loading, True
+        try:
+            self.seg_buffer.setValue(int(staged["seg_buffer"]))
+            self.peak_height.setValue(float(staged["peak_height"]))
+            self.peak_distance.setValue(float(staged["peak_distance"]))
+            self.peak_width.setValue(float(staged["peak_width"]))
+            self.avg_resamp.setValue(int(staged["avg_resamp"]))
+            self.ptp_baseline.setValue(float(staged["ptp_baseline"]))
+            self.breath_counts_edit.setPlainText(staged["breath_counts"])
+        finally:
+            self._loading = prev
+        self._on_field_changed()        # the ordinary commit: dirty + sync + recompute scope
+
     def _open_channel_setup(self, initial=None):
         """Show the visual channel-assignment modal over the valid data files matching the
         input mask, and on OK write the channel columns into the form. Returns True iff a
@@ -1233,6 +1225,15 @@ class SettingsScreen(QWidget):
             visible = (self._mode != "new") or (i < self._revealed)
             for c in cards:
                 c.setVisible(visible)
+        # Conditional cards break this function's monotonicity promise ("a card never
+        # retracts once shown"), so they get the one exemption that keeps that promise
+        # honest where it matters: a card holding the widget the user is typing in is never
+        # yanked out from under them.
+        staged = (self._mode != "new") or (len(self._stage_cards) - 1 < self._revealed)
+        for card, relevant in self._cond_cards:
+            if card.isVisible() and card.isAncestorOf(QApplication.focusWidget()):
+                continue
+            card.setVisible(staged and relevant())
 
     def _new_mode_status(self, ready):
         """The guided-flow status line for the stage the user is on. The Input/Output

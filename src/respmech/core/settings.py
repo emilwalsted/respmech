@@ -165,7 +165,6 @@ class EmgSettings:
     ecg_min_distance_s: float = 0.5
     ecg_min_width_s: float = 0.001
     ecg_window_s: float = 0.4
-    remove_noise: bool = False
     outlier_rms_sd_limit: float = 0.0
     # EMG amplitude normalisation for the OUTPUT tables (P14): each file's RMS columns
     # are also reported as a % of a per-file reference so amplitudes compare across

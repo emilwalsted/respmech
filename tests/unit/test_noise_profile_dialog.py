@@ -20,7 +20,7 @@ def test_dialog_constructs_with_a_plot_per_channel(qapp):
     dlg = NoiseProfileDialog(raw, t, fs, cols)
     assert len(dlg._plots) == 3 and len(dlg._vlines) == 3 and len(dlg._regions) == 3
     assert dlg.btn_ok.text() == "Set noise profile" and dlg.btn_ok.isEnabled() is False
-    assert dlg.btn_cancel.text() == "Annullér"
+    assert dlg.btn_cancel.text() == "Cancel"      # the app is English throughout
     assert dlg.selected_region() is None
     assert dlg.isModal() is True
     dlg.deleteLater()
@@ -182,3 +182,44 @@ def test_click_with_jitter_clears_but_a_real_drag_selects(qapp):
     dlg._on_release(QPoint(far, 150))
     assert dlg.selected_region() is not None
     dlg.close(); dlg.deleteLater()
+
+
+# -- the reference is defined in ONE place ------------------------------------------
+# Regression: the two ways to define it — a marked span, or every expiration — were split
+# across two screens. This dialog silently unticked the Setup checkbox whenever a span was
+# marked, and re-ticking it silently made the marked span inert. Neither screen showed what
+# the other had done, and the core resolves them as `use_expiration or not intervals`, so
+# whichever the user looked at last was not necessarily what would run.
+
+def test_the_whole_expiration_option_is_offered_here(qapp):
+    from respmech.ui.noise_profile_dialog import EXPIRATION, NoiseProfileDialog
+    raw, t, fs, cols = _data()
+    dlg = NoiseProfileDialog(raw, t, fs, cols)
+    assert dlg.selected_region() is None                  # nothing chosen yet
+    dlg.use_expiration.setChecked(True)
+    assert dlg.selected_region() is EXPIRATION
+    assert dlg.btn_ok.isEnabled(), "a valid choice must be acceptable"
+
+
+def test_the_two_options_visibly_retire_each_other(qapp):
+    from respmech.ui.noise_profile_dialog import EXPIRATION, NoiseProfileDialog
+    raw, t, fs, cols = _data()
+    dlg = NoiseProfileDialog(raw, t, fs, cols)
+    dlg._set_selection(1.0, 2.0)
+    assert dlg.selected_region() == (1.0, 2.0)
+    dlg.use_expiration.setChecked(True)
+    assert dlg.selected_region() is EXPIRATION            # expiration takes over
+    assert not dlg.glw.isEnabled(), "the span could still be edited while inert"
+    dlg.use_expiration.setChecked(False)
+    assert dlg.selected_region() == (1.0, 2.0)            # ...and the span comes back
+    assert dlg.glw.isEnabled()
+
+
+def test_marking_a_span_while_expiration_is_chosen_is_not_possible(qapp):
+    """The plot is disabled, so the user cannot leave the dialog believing a span they
+    dragged will be used when the core would ignore it."""
+    from respmech.ui.noise_profile_dialog import NoiseProfileDialog
+    raw, t, fs, cols = _data()
+    dlg = NoiseProfileDialog(raw, t, fs, cols)
+    dlg.use_expiration.setChecked(True)
+    assert not dlg.glw.isEnabled()
