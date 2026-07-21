@@ -2,10 +2,11 @@
 
 A dropdown at the top picks which (valid) data file to look at; below it every column of
 that file is plotted stacked on a shared time axis, with a dropdown above each column that
-designates its role (Flow, Volume, Poes, Pgas, Pdi, EMG, Entropy, or unused). Single-signal
-roles (flow/volume/poes/pgas/pdi) are mutually exclusive — picking one for a column clears
-it from any other. Each trace is drawn in its role's colour so the mapping reads at a
-glance. Role assignments are per COLUMN, so they persist when you switch files (the files of
+designates its role (Flow, Volume, Poes, Pgas, Pdi, EMG, or unused). Single-signal roles
+(flow/volume/poes/pgas/pdi) are mutually exclusive — picking one for a column clears it from
+any other. Entropy is deliberately NOT in that dropdown: it is the one non-exclusive role,
+so it has an independent checkbox per column and a column can be both. Each trace is drawn
+in its role's colour so the mapping reads at a glance. Role assignments are per COLUMN, so they persist when you switch files (the files of
 a batch share the same channel layout). On OK the caller reads ``selected_mapping()`` and
 writes the channel columns into settings; the dialog is Qt-only and headless-testable.
 
@@ -17,7 +18,7 @@ from __future__ import annotations
 import os
 
 import numpy as np
-from PySide6.QtWidgets import (QComboBox, QDialog, QFrame, QHBoxLayout, QLabel,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel,
                                QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
 from respmech.ui import wheel as _wheel
@@ -97,8 +98,9 @@ class ChannelSetupDialog(QDialog):
         v.addLayout(frow)
 
         hint = QLabel("Pick what each column is. Flow, Volume, Poes, Pgas and Pdi take one "
-                      "column each; EMG and Entropy can take several. Assignments are kept "
-                      "when you switch files.")
+                      "column each; EMG can take several. Tick Entropy on any column you also "
+                      "want sample entropy for — including one that already has a role. "
+                      "Assignments are kept when you switch files.")
         hint.setProperty("status", "muted"); hint.setWordWrap(True)
         v.addWidget(hint)
         nfiles = len(self._files)
@@ -113,7 +115,7 @@ class ChannelSetupDialog(QDialog):
         self._scroll = scroll               # eventFilter redirects stray wheel events here
         # The stack itself is shared with the Setup screen's read-only channel summary
         # (ui/column_stack.py); the only dialog-specific part is what goes in each header.
-        self._combos = []
+        self._combos, self._entropy_boxes = [], []
         self._preselect = preselect
         self._stack = ColumnStack(self._fs, header_factory=self._build_header)
         self._stack.build(matrix0, self._names, roles=preselect)
@@ -156,7 +158,7 @@ class ChannelSetupDialog(QDialog):
         analysis derives time from the sampling frequency); every other column gets a role
         dropdown."""
         if i == 0:
-            self._combos.append(None)
+            self._combos.append(None); self._entropy_boxes.append(None)
             note = QLabel("time axis — not assignable"); note.setProperty("status", "muted")
             head.addWidget(note)
             return
@@ -167,6 +169,17 @@ class ChannelSetupDialog(QDialog):
         combo.currentIndexChanged.connect(lambda _idx, ci=i: self._on_role_changed(ci))
         self._combos.append(combo)
         head.addWidget(combo)
+        # Independent of the dropdown by construction — which is the whole point. Sample
+        # entropy may be computed on any column, including one that already carries flow or
+        # a pressure, so there is no conflict to resolve and no cross-column rule to get
+        # wrong: ticking one column can never affect another.
+        box = QCheckBox("Entropy")
+        box.setToolTip("Also compute sample entropy on this column. Independent of the role "
+                       "above — a column can be both.")
+        box.setChecked((i + 1) in self._entropy_cols)
+        box.toggled.connect(lambda _on, ci=i: self._on_entropy_toggled(ci))
+        self._entropy_boxes.append(box)
+        head.addWidget(box)
 
     # -- file loading / switching -------------------------------------------
     def _get(self, path):
@@ -199,41 +212,51 @@ class ChannelSetupDialog(QDialog):
     # -- mapping <-> dropdown state -----------------------------------------
     def _roles_from_mapping(self, m):
         """Turn a {'flow': col, ..., 'emg': [cols]} mapping into a {col_index: role} dict
-        (columns are 1-based in settings, 0-based here). A single role wins over emg/entropy
-        if a column is reused, so a colliding pre-selection never silently drops the pressure
+        (columns are 1-based in settings, 0-based here). A single role wins over emg if a
+        column is reused, so a colliding pre-selection never silently drops the pressure
         channel.
 
-        A column may legitimately carry MORE than one role in the settings: entropy is
-        non-exclusive, and the shipped example config computes EMG and entropy on the very
-        same five columns (``legacy/example.py``). This dialog shows one dropdown per column
-        and so can only display one of them — but it must never DESTROY the others, which is
-        what pressing OK used to do.
+        Entropy is NOT in this dict. It is the one non-exclusive role — sample entropy may be
+        computed on a column that already carries flow or a pressure, and the shipped example
+        config does exactly that — so it has its own per-column checkbox and needs no conflict
+        resolution at all. ``_entropy_cols`` seeds those boxes; ``_entropy_kept`` holds the
+        entropy columns this dialog cannot show a box for (the time axis, or past the end of
+        the file), which ``selected_mapping`` re-emits rather than silently dropping.
 
-        The displaced roles are recorded here and re-emitted by ``selected_mapping``, keyed
-        on the column still showing the role it was seeded with (``_shadow_anchor``). Edit
-        the column and the hidden role is released, so the memory can never migrate onto a
-        channel the user has since re-assigned. Only emg/entropy are remembered: two single
-        roles on one column is an invalid mapping the QC strip blocks, not something to
-        preserve."""
+        EMG can still collide with a single role, and one dropdown cannot show both, so a
+        displaced EMG column is remembered and re-emitted — keyed on the column still showing
+        the role it was seeded with (``_shadow_anchor``), so editing that column releases it
+        and the memory can never migrate onto a channel the user has since re-assigned. Two
+        single roles on one column are deliberately not preserved: that is an invalid mapping
+        the QC strip blocks, not a state worth resurrecting."""
         out = {}
         self._shadowed = {}                  # 1-based column -> roles it carries but cannot show
         self._shadow_anchor = {}             # 1-based column -> the role its combo was seeded with
-        self._offfile = {"emg": [], "entropy": []}   # assigned past this file's last column
+        self._offfile = {"emg": []}          # assigned past this file's last column
+        self._entropy_cols = set()           # 1-based columns whose Entropy box starts ticked
+        self._entropy_kept = []              # entropy this dialog cannot show, but must keep
 
         def _claim(col1, role):
             displaced = out.get(col1 - 1)
-            if displaced in ("emg", "entropy") and displaced != role:
+            if displaced == "emg" and displaced != role:
                 self._shadowed.setdefault(col1, set()).add(displaced)
             out[col1 - 1] = role
 
-        for role in ("emg", "entropy"):             # write multi roles first...
-            for c in (m.get(role) or []):
-                if not c:
-                    continue
-                if 1 <= int(c) <= self._ncols:
-                    _claim(int(c), role)
-                else:
-                    self._offfile[role].append(int(c))
+        for c in (m.get("emg") or []):
+            if not c:
+                continue
+            if 1 <= int(c) <= self._ncols:
+                _claim(int(c), "emg")
+            else:
+                self._offfile["emg"].append(int(c))
+        for c in (m.get("entropy") or []):
+            if not c:
+                continue
+            # column 1 is the time axis and carries no checkbox, so it is kept, not shown
+            if 2 <= int(c) <= self._ncols:
+                self._entropy_cols.add(int(c))
+            else:
+                self._entropy_kept.append(int(c))
         for role in ("flow", "volume", "poes", "pgas", "pdi"):   # ...single roles win
             c = m.get(role)
             if c and 1 <= int(c) <= self._ncols:
@@ -247,6 +270,20 @@ class ChannelSetupDialog(QDialog):
         releases its hidden roles with no signal bookkeeping to get wrong."""
         return {c: roles for c, roles in getattr(self, "_shadowed", {}).items()
                 if self._role_of(c - 1) == self._shadow_anchor.get(c)}
+
+    def _entropy_on(self, col_index):
+        box = self._entropy_boxes[col_index]
+        return box is not None and box.isChecked()
+
+    def _display_role(self, col_index):
+        """Which colour the trace carries. A column doing nothing BUT entropy is not
+        'unused', so it takes the entropy colour rather than the muted grey."""
+        role = self._role_of(col_index)
+        return role or ("entropy" if self._entropy_on(col_index) else "")
+
+    def _on_entropy_toggled(self, col_index):
+        self._recolor(col_index)
+        self._refresh_info()
 
     @staticmethod
     def _index_of_role(role):
@@ -272,7 +309,7 @@ class ChannelSetupDialog(QDialog):
         self._refresh_info()
 
     def _recolor(self, col_index):
-        self._stack.set_role(col_index, self._role_of(col_index))
+        self._stack.set_role(col_index, self._display_role(col_index))
 
     def _missing_required(self):
         """Required single roles (flow/poes/pgas/pdi) not yet assigned to any column."""
@@ -287,7 +324,7 @@ class ChannelSetupDialog(QDialog):
             names = ", ".join(_REQUIRED_LABELS[r] for r in missing)
             text = f"Assign {names} to continue"
         else:
-            assigned = sum(1 for i in range(self._ncols) if self._role_of(i))
+            assigned = sum(1 for i in range(self._ncols) if self._display_role(i))
             text = f"Ready — {assigned} column{'s' if assigned != 1 else ''} assigned"
         # A role kept on a column that displays a different one would otherwise be invisible.
         # Say so in BOTH branches: while a required role is missing is exactly when the user
@@ -301,19 +338,17 @@ class ChannelSetupDialog(QDialog):
     def _kept_notes(self):
         """Human phrases for everything selected_mapping will re-emit but cannot show."""
         notes = []
-        labels = {"emg": "EMG", "entropy": "entropy"}
-        hidden = self._hidden_roles()
-        for role in ("emg", "entropy"):
-            cols = sorted(c for c, roles in hidden.items() if role in roles)
+        hidden = sorted(c for c, roles in self._hidden_roles().items() if "emg" in roles)
+        if hidden:
+            notes.append(f"EMG is also kept on column{'s' if len(hidden) != 1 else ''} "
+                         + ", ".join(f"#{c}" for c in hidden))
+        for label, cols in (("EMG", sorted(self._offfile["emg"])),
+                            ("Entropy", sorted(self._entropy_kept))):
             if cols:
-                notes.append(f"{labels[role]} is also kept on column"
-                             f"{'s' if len(cols) != 1 else ''} "
-                             + ", ".join(f"#{c}" for c in cols))
-            off = sorted(getattr(self, "_offfile", {}).get(role, []))
-            if off:
-                notes.append(f"{labels[role]} column{'s' if len(off) != 1 else ''} "
-                             + ", ".join(f"#{c}" for c in off)
-                             + f" kept but beyond this file's {self._ncols} columns")
+                notes.append(f"{label} column{'s' if len(cols) != 1 else ''} "
+                             + ", ".join(f"#{c}" for c in cols)
+                             + f" kept but not shown here (this file has "
+                             + f"{self._ncols} columns, and column 1 is the time axis)")
         return notes
 
     def selected_mapping(self):
@@ -329,13 +364,12 @@ class ChannelSetupDialog(QDialog):
                 m[role] = i + 1                     # mutual exclusion keeps it unique
             else:
                 m[role].append(i + 1)
-        # Re-add what this dialog could not display (see _roles_from_mapping): the roles
-        # hidden behind another role on a shared column, and any column beyond this file's
-        # width. Pressing OK must never be a way to lose a channel assignment it never
-        # showed. set() also absorbs a role the user has since picked explicitly, so nothing
-        # is ever listed twice.
-        hidden = self._hidden_roles()
-        for role in ("emg", "entropy"):
-            back = {c for c, roles in hidden.items() if role in roles}
-            m[role] = sorted(set(m[role]) | back | set(getattr(self, "_offfile", {}).get(role, [])))
+        # EMG can be hidden behind a single role on a shared column, and either list can name
+        # a column past this file's width. Pressing OK must never be a way to lose a channel
+        # assignment the dialog never showed. set() also absorbs a column the user has since
+        # picked explicitly, so nothing is listed twice.
+        hidden = {c for c, roles in self._hidden_roles().items() if "emg" in roles}
+        m["emg"] = sorted(set(m["emg"]) | hidden | set(self._offfile["emg"]))
+        m["entropy"] = sorted({i + 1 for i in range(self._ncols) if self._entropy_on(i)}
+                              | set(self._entropy_kept))
         return m
