@@ -146,7 +146,7 @@ def test_settings_widgets_expose_varpath_and_description_on_hover(qapp, tmp_path
         sc.samp_freq: "input.format.sampling_frequency",
         sc.emg_rms_window: "processing.emg.rms_window_s",
         sc.remove_noise: "processing.emg.noise.enabled",
-        sc.noise_ref: "processing.emg.noise.reference_file",
+        sc.noise_summary: "processing.emg.noise.reference_file",
         sc.out_folder: "output.folder",
         sc.integrate: "processing.volume.integrate_from_flow",
         sc.emg_gated: "processing.emg.robust_peak.enabled",

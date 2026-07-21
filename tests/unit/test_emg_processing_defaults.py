@@ -123,3 +123,66 @@ def test_the_gate_is_ui_policy_and_not_a_core_block(qapp, tmp_path):
     result = run_batch(s)
     assert result.failed_files == {}, result.failed_files
     assert result.ok_files
+
+
+# -- one writer for the noise reference ------------------------------------------
+# R3/R4. The reference used to be settable in two places that disagreed in two ways.
+# Setup's Browse stored an ABSOLUTE path while the picker stores a bare file name; both
+# "worked" only because the core resolves with os.path.join, which ignores its base when the
+# second argument is absolute — so a Setup-written analysis embedded a machine-specific path
+# and stopped being portable. And Setup's "from expiration" checkbox was silently unticked by
+# the picker whenever a span was marked, then — re-ticked — silently made that span inert.
+
+def test_setup_cannot_write_the_noise_reference(qapp, tmp_path):
+    from respmech.ui.screens.settings_screen import SettingsScreen
+    sc = SettingsScreen(AppState(synth_settings(str(tmp_path), noise=True, data_out=_OUT)))
+    assert not hasattr(sc, "noise_ref"), "the absolute-path writer is back"
+    assert not hasattr(sc, "noise_use_exp"), "the contradicting checkbox is back"
+
+
+def test_to_state_does_not_touch_the_reference_fields(qapp, tmp_path):
+    """to_state runs on every tab change, so a field it rewrote from a widget it no longer
+    has would be erased on the first switch away from Setup."""
+    from respmech.ui.screens.settings_screen import SettingsScreen
+    s = synth_settings(str(tmp_path), noise=True, data_out=_OUT)
+    sc = SettingsScreen(AppState(s))
+    for _ in range(3):
+        n = sc.to_state().processing.emg.noise
+    assert n.reference_file == "synth_case_A.csv"
+    assert n.reference_intervals == [[1.0, 5.0]]
+    assert n.use_expiration is False
+
+
+def test_setup_shows_which_part_of_the_reference_is_used(qapp, tmp_path):
+    from respmech.ui.screens.settings_screen import SettingsScreen
+    s = synth_settings(str(tmp_path), noise=True, data_out=_OUT)
+    sc = SettingsScreen(AppState(s))
+    assert "marked span" in sc.noise_summary.text()
+
+    n = sc.state.settings.processing.emg.noise
+    n.use_expiration, n.reference_intervals = True, []
+    sc._refresh_noise_summary()
+    assert "every expiration" in sc.noise_summary.text()
+
+    n.reference_file = None
+    sc._refresh_noise_summary()
+    assert "not set" in sc.noise_summary.text().lower(), "an empty reference must say so"
+
+
+def test_the_picker_writes_both_halves_together(qapp, tmp_path):
+    """They are alternatives in the core (`use_expiration or not reference_intervals`), so
+    leaving stale intervals behind would make the stored choice ambiguous on re-open."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path), noise=True, data_out=_OUT)
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files()
+    pv.file_combo.setCurrentText("synth_case_A.csv")
+
+    pv._apply_noise_expiration()
+    n = s.processing.emg.noise
+    assert n.use_expiration is True and n.reference_intervals == []
+
+    pv._apply_noise_reference(2.0, 4.0)
+    assert n.use_expiration is False and n.reference_intervals == [[2.0, 4.0]]
+    win.close()
