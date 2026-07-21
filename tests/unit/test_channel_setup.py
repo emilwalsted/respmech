@@ -196,7 +196,7 @@ def test_dialog_selected_mapping_reflects_choices(qapp):
     _set_role(dlg, 4, "flow"); _set_role(dlg, 5, "volume"); _set_role(dlg, 6, "poes")
     _set_role(dlg, 7, "pgas"); _set_role(dlg, 8, "pdi")
     _set_role(dlg, 1, "emg"); _set_role(dlg, 2, "emg"); _set_role(dlg, 3, "emg")
-    _set_role(dlg, 9, "entropy"); _set_role(dlg, 10, "entropy")
+    dlg._entropy_boxes[9].setChecked(True); dlg._entropy_boxes[10].setChecked(True)
     assert dlg.selected_mapping() == {"flow": 5, "volume": 6, "poes": 7, "pgas": 8,
                                       "pdi": 9, "emg": [2, 3, 4], "entropy": [10, 11]}
 
@@ -227,68 +227,86 @@ def _shared(extra=None):
 
 
 def test_emg_and_entropy_on_the_same_columns_both_survive_ok(qapp):
-    """The shipped example config's shape. This is the case that silently disabled EMG."""
+    """The shipped example config's shape (legacy/example.py:56-57). Before entropy had its
+    own control this silently returned emg=[], switching the EMG analysis off."""
     dlg = _dialog(initial={"flow": 5, "poes": 7, "pgas": 8, "pdi": 9,
                            "emg": [2, 3, 4], "entropy": [2, 3, 4]})
     m = dlg.selected_mapping()
-    assert m["emg"] == [2, 3, 4], "pressing OK switched the EMG analysis off"
-    assert m["entropy"] == [2, 3, 4]
+    assert m["emg"] == [2, 3, 4] and m["entropy"] == [2, 3, 4]
+    # and it is VISIBLE as both, not merely remembered
+    assert [dlg._role_of(i) for i in (1, 2, 3)] == ["emg"] * 3
+    assert all(dlg._entropy_on(i) for i in (1, 2, 3))
 
 
-def test_entropy_sharing_a_column_with_a_role_survives_open_and_ok(qapp):
+def test_entropy_sharing_a_column_with_a_role_is_shown_on_both(qapp):
     dlg = _shared()
-    assert dlg._role_of(4) == "flow"                 # the column still SHOWS the single role
+    assert dlg._role_of(4) == "flow"          # the dropdown still shows the exclusive role
+    assert dlg._entropy_on(4)                 # and the box shows the non-exclusive one
     m = dlg.selected_mapping()
-    assert m["flow"] == 5
-    assert m["entropy"] == [5], "pressing OK deleted the entropy assignment"
+    assert m["flow"] == 5 and m["entropy"] == [5]
 
 
-def test_kept_roles_are_announced_rather_than_kept_invisible(qapp):
+def test_ticking_entropy_is_independent_of_the_role_dropdown(qapp):
+    """Structurally orthogonal: no conflict to resolve, no cross-column rule to get wrong."""
+    dlg = _dialog(initial={"flow": 5, "poes": 7, "pgas": 8, "pdi": 9})
+    dlg._entropy_boxes[6].setChecked(True)               # entropy on the Poes column
+    assert dlg.selected_mapping() == {"flow": 5, "volume": None, "poes": 7, "pgas": 8,
+                                      "pdi": 9, "emg": [], "entropy": [7]}
+    _set_role(dlg, 6, "")                                # drop the role, keep the entropy
+    m = dlg.selected_mapping()
+    assert m["poes"] is None and m["entropy"] == [7]
+
+
+def test_entropy_can_now_be_removed_which_the_kept_role_memory_could_not(qapp):
+    """P1 preserved a hidden entropy assignment but gave no way to clear it. The box does."""
     dlg = _shared()
-    assert "entropy" in dlg.info.text().lower() and "#5" in dlg.info.text()
-
-
-def test_the_note_shows_while_a_required_role_is_still_missing(qapp):
-    """Regression: the missing-required branch replaced the whole label, hiding the note
-    during exactly the editing session in which the user might act on it."""
-    dlg = _dialog(initial={"flow": 5, "entropy": [5]})       # no poes/pgas/pdi yet
-    assert "Assign" in dlg.info.text()
-    assert "entropy" in dlg.info.text().lower()
-
-
-def test_a_kept_role_is_released_when_the_user_edits_that_column(qapp):
-    """Regression: an unconditional memory was a one-way ratchet — re-assigning column 5 to
-    Pgas silently carried entropy onto the Pgas channel, with no way to clear it."""
-    dlg = _shared()
-    _set_role(dlg, 4, "pgas")                        # column 5 is something else now
+    dlg._entropy_boxes[4].setChecked(False)
     assert dlg.selected_mapping()["entropy"] == []
-    assert "entropy" not in dlg.info.text().lower()
 
 
-def test_a_kept_role_is_not_duplicated_if_the_user_picks_it_explicitly(qapp):
+def test_entropy_does_not_follow_a_column_that_is_re_assigned(qapp):
+    """It stays on the column the user ticked, whatever role that column later takes."""
     dlg = _shared()
-    _set_role(dlg, 4, "entropy")
+    _set_role(dlg, 4, "pgas")
     m = dlg.selected_mapping()
-    assert m["entropy"] == [5] and m["flow"] is None
+    assert m["pgas"] == 5 and m["entropy"] == [5] and m["flow"] is None
 
 
-def test_entropy_on_its_own_column_is_untouched_by_the_kept_role_logic(qapp):
-    dlg = _shared({"entropy": [5, 11]})
-    assert dlg._role_of(10) == "entropy"
-    assert dlg.selected_mapping()["entropy"] == [5, 11]
+def test_an_entropy_only_column_is_not_drawn_as_unused(qapp):
+    dlg = _dialog(initial={"flow": 5, "poes": 7, "pgas": 8, "pdi": 9, "entropy": [11]})
+    assert dlg._role_of(10) == "" and dlg._entropy_on(10)
+    assert dlg._display_role(10) == "entropy"            # coloured as entropy, not muted grey
+    assert dlg.selected_mapping()["entropy"] == [11]
 
 
-def test_columns_beyond_this_files_width_are_kept_and_flagged(qapp):
-    """A 12-column file cannot show column 20, but OK must not delete it either."""
-    dlg = _dialog(initial={"flow": 5, "poes": 7, "pgas": 8, "pdi": 9, "entropy": [20]})
-    assert dlg.selected_mapping()["entropy"] == [20]
-    assert "#20" in dlg.info.text() and "beyond" in dlg.info.text()
+def test_entropy_only_columns_count_as_assigned(qapp):
+    dlg = _dialog(initial={"flow": 5, "poes": 7, "pgas": 8, "pdi": 9, "entropy": [11]})
+    assert "5 columns assigned" in dlg.info.text()
+
+
+def test_entropy_the_dialog_cannot_show_is_kept_and_flagged(qapp):
+    """Column 20 is past this file's width and column 1 is the time axis: neither can carry
+    a checkbox, but OK must not delete them either."""
+    dlg = _dialog(initial={"flow": 5, "poes": 7, "pgas": 8, "pdi": 9, "entropy": [1, 20]})
+    assert dlg.selected_mapping()["entropy"] == [1, 20]
+    assert "#1" in dlg.info.text() and "#20" in dlg.info.text()
+    assert "kept but not shown" in dlg.info.text()
+
+
+def test_emg_hidden_behind_a_single_role_is_still_kept_and_announced(qapp):
+    """EMG remains exclusive in the dropdown, so it still needs the memory that entropy no
+    longer does — including releasing it when the user edits that column."""
+    dlg = _dialog(initial={"flow": 5, "poes": 7, "pgas": 8, "pdi": 9, "emg": [5, 3]})
+    assert dlg.selected_mapping()["emg"] == [3, 5]
+    assert "EMG is also kept on column #5" in dlg.info.text()
+    _set_role(dlg, 4, "pgas")                            # column 5 is something else now
+    assert dlg.selected_mapping()["emg"] == [3]
 
 
 def test_nothing_is_kept_and_nothing_is_said_when_no_roles_collide(qapp):
     dlg = _dialog(initial={"flow": 5, "poes": 7, "pgas": 8, "pdi": 9, "entropy": [11]})
     assert dlg._shadowed == {} and dlg._hidden_roles() == {}
-    assert "entropy" not in dlg.info.text().lower()
+    assert "kept" not in dlg.info.text().lower()
 
 
 def test_two_single_roles_on_one_column_are_not_preserved(qapp):
