@@ -32,8 +32,13 @@ def _screen(qapp, tmp_path, entropy=(10, 11, 12)):
     return sc
 
 
+def _card(sc, title):
+    """By title, not by index — there is more than one conditional card now."""
+    return next(c for c, _pred in sc._cond_cards if c.title() == title)
+
+
 def _entropy_card(sc):
-    return sc._cond_cards[0][0]
+    return _card(sc, "Sample entropy")
 
 
 def test_the_card_follows_the_channel_assignment(qapp, tmp_path):
@@ -66,6 +71,17 @@ def test_an_unrelated_edit_does_not_un_hide_it(qapp, tmp_path):
     sc._on_field_changed()
     qapp.processEvents()
     assert not card.isVisible(), "an unrelated keystroke revealed an irrelevant card"
+
+
+def test_the_rms_card_follows_the_emg_assignment(qapp, tmp_path):
+    """Same mechanism, second user: the EMG RMS parameters mean nothing with no EMG channel."""
+    sc = _screen(qapp, tmp_path)
+    card = _card(sc, "EMG — RMS envelope")
+    assert card.isVisible()
+    sc.state.settings.input.channels.emg = []
+    sc._update_disclosure()
+    qapp.processEvents()
+    assert not card.isVisible()
 
 
 def test_the_conditional_card_is_not_in_the_staged_registry(qapp, tmp_path):
