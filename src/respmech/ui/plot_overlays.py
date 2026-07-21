@@ -42,9 +42,10 @@ def add_flow_background(plot_item, t, flow, pal, *, frac=0.8):
 
     ``t`` and ``flow`` are the FULL-LENGTH, untrimmed signals aligned sample-for-sample with
     the EMG the plot already holds (no trim offset — unlike breath overlays). The flow is
-    normalised into ``frac`` of the plot's current EMG y-band and centred, so its SHAPE (the
-    respiration cycle), not its amplitude, is what shows. Returns the created item, or None on
-    any no-op (missing/empty/degenerate flow, or an unexpected error)."""
+    scaled into ``frac`` of the plot's current EMG y-band and drawn about ZERO, so its SHAPE
+    (the respiration cycle), not its amplitude, is what shows, and zero flow always coincides
+    with the EMG's own zero line. Returns the created item, or None on any no-op
+    (missing/empty/degenerate flow, or an unexpected error)."""
     try:
         t = np.asarray(t, dtype=float)
         flow = np.asarray(flow, dtype=float)
@@ -60,12 +61,9 @@ def add_flow_background(plot_item, t, flow, pal, *, frac=0.8):
         fmax = float(np.max(flow[finite]))
         if not np.isfinite(fmin) or not np.isfinite(fmax) or fmax <= fmin:
             return None
-        norm = (flow - fmin) / (fmax - fmin)          # -> [0, 1]
-        norm[~finite] = 0.5                            # NaNs -> mid-band, drawn flat
-
-        # Map into a centred fraction of the EMG y-band. childrenBounds() reflects the EMG
-        # traces already plotted; guard the (common) degenerate/empty case with a symmetric
-        # fallback so a zero-trace panel still gets a sensible background scale.
+        # Scale into a fraction of the EMG y-band. childrenBounds() reflects the EMG traces
+        # already plotted; guard the (common) degenerate/empty case with a symmetric fallback
+        # so a zero-trace panel still gets a sensible background scale.
         ylo, yhi = -1.0, 1.0
         try:
             ybounds = plot_item.getViewBox().childrenBounds()[1]
@@ -74,15 +72,29 @@ def add_flow_background(plot_item, t, flow, pal, *, frac=0.8):
                 ylo, yhi = float(ybounds[0]), float(ybounds[1])
         except Exception:                              # noqa: BLE001
             pass
-        mid = 0.5 * (ylo + yhi)
-        half = 0.5 * (yhi - ylo) * float(frac)
+
+        # Both the band and the flow are referenced to ZERO, deliberately.
+        #
+        # Using the MIDPOINT of the EMG's own min/max instead would only equal zero when the
+        # traces happen to be symmetric, and one startup transient is enough to break that:
+        # measured on real recordings the midpoint sat 20 % of the half-band BELOW zero on one
+        # file and 16 % ABOVE on another, so the same respiration silhouette was drawn at a
+        # different height in each -- and the two files could not be compared by eye.
+        #
+        # Min-max normalising the flow has the same flaw one level down: it puts zero flow at
+        # (0-fmin)/(fmax-fmin), i.e. wherever the larger of the inspiratory/expiratory peaks
+        # happens to be (0.54 and 0.52 on those two files, not 0.5). Scaling by the larger
+        # absolute peak keeps the shape and pins zero flow to the zero line, so inspiration
+        # and expiration read the right way round against the EMG.
+        half = max(abs(ylo), abs(yhi)) * float(frac)
         if not np.isfinite(half) or half <= 0:
             half = 1.0
-        y = mid + (2.0 * norm - 1.0) * half
+        scale = max(abs(fmin), abs(fmax))              # > 0: fmax > fmin was checked above
+        y = np.where(finite, flow, 0.0) / scale * half  # NaNs -> the zero line, drawn flat
 
         fill_rgba, line_rgba = _flow_colours(pal)
         item = pg.PlotDataItem(t, y, pen=pg.mkPen(line_rgba, width=1),
-                               fillLevel=mid, fillBrush=pg.mkBrush(fill_rgba))
+                               fillLevel=0.0, fillBrush=pg.mkBrush(fill_rgba))
         item.setZValue(_FLOW_Z)
         # ignoreBounds=True: the flow must never widen the EMG autorange.
         plot_item.addItem(item, ignoreBounds=True)
