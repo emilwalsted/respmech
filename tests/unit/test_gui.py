@@ -141,11 +141,20 @@ def test_reactive_file_list_and_noise_gating(qapp, tmp_path):
     assert pv.file_combo.count() == 1
     sc.in_files.setText("synth_case_*.csv"); sc._on_inputs_changed()
     assert pv.file_combo.count() == 2
-    # noise on but no reference -> the noise-window options are disabled + a hint
+    # noise on but no reference -> the noise-window options are disabled + a hint.
+    # ECG removal has to be on first: it is the earlier prerequisite, and while it is off
+    # the button that PICKS a reference is itself disabled, so asking for one would send
+    # the user after something they cannot do.
     sc.remove_noise.setChecked(True); sc.noise_ref.setText(""); sc._on_field_changed()
+    pv.state.settings.processing.emg.remove_ecg = True
     pv.file_combo.setCurrentIndex(0); pv._update_actions()
     assert pv.noise_opts.isEnabled() is False
     assert "reference" in pv.status.text().lower()
+    # ...and with ECG removal off, that prerequisite is what the user is told instead
+    pv.state.settings.processing.emg.remove_ecg = False
+    pv._update_actions()
+    assert "remove ecg" in pv.status.text().lower()
+    pv.state.settings.processing.emg.remove_ecg = True     # back to the prerequisite met
     # setting a reference enables them
     sc.noise_ref.setText("synth_case_A.csv"); sc._on_field_changed(); pv._update_actions()
     assert pv.noise_opts.isEnabled() is True

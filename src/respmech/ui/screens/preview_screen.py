@@ -79,6 +79,12 @@ _TAB_MECH = "Mechanics"
 _TAB_ECG = "› EMG – ECG reduction"
 _TAB_NOISE = "› EMG – noise reduction"
 
+#: why the noise controls are inert until ECG removal is on — one wording, used by both the
+#: tooltip and the status line so they cannot drift apart
+NEEDS_ECG_HINT = ("Turn on 'Remove ECG' first: the noise profile is measured on the "
+                  "ECG-cleaned signal, so with the heartbeat still in the EMG it would be "
+                  "modelled as steady background noise — which it is not.")
+
 _PANELS = {"mech": ["channels", "raw"], "batch": ["table", "campbell"],
            "ecg": ["ecg_capture", "ecg_stack"],
            "emg_all": ["result"], "emg_detail": ["detail", "detail_psd"], "noise": ["fidelity"]}
@@ -923,6 +929,10 @@ class PreviewScreen(QWidget):
         e.ecg_window_s = float(self.ecg_window.value())
         e.detect_channel = max(0, self.ecg_capture_channel.currentIndex())
         self.settings_edited.emit()      # ECG params land in the .toml -> mark dirty
+        # The noise controls are gated on ECG removal, and that gate lives one strip away —
+        # without this it stays stale until some other event happens to refresh it, leaving
+        # them greyed out immediately after the user has turned Remove ECG on.
+        self._update_actions(status=False)
         # ECG removal feeds the EMG/noise panels too, so recompute those alongside this tab.
         self._request_autorun({"ecg", "emg_all", "emg_detail", "noise"})
 
@@ -1254,17 +1264,27 @@ class PreviewScreen(QWidget):
         emg = self.state.settings.processing.emg
         noise_on, ref = emg.noise.enabled, emg.noise.reference_file
         has_emg = bool(self.state.settings.input.channels.emg)
+        # Noise reduction runs on whatever the ECG stage produced (core/pipeline _process_emg),
+        # and its reference clip is ECG-cleaned too. It is not a hard requirement — the core
+        # will happily denoise a raw signal — but the profile would then model the cardiac
+        # artefact as steady background noise, which it is not: it is large and periodic. So
+        # the controls stay visible and explain themselves rather than silently misbehaving.
+        ecg_on = emg.remove_ecg
         jr = self._job_running
         self.btn_refresh_all.setEnabled(has_file)
         self.emg_channel.setEnabled(has_emg)
-        self.btn_set_noise.setEnabled(has_file and has_emg)
+        self.btn_set_noise.setEnabled(has_file and has_emg and ecg_on)
         # noise-window options only active with a reference file (Emil's requirement)
-        self.noise_opts.setEnabled(bool(has_emg and noise_on and ref))
+        self.noise_opts.setEnabled(bool(has_emg and ecg_on and noise_on and ref))
+        for w in (self.btn_set_noise, self.noise_opts):
+            w.setToolTip("" if ecg_on else NEEDS_ECG_HINT)
         if noise_on:
-            self.noise_prop.setEnabled(bool(ref) and not self.noise_auto.isChecked())
+            self.noise_prop.setEnabled(bool(ref) and ecg_on and not self.noise_auto.isChecked())
         if not status:
             return
-        if noise_on and not ref:
+        if has_emg and noise_on and not ecg_on:
+            self._set_status(NEEDS_ECG_HINT)
+        elif noise_on and not ref:
             self._set_status("Noise reduction is on — pick a reference file (Settings) or "
                              "click 'Set noise profile' to mark a rest span in this file.")
         elif has_file and not ok:
