@@ -61,6 +61,14 @@ def build_breath_table(file, breaths, settings):
             dfmech = dfmech.join(_getbreathdata(breath, "intemg_insp", "integral_emg_insp_col_", ['integralemg_insp_max', 'integralemg_insp_mean'], emgcols), how="outer", sort=False)
             dfmech = dfmech.join(_getbreathdata(breath, "intemg_exp", "integral_emg_exp_col_", ['integralemg_exp_max', 'integralemg_exp_mean'], emgcols), how="outer", sort=False)
 
+            # Opt-in cardiac-gated peak EMG: extra columns alongside the existing ones, never
+            # in place of them. Guarded on the setting, so with the feature off the sheet is
+            # byte-identical to before.
+            if getattr(settings.processing.emg, "robust_peak", None) and settings.processing.emg.robust_peak.enabled:
+                dfmech = dfmech.join(_getbreathdata(breath, "rms_gated", "rms_gated_col_", ['rms_gated_max', 'rms_gated_mean'], emgcols), how="outer", sort=False)
+                dfmech = dfmech.join(_getbreathdata(breath, "rms_gated_insp", "rms_gated_insp_col_", ['rms_gated_insp_max', 'rms_gated_insp_mean'], emgcols), how="outer", sort=False)
+                dfmech = dfmech.join(_getbreathdata(breath, "rms_gated_exp", "rms_gated_exp_col_", ['rms_gated_exp_max', 'rms_gated_exp_mean'], emgcols), how="outer", sort=False)
+
         if len(entcols) > 0:
             dfmech = dfmech.join(_getbreathdata(breath, "entropy", "sample_entropy_col_", ['sample_entropy_max', 'sample_entropy_min', 'sample_entropy_mean'], entcols), how="outer", sort=False)
             dfmech = dfmech.join(_getbreathdata(breath, "entropy_insp", "sample_entropy_insp_col_", ['sample_entropy_insp_max', 'sample_entropy_insp_min', 'sample_entropy_insp_mean'], entcols), how="outer", sort=False)

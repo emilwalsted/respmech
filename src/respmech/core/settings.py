@@ -120,6 +120,43 @@ class NoiseSettings:
 
 
 @dataclass
+class RobustPeakSettings:
+    """Opt-in cardiac-gated peak EMG.
+
+    The shipped per-breath EMG number is the MAX of the rolling RMS. On strongly
+    cardiac-coupled recordings that maximum usually sits on a residual heartbeat rather
+    than on diaphragm activity, because averaged-template subtraction leaves a sharp
+    beat-to-beat residual that a maximum statistic seeks out. Gating blanks a window
+    around every detected R-peak and takes the maximum of what survives, so the number is
+    read from cardiac-free signal.
+
+    Losing samples is not a cost here: EMG is reported relative to the patient's own
+    maximum, so a transformation applied identically to every breath (and to the
+    normalising maximum) cancels in the ratio. What does cost is incomplete R-peak
+    detection — an undetected beat is neither subtracted nor blanked, so the gate discards
+    the honest samples and leaves the missed beat exposed. Hence the quality guards below;
+    when any of them trips the gated columns are NaN rather than quietly wrong.
+
+    Off by default: enabling it ADDS columns and never changes the existing ones.
+    """
+    enabled: bool = False
+    # Half-width of the blanked window around each R-peak. The cardiac excursion in the
+    # rolling RMS is about (rms_window_s + QRS duration) wide; 120 ms covers it with margin.
+    gate_half_width_s: float = 0.120
+    # Quality guards. A phase whose surviving fraction or longest cardiac-free island falls
+    # below these is not measurable and reports NaN.
+    min_survival: float = 0.40
+    min_island_s: float = 0.20
+    # Detection guards, applied per file. An RR interval longer than long_rr_factor x the
+    # median means a beat was missed; more than max_long_rr_frac of such intervals makes the
+    # peak set too incomplete to gate on. hr_ceiling_margin flags a heart rate approaching
+    # the detector's own refractory ceiling (60 / ecg_min_distance_s), where misses begin.
+    long_rr_factor: float = 1.6
+    max_long_rr_frac: float = 0.02
+    hr_ceiling_margin: float = 0.10
+
+
+@dataclass
 class EmgSettings:
     rms_window_s: float = 0.050
     remove_ecg: bool = False
@@ -142,6 +179,8 @@ class EmgSettings:
     noise_profile: list[Any] = field(default_factory=list)
     # new shared-profile noise reduction (canonical):
     noise: NoiseSettings = field(default_factory=NoiseSettings)
+    # opt-in cardiac-gated peak EMG (adds columns; default off -> existing output unchanged)
+    robust_peak: RobustPeakSettings = field(default_factory=RobustPeakSettings)
 
 
 @dataclass

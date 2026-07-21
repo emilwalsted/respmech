@@ -210,6 +210,16 @@ Per scenario: Zeros/Trimming changed **only PTP**; Resampling and H5/H6 changed 
 (re-run reproduces with zero diff). The synthetic golden is unchanged (noise off
 there).
 
+## 4b. Downstream: the peak statistic
+
+This document governs the ECG **removal** stage. A later study established that the residual
+that survives removal is dominated by beat-to-beat *shape* variation, and that the shipped
+per-breath statistic — `max` of the rolling RMS — lands on that residual in ~85–90 % of
+strongly-coupled breath-channels. See
+[`CARDIAC_GATED_PEAK_EMG.md`](CARDIAC_GATED_PEAK_EMG.md) for the measurements, the opt-in
+cardiac-gated statistic (`processing.emg.robust_peak`), and the list of approaches that were
+tried and rejected — including further template refinements, so they are not re-attempted here.
+
 ## 5. Status
 
 **Done:** the `n_fft`/`win_length` bug fix (fixed STFT params); the shared,
