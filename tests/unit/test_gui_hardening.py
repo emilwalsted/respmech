@@ -151,6 +151,13 @@ def test_settings_widgets_expose_varpath_and_description_on_hover(qapp, tmp_path
         sc.noise_ref: "processing.emg.noise.reference_file",
         sc.out_folder: "output.folder",
         sc.integrate: "processing.volume.integrate_from_flow",
+        sc.emg_gated: "processing.emg.robust_peak.enabled",
+        sc.emg_gate_width: "processing.emg.robust_peak.gate_half_width_s",
+        sc.rp_min_survival: "processing.emg.robust_peak.min_survival",
+        sc.rp_min_island: "processing.emg.robust_peak.min_island_s",
+        sc.rp_long_rr: "processing.emg.robust_peak.long_rr_factor",
+        sc.rp_max_long_rr: "processing.emg.robust_peak.max_long_rr_frac",
+        sc.rp_hr_margin: "processing.emg.robust_peak.hr_ceiling_margin",
     }
     for w, var in checks.items():
         tip = w.toolTip()
@@ -160,6 +167,29 @@ def test_settings_widgets_expose_varpath_and_description_on_hover(qapp, tmp_path
     labels = {la.text() for la in sc.findChildren(QLabel)}
     assert "Sampling frequency" in labels
     assert "input.format.sampling_frequency" not in labels
+
+
+def test_every_settings_tooltip_names_a_real_settings_field(qapp, tmp_path):
+    """The dict above is hand-maintained, so a widget added without an entry is unchecked and
+    a typo in its dotted path ships silently. This resolves whatever path each tooltip claims
+    against the live Settings object, which covers every widget automatically."""
+    import re
+    from PySide6.QtWidgets import QAbstractSpinBox, QCheckBox, QComboBox, QLineEdit
+    from respmech.ui.screens.settings_screen import SettingsScreen
+    sc = SettingsScreen(AppState(_settings(str(tmp_path))))
+    seen = 0
+    widgets = [w for cls in (QAbstractSpinBox, QCheckBox, QComboBox, QLineEdit)
+               for w in sc.findChildren(cls)]     # PySide6 findChildren takes one type only
+    for w in widgets:
+        m = re.search(r"<b>([a-z_]+(?:\.[a-z_0-9]+)+)</b>", w.toolTip() or "")
+        if not m:
+            continue
+        obj = sc.state.settings
+        for part in m.group(1).split("."):
+            assert hasattr(obj, part), f"{m.group(1)} does not resolve: no '{part}' on {obj!r}"
+            obj = getattr(obj, part)
+        seen += 1
+    assert seen > 20, f"only {seen} tooltips carried a settings path — the regex likely broke"
 
 
 def test_preview_noise_params_expose_varpath_on_hover(qapp, tmp_path):
