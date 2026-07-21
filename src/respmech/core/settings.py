@@ -175,7 +175,6 @@ class EmgSettings:
     plot_yscale: list[float] = field(default_factory=lambda: [-0.1, 0.1])
     # legacy filename-keyed noise-profile intervals (kept for migration):
     # [[file, source_file_or_empty, [t0,t1]], ...]
-    noise_profile: list[Any] = field(default_factory=list)
     # new shared-profile noise reduction (canonical):
     noise: NoiseSettings = field(default_factory=NoiseSettings)
     # opt-in cardiac-gated peak EMG (adds columns; default off -> existing output unchanged)

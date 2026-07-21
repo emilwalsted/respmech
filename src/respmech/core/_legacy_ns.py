@@ -82,7 +82,6 @@ def to_legacy_ns(s: Settings) -> SimpleNamespace:
                 minwidth=emg.ecg_min_width_s,
                 windowsize=emg.ecg_window_s,
                 outlierrmssdlimit=emg.outlier_rms_sd_limit,
-                noise_profile=emg.noise_profile,
                 save_sound=emg.save_sound,
                 emgplotyscale=emg.plot_yscale,
                 # passed through as the dataclass — read-only, and keeping one name avoids

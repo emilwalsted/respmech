@@ -397,7 +397,7 @@ class SettingsScreen(QWidget):
         self._stage_cards = [
             [gin],                                   # 0: Input (always shown)
             [gout],                                  # 1: Output (after Input is valid)
-            [gch, gpr, gemg, gecg, gns, gsave],  # 2: the rest (after Output is valid)
+            [gch, gpr, gecg, gns, gsave],  # 2: the rest (after Output is valid)
         ]
         # Cards whose relevance depends on the analysis itself. Deliberately NOT in
         # _stage_cards: that loop forces every registered card visible outside "new" mode, so
@@ -405,6 +405,7 @@ class SettingsScreen(QWidget):
         # test_startup_flow's "open mode reveals everything" walk would fail on a default
         # AppState. Kept separate, ANDed in its own pass.
         self._cond_cards = [
+            (gemg, lambda: bool(self.state.settings.input.channels.emg)),
             (gent, lambda: bool(self.state.settings.input.channels.entropy)),
         ]
         self._stage_gate = [self._input_stage_ok, self._output_stage_ok]

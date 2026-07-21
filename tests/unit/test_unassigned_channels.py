@@ -219,3 +219,29 @@ def test_recovering_from_invalid_settings_rebuilds_every_panel(qapp, tmp_path):
     assert pv._pending_kinds == set(_AUTO_KINDS), pv._pending_kinds
     pv.shutdown()
     win.close()
+
+
+def test_the_ecg_capture_channel_cannot_point_past_the_assigned_emg(qapp, tmp_path):
+    """detect_channel is an INDEX into input.channels.emg, not a column number, so
+    re-assigning the EMG channels re-points it — and a shorter list points it past the end.
+    The combo clamped for display only, so the screen showed one electrode while the model
+    held an index the core would crash on (emgcols[:, detect]). Measured: index 2 survived a
+    re-assignment to two channels."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.state import AppState
+    s = synth_settings(str(tmp_path), data_out={"saveaveragedata": True,
+                                                "savebreathbybreathdata": True})
+    s.processing.emg.remove_ecg = True
+    s.processing.emg.detect_channel = 2            # the third of three EMG channels
+    win = MainWindow(AppState(s))
+    win.settings_screen._apply_channel_mapping(
+        {"flow": 5, "volume": 6, "poes": 7, "pgas": 8, "pdi": 9, "emg": [2, 3], "entropy": []})
+    win.preview_screen.sync_from_settings()
+    qapp.processEvents()
+
+    e, cols = s.processing.emg, s.input.channels.emg
+    assert 0 <= e.detect_channel < len(cols), "the capture channel points past the EMG list"
+    # and the user is told, because which electrode the heartbeats come from is a scientific
+    # choice rather than a detail to repair quietly
+    assert "capture channel" in win.preview_screen.status.text().lower()
+    win.close()

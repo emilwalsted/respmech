@@ -59,7 +59,9 @@ def test_migrate_maps_and_normalises():
     assert s.processing.exclude_breaths[0].breaths == [1, 2, 4]
     assert s.processing.breath_counts[0].count == 6
     assert s.processing.emg.outlier_rms_sd_limit == 3
-    assert s.processing.emg.noise_profile == [["a.txt", "", [1.0, 1.1]]]
+    # the legacy per-file noise_profile is consumed by the migrator to build the shared
+    # noise table (below) and no longer kept as an inert field on Settings
+    assert not hasattr(s.processing.emg, "noise_profile")
 
 
 def test_noise_mapping_and_toml_round_trip(tmp_path):
