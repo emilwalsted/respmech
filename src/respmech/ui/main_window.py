@@ -60,6 +60,10 @@ class MainWindow(QMainWindow):
         self._i_preview = self.tabs.addTab(self.preview_screen, "Preview && QC")
         self._i_run = self.tabs.addTab(self.run_screen, "Run && results")
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        # A wheel that starts on the Setup form and drifts up onto the tab bar would
+        # otherwise change tab — landing on Preview, which schedules work.
+        from respmech.ui import wheel as _wheel
+        self._wheel_guard = _wheel.swallow_wheel(extra=[self.tabs.tabBar()], parent=self)
 
         central = QWidget()
         col = QVBoxLayout(central)

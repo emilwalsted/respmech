@@ -47,6 +47,7 @@ from respmech.core.settings import ExcludeEntry
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
 from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
+from respmech.ui import wheel as _wheel
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
                                   stage_ecg_reduction, stage_mechanics_preview,
@@ -541,6 +542,14 @@ class PreviewScreen(QWidget):
         self._emg_tab = self._build_emg_tab()
         self.subtabs.addTab(self._mech_tab, _TAB_MECH)
         root.addWidget(self.subtabs, 1)
+
+        # The control strips sit directly above wheel-zoomable plots, so an overshoot while
+        # zooming used to land on a spin box and step it — and every ECG/noise parameter here
+        # writes straight into the analysis, marks it modified and schedules a recompute.
+        # file_combo was worse still: one notch silently switched the previewed recording.
+        # Nothing on this screen scrolls, so the wheel should do nothing at all.
+        self._wheel_guard = _wheel.swallow_wheel(
+            root=self, extra=[self.subtabs.tabBar()])
 
         # one spinner overlay per panel (each fed by exactly one job kind)
         self._overlays = {

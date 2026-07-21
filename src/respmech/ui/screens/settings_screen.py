@@ -23,6 +23,7 @@ from respmech.ui.dialogs import open_error_dialog, short_error
 from respmech.ui.help_text import tooltip as _tip
 from respmech.ui.startup_dialog import LEGACY_FILTER, OPEN_FILTER, TOML_FILTER
 from respmech.ui.validation import matching_files
+from respmech.ui import wheel as _wheel
 
 # the guided-flow default file mask (multi-pattern; narrowed to the found extension on the
 # channel-setup OK so the single-pattern core batch runner still finds the files)
@@ -451,6 +452,15 @@ class SettingsScreen(QWidget):
         root.addStretch(1)
 
         scroll.setWidget(content)
+        # Scrolling the form must not edit it. Every spin box and combo here accepts the
+        # wheel and steps its own value, so scrolling past one silently changed a setting,
+        # marked the analysis modified and scheduled a recompute — a wheel over "EMG RMS
+        # window" moved it from 0.05 s to 0.02 s, which changes every reported EMG number.
+        self._wheel_guard = _wheel.guard_scroll_area(scroll)
+        # The breath-count box has its own scrollbar, so it was a dead patch in the middle of
+        # the form: it ate the wheel even when already at its own end. Let it scroll itself
+        # first, then hand the wheel out.
+        self._wheel_chain = _wheel.chain_nested(scroll, self.breath_counts_edit)
         outer.addWidget(scroll, 1)
 
         # Live QC strip, pinned below the (scrolling) form: every current caution at a
