@@ -20,69 +20,19 @@ import numpy as np
 from PySide6.QtWidgets import (QComboBox, QDialog, QFrame, QHBoxLayout, QLabel,
                                QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
-import pyqtgraph as pg
-
 from respmech.ui import wheel as _wheel
+from respmech.ui.column_stack import (REQUIRED, REQUIRED_LABELS, ROLES, SINGLE, ColumnStack,
+                                      as_2d, name_suffix as _name_suffix,
+                                      plot_palette, role_color)
 
 try:
     from respmech.ui import theme as _theme
 except Exception:  # pragma: no cover
     _theme = None
 
-# role key -> menu label. "" is the (unused) sentinel and must stay first.
-_ROLES = [
-    ("", "(unused)"),
-    ("flow", "Flow"),
-    ("volume", "Volume"),
-    ("poes", "Poes — oesophageal pressure"),
-    ("pgas", "Pgas — gastric pressure"),
-    ("pdi", "Pdi — transdiaphragmatic"),
-    ("emg", "EMG — diaphragm"),
-    ("entropy", "Entropy"),
-]
-# roles that may be assigned to at most one column (the multi-column roles are emg/entropy)
-_SINGLE = {"flow", "volume", "poes", "pgas", "pdi"}
-# roles the core analysis always requires (volume is optional — it can be integrated from
-# flow instead; emg/entropy are optional). OK stays disabled until each is assigned, so a
-# partial mapping can never silently leave a required channel pointing at the wrong column.
-_REQUIRED = ("flow", "poes", "pgas", "pdi")
-_REQUIRED_LABELS = {"flow": "Flow", "poes": "Poes", "pgas": "Pgas", "pdi": "Pdi"}
-
-
-def _plot_pal():
-    if _theme is not None:
-        try:
-            return _theme.plot_palette()
-        except Exception:  # pragma: no cover - defensive
-            pass
-    return {"bg": "#FCFDFE", "fg": (51, 64, 77),
-            "channels": {"flow": (44, 110, 155), "volume": (31, 122, 77),
-                         "poes": (180, 50, 42), "pgas": (183, 121, 31), "pdi": (125, 91, 166)},
-            "emg_cycle": [(44, 110, 155), (180, 50, 42), (31, 122, 77), (183, 121, 31),
-                          (125, 91, 166), (14, 124, 123), (180, 80, 122), (92, 107, 122)],
-            "separator": (150, 165, 180)}
-
-
-def _as_2d(matrix):
-    """A raw matrix as a 2-D ``(samples, columns)`` float array (a lone column -> one col)."""
-    arr = np.asarray(matrix, dtype=float)
-    if arr.ndim == 1:
-        arr = arr[:, None]
-    return arr
-
-
-def _role_color(pal, role):
-    """The trace colour for a role: its channel colour, a distinct hue for EMG/entropy,
-    or a muted grey for unused."""
-    if role in ("flow", "volume", "poes", "pgas", "pdi"):
-        return pal["channels"][role]
-    cyc = pal["emg_cycle"]
-    if role == "emg":
-        return cyc[5 % len(cyc)]
-    if role == "entropy":
-        return cyc[6 % len(cyc)]
-    return pal["separator"]                     # unused -> de-emphasised
-
+# kept as module-level aliases: the tests and _index_of_role read them by these names
+_ROLES, _SINGLE, _REQUIRED, _REQUIRED_LABELS = ROLES, SINGLE, REQUIRED, REQUIRED_LABELS
+_as_2d, _role_color, _plot_pal = as_2d, role_color, plot_palette   # legacy aliases
 
 class ChannelSetupDialog(QDialog):
     """Assign each raw data column to a physiological role, across a batch of files.
@@ -103,8 +53,6 @@ class ChannelSetupDialog(QDialog):
         self._fs = fs or 1.0
         self._cache = {}
         self._file_idx = 0
-        pal = _plot_pal()
-        self._pal = pal
 
         # The first file is the default, but a file can pass the cheap column probe and
         # still fail a full read (e.g. a ragged row) — fall forward to the first file that
@@ -163,61 +111,15 @@ class ChannelSetupDialog(QDialog):
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         self._scroll = scroll               # eventFilter redirects stray wheel events here
-        content = QWidget(); rows = QVBoxLayout(content)
-        rows.setContentsMargins(0, 0, 0, 0); rows.setSpacing(10)
-
-        t = np.arange(matrix0.shape[0], dtype=float) / self._fs
-        self._combos, self._plots, self._curves, self._headers = [], [], [], []
-        prev = None
-        for i in range(self._ncols):
-            col = QWidget(); cv = QVBoxLayout(col)
-            cv.setContentsMargins(0, 0, 0, 0); cv.setSpacing(2)
-            head = QHBoxLayout(); head.setContentsMargins(2, 0, 2, 0); head.setSpacing(8)
-            lab = QLabel(f"Column {i + 1}" + self._name_suffix(i))
-            head.addWidget(lab)
-            if i == 0:
-                # the first column is always the time axis — shown for reference but not
-                # assignable (the analysis derives time from the sampling frequency)
-                combo = None
-                role0 = ""
-                note = QLabel("time axis — not assignable"); note.setProperty("status", "muted")
-                head.addWidget(note)
-            else:
-                combo = QComboBox()
-                for _key, label in _ROLES:
-                    combo.addItem(label)
-                role0 = preselect.get(i, "")
-                combo.setCurrentIndex(self._index_of_role(role0))
-                combo.currentIndexChanged.connect(lambda _idx, ci=i: self._on_role_changed(ci))
-                head.addWidget(combo)
-            head.addStretch(1)
-            cv.addLayout(head)
-
-            plot = pg.PlotWidget()
-            plot.setBackground(pal["bg"])
-            plot.setFixedHeight(74)
-            plot.setMenuEnabled(False)
-            # These are read-only previews of what each column contains: the scale is the
-            # information, so it must not be pannable, zoomable or resettable by accident.
-            plot.getViewBox().setMouseEnabled(x=False, y=False)
-            plot.hideButtons()                          # no auto-range 'A' in the corner
-            if _theme is not None:
-                _theme.align_left_axis(plot)       # stacked column previews share one left margin
-            plot.getAxis("bottom").setStyle(showValues=(i == self._ncols - 1))
-            y = matrix0[:, i]
-            curve = plot.plot(t[:len(y)], y, pen=pg.mkPen(_role_color(pal, role0),
-                                                          width=1), connect="finite")
-            if i == self._ncols - 1:
-                plot.setLabel("bottom", "Time (s)")
-            if prev is not None:
-                plot.setXLink(prev)
-            prev = plot
-            cv.addWidget(plot)
-            rows.addWidget(col)
-            self._combos.append(combo); self._plots.append(plot)
-            self._curves.append(curve); self._headers.append(lab)
-
-        scroll.setWidget(content)
+        # The stack itself is shared with the Setup screen's read-only channel summary
+        # (ui/column_stack.py); the only dialog-specific part is what goes in each header.
+        self._combos = []
+        self._preselect = preselect
+        self._stack = ColumnStack(self._fs, header_factory=self._build_header)
+        self._stack.build(matrix0, self._names, roles=preselect)
+        self._plots, self._curves, self._headers = (self._stack.plots, self._stack.curves,
+                                                    self._stack.headers)
+        scroll.setWidget(self._stack)
         # The wheel belongs to the column list: without this a role dropdown steps its own
         # selection (silently re-assigning a channel) and a preview graph zooms.
         self._wheel_guard = _wheel.guard_scroll_area(
@@ -244,6 +146,28 @@ class ChannelSetupDialog(QDialog):
         v.addLayout(foot)
         self._refresh_info()
 
+    @property
+    def _pal(self):
+        """The plot palette actually in use — owned by the column stack."""
+        return self._stack.pal
+
+    def _build_header(self, i, head):
+        """One header row: the time column is shown for reference but not assignable (the
+        analysis derives time from the sampling frequency); every other column gets a role
+        dropdown."""
+        if i == 0:
+            self._combos.append(None)
+            note = QLabel("time axis — not assignable"); note.setProperty("status", "muted")
+            head.addWidget(note)
+            return
+        combo = QComboBox()
+        for _key, label in _ROLES:
+            combo.addItem(label)
+        combo.setCurrentIndex(self._index_of_role(self._preselect.get(i, "")))
+        combo.currentIndexChanged.connect(lambda _idx, ci=i: self._on_role_changed(ci))
+        self._combos.append(combo)
+        head.addWidget(combo)
+
     # -- file loading / switching -------------------------------------------
     def _get(self, path):
         if path not in self._cache:
@@ -267,20 +191,10 @@ class ChannelSetupDialog(QDialog):
         self._file_idx = idx
         self.file_combo.setToolTip(self.file_combo.currentText())
         self._names = list(names)
-        t = np.arange(matrix.shape[0], dtype=float) / self._fs
-        for i in range(self._ncols):
-            y = matrix[:, i] if i < matrix.shape[1] else np.full(matrix.shape[0], np.nan)
-            self._curves[i].setData(t[:len(y)], y)
-            self._plots[i].enableAutoRange()
-            self._headers[i].setText(f"Column {i + 1}" + self._name_suffix(i))
+        self._stack.set_data(matrix, names)
 
     def _name_suffix(self, i):
-        """The source header for column i, shown after the generic index (e.g. ' · flow'),
-        or '' when the file had no usable name for it."""
-        name = self._names[i].strip() if i < len(self._names) else ""
-        if not name or name.startswith("__") or name.lower().startswith("unnamed"):
-            return ""
-        return f"  ·  {name}"
+        return _name_suffix(self._names, i)
 
     # -- mapping <-> dropdown state -----------------------------------------
     def _roles_from_mapping(self, m):
@@ -358,8 +272,7 @@ class ChannelSetupDialog(QDialog):
         self._refresh_info()
 
     def _recolor(self, col_index):
-        role = self._role_of(col_index)
-        self._curves[col_index].setPen(pg.mkPen(_role_color(self._pal, role), width=1))
+        self._stack.set_role(col_index, self._role_of(col_index))
 
     def _missing_required(self):
         """Required single roles (flow/poes/pgas/pdi) not yet assigned to any column."""
