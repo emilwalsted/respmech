@@ -42,6 +42,26 @@ ORDER = ("flow", "volume", "poes", "pgas", "pdi", "emg", "entropy")
 
 EMPTY_TEXT = "No channels assigned yet — click ‘Assign channels from data…’."
 
+#: the previews here are a readout, not a working surface, so they are shorter than the
+#: dialog's. Measured floor: below this the y tick labels of the wider-range channels clip
+#: (48 loses Poes's end labels, 50 still clips Volume's top), so this is as compact as the
+#: axis text allows rather than an aesthetic pick.
+SUMMARY_ROW_HEIGHT = 56
+
+
+def roles_of(channels, col):
+    """Every role a 1-based column carries, in analysis order. Usually one, but entropy is
+    non-exclusive, so a column can be both."""
+    out = []
+    for role in ORDER:
+        value = getattr(channels, role, None)
+        if role in ("emg", "entropy"):
+            if col in {int(c) for c in (value or [])}:
+                out.append(role)
+        elif value and int(value) == col:
+            out.append(role)
+    return out
+
 
 def _swatch(pal, role):
     dot = QLabel("●")
@@ -136,16 +156,16 @@ class ChannelSummary(QWidget):
             self.rows.append(lab)
 
         if matrix is not None:
-            roles = {}
-            for role in ORDER:
-                if role in ("emg", "entropy"):
-                    for c in (getattr(channels, role, None) or []):
-                        roles.setdefault(int(c) - 1, role)
-                elif getattr(channels, role, None):
-                    roles.setdefault(int(getattr(channels, role)) - 1, role)
+            roles, prefixes = {}, {}
+            for col in cols:
+                carried = roles_of(channels, col)
+                roles[col - 1] = carried[0] if carried else ""
+                # name the graph by what it IS, ahead of where it sits, so a reader does not
+                # have to carry the legend above in their head
+                prefixes[col - 1] = " + ".join(ROLE_NAMES[r] for r in carried)
             shown = [c - 1 for c in cols]
-            self.stack = ColumnStack(fs, columns=shown)
-            self.stack.build(matrix, names or [], roles=roles)
+            self.stack = ColumnStack(fs, columns=shown, row_height=SUMMARY_ROW_HEIGHT)
+            self.stack.build(matrix, names or [], roles=roles, prefixes=prefixes)
             self._box.addWidget(self.stack)
         return self
 

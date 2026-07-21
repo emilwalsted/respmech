@@ -58,6 +58,9 @@ REQUIRED_LABELS = {"flow": "Flow", "poes": "Poes", "pgas": "Pgas", "pdi": "Pdi"}
 
 #: height of one column preview, in pixels
 ROW_HEIGHT = 74
+#: the last row additionally carries the tick values and the "Time (s)" label, which eat into
+#: the plot area — without this its y labels are clipped at compact row heights
+BOTTOM_AXIS_EXTRA = 28
 
 
 def plot_palette():
@@ -116,11 +119,14 @@ class ColumnStack(QWidget):
     pannable, zoomable or resettable by accident.
     """
 
-    def __init__(self, fs, columns=None, header_factory=None, parent=None):
+    def __init__(self, fs, columns=None, header_factory=None, row_height=ROW_HEIGHT,
+                 parent=None):
         super().__init__(parent)
         self._fs = fs or 1.0
         self._columns = columns
         self._header_factory = header_factory
+        self._row_height = row_height
+        self._prefixes = {}
         self._names = []
         self.pal = plot_palette()
         self.plots, self.curves, self.headers = [], [], []
@@ -128,9 +134,13 @@ class ColumnStack(QWidget):
         self._rows.setContentsMargins(0, 0, 0, 0)
         self._rows.setSpacing(10)
 
-    def build(self, matrix, names, roles=None):
-        """Create the rows. Call once; use ``set_data`` afterwards to change file."""
+    def build(self, matrix, names, roles=None, prefixes=None):
+        """Create the rows. Call once; use ``set_data`` afterwards to change file.
+
+        ``prefixes`` maps a column index to text placed BEFORE the column number, so a graph
+        says what it is without the reader having to look it up in a legend above."""
         matrix = as_2d(matrix)
+        self._prefixes = dict(prefixes or {})
         self._names = list(names)
         cols = list(range(matrix.shape[1])) if self._columns is None else list(self._columns)
         pal = self.pal = plot_palette()
@@ -140,7 +150,7 @@ class ColumnStack(QWidget):
             box = QWidget(); cv = QVBoxLayout(box)
             cv.setContentsMargins(0, 0, 0, 0); cv.setSpacing(2)
             head = QHBoxLayout(); head.setContentsMargins(2, 0, 2, 0); head.setSpacing(8)
-            lab = QLabel(f"Column {i + 1}" + name_suffix(self._names, i))
+            lab = QLabel(self._header_text(i))
             head.addWidget(lab)
             if self._header_factory is not None:
                 self._header_factory(i, head)
@@ -150,7 +160,7 @@ class ColumnStack(QWidget):
             last = row == len(cols) - 1
             plot = pg.PlotWidget()
             plot.setBackground(pal["bg"])
-            plot.setFixedHeight(ROW_HEIGHT)
+            plot.setFixedHeight(self._row_height + (BOTTOM_AXIS_EXTRA if last else 0))
             plot.setMenuEnabled(False)
             plot.getViewBox().setMouseEnabled(x=False, y=False)
             plot.hideButtons()                          # no auto-range 'A' in the corner
@@ -175,6 +185,11 @@ class ColumnStack(QWidget):
         self._shown = cols
         return self
 
+    def _header_text(self, i):
+        prefix = self._prefixes.get(i)
+        stem = f"Column {i + 1}" + name_suffix(self._names, i)
+        return f"{prefix}  ·  {stem}" if prefix else stem
+
     def set_data(self, matrix, names):
         """Re-plot from a different file, keeping the rows, roles and colours."""
         matrix = as_2d(matrix)
@@ -185,7 +200,7 @@ class ColumnStack(QWidget):
                  else np.full(matrix.shape[0], np.nan))
             self.curves[row].setData(t[:len(y)], y)
             self.plots[row].enableAutoRange()
-            self.headers[row].setText(f"Column {i + 1}" + name_suffix(self._names, i))
+            self.headers[row].setText(self._header_text(i))
 
     def set_role(self, col_index, role):
         """Recolour one column's trace for the role it now carries."""

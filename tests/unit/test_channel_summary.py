@@ -123,3 +123,36 @@ def test_every_assignable_role_can_be_described_and_helped(qapp, role):
     assert role in ROLE_HELP
     value = [3] if role in ("emg", "entropy") else 3
     assert describe(_channels(**{role: value}), role) is not None
+
+
+# -- the readout names itself -------------------------------------------------
+def test_each_graph_says_what_it_is_before_where_it_sits(qapp):
+    """Reading a trace should not require carrying the legend above in your head, so the
+    role comes first and the column number second."""
+    ch = _channels(flow=5, poes=7, emg=[2])
+    m, names = _matrix()
+    su = ChannelSummary().show_mapping(ch, matrix=m, names=names)
+    heads = [h.text() for h in su.stack.headers]
+    assert heads[0].startswith("EMG  ·  Column 2")
+    assert heads[1].startswith("Flow signal  ·  Column 5")
+    assert heads[2].startswith("Oesophageal pressure (Poes)  ·  Column 7")
+
+
+def test_a_column_with_two_roles_names_both(qapp):
+    ch = _channels(flow=5, entropy=[5])
+    m, names = _matrix()
+    su = ChannelSummary().show_mapping(ch, matrix=m, names=names)
+    assert su.stack.headers[0].text().startswith("Flow signal + Entropy  ·  Column 5")
+
+
+def test_the_previews_are_shorter_here_than_in_the_dialog(qapp):
+    """A readout, not a working surface — but not so short that the axis text clips."""
+    from respmech.ui.column_stack import BOTTOM_AXIS_EXTRA, ROW_HEIGHT
+    from respmech.ui.channel_summary import SUMMARY_ROW_HEIGHT
+    assert SUMMARY_ROW_HEIGHT < ROW_HEIGHT
+    ch = _channels(flow=5, poes=7)
+    m, names = _matrix()
+    su = ChannelSummary().show_mapping(ch, matrix=m, names=names)
+    assert su.stack.plots[0].minimumHeight() == SUMMARY_ROW_HEIGHT
+    # the last row also carries the tick values and the "Time (s)" label
+    assert su.stack.plots[-1].minimumHeight() == SUMMARY_ROW_HEIGHT + BOTTOM_AXIS_EXTRA
