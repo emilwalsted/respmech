@@ -679,7 +679,10 @@ def style_matplotlib() -> None:
             "axes.grid": True,
             "axes.axisbelow": True,
             "axes.titlesize": 11,
-            "axes.titleweight": "600",
+            # "bold" not "600" — DejaVu Sans has no 600 weight, so 600 always fell back to
+            # 700 while printing a findfont warning per figure. Pixel-identical; must stay in
+            # step with core.plot_style._LIGHT_RC, which mirrors every key set here.
+            "axes.titleweight": "bold",
             "axes.titlepad": 8.0,
             "axes.labelsize": 10,
             "axes.labelcolor": pal["fg"],
