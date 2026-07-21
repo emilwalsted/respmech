@@ -265,17 +265,25 @@ class SettingsScreen(QWidget):
         fn = QFormLayout(gns)
         fn.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
         self.remove_noise = QCheckBox("Reduce EMG background noise")
-        self.noise_ref = QLineEdit()
-        self.noise_use_exp = QCheckBox("Build noise profile from expiration (recommended)")
         self._check_row(fn, self.remove_noise, "processing.emg.noise.enabled",
                         "Subtracts a shared spectral noise profile, built from a rest reference, from every EMG channel; off by default.")
-        self._browse_row(fn, "Noise reference recording", self.noise_ref, "processing.emg.noise.reference_file",
-                         "Rest or baseline recording whose EMG-free portion defines the noise profile applied to every file in the test.",
-                         folder=False)
-        self._check_row(fn, self.noise_use_exp, "processing.emg.noise.use_expiration",
-                        "Samples the noise profile from the reference's expiratory phase, which is EMG-free and more stable; on by default.")
-        hint = QLabel("Noise-window options (suppression, fidelity target) are on the Preview "
-                      "screen's › EMG – noise reduction tab, active once a reference file is set.")
+        # READ-ONLY. The reference used to be settable here as well as in the picker, and the
+        # two disagreed in both directions: Browse stored an ABSOLUTE path (so the analysis
+        # stopped being portable, and only worked at all because os.path.join ignores its base
+        # when the second argument is absolute) while the picker stores a bare file name; and
+        # the "from expiration" checkbox here was silently unticked by the picker whenever a
+        # span was marked, then — re-ticked — silently made that span inert. The picker owns
+        # both halves now, and this says what it chose.
+        self.noise_summary = QLabel("")
+        self.noise_summary.setWordWrap(True)
+        self.noise_summary.setToolTip(_tip(
+            "processing.emg.noise.reference_file",
+            "The rest recording, and which part of it, that defines the noise profile applied "
+            "to every file in the test. Chosen with 'Set noise profile' on the Preview "
+            "screen's › EMG – noise reduction tab."))
+        fn.addRow("Reference", self.noise_summary)
+        hint = QLabel("Pick the reference — and the suppression and fidelity target — with "
+                      "'Set noise profile' on the Preview screen's › EMG – noise reduction tab.")
         hint.setWordWrap(True); hint.setProperty("status", "muted")
         fn.addRow("", hint)
         root.addWidget(gns)
@@ -599,8 +607,7 @@ class SettingsScreen(QWidget):
             # Noise reduction (enable + reference file; tuning lives in the EMG tab). ECG
             # removal is tuned on the Preview "› EMG – ECG reduction" tab, not here.
             self.remove_noise.setChecked(n.enabled)               # rebind to the real gate
-            self.noise_ref.setText(n.reference_file or "")
-            self.noise_use_exp.setChecked(n.use_expiration)
+            self._refresh_noise_summary()
             self.out_folder.setText(s.output.folder)
             # Advanced (rarely changed)
             seg, peak = s.processing.segmentation, s.processing.segmentation.peak
@@ -676,9 +683,10 @@ class SettingsScreen(QWidget):
         # "› EMG – ECG reduction" tab, not here — leave those model fields untouched.
         # Noise reduction (enable + reference file; tuning owned by the EMG tab)
         n.enabled = self.remove_noise.isChecked()
-        emg.remove_noise = self.remove_noise.isChecked()      # keep legacy mirror so TOML round-trips
-        n.reference_file = self.noise_ref.text().strip() or None
-        n.use_expiration = self.noise_use_exp.isChecked()
+        # reference_file / use_expiration / reference_intervals are written ONLY by the
+        # noise picker (preview_screen._apply_noise_reference / _apply_noise_expiration).
+        # to_state runs on every tab change, so rewriting them from here — where they have no
+        # widget — would erase the choice on the first switch away from Setup.
         s.output.folder = self.out_folder.text()
         # Advanced (rarely changed)
         s.processing.segmentation.buffer = self.seg_buffer.value()
@@ -720,29 +728,35 @@ class SettingsScreen(QWidget):
         return s
 
     def set_noise_reference(self, file, intervals, use_expiration):
-        """Apply a noise reference chosen on the Preview graph (feature B) so the
-        Settings form and shared state stay coherent. ``reference_intervals`` has no
-        widget, so it is written straight to state (and survives ``to_state``, which
-        does not touch it); the file + use_expiration mirror into the widgets and are
-        committed via ``to_state``. Guarded against reactive feedback with ``_loading``."""
-        prev, self._loading = self._loading, True
-        try:
-            self.noise_ref.setText(file or "")
-            self.noise_use_exp.setChecked(bool(use_expiration))
-            self.state.settings.processing.emg.noise.reference_intervals = list(intervals or [])
-        finally:
-            self._loading = prev
-        self.to_state()
-        self._sync_widgets()
-        self._mark_dirty()   # a graph-chosen noise reference is a user edit that lands in the .toml
-        self._set_status(f"Noise reference set from graph selection: {file}")
+        """Reflect a noise reference chosen in the picker. The picker has already written all
+        three fields into state — it is their only writer — so this just re-renders the
+        read-only summary and records that the analysis changed."""
+        self._refresh_noise_summary()
+        self._mark_dirty()   # a picked noise reference is a user edit that lands in the .toml
+        where = "every expiration" if use_expiration else "a marked rest span"
+        self._set_status(f"Noise reference set from {file}: {where}.")
+
+    def _refresh_noise_summary(self):
+        """What the picker chose, in words. Empty is a real state and says so, because the
+        alternative — a blank line beside a ticked 'Reduce EMG background noise' — reads as
+        configured when nothing will run."""
+        n = self.state.settings.processing.emg.noise
+        if not n.reference_file:
+            self.noise_summary.setText("Not set — noise reduction will not run.")
+            self.noise_summary.setProperty("status", "muted")
+        elif n.use_expiration or not n.reference_intervals:
+            self.noise_summary.setText(f"{n.reference_file} · every expiration")
+            self.noise_summary.setProperty("status", None)
+        else:
+            spans = ", ".join(f"{a:.2f}–{b:.2f} s" for a, b in n.reference_intervals)
+            self.noise_summary.setText(f"{n.reference_file} · marked span {spans}")
+            self.noise_summary.setProperty("status", None)
+        self.noise_summary.style().unpolish(self.noise_summary)
+        self.noise_summary.style().polish(self.noise_summary)
 
     # -- helpers ------------------------------------------------------------
     def _sync_widgets(self):
-        noise_on = self.remove_noise.isChecked()
-        self.noise_ref.setEnabled(noise_on)
-        # "use expiration" only makes sense once a reference file is chosen
-        self.noise_use_exp.setEnabled(noise_on and bool(self.noise_ref.text().strip()))
+        self._refresh_noise_summary()
         gated_on = self.emg_gated.isChecked()
         self.emg_gate_width.setEnabled(gated_on)
         for w in (self.rp_min_survival, self.rp_min_island, self.rp_long_rr,
@@ -779,7 +793,7 @@ class SettingsScreen(QWidget):
     def _wire_reactivity(self):
         self.in_folder.editingFinished.connect(self._on_inputs_changed)
         self.in_files.editingFinished.connect(self._on_inputs_changed)
-        for le in (self.out_folder, self.noise_ref, self.group_regex):
+        for le in (self.out_folder, self.group_regex):
             le.editingFinished.connect(self._on_field_changed)
         self.breath_counts_edit.textChanged.connect(self._on_field_changed)   # QPlainTextEdit: no editingFinished
         for sb in (self.samp_freq, self.resample_hz,
@@ -794,7 +808,7 @@ class SettingsScreen(QWidget):
             cb.currentTextChanged.connect(self._on_field_changed)
         self.emg_norm.currentIndexChanged.connect(self._on_field_changed)
         self.matlab_variant.currentIndexChanged.connect(self._on_field_changed)
-        for chk in (self.integrate, self.remove_noise, self.noise_use_exp, self.emg_gated,
+        for chk in (self.integrate, self.remove_noise, self.emg_gated,
                     self.correct_drift, self.correct_trend, self.inverse_flow, self.inverse_volume,
                     self.resample, self.save_average, self.save_bbb, self.save_processed,
                     self.include_ignored, self.save_pv_avg, self.save_pv_ind, self.save_raw_fig,

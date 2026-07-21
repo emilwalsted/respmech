@@ -6,7 +6,11 @@ click-drag marks a rest region — shaded on every channel — and the label the
 the region's duration (Δt). A region wider than 0.5 s warns that a larger noise
 profile can slow processing markedly. The selection persists until a new drag or a
 plain click clears it. "Set noise profile" (enabled only once a region is marked)
-accepts the dialog; "Annullér" rejects it without touching the settings.
+accepts the dialog; "Cancel" rejects it without touching the settings.
+
+The reference can also be defined as "every expiration" rather than a marked span — the two
+are alternatives in the core, so they are offered as one choice here instead of a checkbox
+on another screen that this dialog silently contradicted.
 
 The wheel zooms the time axis for all channels together (they are x-linked, and the
 view is bounded to the recording); a bottom scrollbar pans the zoomed view, and a
@@ -19,7 +23,7 @@ from __future__ import annotations
 
 import numpy as np
 from PySide6.QtCore import Qt, QEvent
-from PySide6.QtWidgets import (QApplication, QDialog, QHBoxLayout, QLabel,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QHBoxLayout, QLabel,
                                QPushButton, QScrollBar, QVBoxLayout)
 
 import pyqtgraph as pg
@@ -30,6 +34,9 @@ try:
     from respmech.ui import theme as _theme
 except Exception:  # pragma: no cover
     _theme = None
+
+#: sentinel returned by ``selected_region`` for the whole-expiration option
+EXPIRATION = "expiration"
 
 _WARN_SECONDS = 0.5
 _TIME_STEPS = 1000.0                   # scrollbar ticks per second: QScrollBar is integer-only
@@ -161,10 +168,23 @@ class NoiseProfileDialog(QDialog):
         self.warn.setStyleSheet("#noiseWarn { color: #E08A4F; font-weight: 600; }")
         v.addWidget(self.warn)
 
+        # The two ways to define the reference, in ONE place. They are mutually exclusive in
+        # the core (expiration wins whenever use_expiration or no intervals are set), and
+        # they used to be split across two screens: a checkbox on Setup that this dialog
+        # silently unticked whenever a span was marked, and which — re-ticked — silently made
+        # the marked span inert. Neither screen showed what the other had done.
+        self.use_expiration = QCheckBox("Use the whole expiration of this recording")
+        self.use_expiration.setToolTip(
+            "Sample the noise profile from every expiratory phase, which is diaphragm-quiet "
+            "and gives a more stable estimate than one hand-marked span. Untick to mark a "
+            "rest span yourself.")
+        self.use_expiration.toggled.connect(self._on_mode_changed)
+        v.addWidget(self.use_expiration)
+
         row = QHBoxLayout()
         self.info = QLabel(""); self.info.setProperty("status", "muted")
         row.addWidget(self.info, 1)
-        self.btn_cancel = QPushButton("Annullér"); self.btn_cancel.clicked.connect(self.reject)
+        self.btn_cancel = QPushButton("Cancel"); self.btn_cancel.clicked.connect(self.reject)
         self.btn_ok = QPushButton("Set noise profile"); self.btn_ok.setEnabled(False)
         self.btn_ok.clicked.connect(self.accept)
         row.addWidget(self.btn_cancel); row.addWidget(self.btn_ok)
@@ -350,6 +370,24 @@ class NoiseProfileDialog(QDialog):
         else:
             self.warn.setVisible(False)
 
+    def _on_mode_changed(self, on):
+        """Whole-expiration and a marked span are alternatives, so choosing one visibly
+        retires the other rather than leaving both on screen looking active."""
+        self.glw.setEnabled(not on)
+        for reg in self._regions:
+            reg.setVisible(bool(self._selection) and not on)
+        if on:
+            self.warn.setVisible(False)
+            self.info.setText("The profile will be built from every expiration.")
+        elif self._selection:
+            self._set_selection(*self._selection)
+        else:
+            self.info.setText("")
+        self.btn_ok.setEnabled(on or self._selection is not None)
+
     def selected_region(self):
-        """The chosen (t0, t1) in seconds, or None if nothing is marked."""
+        """The chosen (t0, t1) in seconds, ``EXPIRATION`` for the whole-expiration option,
+        or None if nothing is chosen."""
+        if self.use_expiration.isChecked():
+            return EXPIRATION
         return self._selection

@@ -81,7 +81,6 @@ def to_legacy_ns(s: Settings) -> SimpleNamespace:
                 mindistance=emg.ecg_min_distance_s,
                 minwidth=emg.ecg_min_width_s,
                 windowsize=emg.ecg_window_s,
-                remove_noise=emg.remove_noise,
                 outlierrmssdlimit=emg.outlier_rms_sd_limit,
                 noise_profile=emg.noise_profile,
                 save_sound=emg.save_sound,

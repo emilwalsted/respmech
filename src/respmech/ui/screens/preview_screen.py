@@ -2183,6 +2183,25 @@ class PreviewScreen(QWidget):
         if reg.scene() is None:
             self.emg_plots.addItem(reg)
 
+    def _apply_noise_expiration(self):
+        """Define the shared noise reference as every expiration of the current file, the
+        alternative to a hand-marked span. Both halves are written here so the pair can never
+        disagree: the core resolves them as `use_expiration or not reference_intervals`, so
+        leaving stale intervals behind would make the choice ambiguous on re-open."""
+        name = self.file_combo.currentText()
+        if not name:
+            return None
+        n = self.state.settings.processing.emg.noise
+        n.reference_file = name
+        n.reference_intervals = []
+        n.use_expiration = True
+        self.noise_reference_changed.emit(name, [], True)
+        self._set_status(f"Noise profile ← {name}, built from every expiration. "
+                         "Enable 'Reduce EMG noise' to apply it.")
+        self._update_actions()
+        self._request_autorun()
+        return True
+
     def _apply_noise_reference(self, t0, t1):
         """Apply [t0, t1] s of the current file as the shared noise reference: write it
         into settings, mirror it (signal + the inline detail-plot indicator), and
@@ -2239,12 +2258,17 @@ class PreviewScreen(QWidget):
         if not data["raw"]:
             self._set_status("This file has no EMG channels to pick a noise profile from.")
             return
+        from respmech.ui.noise_profile_dialog import EXPIRATION
         dlg = NoiseProfileDialog(data["raw"], data["t"], data["fs"], data["cols"],
                                  parent=self, file_name=self.file_combo.currentText(),
                                  flow=data.get("flow"))
+        n = self.state.settings.processing.emg.noise
+        dlg.use_expiration.setChecked(bool(n.use_expiration or not n.reference_intervals))
         if dlg.exec() == QDialog.Accepted:
             sel = dlg.selected_region()
-            if sel is not None:
+            if sel is EXPIRATION:
+                self._apply_noise_expiration()
+            elif sel is not None:
                 self._apply_noise_reference(sel[0], sel[1])
 
     # -- EMG detail / result / test triggers (manual re-runs) --------------
