@@ -776,11 +776,12 @@ class PreviewScreen(QWidget):
         self.emg_gated = QCheckBox("Gated peak")
         self.emg_gated.setToolTip(_help_tip(
             "processing.emg.robust_peak.enabled",
-            "The reported peak EMG is the largest windowed value in the breath, which on a "
-            "strongly heart-coupled recording is usually a leftover heartbeat rather than "
-            "diaphragm activity. This blanks a window around every detected heartbeat and "
-            "takes the peak of what survives, reported as extra 'gated' columns beside the "
-            "existing ones; the existing columns never change."))
+            "The peak EMG of a breath is its single loudest moment — but on a recording where "
+            "the heartbeat bleeds into the EMG, that moment is often a leftover heartbeat, not "
+            "the diaphragm. Tick this to ALSO measure the peak from just the heartbeat-free "
+            "stretches of each breath. It has no effect on the live plots here: it adds extra "
+            "'gated' columns to the saved data, which you see after a run. The existing "
+            "numbers never change."))
         self.emg_gate_width = QDoubleSpinBox()
         self.emg_gate_width.setRange(0.02, 0.5); self.emg_gate_width.setSingleStep(0.01)
         self.emg_gate_width.setDecimals(3); self.emg_gate_width.setSuffix(" s")
@@ -803,6 +804,13 @@ class PreviewScreen(QWidget):
         grow.addWidget(self.emg_gated)
         grow.addSpacing(10); grow.addWidget(_cap("Blank", self.emg_gate_width.toolTip()))
         grow.addWidget(self.emg_gate_width)
+        # say plainly that this is an output-only add-on: nothing on this tab changes when it
+        # is ticked, so without a word the empty response reads as "it did nothing"
+        _gcap = _cap("→ extra columns in the saved output",
+                     "The gated peak is not drawn here — it appears as extra columns in the "
+                     "data files after a run.")
+        _gcap.setProperty("status", "muted")
+        grow.addSpacing(8); grow.addWidget(_gcap)
 
         self.btn_emg_advanced = QPushButton("Advanced…")
         self.btn_emg_advanced.setProperty("compact", True)
@@ -835,23 +843,26 @@ class PreviewScreen(QWidget):
         self.emg_plots.setLabel("bottom", "Time (s)"); self.emg_plots.setLabel("left", "EMG (a.u.)")
         self.emg_psd_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 3)))
 
+        self.fidelity_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 3)))
         split = QSplitter(Qt.Vertical)
-        top = QSplitter(Qt.Horizontal)
-        top.addWidget(self._titled("Raw EMG channels", self.emg_raw_plots))
-        top.addWidget(self._titled("Detail channel",       # pipeline stages are in the plot legend
-                                   self.emg_plots, corner=self.emg_channel))
-        split.addWidget(top)
-        # Conditioned result spans the full width: it is EMG against time, so width is what
-        # makes it readable. The two small diagnostics below share a row — the fidelity
-        # frontier and the PSD are compact curves that gain nothing from the extra width.
+        # Detail channel and Conditioned result are the two working views — the conditioning
+        # stages and the finished EMG, each against time — so both span the full width, where
+        # width is what makes them readable. Their legends sit along the bottom edge, clear of
+        # the breath numbers pinned at the top (see _legend_one_row).
+        split.addWidget(self._titled("Detail channel",       # pipeline stages are in the plot legend
+                                     self.emg_plots, corner=self.emg_channel))
         split.addWidget(self._titled("Conditioned result",   # the corner picker names the channels
                                      self.emg_result_plots, corner=self.result_checks_holder))
-        self.fidelity_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 3)))
-        mid = QSplitter(Qt.Horizontal)
-        mid.addWidget(self._titled("Noise fidelity frontier (1 = untouched)", self.fidelity_canvas))
-        mid.addWidget(self._titled("Detail PSD", self.emg_psd_canvas))
-        self._emg_diag_row = mid          # the two small diagnostics share the bottom row
-        split.addWidget(mid)
+        # The bottom row holds three reference panels: the raw channels alongside the two
+        # compact diagnostics (the fidelity frontier and the detail PSD). None needs the width,
+        # and the raw stack is a reference the working views are read against.
+        bottom = QSplitter(Qt.Horizontal)
+        bottom.addWidget(self._titled("Raw EMG channels", self.emg_raw_plots))
+        bottom.addWidget(self._titled("Noise fidelity frontier (1 = untouched)", self.fidelity_canvas))
+        bottom.addWidget(self._titled("Detail PSD", self.emg_psd_canvas))
+        self._emg_diag_row = bottom
+        split.addWidget(bottom)
+        split.setStretchFactor(0, 3); split.setStretchFactor(1, 3); split.setStretchFactor(2, 2)
         v.addWidget(split, 1)
         # clicking a numbered breath in any EMG plot toggles its exclusion too
         self.emg_raw_plots.scene().sigMouseClicked.connect(self._on_emg_raw_clicked)
@@ -1215,7 +1226,6 @@ class PreviewScreen(QWidget):
         cols = data.get("cols", [])
         proc = data.get("processed", [])
         cycle = pal["emg_cycle"]
-        prev = None
         for i, ch in enumerate(proc):
             p = self.ecg_processed_plots.addPlot(row=i, col=0)
             p.showGrid(x=True, y=True, alpha=0.12)
@@ -1225,13 +1235,11 @@ class PreviewScreen(QWidget):
             p.plot(t, np.asarray(ch), pen=_pen(cycle[i % len(cycle)]))
             add_flow_background(p, t, data.get("flow"), pal)
             add_ecg_capture_markers(p, peaks, pal)
-            if i == len(proc) - 1:
-                p.setLabel("bottom", "Time (s)")
-            if prev is not None:
-                p.setXLink(prev)
-            prev = p
             self._limit_x(p, t)
             self._ecg_capture_subplots.append(p)
+        # x-values on the bottom channel only; y-zoom shared (all ECG-processed EMG)
+        self._style_channel_stack(self.ecg_processed_plots, self._ecg_capture_subplots,
+                                  link_y=True)
 
         npk = int(np.asarray(peaks).size)
         col = data.get("detect_col", "?")
@@ -1242,8 +1250,59 @@ class PreviewScreen(QWidget):
             self._set_status(f"ECG reduction — capture on col {col}: {npk} R-peaks · {state}.")
 
     @staticmethod
-    def _legend_one_row(plot, offset=(10, 4)):
-        """Lay a plot's legend out as a single horizontal row tucked under the top edge.
+    def _style_channel_stack(glw, plots, *, link_y=False, time_label="Time (s)"):
+        """Shared styling for a vertical stack of channel subplots in a GraphicsLayoutWidget.
+
+        - x tick VALUES appear only on the bottom plot; the rest give that strip back to the
+          trace, so a tall stack reads as one aligned block rather than a ladder of axes.
+        - the rows sit tight, a hairline apart.
+        - x is always linked: pan or zoom the time axis once and every channel follows.
+        - y is linked only when the channels share units — the EMG and ECG-processed stacks
+          do, so zooming one zooms all; the mechanics stack mixes L/s, L and cmH2O, so it
+          must NOT, or the pressures would flatten the flow.
+        """
+        if not plots:
+            return
+        try:
+            glw.ci.layout.setVerticalSpacing(2)
+        except Exception:                        # pragma: no cover — spacing is cosmetic
+            pass
+        first = plots[0]
+        for i, p in enumerate(plots):
+            last = i == len(plots) - 1
+            ax = p.getAxis("bottom")
+            ax.setStyle(showValues=last)
+            if last:
+                if time_label:
+                    p.setLabel("bottom", time_label)
+            else:
+                # keep the axis (its ticks still drive the x-grid) but collapse the strip the
+                # tick numbers used to occupy
+                ax.setLabel(None)
+                ax.setHeight(8)
+            if i > 0:
+                p.setXLink(first)
+                if link_y:
+                    p.setYLink(first)
+        if link_y and len(plots) > 1:
+            # A shared y makes zooming one channel zoom all — but pyqtgraph collapses every
+            # linked plot onto plots[0]'s range, which would clip a louder electrode down to
+            # a quieter first one (and overflow its flow silhouette). Set the shared range to
+            # the UNION of every channel's data instead, so the sync never hides signal.
+            ys = [p.getViewBox().childrenBounds()[1] for p in plots]
+            ys = [b for b in ys if b and b[0] is not None and b[1] is not None]
+            if ys:
+                lo, hi = min(b[0] for b in ys), max(b[1] for b in ys)
+                pad = (hi - lo) * 0.05 or 1.0
+                first.getViewBox().setYRange(lo - pad, hi + pad, padding=0)
+
+    @staticmethod
+    def _legend_one_row(plot, offset=(10, -4)):
+        """Lay a plot's legend out as a single horizontal row along the BOTTOM edge.
+
+        The breath numbers are pinned to the top of the view, so a top-anchored legend sat on
+        top of them; the bottom edge is clear. (Anchoring bottom-left needs itemPos and
+        parentPos at (0, 1) with a negative y offset — see below.)
 
         ``plot`` must be the PlotItem, never the PlotWidget: PlotWidget.__getattr__ only
         forwards callables, so a widget yields legend=None and this silently does nothing.
@@ -1262,7 +1321,7 @@ class PreviewScreen(QWidget):
             if not n:
                 return                       # setColumnCount(0) divides by zero
             leg.setColumnCount(n)
-            leg.anchor(itemPos=(0, 0), parentPos=(0, 0), offset=offset)
+            leg.anchor(itemPos=(0, 1), parentPos=(0, 1), offset=offset)
         except Exception:                    # noqa: BLE001 — legend chrome is cosmetic
             pass
 
@@ -1947,13 +2006,13 @@ class PreviewScreen(QWidget):
         self.plots.clear()
         self._channel_plots = []
         self._crosshair_lines = []                       # cleared with the plots; rebuilt below
-        prev = None
-        n = len(_CHANNELS)
         pal = _plot_pal()
         for i, (key, label, colour) in enumerate(_CHANNELS):
             p = self.plots.addPlot(row=i, col=0)
             p.showGrid(x=True, y=True, alpha=pal["grid_alpha"])
-            p.setLabel("left", label)
+            # two lines — "Poes (cmH₂O)" on one line is taller than the short stacked plot and
+            # the rotated label overran its neighbour; the unit drops beneath the name
+            p.setLabel("left", label.replace(" (", "<br>("))
             if _theme is not None:
                 _theme.align_left_axis(p)          # keep the stacked channels x-aligned
             y = series[key]
@@ -1961,13 +2020,11 @@ class PreviewScreen(QWidget):
             # P22: a subtle zero-reference baseline on every channel, so the sign and
             # excursion of each signal read at a glance.
             p.addLine(y=0, pen=pg.mkPen(pal["separator"], width=1, style=Qt.DashLine))
-            if i == n - 1:
-                p.setLabel("bottom", "Time (s)")
-            if prev is not None:
-                p.setXLink(prev)
-            prev = p
             self._limit_x(p, t[:len(y)])          # can't zoom/pan past the data
             self._channel_plots.append(p)
+        # x-values on the bottom channel only; y-zoom is NOT shared — flow, volume and the
+        # pressures are different units, so a common y-range would flatten most of them
+        self._style_channel_stack(self.plots, self._channel_plots, link_y=False)
         # P17: one crosshair line per channel, hidden until the cursor enters the stack
         self._crosshair_lines = []
         for p in self._channel_plots:
@@ -2009,23 +2066,23 @@ class PreviewScreen(QWidget):
             return
         cols = list(self.state.settings.input.channels.emg)
         t = np.arange(emg.shape[0]) / fs
-        prev = None
         cycle = _plot_pal()["emg_cycle"]
         for i in range(emg.shape[1]):
             p = self.emg_raw_plots.addPlot(row=i, col=0)
             p.showGrid(x=True, y=True, alpha=0.12)
             p.setLabel("left", f"col {cols[i]}" if i < len(cols) else f"EMG {i + 1}")
+            # This is now a compact reference panel (bottom-row third), so the channels are
+            # short. Drop pyqtgraph's "(×0.001)" SI suffix: rotated, it made the label longer
+            # than the channel is tall, and the three labels overran each other.
+            p.getAxis("left").enableAutoSIPrefix(False)
             if _theme is not None:
                 _theme.align_left_axis(p)          # keep the stacked channels x-aligned
             p.plot(t, emg[:, i], pen=_pen(cycle[i % len(cycle)]))
             add_flow_background(p, t, flow, _plot_pal())   # discrete respiration reference, behind
-            if i == emg.shape[1] - 1:
-                p.setLabel("bottom", "Time (s)")
-            if prev is not None:
-                p.setXLink(prev)
-            prev = p
             self._limit_x(p, t)
             self._emg_raw_subplots.append(p)
+        # x-values on the bottom channel only; y-zoom shared across the raw EMG channels
+        self._style_channel_stack(self.emg_raw_plots, self._emg_raw_subplots, link_y=True)
         self._ensure_noise_region()
         self._raw_label_y = self._safe_top(emg[:, 0])
         self._repaint_view_breaths("raw")
@@ -2375,8 +2432,9 @@ class PreviewScreen(QWidget):
             return
         for p in plot_items:
             # a click on the plot's legend (text/frame) is unaccepted by pyqtgraph
-            # and would otherwise fall through to the breath underneath it — the
-            # legend sits top-left over breath 1 on the detail/result plots
+            # and would otherwise fall through to the breath underneath it — the legend
+            # sits bottom-left on the detail/result plots (sceneBoundingRect tracks it
+            # wherever it is anchored, so this guard follows the move)
             leg = getattr(p, "legend", None)
             if leg is not None and leg.isVisible() and leg.sceneBoundingRect().contains(pos):
                 return
