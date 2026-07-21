@@ -865,11 +865,20 @@ class PreviewScreen(QWidget):
         row.addSpacing(12); row.addWidget(self.remove_ecg)
         row.addSpacing(10); row.addWidget(_cap("Min height", self.ecg_min_height.toolTip())); row.addWidget(self.ecg_min_height)
         row.addSpacing(10); row.addWidget(_cap("Min gap", self.ecg_min_distance.toolTip())); row.addWidget(self.ecg_min_distance)
-        row.addSpacing(10); row.addWidget(_cap("Min width", self.ecg_min_width.toolTip())); row.addWidget(self.ecg_min_width)
-        row.addSpacing(10); row.addWidget(_cap("Window", self.ecg_window.toolTip())); row.addWidget(self.ecg_window)
+        # Min width and Window are NOT on the strip: a shape guard at 0.001 s and a
+        # physiologically fixed template width are not what anyone reaches for while watching
+        # the detected beats, and they crowded out the two that are. They keep their widgets
+        # (Auto-suggest writes them, and from_state/to_state still round-trip them) — the
+        # widgets simply live in the Advanced dialog's layout instead of here.
+        self.btn_ecg_advanced = QPushButton("Advanced…")
+        self.btn_ecg_advanced.setProperty("compact", True)
+        self.btn_ecg_advanced.setToolTip("Detector shape guard and template width — rarely "
+                                         "the right thing to change.")
+        self.btn_ecg_advanced.clicked.connect(self._open_ecg_advanced)
 
         strip = QHBoxLayout(); strip.setSpacing(10)
-        strip.addWidget(self.ecg_opts); strip.addStretch(1); strip.addWidget(self.btn_ecg_autosuggest)
+        strip.addWidget(self.ecg_opts); strip.addStretch(1)
+        strip.addWidget(self.btn_ecg_advanced); strip.addWidget(self.btn_ecg_autosuggest)
         v.addLayout(strip)
 
         _bg = _plot_pal()["bg"]
@@ -934,6 +943,40 @@ class PreviewScreen(QWidget):
         # them greyed out immediately after the user has turned Remove ECG on.
         self._update_actions(status=False)
         # ECG removal feeds the EMG/noise panels too, so recompute those alongside this tab.
+        self._request_autorun({"ecg", "emg_all", "emg_detail", "noise"})
+
+    def _open_ecg_advanced(self):
+        """The two ECG parameters that are not worth strip space.
+
+        Staged, not live: the dialog holds its own widgets and nothing reaches the settings
+        unless OK is pressed, so Cancel needs no undo. On OK the commit goes through the same
+        funnel a strip edit uses, which is what keeps the dirty flag and the recompute scope
+        correct without repeating either here."""
+        from respmech.ui.advanced_dialog import AdvancedDialog, Field
+        e = self.state.settings.processing.emg
+        fields = [
+            Field("ecg_min_width_s", "Minimum peak width", "float",
+                  "processing.emg.ecg_min_width_s",
+                  "Minimum width of an R-wave peak. A shape guard against counting a narrow "
+                  "spike as a heartbeat; the default rarely needs moving.",
+                  lo=0.0, hi=0.1, step=0.001, decimals=4, suffix=" s"),
+            Field("ecg_window_s", "Template width", "float", "processing.emg.ecg_window_s",
+                  "Width of the ECG template averaged and subtracted around each beat "
+                  "(QRS-T). Physiologically fixed — 0.4 s is right for adults.",
+                  lo=0.05, hi=1.0, step=0.05, decimals=3, suffix=" s"),
+        ]
+        dlg = AdvancedDialog(
+            "ECG removal — advanced", fields,
+            {f.key: getattr(e, f.key) for f in fields}, parent=self,
+            intro="Detection is driven by the capture channel, Min height and Min gap on the "
+                  "strip. These two shape the template rather than finding the beats.")
+        if dlg.exec() != QDialog.Accepted:
+            return
+        from respmech.ui.advanced_dialog import apply_values
+        if not apply_values(e, dlg.values()):
+            return                       # OK without an edit: no dirty flag, no recompute
+        self._load_ecg_params()          # keep the (hidden) widgets in step with the model
+        self.settings_edited.emit()
         self._request_autorun({"ecg", "emg_all", "emg_detail", "noise"})
 
     def _on_ecg_autosuggest(self):
