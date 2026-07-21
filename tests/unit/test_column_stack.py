@@ -10,7 +10,8 @@ import numpy as np
 import pytest
 from PySide6.QtWidgets import QLabel
 
-from respmech.ui.column_stack import ColumnStack, ROLE_NAMES, ROLES, name_suffix, role_color
+from respmech.ui.column_stack import (ASSIGNABLE, ColumnStack, ROLE_NAMES, ROLES,
+                                      name_suffix, role_color)
 
 
 def _matrix(n=200, cols=6):
@@ -108,11 +109,16 @@ def test_every_assignable_role_has_a_summary_name_and_a_colour(qapp):
     """The summary names a role in prose where the dialog names it in a menu; a role
     present in one and missing from the other would render blank on the Setup screen."""
     pal = ColumnStack(1000).pal
-    for key, _label in ROLES:
-        if not key:
-            continue
+    for key in ASSIGNABLE:
         assert key in ROLE_NAMES, f"{key} has no summary name"
         assert role_color(pal, key) is not None
+
+
+def test_entropy_is_not_a_dropdown_role(qapp):
+    """It is non-exclusive, so it gets a per-column checkbox instead — a dropdown cannot
+    say "this column is both flow and entropy", and pretending it could deleted data."""
+    assert "entropy" not in [k for k, _l in ROLES]
+    assert "entropy" in ASSIGNABLE
 
 
 @pytest.mark.parametrize("names, i, expect", [
