@@ -456,6 +456,7 @@ class PreviewScreen(QWidget):
         self._last_synced_settings = None   # snapshot for dependency-scoped invalidation (diff)
         self._noise_has_result = False   # has the fidelity panel a current result? (first-compute guard)
         self._previewed_file = None
+        self._blanked_for_invalid = False   # see _schedule's settings gate
         self._loading_noise = False
         self._loading_ecg = False
         self._ecg_capture_subplots = []   # per-channel PlotItems of the ECG-processed stack
@@ -1411,9 +1412,34 @@ class PreviewScreen(QWidget):
         # ungated kind would render a panel full of raw loader traceback instead.
         ok, why = self._settings_ok()
         if not ok:
+            # Blank the traces, not just the spinners. Unlike the EMG sub-tabs — which
+            # _update_emg_tab_visibility removes outright — the Mechanics tab is always
+            # present, and sync_from_settings does not clear panels. So clearing the channel
+            # mapping after a preview left the previous mapping's plots on screen, looking
+            # like a current result for settings that can no longer produce one.
+            # _settings_ok is global, so every kind gates out together: blank once on the way
+            # in, and re-arm when the settings become valid again.
+            if not self._blanked_for_invalid:
+                # Cancel first, and for EVERY kind. Blanking alone does not bump the tokens,
+                # so a worker launched while the settings were still valid would complete
+                # afterwards, pass the acceptance check in _on_job_done, and repaint the very
+                # traces we just cleared — over a status line claiming success. Verified.
+                self._cancel_inflight(set(_AUTO_KINDS))
+                self._clear_file_panels(include_noise=True)
+                self._blanked_for_invalid = True
             self._clear_panel_overlays(*_PANELS[kind])
             self._set_status(f"Settings incomplete: {why}")
             return
+        if self._blanked_for_invalid:
+            # The blank was global, so the recovery has to be too. sync_from_settings scopes
+            # the rebuild to the kinds the repairing edit touched, which is right for an
+            # ordinary edit and wrong here: repair a field that scopes to {"batch"} and only
+            # the table returns, leaving five panels blank for good under a status reading
+            # "Test run OK". Every GUI-reachable invalidation happens to scope wide, so this
+            # only bites a hand-edited analysis — which is exactly the case the blank exists
+            # for. The debounce coalesces this with the edit's own request.
+            self._blanked_for_invalid = False
+            self._request_autorun(set(_AUTO_KINDS))
         has_emg = bool(self.state.settings.input.channels.emg)
         # snapshot the settings on the GUI thread so a worker never reads them while
         # the GUI mutates them in place (Settings is a plain, deep-copyable model)

@@ -3,18 +3,20 @@
 The Setup screen used to hold seven editable fields for the channel columns, which meant two
 places could set them and the numbers had to be typed against a column count the user could
 not see. Assignment now happens only in the channel dialog, where each column is plotted, so
-Setup shows what was chosen rather than asking for it: one row per assigned role, and the
-same stacked preview the dialog draws.
+Setup shows what was chosen rather than asking for it: the same stacked preview the dialog
+draws, restricted to the columns that carry something, with each graph headed by the role it
+serves. There is no separate legend — each row names itself, so a list above repeating the
+same facts would only be a second place to keep in sync.
 
-Only roles that HAVE a column appear — an empty summary is the honest rendering of "nothing
+Only columns that HAVE a role appear — an empty summary is the honest rendering of "nothing
 assigned yet", and is what the empty-state line says.
 """
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-from respmech.ui.column_stack import ColumnStack, ROLE_NAMES, role_color
+from respmech.ui.column_stack import ColumnStack, ROLE_NAMES
 from respmech.ui.help_text import tooltip as _tip
 
 #: role -> the settings path and description its row carries, so hovering the summary still
@@ -61,13 +63,6 @@ def roles_of(channels, col):
         elif value and int(value) == col:
             out.append(role)
     return out
-
-
-def _swatch(pal, role):
-    dot = QLabel("●")
-    r, g, b = role_color(pal, role)
-    dot.setStyleSheet(f"color: rgb({r},{g},{b});")
-    return dot
 
 
 def describe(channels, role, integrate_from_flow=False):
@@ -140,33 +135,39 @@ class ChannelSummary(QWidget):
             return self
         self._empty.hide()
 
-        pal = ColumnStack(fs).pal
-        for role in ORDER:
-            text = describe(channels, role, integrate_from_flow)
-            if text is None:
-                continue
-            row = QWidget(); rl = QHBoxLayout(row)
-            rl.setContentsMargins(0, 0, 0, 0); rl.setSpacing(6)
-            rl.addWidget(_swatch(pal, role))
-            lab = QLabel(text)
-            lab.setToolTip(_tip(*ROLE_HELP[role]))
-            lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            rl.addWidget(lab); rl.addStretch(1)
-            self._box.addWidget(row)
-            self.rows.append(lab)
+        if matrix is None:
+            # No readable file yet: fall back to a plain list, so the mapping is still visible
+            # the moment it exists rather than only once a file can be loaded.
+            for role in ORDER:
+                text = describe(channels, role, integrate_from_flow)
+                if text is None:
+                    continue
+                lab = QLabel(text)
+                lab.setToolTip(_tip(*ROLE_HELP[role]))
+                lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                self._box.addWidget(lab)
+                self.rows.append(lab)
+            return self
 
-        if matrix is not None:
-            roles, prefixes = {}, {}
-            for col in cols:
-                carried = roles_of(channels, col)
-                roles[col - 1] = carried[0] if carried else ""
-                # name the graph by what it IS, ahead of where it sits, so a reader does not
-                # have to carry the legend above in their head
-                prefixes[col - 1] = " + ".join(ROLE_NAMES[r] for r in carried)
-            shown = [c - 1 for c in cols]
-            self.stack = ColumnStack(fs, columns=shown, row_height=SUMMARY_ROW_HEIGHT)
-            self.stack.build(matrix, names or [], roles=roles, prefixes=prefixes)
-            self._box.addWidget(self.stack)
+        roles, prefixes = {}, {}
+        for col in cols:
+            carried = roles_of(channels, col)
+            # the trace takes the exclusive role's colour; entropy-only columns take entropy's
+            roles[col - 1] = carried[0] if carried else ""
+            # ...and the header names what the column IS, ahead of where it sits, so a graph
+            # can be read without a legend to cross-reference
+            prefixes[col - 1] = " + ".join(ROLE_NAMES[r] for r in carried)
+        self.stack = ColumnStack(fs, columns=[c - 1 for c in cols],
+                                 row_height=SUMMARY_ROW_HEIGHT)
+        self.stack.build(matrix, names or [], roles=roles, prefixes=prefixes)
+        # the graph headers ARE the rows now, so they carry the settings-path tooltips the
+        # deleted fields used to hold — a column with two roles names both
+        for col, head in zip(cols, self.stack.headers):
+            carried = roles_of(channels, col)
+            if carried:
+                head.setToolTip("<br><br>".join(_tip(*ROLE_HELP[r]) for r in carried))
+            self.rows.append(head)
+        self._box.addWidget(self.stack)
         return self
 
     def texts(self):

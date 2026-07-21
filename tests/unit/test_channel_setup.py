@@ -447,7 +447,7 @@ def test_open_channel_setup_applies_mapping_on_ok(qapp, monkeypatch):
     assert (ch.flow, ch.volume, ch.poes, ch.pgas, ch.pdi) == (5, 6, 7, 8, 9)
     assert ch.emg == [2, 3, 4] and ch.entropy == [10, 11, 12]
     # and it reached the readout the user actually sees
-    assert "Flow signal: Column #5" in sc.channel_summary.texts()
+    assert any(t.startswith("Flow signal  ·  Column 5") for t in sc.channel_summary.texts())
     win.close()
 
 
@@ -653,6 +653,8 @@ def test_apply_channel_mapping_writes_the_model_and_the_readout(qapp):
     ch = sc.state.settings.input.channels
     assert (ch.flow, ch.poes, ch.pgas, ch.pdi) == (3, 4, 5, 6) and ch.emg == [1, 2]
     assert ch.volume is None                      # unassigned stays unassigned, not 0
+    # no input folder here, so there is no file to plot: the summary falls back to the
+    # plain list, which is the point — the mapping shows the moment it exists
     rows = sc.channel_summary.texts()
     assert "Flow signal: Column #3" in rows
     assert not any(r.startswith("Volume") for r in rows)
