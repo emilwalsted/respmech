@@ -215,7 +215,8 @@ class ChannelSetupDialog(QDialog):
 
         foot = QHBoxLayout()
         self.info = QLabel(""); self.info.setProperty("status", "muted")
-        foot.addWidget(self.info); foot.addStretch(1)
+        self.info.setWordWrap(True)          # the kept-role notes can run long
+        foot.addWidget(self.info, 1); foot.addStretch(0)
         cancel = QPushButton("Cancel"); cancel.clicked.connect(self.reject)
         ok = QPushButton("OK")
         try:
@@ -272,17 +273,52 @@ class ChannelSetupDialog(QDialog):
         """Turn a {'flow': col, ..., 'emg': [cols]} mapping into a {col_index: role} dict
         (columns are 1-based in settings, 0-based here). A single role wins over emg/entropy
         if a column is reused, so a colliding pre-selection never silently drops the pressure
-        channel."""
+        channel.
+
+        A column may legitimately carry MORE than one role in the settings: entropy is
+        non-exclusive, and the shipped example config computes EMG and entropy on the very
+        same five columns (``legacy/example.py``). This dialog shows one dropdown per column
+        and so can only display one of them — but it must never DESTROY the others, which is
+        what pressing OK used to do.
+
+        The displaced roles are recorded here and re-emitted by ``selected_mapping``, keyed
+        on the column still showing the role it was seeded with (``_shadow_anchor``). Edit
+        the column and the hidden role is released, so the memory can never migrate onto a
+        channel the user has since re-assigned. Only emg/entropy are remembered: two single
+        roles on one column is an invalid mapping the QC strip blocks, not something to
+        preserve."""
         out = {}
+        self._shadowed = {}                  # 1-based column -> roles it carries but cannot show
+        self._shadow_anchor = {}             # 1-based column -> the role its combo was seeded with
+        self._offfile = {"emg": [], "entropy": []}   # assigned past this file's last column
+
+        def _claim(col1, role):
+            displaced = out.get(col1 - 1)
+            if displaced in ("emg", "entropy") and displaced != role:
+                self._shadowed.setdefault(col1, set()).add(displaced)
+            out[col1 - 1] = role
+
         for role in ("emg", "entropy"):             # write multi roles first...
             for c in (m.get(role) or []):
-                if c and 1 <= int(c) <= self._ncols:
-                    out[int(c) - 1] = role
+                if not c:
+                    continue
+                if 1 <= int(c) <= self._ncols:
+                    _claim(int(c), role)
+                else:
+                    self._offfile[role].append(int(c))
         for role in ("flow", "volume", "poes", "pgas", "pdi"):   # ...single roles win
             c = m.get(role)
             if c and 1 <= int(c) <= self._ncols:
-                out[int(c) - 1] = role
+                _claim(int(c), role)
+        self._shadow_anchor = {c: out[c - 1] for c in self._shadowed}
         return out
+
+    def _hidden_roles(self):
+        """Roles carried by a column that is still showing the role it was seeded with, i.e.
+        the ones ``selected_mapping`` will re-emit. Recomputed live, so changing a column
+        releases its hidden roles with no signal bookkeeping to get wrong."""
+        return {c: roles for c, roles in getattr(self, "_shadowed", {}).items()
+                if self._role_of(c - 1) == self._shadow_anchor.get(c)}
 
     @staticmethod
     def _index_of_role(role):
@@ -322,12 +358,36 @@ class ChannelSetupDialog(QDialog):
         missing = self._missing_required()
         if missing:
             names = ", ".join(_REQUIRED_LABELS[r] for r in missing)
-            self.info.setText(f"Assign {names} to continue")
+            text = f"Assign {names} to continue"
         else:
             assigned = sum(1 for i in range(self._ncols) if self._role_of(i))
-            self.info.setText(f"Ready — {assigned} column{'s' if assigned != 1 else ''} assigned")
+            text = f"Ready — {assigned} column{'s' if assigned != 1 else ''} assigned"
+        # A role kept on a column that displays a different one would otherwise be invisible.
+        # Say so in BOTH branches: while a required role is missing is exactly when the user
+        # is still editing and might act on it.
+        for note in self._kept_notes():
+            text += f"  ·  {note}"
+        self.info.setText(text)
         if getattr(self, "_ok_btn", None) is not None:
             self._ok_btn.setEnabled(not missing)
+
+    def _kept_notes(self):
+        """Human phrases for everything selected_mapping will re-emit but cannot show."""
+        notes = []
+        labels = {"emg": "EMG", "entropy": "entropy"}
+        hidden = self._hidden_roles()
+        for role in ("emg", "entropy"):
+            cols = sorted(c for c, roles in hidden.items() if role in roles)
+            if cols:
+                notes.append(f"{labels[role]} is also kept on column"
+                             f"{'s' if len(cols) != 1 else ''} "
+                             + ", ".join(f"#{c}" for c in cols))
+            off = sorted(getattr(self, "_offfile", {}).get(role, []))
+            if off:
+                notes.append(f"{labels[role]} column{'s' if len(off) != 1 else ''} "
+                             + ", ".join(f"#{c}" for c in off)
+                             + f" kept but beyond this file's {self._ncols} columns")
+        return notes
 
     def selected_mapping(self):
         """The chosen mapping: single roles -> 1-based column (or None), emg/entropy ->
@@ -342,6 +402,13 @@ class ChannelSetupDialog(QDialog):
                 m[role] = i + 1                     # mutual exclusion keeps it unique
             else:
                 m[role].append(i + 1)
-        m["emg"] = sorted(m["emg"])
-        m["entropy"] = sorted(m["entropy"])
+        # Re-add what this dialog could not display (see _roles_from_mapping): the roles
+        # hidden behind another role on a shared column, and any column beyond this file's
+        # width. Pressing OK must never be a way to lose a channel assignment it never
+        # showed. set() also absorbs a role the user has since picked explicitly, so nothing
+        # is ever listed twice.
+        hidden = self._hidden_roles()
+        for role in ("emg", "entropy"):
+            back = {c for c, roles in hidden.items() if role in roles}
+            m[role] = sorted(set(m[role]) | back | set(getattr(self, "_offfile", {}).get(role, [])))
         return m

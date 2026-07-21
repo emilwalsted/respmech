@@ -213,6 +213,93 @@ def test_dialog_single_roles_are_mutually_exclusive(qapp):
     assert dlg.selected_mapping()["emg"] == [2, 3]
 
 
+# -- a column may carry several roles: opening the dialog must never destroy them ----
+# Regression: _roles_from_mapping seeds emg then entropy then the single roles, each
+# overwriting the last, and selected_mapping reads only the combos. So merely opening the
+# dialog and pressing OK deleted every role that lost. The worst case is the SHIPPED example
+# config (legacy/example.py:56-57), which puts EMG and entropy on the same five columns:
+# OK returned emg=[], silently switching the entire EMG analysis off.
+
+def _shared(extra=None):
+    m = {"flow": 5, "poes": 7, "pgas": 8, "pdi": 9, "entropy": [5]}
+    m.update(extra or {})
+    return _dialog(initial=m)
+
+
+def test_emg_and_entropy_on_the_same_columns_both_survive_ok(qapp):
+    """The shipped example config's shape. This is the case that silently disabled EMG."""
+    dlg = _dialog(initial={"flow": 5, "poes": 7, "pgas": 8, "pdi": 9,
+                           "emg": [2, 3, 4], "entropy": [2, 3, 4]})
+    m = dlg.selected_mapping()
+    assert m["emg"] == [2, 3, 4], "pressing OK switched the EMG analysis off"
+    assert m["entropy"] == [2, 3, 4]
+
+
+def test_entropy_sharing_a_column_with_a_role_survives_open_and_ok(qapp):
+    dlg = _shared()
+    assert dlg._role_of(4) == "flow"                 # the column still SHOWS the single role
+    m = dlg.selected_mapping()
+    assert m["flow"] == 5
+    assert m["entropy"] == [5], "pressing OK deleted the entropy assignment"
+
+
+def test_kept_roles_are_announced_rather_than_kept_invisible(qapp):
+    dlg = _shared()
+    assert "entropy" in dlg.info.text().lower() and "#5" in dlg.info.text()
+
+
+def test_the_note_shows_while_a_required_role_is_still_missing(qapp):
+    """Regression: the missing-required branch replaced the whole label, hiding the note
+    during exactly the editing session in which the user might act on it."""
+    dlg = _dialog(initial={"flow": 5, "entropy": [5]})       # no poes/pgas/pdi yet
+    assert "Assign" in dlg.info.text()
+    assert "entropy" in dlg.info.text().lower()
+
+
+def test_a_kept_role_is_released_when_the_user_edits_that_column(qapp):
+    """Regression: an unconditional memory was a one-way ratchet — re-assigning column 5 to
+    Pgas silently carried entropy onto the Pgas channel, with no way to clear it."""
+    dlg = _shared()
+    _set_role(dlg, 4, "pgas")                        # column 5 is something else now
+    assert dlg.selected_mapping()["entropy"] == []
+    assert "entropy" not in dlg.info.text().lower()
+
+
+def test_a_kept_role_is_not_duplicated_if_the_user_picks_it_explicitly(qapp):
+    dlg = _shared()
+    _set_role(dlg, 4, "entropy")
+    m = dlg.selected_mapping()
+    assert m["entropy"] == [5] and m["flow"] is None
+
+
+def test_entropy_on_its_own_column_is_untouched_by_the_kept_role_logic(qapp):
+    dlg = _shared({"entropy": [5, 11]})
+    assert dlg._role_of(10) == "entropy"
+    assert dlg.selected_mapping()["entropy"] == [5, 11]
+
+
+def test_columns_beyond_this_files_width_are_kept_and_flagged(qapp):
+    """A 12-column file cannot show column 20, but OK must not delete it either."""
+    dlg = _dialog(initial={"flow": 5, "poes": 7, "pgas": 8, "pdi": 9, "entropy": [20]})
+    assert dlg.selected_mapping()["entropy"] == [20]
+    assert "#20" in dlg.info.text() and "beyond" in dlg.info.text()
+
+
+def test_nothing_is_kept_and_nothing_is_said_when_no_roles_collide(qapp):
+    dlg = _dialog(initial={"flow": 5, "poes": 7, "pgas": 8, "pdi": 9, "entropy": [11]})
+    assert dlg._shadowed == {} and dlg._hidden_roles() == {}
+    assert "entropy" not in dlg.info.text().lower()
+
+
+def test_two_single_roles_on_one_column_are_not_preserved(qapp):
+    """Only emg/entropy are remembered. Two pressures on one column is an invalid mapping
+    the QC strip blocks outright, not a state worth resurrecting."""
+    dlg = _dialog(initial={"flow": 5, "poes": 5, "pgas": 8, "pdi": 9})
+    m = dlg.selected_mapping()
+    assert m["poes"] == 5 and m["flow"] is None       # last single role written wins
+    assert dlg._shadowed == {}
+
+
 def test_dialog_shows_source_column_names(qapp):
     dlg = _dialog()
     assert dlg._name_suffix(4).endswith("flow")      # column 5 == "flow"
@@ -290,6 +377,21 @@ def test_open_channel_setup_applies_mapping_on_ok(qapp, monkeypatch):
     assert sc.col_poes.value() == 7 and sc.col_pgas.value() == 8 and sc.col_pdi.value() == 9
     assert sc.cols_emg.text().replace(" ", "") == "2,3,4"
     assert sc.cols_entropy.text().replace(" ", "") == "10,11,12"
+    win.close()
+
+
+def test_shared_entropy_column_survives_a_full_settings_round_trip(qapp):
+    """End to end through the real dialog, not a stub: settings -> _current_channel_mapping
+    -> dialog -> selected_mapping -> _apply_channel_mapping -> settings. The dialog is the
+    only channel-assignment path, so a round trip through it must be lossless."""
+    win, sc = _screen_pointed_at_input(qapp)
+    ch = sc.state.settings.input.channels
+    ch.flow, ch.poes, ch.pgas, ch.pdi, ch.entropy = 5, 7, 8, 9, [5, 11]
+    dlg = _dialog(initial=sc._current_channel_mapping())
+    sc._apply_channel_mapping(dlg.selected_mapping())
+    out = sc.to_state().input.channels
+    assert out.flow == 5
+    assert out.entropy == [5, 11], "the entropy column shared with flow was lost"
     win.close()
 
 
