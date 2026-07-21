@@ -1395,6 +1395,16 @@ class PreviewScreen(QWidget):
         path = self._current_file()
         if not path:
             return
+        # EVERY kind loads the recording, and every load resolves the channel columns — so an
+        # incomplete mapping has to gate them all, not just "batch". This used to be masked by
+        # the Setup spin boxes, whose minimum of 1 meant a required channel could never be
+        # unset; with the assignment dialog as the sole writer it genuinely can be, and each
+        # ungated kind would render a panel full of raw loader traceback instead.
+        ok, why = self._settings_ok()
+        if not ok:
+            self._clear_panel_overlays(*_PANELS[kind])
+            self._set_status(f"Settings incomplete: {why}")
+            return
         has_emg = bool(self.state.settings.input.channels.emg)
         # snapshot the settings on the GUI thread so a worker never reads them while
         # the GUI mutates them in place (Settings is a plain, deep-copyable model)
@@ -1408,9 +1418,6 @@ class PreviewScreen(QWidget):
                 return
             worker = FnWorker(stage_ecg_reduction, snap, path)
         elif kind == "batch":
-            ok, _ = self._settings_ok()
-            if not ok:
-                return
             # MECHANICS-ONLY test run: drop EMG so run_batch skips ECG removal, EMG RMS
             # and noise reduction (that work is shown separately in the EMG tab).
             snap.input.channels.emg = []
