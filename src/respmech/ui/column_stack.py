@@ -158,7 +158,10 @@ class ColumnStack(QWidget):
                 _theme.align_left_axis(plot)       # stacked column previews share one left margin
             plot.getAxis("bottom").setStyle(showValues=last)
             role = "" if roles is None else roles.get(i, "")
-            y = matrix[:, i]
+            # A saved mapping can name a column this file does not have — a re-export with
+            # fewer channels, say. Draw the row blank rather than raising: the row still
+            # tells the user which column the setting points at, which is the useful part.
+            y = matrix[:, i] if i < matrix.shape[1] else np.full(matrix.shape[0], np.nan)
             curve = plot.plot(t[:len(y)], y, pen=pg.mkPen(role_color(pal, role), width=1),
                               connect="finite")
             if last:

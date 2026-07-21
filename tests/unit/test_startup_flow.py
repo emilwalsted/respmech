@@ -39,9 +39,9 @@ def _fill_valid_output(sc, out_dir):
 
 
 def _fill_valid_channels(sc):
-    sc.col_flow.setValue(5); sc.col_volume.setValue(6); sc.col_poes.setValue(7)
-    sc.col_pgas.setValue(8); sc.col_pdi.setValue(9)
-    sc.cols_emg.setText("2,3,4")
+    """Through the picker's own commit path — the channel fields are gone."""
+    sc._apply_channel_mapping({"flow": 5, "volume": 6, "poes": 7, "pgas": 8, "pdi": 9,
+                               "emg": [2, 3, 4], "entropy": []})
     sc._on_field_changed()
 
 
@@ -244,7 +244,7 @@ def test_open_analysis_from_saved_toml_roundtrips(qapp, tmp_path):
     sc2.enter_new_mode()
     sc2.open_analysis(str(p))
     assert sc2.in_folder.text() == INPUT
-    assert sc2.cols_emg.text().replace(" ", "") == "2,3,4"
+    assert "EMG: Columns #2, #3, #4" in sc2.channel_summary.texts()
     assert win2.tabs.isTabEnabled(win2._i_preview)
     assert "valid" in sc2.status.text().lower()
     win2.close()
@@ -552,7 +552,7 @@ def test_open_legacy_py_migrates_populates_and_reveals(qapp, tmp_path):
     assert sc.open_analysis(str(legacy)) is True          # migrator ran + report shown
     assert sc.in_folder.text() == INPUT                   # migrated fields landed in the form
     assert sc.samp_freq.value() == 1000
-    assert sc.cols_emg.text().replace(" ", "") == "2,3,4"
+    assert "EMG: Columns #2, #3, #4" in sc.channel_summary.texts()
     for stage in sc._stage_cards:
         for card in stage:
             assert _shown(card)
@@ -567,7 +567,8 @@ def test_save_open_roundtrip_preserves_surfaced_fields(qapp, tmp_path):
     sc = win.settings_screen
     _fill_valid_input(sc); _fill_valid_output(sc, tmp_path); _fill_valid_channels(sc)
     # set non-defaults across the groups
-    sc.cols_entropy.setText("10,11,12")
+    sc._apply_channel_mapping({"flow": 5, "volume": 6, "poes": 7, "pgas": 8,
+                               "pdi": 9, "emg": [2, 3, 4], "entropy": [10, 11, 12]})
     sc.seg_method.setCurrentText("Volume")        # display text; canonical token "volume" is userData
     sc.wob_from.setCurrentText("Individual")
     sc.emg_rms_window.setValue(0.1)
@@ -584,7 +585,7 @@ def test_save_open_roundtrip_preserves_surfaced_fields(qapp, tmp_path):
     win2 = MainWindow(AppState())
     sc2 = win2.settings_screen
     assert sc2.open_analysis(str(p)) is True
-    assert sc2.cols_entropy.text().replace(" ", "") == "10,11,12"
+    assert "Entropy: Columns #10, #11, #12" in sc2.channel_summary.texts()
     assert sc2.seg_method.currentData() == "volume"      # model token restored via userData
     assert sc2.wob_from.currentData() == "individual"
     assert abs(sc2.emg_rms_window.value() - 0.1) < 1e-9
@@ -683,7 +684,11 @@ def test_new_from_last_rig(qapp, isolated_prefs):
     assert hasattr(dlg, "rig_btn")                        # offered because a rig exists
     win = MainWindow(AppState()); sc = win.settings_screen
     sc.enter_new_mode(use_last_rig=True)
-    assert sc.col_poes.value() == 7 and sc.cols_emg.text() == "2,3,4"
+    # The rig object is state.settings itself, so a model assertion here would pass
+    # even with enter_new_mode's population and the whole summary dead.
+    rows = sc.channel_summary.texts()
+    assert "Oesophageal pressure (Poes): Column #7" in rows
+    assert "EMG: Columns #2, #3, #4" in rows
     assert sc.samp_freq.value() == 800
     assert not win.tabs.isTabEnabled(win._i_preview)      # still guided (folders blank)
     win.close()
