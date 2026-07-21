@@ -48,6 +48,45 @@ def test_helper_is_noop_without_usable_flow(qapp):
     assert _flow_items(pi) == []
 
 
+def test_helper_is_centred_on_zero_whatever_the_emg_spans(qapp):
+    """Regression: the silhouette used to be centred on the MIDPOINT of the EMG traces' own
+    min/max, so an asymmetric EMG (one startup transient is enough) shifted the whole
+    respiration curve off the zero line — by 20 % of the half-band down on one real file and
+    16 % up on another, which made two files impossible to compare by eye."""
+    import pyqtgraph as pg
+    from respmech.ui.plot_overlays import add_flow_background
+    t = np.arange(400) / 400.0
+    flow = np.sin(2 * np.pi * 2 * t)                    # symmetric about zero
+
+    for lo, hi in ((-1.0, 1.0), (-3.0, 0.4), (-0.2, 2.5)):   # symmetric, then badly skewed
+        pw = pg.PlotWidget(); pi = pw.getPlotItem()
+        pi.plot(t, np.linspace(lo, hi, t.size))         # an "EMG" trace spanning [lo, hi]
+        item = add_flow_background(pi, t, flow, {})
+        assert item is not None
+        y = np.asarray(item.getData()[1], float)
+        # a zero-symmetric flow must come back zero-symmetric, wherever the EMG sat
+        assert abs(y.max() + y.min()) < 1e-9, f"not centred on zero for EMG span ({lo}, {hi})"
+        assert item.opts["fillLevel"] == 0.0
+
+
+def test_helper_puts_zero_flow_on_the_zero_line(qapp):
+    """Min-max normalisation used to place zero flow at (0-fmin)/(fmax-fmin) — i.e. wherever
+    the larger of the two peaks fell (0.54 rather than 0.50 on a real file). An asymmetric
+    flow must still cross zero exactly where the real signal does."""
+    import pyqtgraph as pg
+    from respmech.ui.plot_overlays import add_flow_background
+    t = np.arange(400) / 400.0
+    flow = np.sin(2 * np.pi * 2 * t)
+    flow[flow < 0] *= 3.0                               # expiration 3x the inspiratory peak
+    pw = pg.PlotWidget(); pi = pw.getPlotItem()
+    pi.plot(t, np.zeros_like(t))
+    item = add_flow_background(pi, t, flow, {})
+    y = np.asarray(item.getData()[1], float)
+    assert np.all(np.sign(y[flow != 0]) == np.sign(flow[flow != 0]))   # sign preserved
+    assert abs(y[np.argmin(np.abs(flow))]) < 1e-9                      # zero flow -> y = 0
+    assert abs(y.min()) > abs(y.max())                  # the real asymmetry is kept, not erased
+
+
 def test_helper_survives_minimal_palette(qapp):
     """The noise dialog's fallback palette lacks a 'channels' key — must not KeyError."""
     import pyqtgraph as pg
