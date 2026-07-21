@@ -300,6 +300,58 @@ def test_two_single_roles_on_one_column_are_not_preserved(qapp):
     assert dlg._shadowed == {}
 
 
+# -- the column previews are read-only, and the wheel belongs to the list ----------
+# Two separate mechanisms, worth keeping straight. setMouseEnabled(False, False) is what
+# makes the preview read-only: pyqtgraph's ViewBox zooms on the wheel only while mouse
+# interaction is on, and ignores it once off. The wheel guard then turns that "nothing
+# happens" into "the column list scrolls". The dropdowns are the sharper case — measured
+# before the guard, one wheel over a role dropdown set that column to Flow, and because
+# Flow is mutually exclusive that moved the flow channel off the column it was on.
+# Exhaustive per-screen coverage lives in test_wheel_guard.py.
+
+def _wheel(qapp, target, notches=-3):
+    from PySide6.QtCore import Qt, QPoint, QPointF
+    from PySide6.QtGui import QWheelEvent
+    qapp.sendEvent(target, QWheelEvent(
+        QPointF(10, 10), target.mapToGlobal(QPoint(10, 10)), QPoint(0, 0),
+        QPoint(0, notches * 120), Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False))
+    qapp.processEvents()
+
+
+def _shown(qapp):
+    dlg = _dialog(initial={"flow": 5, "poes": 7, "pgas": 8, "pdi": 9})
+    dlg.resize(940, 660)
+    dlg.show()
+    qapp.processEvents()
+    return dlg
+
+
+def test_the_column_previews_are_not_interactive(qapp):
+    dlg = _shown(qapp)
+    for plot in dlg._plots:
+        assert plot.getViewBox().state["mouseEnabled"] == [False, False]
+
+
+def test_wheel_over_a_graph_scrolls_the_list_instead_of_zooming(qapp):
+    dlg = _shown(qapp)
+    vb = dlg._plots[3].getViewBox()
+    before, bar = vb.viewRange()[1][:], dlg._scroll.verticalScrollBar()
+    assert bar.maximum() > 0, "the column list must be scrollable for this to mean anything"
+    _wheel(qapp, dlg._plots[3].viewport())
+    assert bar.value() > 0, "the wheel did not scroll the column list"
+    assert vb.viewRange()[1][:] == before, "the graph zoomed"
+
+
+def test_wheel_over_a_role_dropdown_scrolls_instead_of_re_assigning(qapp):
+    dlg = _shown(qapp)
+    bar = dlg._scroll.verticalScrollBar()
+    before = dlg.selected_mapping()
+    at = bar.value()
+    _wheel(qapp, dlg._combos[3])
+    assert bar.value() > at, "the wheel did not scroll the column list"
+    assert dlg.selected_mapping() == before, "the wheel re-assigned a channel"
+
+
 def test_dialog_shows_source_column_names(qapp):
     dlg = _dialog()
     assert dlg._name_suffix(4).endswith("flow")      # column 5 == "flow"

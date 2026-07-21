@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QFrame, QHBoxLayout, QLabel,
 
 import pyqtgraph as pg
 
+from respmech.ui import wheel as _wheel
+
 try:
     from respmech.ui import theme as _theme
 except Exception:  # pragma: no cover
@@ -160,6 +162,7 @@ class ChannelSetupDialog(QDialog):
 
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll = scroll               # eventFilter redirects stray wheel events here
         content = QWidget(); rows = QVBoxLayout(content)
         rows.setContentsMargins(0, 0, 0, 0); rows.setSpacing(10)
 
@@ -194,6 +197,10 @@ class ChannelSetupDialog(QDialog):
             plot.setBackground(pal["bg"])
             plot.setFixedHeight(74)
             plot.setMenuEnabled(False)
+            # These are read-only previews of what each column contains: the scale is the
+            # information, so it must not be pannable, zoomable or resettable by accident.
+            plot.getViewBox().setMouseEnabled(x=False, y=False)
+            plot.hideButtons()                          # no auto-range 'A' in the corner
             if _theme is not None:
                 _theme.align_left_axis(plot)       # stacked column previews share one left margin
             plot.getAxis("bottom").setStyle(showValues=(i == self._ncols - 1))
@@ -211,6 +218,13 @@ class ChannelSetupDialog(QDialog):
             self._curves.append(curve); self._headers.append(lab)
 
         scroll.setWidget(content)
+        # The wheel belongs to the column list: without this a role dropdown steps its own
+        # selection (silently re-assigning a channel) and a preview graph zooms.
+        self._wheel_guard = _wheel.guard_scroll_area(
+            scroll, extra=[p.viewport() for p in self._plots])
+        # file_combo sits ABOVE the scroll area, so scrolling it must do nothing rather than
+        # move the list underneath — and certainly not switch files and reload every plot.
+        self._wheel_swallow = _wheel.swallow_wheel(extra=[self.file_combo], parent=self)
         v.addWidget(scroll, 1)
 
         foot = QHBoxLayout()
