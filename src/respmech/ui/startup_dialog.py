@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (QCommandLinkButton, QDialog, QFileDialog,
                                QHBoxLayout, QLabel, QPushButton, QVBoxLayout)
 
@@ -122,4 +123,13 @@ class StartupDialog(QDialog):
         p, _ = QFileDialog.getOpenFileName(
             self, "Open analysis", prefs.last_folder("analysis", "."), OPEN_FILTER)
         if p:                                   # a cancelled file picker keeps the chooser open
-            self.mode = "open"; self.path = p; self.accept()
+            self.mode = "open"; self.path = p
+            # accept() ends THIS dialog's modal session. Calling it right here would do that
+            # from inside the stack the native macOS open panel just returned into, while
+            # AppKit's own modal session for that panel is still unwinding — ending the two
+            # NSModalSessions out of order, which is what produces the stderr line
+            # "modalSession has been exited prematurely - check for a reentrant call to
+            # endModalSession:". Deferring by a single event-loop turn lets the panel's
+            # session finish first. This is the only place in the app where a native panel is
+            # opened from inside a Qt modal dialog.
+            QTimer.singleShot(0, self.accept)
