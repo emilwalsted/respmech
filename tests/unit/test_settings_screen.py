@@ -152,7 +152,11 @@ def test_advanced_panel_roundtrips_toml_only_knobs(qapp, tmp_path):
     s.processing.breath_counts = [BreathCountEntry("a,b.txt", 12)]
     win = MainWindow(AppState(s)); sc = win.settings_screen
     assert sc.seg_buffer.value() == 640 and sc.avg_resamp.value() == 750
-    assert sc.noise_nfft.value() == 512 and sc.matlab_variant.currentData() == "windows"
+    # n_fft has no Setup widget any more — the Preview EMG tab's Advanced modal owns it,
+    # alongside win_length and hop_length (test_advanced_dialog.py). It must still SURVIVE a
+    # Setup round trip, which is the thing this test is really about.
+    assert sc.to_state().processing.emg.noise.n_fft == 512
+    assert sc.matlab_variant.currentData() == "windows"
     assert sc.breath_counts_edit.toPlainText() == "a,b.txt = 12"
     assert [(e.file, e.count) for e in sc.to_state().processing.breath_counts] == [("a,b.txt", 12)]
     # edit + write back

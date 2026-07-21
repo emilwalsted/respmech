@@ -74,9 +74,9 @@ def test_use_region_as_noise_writes_settings_and_mirrors(qapp, tmp_path):
     assert n.reference_file == name
     assert n.reference_intervals == [[1.0, 5.0]]
     assert n.use_expiration is False
-    # the signal mirrored the choice into the Settings screen widgets
-    assert sc.noise_ref.text() == name
-    assert sc.noise_use_exp.isChecked() is False
+    # ...and Setup reflects it read-only: the picker is the only writer of all three fields
+    assert name in sc.noise_summary.text()
+    assert "marked span" in sc.noise_summary.text()
 
 
 # -- Feature C: preview EMG conditioning (staging + render) -----------------
@@ -602,7 +602,9 @@ def test_set_noise_profile_dialog_applies_selection(qapp, tmp_path, monkeypatch)
     pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
 
     class _FakeDialog:                                   # stub: accept with a chosen span
-        def __init__(self, *a, **k): pass
+        def __init__(self, *a, **k):
+            from PySide6.QtWidgets import QCheckBox
+            self.use_expiration = QCheckBox()            # the dialog's two-way choice
         def exec(self): return QDialog.Accepted
         def selected_region(self): return (0.4, 0.7)
 
@@ -626,13 +628,15 @@ def test_set_noise_profile_dialog_cancel_leaves_settings(qapp, tmp_path, monkeyp
     before = s.processing.emg.noise.reference_file
 
     class _FakeDialog:
-        def __init__(self, *a, **k): pass
+        def __init__(self, *a, **k):
+            from PySide6.QtWidgets import QCheckBox
+            self.use_expiration = QCheckBox()
         def exec(self): return QDialog.Rejected
         def selected_region(self): return (0.4, 0.7)
 
     monkeypatch.setattr(npd, "NoiseProfileDialog", _FakeDialog)
     pv._open_noise_profile_dialog()
-    assert s.processing.emg.noise.reference_file == before   # Annullér changed nothing
+    assert s.processing.emg.noise.reference_file == before   # Cancel changed nothing
     win.close()
 
 

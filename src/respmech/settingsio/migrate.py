@@ -168,7 +168,6 @@ def migrate_dict(legacy: dict) -> tuple[Settings, MigrationReport]:
         "ecg_min_distance_s": emg.get("mindistance", 0.5),
         "ecg_min_width_s": emg.get("minwidth", 0.001),
         "ecg_window_s": emg.get("windowsize", 0.4),
-        "remove_noise": emg.get("remove_noise", False),
         "outlier_rms_sd_limit": emg.get("outlierrmssdlimit", 0) or 0,
         "save_sound": emg.get("save_sound", False),
         "plot_yscale": emg.get("emgplotyscale", [-0.1, 0.1]),
