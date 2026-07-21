@@ -31,7 +31,12 @@ _LIGHT_RC = {
     "axes.grid": True,
     "axes.axisbelow": True,
     "axes.titlesize": 11,
-    "axes.titleweight": "600",
+    # "bold", not "600": nothing sets font.family, so matplotlib uses DejaVu Sans, which
+    # ships only weights 400 and 700. A request for 600 has always failed and fallen back
+    # to 700 — printing "findfont: Failed to find font weight 600, now using 700." on every
+    # figure — so this pins the weight that was already being rendered. Verified pixel-
+    # identical; changing it would break the byte-for-byte written-figure guarantee.
+    "axes.titleweight": "bold",
     "axes.titlepad": 8.0,
     "axes.labelsize": 10,
     "axes.labelcolor": "#33404D",
