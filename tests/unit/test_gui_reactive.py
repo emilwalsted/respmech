@@ -158,9 +158,12 @@ def test_shutdown_parks_a_thread_it_cannot_join(qapp, tmp_path):
 
 
 def test_gated_out_reschedule_does_not_supersede_running_job(qapp, tmp_path):
-    """Finding: bumping the token before the gate would let a gated-out
-    reschedule discard a still-running job's result. The token must only move
-    when a job actually launches."""
+    """Finding: bumping the token before the gate would let a gated-out reschedule discard a
+    still-running job's result. The token must only move when a job actually launches.
+
+    This is about a gate on WHAT IS SHOWN — no EMG channels, no ECG panel. The job that is
+    running is still computing something the current settings can produce, so its result
+    stays valid and must not be thrown away."""
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
@@ -169,9 +172,28 @@ def test_gated_out_reschedule_does_not_supersede_running_job(qapp, tmp_path):
     qapp.processEvents()                           # auto-run dispatches jobs (incl. the batch)
     assert _pump_until(qapp, lambda: "batch" in pv._jobs, 10)
     tok = pv._tokens["batch"]
-    pv._settings_ok = lambda: (False, "invalid")   # force the batch gate to fail
-    pv._schedule("batch")                          # gated out -> must NOT bump the token
-    assert pv._tokens["batch"] == tok              # running job's result stays valid
+    pv.state.settings.input.channels.emg = []      # the ECG panel has nothing to show
+    pv._schedule("ecg")                            # gated out -> must NOT bump any token
+    assert pv._tokens["batch"] == tok              # the running job's result stays valid
+    assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60)
+    win.close()
+
+
+def test_settings_going_invalid_DOES_supersede_a_running_job(qapp, tmp_path):
+    """The opposite case, and the distinction is the point. A job launched while the mapping
+    was valid is computing a result for a mapping the user has since abandoned; letting it
+    land repaints the panels we just blanked, under a status claiming success."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    pv._refresh_files()
+    pv.file_combo.setCurrentIndex(1)
+    qapp.processEvents()
+    assert _pump_until(qapp, lambda: "batch" in pv._jobs, 10)
+    tok = pv._tokens["batch"]
+    pv.state.settings.input.channels.flow = None   # the mapping is abandoned
+    pv._schedule("batch")
+    assert pv._tokens["batch"] != tok, "the obsolete job's result would still have landed"
     assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60)
     win.close()
 

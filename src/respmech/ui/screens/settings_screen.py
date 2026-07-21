@@ -24,6 +24,7 @@ from respmech.ui.help_text import tooltip as _tip
 from respmech.ui.startup_dialog import LEGACY_FILTER, OPEN_FILTER, TOML_FILTER
 from respmech.ui.validation import matching_files
 from respmech.ui import wheel as _wheel
+from respmech.ui.channel_summary import ChannelSummary
 
 # the guided-flow default file mask (multi-pattern; narrowed to the found extension on the
 # channel-setup OK so the single-pattern core batch runner still finds the files)
@@ -103,34 +104,23 @@ class SettingsScreen(QWidget):
         root.addWidget(gout)
 
         # Channels ---------------------------------------------------------
-        gch = QGroupBox("Channels — 1-based column numbers in the data file")
-        fc = QFormLayout(gch)
-        fc.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
+        gch = QGroupBox("Channels")
+        fc = QVBoxLayout(gch)
+        fc.setSpacing(8)
         self.btn_assign_channels = QPushButton("Assign channels from data…")
+        self.btn_assign_channels.setProperty("compact", True)   # a button, not a banner
         self.btn_assign_channels.setToolTip(
             "Open a visual picker: plot every column of your data and pick what each one is.")
         self.btn_assign_channels.clicked.connect(lambda: self._open_channel_setup())
-        fc.addRow("", self.btn_assign_channels)
-        self.col_flow = self._spin(); self.col_volume = self._spin(allow_zero=True)
-        self.col_poes = self._spin(); self.col_pgas = self._spin(); self.col_pdi = self._spin()
-        self.cols_emg = QLineEdit(); self.cols_entropy = QLineEdit()
-        for _cols in (self.cols_emg, self.cols_entropy):
-            _cols.setProperty("formField", "compact")   # short column lists ('2,3,4') share the spin column
-        self._row(fc, "Flow signal column", self.col_flow, "input.channels.flow",
-                  "Column number (counting from 1) holding the airflow signal, which reads negative during inspiration.")
-        self._row(fc, "Volume signal column", self.col_volume, "input.channels.volume",
-                  "Column number (counting from 1) holding the volume signal; or tick 'Calculate volume "
-                  "from flow' in Processing to derive it from flow instead (this column is then ignored).")
-        self._row(fc, "Oesophageal pressure (Poes) column", self.col_poes, "input.channels.poes",
-                  "Column number (counting from 1) holding the oesophageal pressure signal, in cmH2O.")
-        self._row(fc, "Gastric pressure (Pgas) column", self.col_pgas, "input.channels.pgas",
-                  "Column number (counting from 1) holding the gastric pressure signal, in cmH2O.")
-        self._row(fc, "Transdiaphragmatic pressure (Pdi) column", self.col_pdi, "input.channels.pdi",
-                  "Column number (counting from 1) holding the transdiaphragmatic pressure signal, in cmH2O.")
-        self._row(fc, "EMG channel columns", self.cols_emg, "input.channels.emg",
-                  "Column numbers (counting from 1) of the diaphragm EMG channels to analyse; enter one or more.")
-        self._row(fc, "Sample entropy columns", self.cols_entropy, "input.channels.entropy",
-                  "Column numbers (counting from 1) of the channels used for sample-entropy analysis; leave empty to skip.")
+        _brow = QWidget(); _bl = QHBoxLayout(_brow)
+        _bl.setContentsMargins(0, 0, 0, 0)
+        _bl.addWidget(self.btn_assign_channels); _bl.addStretch(1)
+        fc.addWidget(_brow)
+        # Read-only: the dialog is the only way to assign a channel, so this says what was
+        # chosen rather than asking for it. Typing a column number against a column count you
+        # cannot see is what the picker replaced.
+        self.channel_summary = ChannelSummary()
+        fc.addWidget(self.channel_summary)
         root.addWidget(gch)
 
         # Processing — breath mechanics ------------------------------------
@@ -550,13 +540,7 @@ class SettingsScreen(QWidget):
             self.in_files.setText(s.input.files)
             self.samp_freq.setValue(s.input.format.sampling_frequency or 2000)
             ch = s.input.channels
-            self.col_flow.setValue(ch.flow or 1)
-            self.col_volume.setValue(ch.volume or 0)
-            self.col_poes.setValue(ch.poes or 1)
-            self.col_pgas.setValue(ch.pgas or 1)
-            self.col_pdi.setValue(ch.pdi or 1)
-            self.cols_emg.setText(",".join(map(str, ch.emg)))
-            self.cols_entropy.setText(",".join(map(str, ch.entropy)))
+            self._refresh_channel_view()
             _si = self.seg_method.findData(s.processing.segmentation.method)
             self.seg_method.setCurrentIndex(_si if _si >= 0 else 0)
             _wi = self.wob_from.findData(s.processing.wob.calc_from)
@@ -633,13 +617,10 @@ class SettingsScreen(QWidget):
         s.input.files = self.in_files.text()
         s.input.format.sampling_frequency = self.samp_freq.value()
         ch = s.input.channels
-        ch.flow = self.col_flow.value()
-        ch.volume = self.col_volume.value() or None
-        ch.poes = self.col_poes.value()
-        ch.pgas = self.col_pgas.value()
-        ch.pdi = self.col_pdi.value()
-        ch.emg = _parse_ints(self.cols_emg.text())
-        ch.entropy = _parse_ints(self.cols_entropy.text())
+        # input.channels is written ONLY by _apply_channel_mapping, from the picker. It has
+        # no widget here, so rewriting it from one would mean rewriting it from nothing —
+        # and to_state runs on every tab change, which would erase the mapping on the first
+        # switch away from Setup.
         s.processing.segmentation.method = self.seg_method.currentData()
         s.processing.wob.calc_from = self.wob_from.currentData()
         s.processing.volume.integrate_from_flow = self.integrate.isChecked()
@@ -744,7 +725,7 @@ class SettingsScreen(QWidget):
         for w in (self.rp_min_survival, self.rp_min_island, self.rp_long_rr,
                   self.rp_max_long_rr, self.rp_hr_margin):
             w.setEnabled(gated_on)          # the guards only ever apply to the gated columns
-        self.col_volume.setEnabled(not self.integrate.isChecked())
+        self._refresh_channel_view()   # 'Volume: derived from flow' follows the checkbox
         self.trend_method.setEnabled(self.correct_trend.isChecked())
         self.resample_hz.setEnabled(self.resample.isChecked())
         self._update_save_preview()
@@ -760,7 +741,7 @@ class SettingsScreen(QWidget):
             got.append("cohort summary (mean ± SD, CV%, by group)")   # always paired with the average
         if self.save_bbb.isChecked():
             got.append("breath-by-breath workbook")
-            if self.emg_norm.currentData() != "none" and _parse_ints(self.cols_emg.text()):
+            if self.emg_norm.currentData() != "none" and self.state.settings.input.channels.emg:
                 got.append("normalised-EMG sheet")     # only when EMG channels are configured
         if self.save_processed.isChecked():
             got.append("processed CSV")
@@ -775,12 +756,10 @@ class SettingsScreen(QWidget):
     def _wire_reactivity(self):
         self.in_folder.editingFinished.connect(self._on_inputs_changed)
         self.in_files.editingFinished.connect(self._on_inputs_changed)
-        self.cols_emg.editingFinished.connect(self._on_emg_cols_changed)
-        for le in (self.cols_entropy, self.out_folder, self.noise_ref, self.group_regex):
+        for le in (self.out_folder, self.noise_ref, self.group_regex):
             le.editingFinished.connect(self._on_field_changed)
         self.breath_counts_edit.textChanged.connect(self._on_field_changed)   # QPlainTextEdit: no editingFinished
-        for sb in (self.samp_freq, self.col_flow, self.col_volume, self.col_poes,
-                   self.col_pgas, self.col_pdi, self.resample_hz,
+        for sb in (self.samp_freq, self.resample_hz,
                    self.seg_buffer, self.avg_resamp, self.ent_epochs, self.noise_nfft):
             sb.valueChanged.connect(self._on_field_changed)
         for dsb in (self.emg_rms_window, self.emg_outlier_sd, self.peak_height,
@@ -868,16 +847,6 @@ class SettingsScreen(QWidget):
         lab.setText(text)
         lab.setProperty("status", status)
         lab.style().unpolish(lab); lab.style().polish(lab)
-
-    def _on_emg_cols_changed(self, *_):
-        if self._loading:
-            return
-        # warn (non-blocking) if a typo silently dropped a non-numeric column token
-        raw = [p.strip() for p in self.cols_emg.text().replace(";", ",").split(",") if p.strip()]
-        dropped = [p for p in raw if not _is_int(p)]
-        self._on_field_changed()
-        if dropped:
-            self._set_status(f"Ignored non-numeric EMG column(s): {', '.join(dropped)}")
 
     def _set_status(self, text):
         self.status.setText(text)
@@ -1162,30 +1131,62 @@ class SettingsScreen(QWidget):
         ref = max(n for n, c in counts.items() if c == top)   # tie -> the widest layout
         return [f for f, n in probed if n == ref]
 
+    def _channel_view_signature(self):
+        """What the summary actually depends on. Rebuilding a stack of pyqtgraph plots on
+        every keystroke would be unusable, so the render is skipped unless one of these
+        moved."""
+        ch = self.state.settings.input.channels
+        f = self.state.settings.input.format
+        return (ch.flow, ch.volume, ch.poes, ch.pgas, ch.pdi, tuple(ch.emg), tuple(ch.entropy),
+                self.integrate.isChecked(), f.sampling_frequency, f.decimal,
+                self.in_folder.text(), self.in_files.text())
+
+    def _refresh_channel_view(self, force=False):
+        """Re-render the read-only channel summary. The traces need a readable data file; the
+        rows do not, so a mapping with no loadable file still shows which column is what."""
+        sig = self._channel_view_signature()
+        if not force and sig == getattr(self, "_channel_view_sig", None):
+            return
+        self._channel_view_sig = sig
+        s = self.state.settings
+        matrix = names = None
+        files = self._valid_input_files()
+        if files:
+            key = (files[0], s.input.format.sampling_frequency, s.input.format.decimal)
+            if getattr(self, "_raw_cache_key", None) == key:
+                matrix, names = self._raw_cache
+            else:
+                try:
+                    from respmech.ui.workers import load_raw_matrix
+                    matrix, names = load_raw_matrix(s, files[0])
+                    self._raw_cache_key, self._raw_cache = key, (matrix, names)
+                except Exception:      # noqa: BLE001 — the rows are still worth showing
+                    matrix = names = None
+        self.channel_summary.show_mapping(
+            s.input.channels, matrix=matrix, names=names,
+            fs=s.input.format.sampling_frequency or 1000,
+            integrate_from_flow=s.processing.volume.integrate_from_flow)
+
     def _current_channel_mapping(self):
         ch = self.state.settings.input.channels
         return {"flow": ch.flow, "volume": ch.volume, "poes": ch.poes, "pgas": ch.pgas,
                 "pdi": ch.pdi, "emg": list(ch.emg), "entropy": list(ch.entropy)}
 
     def _apply_channel_mapping(self, m, fmt_note=""):
-        """Write a role->column mapping from the modal into the channel widgets, then run
-        the normal reactive commit (which advances the guided disclosure). ``fmt_note`` is
-        an optional summary of any auto-detected file settings to mention in the status."""
-        prev, self._loading = self._loading, True
-        try:
-            if m.get("flow"):
-                self.col_flow.setValue(int(m["flow"]))
-            self.col_volume.setValue(int(m.get("volume") or 0))
-            if m.get("poes"):
-                self.col_poes.setValue(int(m["poes"]))
-            if m.get("pgas"):
-                self.col_pgas.setValue(int(m["pgas"]))
-            if m.get("pdi"):
-                self.col_pdi.setValue(int(m["pdi"]))
-            self.cols_emg.setText(",".join(str(c) for c in m.get("emg", [])))
-            self.cols_entropy.setText(",".join(str(c) for c in m.get("entropy", [])))
-        finally:
-            self._loading = prev
+        """Write a role->column mapping from the picker STRAIGHT INTO the model, then run the
+        normal reactive commit (which advances the guided disclosure). ``fmt_note`` is an
+        optional summary of any auto-detected file settings to mention in the status.
+
+        The model is written here rather than through widgets because there are none: this is
+        the only writer of input.channels, and to_state deliberately leaves it alone."""
+        ch = self.state.settings.input.channels
+        ch.flow = int(m["flow"]) if m.get("flow") else None
+        ch.volume = int(m["volume"]) if m.get("volume") else None
+        ch.poes = int(m["poes"]) if m.get("poes") else None
+        ch.pgas = int(m["pgas"]) if m.get("pgas") else None
+        ch.pdi = int(m["pdi"]) if m.get("pdi") else None
+        ch.emg = [int(c) for c in m.get("emg", [])]
+        ch.entropy = [int(c) for c in m.get("entropy", [])]
         self._sync_widgets()
         self._on_inputs_changed()   # a narrowed mask means the file list may have changed
         n_emg = len(m.get("emg", []))
@@ -1263,15 +1264,24 @@ class SettingsScreen(QWidget):
             "Almost done — complete the remaining settings to unlock Preview."
 
     def _channel_collision(self):
-        """A HARD channel-mapping error (message, else '') that the core's null-only
-        validate() would miss but which gives a silently wrong analysis: a required channel
-        (flow/poes/pgas/pdi) still pointing at column 1 — the time axis, the value they
-        default to when the mapping is skipped/cancelled — or two of them sharing a column."""
+        """A HARD channel-mapping error (message, else ''): a required channel
+        (flow/poes/pgas/pdi) not assigned at all, one pointing at column 1 — the time axis —
+        or two of them sharing a column.
+
+        Unassigned used to be impossible to express: the spin boxes had a minimum of 1, so a
+        skipped mapping read as column 1 and that was the sentinel this checked. With the
+        picker as the only writer the value is genuinely None, so both cases are named — and
+        they are named separately, because "you have not chosen yet" and "you chose the time
+        axis" call for different advice."""
         ch = self.state.settings.input.channels
         req = [("flow", ch.flow), ("poes", ch.poes), ("pgas", ch.pgas), ("pdi", ch.pdi)]
+        unset = [n for n, c in req if c is None]
+        if unset:
+            return (f"{', '.join(unset)} not assigned — "
+                    "click 'Assign channels from data…'")
         on_time = [n for n, c in req if c == 1]
         if on_time:
-            return (f"{', '.join(on_time)} still point at column 1 (the time axis) — "
+            return (f"{', '.join(on_time)} point at column 1 (the time axis) — "
                     "click 'Assign channels from data…'")
         cols = [c for _n, c in req if c]
         dup = sorted({c for c in cols if cols.count(c) > 1})
@@ -1594,18 +1604,3 @@ class SettingsScreen(QWidget):
         return path_problem(self.state.settings)
 
 
-def _is_int(token):
-    try:
-        int(token)
-        return True
-    except ValueError:
-        return False
-
-
-def _parse_ints(text):
-    out = []
-    for part in text.replace(";", ",").split(","):
-        part = part.strip()
-        if part and _is_int(part):
-            out.append(int(part))
-    return out

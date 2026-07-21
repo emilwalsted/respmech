@@ -144,8 +144,6 @@ def test_settings_widgets_expose_varpath_and_description_on_hover(qapp, tmp_path
     sc = SettingsScreen(AppState(_settings(str(tmp_path))))
     checks = {
         sc.samp_freq: "input.format.sampling_frequency",
-        sc.col_flow: "input.channels.flow",
-        sc.cols_emg: "input.channels.emg",
         sc.emg_rms_window: "processing.emg.rms_window_s",
         sc.remove_noise: "processing.emg.noise.enabled",
         sc.noise_ref: "processing.emg.noise.reference_file",
@@ -163,6 +161,8 @@ def test_settings_widgets_expose_varpath_and_description_on_hover(qapp, tmp_path
         tip = w.toolTip()
         assert var in tip, f"{var} missing from tooltip: {tip!r}"
         assert len(tip) > len(var) + 15, f"no description for {var}: {tip!r}"
+    # the channel columns have no fields any more: their settings paths moved onto the
+    # read-only summary rows, covered exhaustively by test_channel_summary.py
     # visible labels are human, never the raw variable name
     labels = {la.text() for la in sc.findChildren(QLabel)}
     assert "Sampling frequency" in labels
