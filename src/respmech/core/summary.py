@@ -79,6 +79,14 @@ def normalize_emg_table(breaths_table, settings) -> "pd.DataFrame | None":
         out["breath_no"] = breaths_table["breath_no"].to_numpy()
     for c in rms_cols:
         v = breaths_table[c].to_numpy(dtype=float)
+        if not np.isfinite(v).any():
+            # An entirely blank column is now a normal outcome, not a fault: the
+            # cardiac-gated columns are NaN for a whole file whose quality guards refused it
+            # (too fast a heart rate, too little heartbeat-free signal). nanmax/nanmean would
+            # emit "All-NaN slice encountered" and return NaN anyway, so short-circuit to the
+            # same answer without the noise.
+            out[f"{c}_pct"] = np.full_like(v, np.nan)
+            continue
         ref = np.nanmax(v) if mode == "per_file_max" else np.nanmean(v)
         out[f"{c}_pct"] = (100.0 * v / ref) if (ref and not np.isnan(ref)) else np.full_like(v, np.nan)
     return out
