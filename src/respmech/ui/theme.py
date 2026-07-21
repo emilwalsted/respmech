@@ -214,6 +214,48 @@ def _check_icon_path() -> str:
     return _CHECK_ICON_PATH
 
 
+_ARROW_ICON_PATHS: dict = {}
+
+
+def _arrow_icon_path(direction: str, colour: str) -> str:
+    """A small solid triangle PNG for a spin box's up/down arrow, generated once per
+    (direction, colour) and cached — Qt QSS ``url()`` needs a real file, not a data URI.
+
+    These exist because the entry-field rule below sets a border and radius on
+    QAbstractSpinBox, which hands the whole widget to Qt's stylesheet style. That style
+    positions the up/down buttons itself but leaves the arrow GLYPH to the base style, and
+    on Windows the glyph then draws blank: the two button stubs appear with no arrows in
+    them. Supplying the image explicitly is the documented fix and renders identically on
+    every platform. Returns "" on failure, in which case the arrows simply stay as Qt drew
+    them (i.e. no worse than before)."""
+    key = (direction, colour)
+    if key not in _ARROW_ICON_PATHS:
+        try:
+            import os as _os
+            import tempfile
+            from PySide6.QtGui import QImage, QPainter, QPolygonF, QColor, QBrush
+            from PySide6.QtCore import QPointF, Qt as _Qt
+            s = 28                                  # drawn large, scaled down by the QSS
+            img = QImage(s, s, QImage.Format_ARGB32)
+            img.fill(_Qt.transparent)
+            p = QPainter(img)
+            p.setRenderHint(QPainter.Antialiasing)
+            p.setPen(_Qt.NoPen)
+            p.setBrush(QBrush(QColor(colour)))
+            m, top, bot = 5.0, 8.0, 20.0            # a wide, shallow triangle reads best small
+            pts = ([QPointF(m, bot), QPointF(s - m, bot), QPointF(s / 2, top)] if direction == "up"
+                   else [QPointF(m, top), QPointF(s - m, top), QPointF(s / 2, bot)])
+            p.drawPolygon(QPolygonF(pts))
+            p.end()
+            path = _os.path.join(tempfile.gettempdir(),
+                                 f"respmech_qss_arrow_{direction}_{colour.lstrip('#')}.png")
+            img.save(path)
+            _ARROW_ICON_PATHS[key] = path.replace("\\", "/")
+        except Exception:                           # pragma: no cover - cosmetic
+            _ARROW_ICON_PATHS[key] = ""
+    return _ARROW_ICON_PATHS[key]
+
+
 # --------------------------------------------------------------------------- #
 # Style sheet template. Only ``$token`` placeholders are special (``string.
 # Template``); the many literal ``{ }`` of QSS pass through untouched. All
@@ -332,6 +374,29 @@ QLineEdit:disabled, QPlainTextEdit:disabled, QTextEdit:disabled,
 QComboBox:disabled, QAbstractSpinBox:disabled {
     background-color: $disabled_bg; color: $disabled_fg; border-color: $border;
 }
+/* Spin-box up/down buttons. The rule above sets a border + radius on QAbstractSpinBox,
+   which puts the widget under Qt's stylesheet style; that style positions these buttons but
+   leaves the arrow glyph to the base style, which draws nothing on Windows — the buttons
+   appear as two empty stubs. Drawing the arrows ourselves fixes that and looks the same
+   everywhere. The combo box is deliberately NOT touched: its native drop-down indicator
+   renders correctly today, so styling it would be risk without benefit. */
+QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {
+    subcontrol-origin: border;
+    width: 16px;
+    border: none;
+    background: transparent;
+}
+QAbstractSpinBox::up-button   { subcontrol-position: top right;    margin: 2px 2px 0 0; }
+QAbstractSpinBox::down-button { subcontrol-position: bottom right; margin: 0 2px 2px 0; }
+QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover {
+    background: $accent_soft; border-radius: 3px;
+}
+QAbstractSpinBox::up-arrow   { image: url("$arrow_up");   width: 9px; height: 9px; }
+QAbstractSpinBox::down-arrow { image: url("$arrow_down"); width: 9px; height: 9px; }
+/* ":off" is Qt's state for a spin button that can no longer step (value at min/max) */
+QAbstractSpinBox::up-arrow:disabled,   QAbstractSpinBox::up-arrow:off   { image: url("$arrow_up_dim"); }
+QAbstractSpinBox::down-arrow:disabled, QAbstractSpinBox::down-arrow:off { image: url("$arrow_down_dim"); }
+
 QComboBox QAbstractItemView {
     background-color: $surface;
     color: $text;
@@ -619,7 +684,16 @@ def apply_theme(app) -> str:
             pass
 
         try:
-            app.setStyleSheet(_QSS.safe_substitute(dict(tokens, check_icon=_check_icon_path())))
+            app.setStyleSheet(_QSS.safe_substitute(dict(
+                tokens,
+                check_icon=_check_icon_path(),
+                # $text, not $text_muted: rendered at 9px a muted triangle reads as almost
+                # absent, and the whole point of these is to be seen. This matches the weight
+                # of the arrows Qt drew natively before.
+                arrow_up=_arrow_icon_path("up", tokens["text"]),
+                arrow_down=_arrow_icon_path("down", tokens["text"]),
+                arrow_up_dim=_arrow_icon_path("up", tokens["disabled_fg"]),
+                arrow_down_dim=_arrow_icon_path("down", tokens["disabled_fg"]))))
         except Exception:
             pass
 
