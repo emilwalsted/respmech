@@ -223,6 +223,11 @@ def test_open_mode_reveals_everything(qapp):
     for stage in sc._stage_cards:
         for card in stage:
             assert _shown(card)
+    # conditional cards are deliberately NOT in _stage_cards: "reveal everything" reveals
+    # every card that APPLIES, and a default AppState has neither EMG nor entropy channels,
+    # so these two stay hidden (test_conditional_cards.py covers them in full)
+    for card, predicate in sc._cond_cards:
+        assert _shown(card) == predicate()
     assert win.tabs.isTabEnabled(win._i_preview)
     assert win.tabs.isTabEnabled(win._i_run)
     win.close()
@@ -527,6 +532,8 @@ def test_open_invalid_analysis_reveals_all_but_warns(qapp, tmp_path):
     for stage in sc._stage_cards:
         for card in stage:
             assert _shown(card)
+    for card, predicate in sc._cond_cards:     # shown iff they apply (this file has no EMG/entropy)
+        assert _shown(card) == predicate()
     assert win.tabs.isTabEnabled(win._i_preview)
     assert sc.status.text().lower().startswith("invalid")
     win.close()

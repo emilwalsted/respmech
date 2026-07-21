@@ -171,7 +171,6 @@ def migrate_dict(legacy: dict) -> tuple[Settings, MigrationReport]:
         "outlier_rms_sd_limit": emg.get("outlierrmssdlimit", 0) or 0,
         "save_sound": emg.get("save_sound", False),
         "plot_yscale": emg.get("emgplotyscale", [-0.1, 0.1]),
-        "noise_profile": emg.get("noise_profile", []),
     }
     m("emg.rms_s->rms_window_s; column_detect->detect_channel; min*->ecg_min_*; "
       "windowsize->ecg_window_s; outlierrmssdlimit->outlier_rms_sd_limit; "
