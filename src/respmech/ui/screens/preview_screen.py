@@ -136,7 +136,7 @@ def _kinds_for_settings_path(path):
         if path == "processing.emg.outlier_rms_sd_limit":
             return frozenset(("batch",))          # a batch-table outlier flag only
         if path in ("processing.emg.normalization", "processing.emg.save_sound",
-                    "processing.emg.plot_yscale", "processing.emg.noise_profile"):
+                    "processing.emg.plot_yscale"):
             return frozenset(("emg_all", "emg_detail"))   # display/output-ish -> redraw EMG panels
         # EMG conditioning (remove_ecg / detect_channel / ecg_* / rms_window_s / remove_noise) +
         # noise.* params: the ECG-reduction tab + the EMG/noise panels (the mechanics test run
@@ -947,11 +947,25 @@ class PreviewScreen(QWidget):
 
     def _refresh_ecg_channels(self):
         """Populate the capture-channel combo; default it to the MIDDLE EMG channel (typically
-        the weakest-EMG / clearest-ECG electrode) when the analysis has not configured ECG yet."""
+        the weakest-EMG / clearest-ECG electrode) when the analysis has not configured ECG yet.
+
+        detect_channel is an INDEX into input.channels.emg, not a column number, so
+        re-assigning the EMG channels silently re-points it — and if the new list is shorter,
+        points it past the end. The combo clamped for display only, so the screen showed one
+        electrode while the model held an index the core would crash on
+        (``emgcols[:, detect]``). The clamp is written back here, and said out loud: which
+        electrode the heartbeats are read from is a scientific choice, not a detail."""
         cols = list(self.state.settings.input.channels.emg)
         e = self.state.settings.processing.emg
         if len(cols) > 1 and int(e.detect_channel) == 0 and not e.remove_ecg:
             e.detect_channel = len(cols) // 2         # preview-only seed (golden reads the model directly)
+        if cols and not (0 <= int(e.detect_channel) < len(cols)):
+            was = int(e.detect_channel)
+            e.detect_channel = max(0, min(was, len(cols) - 1))
+            self._set_status(
+                f"ECG capture channel {was + 1} is beyond the {len(cols)} assigned EMG "
+                f"channel{'s' if len(cols) != 1 else ''} — reset to EMG col "
+                f"{cols[e.detect_channel]}. Check it is the electrode you want.")
         self.ecg_capture_channel.blockSignals(True)
         self.ecg_capture_channel.clear()
         for c in cols:
