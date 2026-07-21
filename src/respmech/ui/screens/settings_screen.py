@@ -95,6 +95,15 @@ class SettingsScreen(QWidget):
         self.format_readout.setProperty("banner", True)   # box baked at first polish (theme.py)
         self.format_readout.setProperty("status", "muted")
         f.addRow("", self.format_readout)
+        self.matlab_variant = QComboBox()
+        # 'wide', not 'compact': "MATLAB (Unix/Mac)" plus the drop-down arrow outgrows the
+        # 150px column on wider fonts (measured 131px of text against the column's 126px
+        # text box on the CI runners' fonts) — the cap must never clip its own content.
+        self.matlab_variant.setProperty("formField", "wide")
+        self.matlab_variant.addItem("MATLAB (Windows)", "windows")
+        self.matlab_variant.addItem("MATLAB (Unix/Mac)", "mac")
+        self._row(f, "MATLAB file variant", self.matlab_variant, "input.format.matlab_variant",
+                  "Variant/byte-order for .mat input files (ignored for CSV/Excel/text).")
         root.addWidget(gin)
 
         # Output (second in the flow: an analysis reads as Input -> Output -> rest) --
@@ -127,7 +136,7 @@ class SettingsScreen(QWidget):
         root.addWidget(gch)
 
         # Processing — breath mechanics ------------------------------------
-        gpr = QGroupBox("Processing")
+        gpr = QGroupBox("Mechanics")
         fp = QFormLayout(gpr)
         fp.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
         self.seg_method = QComboBox()
@@ -179,6 +188,15 @@ class SettingsScreen(QWidget):
                          "energy and degrades RMS / entropy / noise reduction.")
         _rshint.setWordWrap(True); _rshint.setProperty("status", "muted")
         fp.addRow("", _rshint)
+        self.btn_mech_advanced = QPushButton("Advanced…")
+        self.btn_mech_advanced.setProperty("compact", True)
+        self.btn_mech_advanced.setToolTip("Breath-detection tuning, the averaging grid, the "
+                                          "PTP baseline and per-file breath-count overrides.")
+        self.btn_mech_advanced.clicked.connect(self._open_mech_advanced)
+        _mrow = QWidget(); _ml = QHBoxLayout(_mrow)
+        _ml.setContentsMargins(0, 0, 0, 0)
+        _ml.addWidget(self.btn_mech_advanced); _ml.addStretch(1)
+        fp.addRow("", _mrow)
         root.addWidget(gpr)
 
         # EMG — RMS envelope -----------------------------------------------
@@ -324,55 +342,24 @@ class SettingsScreen(QWidget):
         root.addWidget(gsave)
 
         # --- Advanced (rarely changed): knobs that were previously TOML-only (audit #16/17/22-26)
-        gadv = QGroupBox("Advanced (rarely changed)")
-        fa = QFormLayout(gadv)
-        fa.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
+        # The Mechanics "Advanced…" settings keep their widgets — from_state/to_state still
+        # round-trip through them, which is what keeps the analysis file honest — but they are
+        # no longer laid out anywhere. The modal edits its own copies and commits into these,
+        # so Cancel costs nothing and the commit funnel is unchanged.
         self.seg_buffer = QSpinBox(); self.seg_buffer.setRange(0, 100_000)
-        self._row(fa, "Breath-separation buffer", self.seg_buffer, "processing.segmentation.buffer",
-                  "Guard samples added around each detected breath boundary during segmentation.")
         self.peak_height = QDoubleSpinBox(); self.peak_height.setRange(0.0, 1_000_000.0)
         self.peak_height.setDecimals(4); self.peak_height.setSingleStep(0.01)
-        self._row(fa, "Breath peak — min height", self.peak_height, "processing.segmentation.peak.height",
-                  "Minimum peak height for breath detection (used for volume-based separation).")
         self.peak_distance = QDoubleSpinBox(); self.peak_distance.setRange(0.0, 60.0)
         self.peak_distance.setDecimals(4); self.peak_distance.setSingleStep(0.05); self.peak_distance.setSuffix(" s")
-        self._row(fa, "Breath peak — min distance", self.peak_distance, "processing.segmentation.peak.distance_s",
-                  "Minimum time between detected breath peaks.")
         self.peak_width = QDoubleSpinBox(); self.peak_width.setRange(0.0, 60.0)
         self.peak_width.setDecimals(4); self.peak_width.setSingleStep(0.05); self.peak_width.setSuffix(" s")
-        self._row(fa, "Breath peak — min width", self.peak_width, "processing.segmentation.peak.width_s",
-                  "Minimum width of a detected breath peak.")
         self.avg_resamp = QSpinBox(); self.avg_resamp.setRange(10, 100_000)
-        self._row(fa, "Average-breath resampling points", self.avg_resamp, "processing.wob.avg_resampling_obs",
-                  "Points each breath is resampled to when building the average breath / WOB.")
         self.ptp_baseline = QDoubleSpinBox(); self.ptp_baseline.setRange(0.0, 1.0)
         self.ptp_baseline.setDecimals(4); self.ptp_baseline.setSingleStep(0.01); self.ptp_baseline.setSuffix(" s")
-        self._row(fa, "PTP baseline window", self.ptp_baseline, "processing.ptp.baseline_window_s",
-                  "End-expiratory window whose mean is the pressure-time-product baseline.")
-        self.noise_nfft = QSpinBox(); self.noise_nfft.setRange(16, 8192)
-        self._row(fa, "Noise STFT window (n_fft)", self.noise_nfft, "processing.emg.noise.n_fft",
-                  "FFT window length (samples) for the spectral noise gate; a power of two.")
-        # Cardiac-gated peak — the quality guards. Each decides when a gated value would be
-        # untrustworthy and should be left blank instead; the defaults are the measured ones
-        # (see docs/CARDIAC_GATED_PEAK_EMG.md) and are rarely worth changing.
-        self.matlab_variant = QComboBox()
-        # 'wide', not 'compact': "MATLAB (Unix/Mac)" plus the drop-down arrow outgrows the
-        # 150px column on wider fonts (measured 131px of text against the column's 126px
-        # text box on the CI runners' fonts) — the cap must never clip its own content.
-        self.matlab_variant.setProperty("formField", "wide")
-        self.matlab_variant.addItem("MATLAB (Windows)", "windows")
-        self.matlab_variant.addItem("MATLAB (Unix/Mac)", "mac")
-        self._row(fa, "MATLAB file variant", self.matlab_variant, "input.format.matlab_variant",
-                  "Variant/byte-order for .mat input files (ignored for CSV/Excel/text).")
-        # one entry per line (not comma-separated) so filenames containing a comma survive
         self.breath_counts_edit = QPlainTextEdit()
         self.breath_counts_edit.setProperty("formField", "wide")   # holds 'filename = count' lines (theme.py)
         self.breath_counts_edit.setPlaceholderText("one 'filename = count' per line")
         self.breath_counts_edit.setFixedHeight(64)
-        self._row(fa, "Breath-count overrides", self.breath_counts_edit, "processing.breath_counts",
-                  "Per-file override of the breath count used for per-minute rate scaling — one "
-                  "'filename = count' per line, e.g. 'RIU_H5_40W.txt = 12'. Blank = each file's detected count.")
-        root.addWidget(gadv)
 
         # Status text is shown in the window's bottom status bar (see main_window). This
         # label is kept only as a hidden text holder mirroring that message — showing it
@@ -410,7 +397,7 @@ class SettingsScreen(QWidget):
         self._stage_cards = [
             [gin],                                   # 0: Input (always shown)
             [gout],                                  # 1: Output (after Input is valid)
-            [gch, gpr, gemg, gecg, gns, gsave, gadv],  # 2: the rest (after Output is valid)
+            [gch, gpr, gemg, gecg, gns, gsave],  # 2: the rest (after Output is valid)
         ]
         # Cards whose relevance depends on the analysis itself. Deliberately NOT in
         # _stage_cards: that loop forces every registered card visible outside "new" mode, so
@@ -538,7 +525,6 @@ class SettingsScreen(QWidget):
             self.ptp_baseline.setValue(s.processing.ptp.baseline_window_s)
             self.ent_epochs.setValue(s.processing.entropy.epochs)
             self.ent_tol.setValue(s.processing.entropy.tolerance)
-            self.noise_nfft.setValue(n.n_fft)
             _mi = self.matlab_variant.findData(s.input.format.matlab_variant)
             self.matlab_variant.setCurrentIndex(_mi if _mi >= 0 else 0)
             self.breath_counts_edit.setPlainText(
@@ -605,7 +591,9 @@ class SettingsScreen(QWidget):
         s.processing.ptp.baseline_window_s = self.ptp_baseline.value()
         s.processing.entropy.epochs = self.ent_epochs.value()
         s.processing.entropy.tolerance = self.ent_tol.value()
-        n.n_fft = self.noise_nfft.value()
+        # noise.n_fft is written by the Preview EMG tab's Advanced modal, alongside
+        # win_length and hop_length. Keeping a second writer here silently reverted it
+        # on the next tab change — measured.
         # processing.emg.robust_peak is written ONLY by the Preview EMG tab, which is where
         # its controls now live — beside the EMG they change, and one tab from the ECG removal
         # they depend on. to_state runs on every tab change, so rewriting it from here would
@@ -693,7 +681,7 @@ class SettingsScreen(QWidget):
             le.editingFinished.connect(self._on_field_changed)
         self.breath_counts_edit.textChanged.connect(self._on_field_changed)   # QPlainTextEdit: no editingFinished
         for sb in (self.samp_freq, self.resample_hz,
-                   self.seg_buffer, self.avg_resamp, self.ent_epochs, self.noise_nfft):
+                   self.seg_buffer, self.avg_resamp, self.ent_epochs):
             sb.valueChanged.connect(self._on_field_changed)
         for dsb in (self.emg_rms_window, self.emg_outlier_sd, self.peak_height,
                     self.peak_distance, self.peak_width, self.ptp_baseline, self.ent_tol):
@@ -954,6 +942,79 @@ class SettingsScreen(QWidget):
         self._channel_modal_done = True
         self._open_channel_setup(initial={})     # fresh analysis -> no pre-selection
         self._update_disclosure()                # reveal the rest (OK applied, or cancelled)
+
+    def _open_mech_advanced(self):
+        """Breath detection, the averaging grid, the PTP baseline and the per-file breath
+        counts. Real settings, but not ones anyone sets while getting a result out.
+
+        The screen's own widgets still exist and still round-trip through from_state/to_state
+        — they are simply not laid out any more. The dialog edits its own copies and commits
+        into them, so Cancel costs nothing and the commit funnel below is the same one an
+        ordinary field edit uses, which is what keeps the dirty flag and the recompute scope
+        right without repeating either here."""
+        from respmech.ui.advanced_dialog import AdvancedDialog, Field
+        fields = [
+            Field("seg_buffer", "Breath-separation buffer", "int",
+                  "processing.segmentation.buffer",
+                  "Guard samples added around each detected breath boundary.",
+                  lo=0, hi=100_000, step=10),
+            Field("peak_height", "Breath peak — minimum height", "float",
+                  "processing.segmentation.peak.height",
+                  "Minimum peak height for breath detection (volume-based separation).",
+                  lo=0.0, hi=1_000_000.0, step=0.01, decimals=4),
+            Field("peak_distance", "Breath peak — minimum distance", "float",
+                  "processing.segmentation.peak.distance_s",
+                  "Minimum time between detected breath peaks.",
+                  lo=0.0, hi=60.0, step=0.05, decimals=4, suffix=" s"),
+            Field("peak_width", "Breath peak — minimum width", "float",
+                  "processing.segmentation.peak.width_s",
+                  "Minimum width of a detected breath peak.",
+                  lo=0.0, hi=60.0, step=0.05, decimals=4, suffix=" s"),
+            Field("avg_resamp", "Average-breath resampling points", "int",
+                  "processing.wob.avg_resampling_obs",
+                  "Points each breath is resampled to when building the average breath / WOB.",
+                  lo=10, hi=100_000, step=10),
+            Field("ptp_baseline", "PTP baseline window", "float",
+                  "processing.ptp.baseline_window_s",
+                  "End-expiratory window whose mean is the pressure-time-product baseline.",
+                  lo=0.0, hi=1.0, step=0.01, decimals=4, suffix=" s"),
+            Field("breath_counts", "Breath-count overrides", "text",
+                  "processing.breath_counts",
+                  "Per-file override of the breath count used for per-minute rate scaling — "
+                  "one 'filename = count' per line, e.g. 'RIU_H5_40W.txt = 12'. Blank means "
+                  "each file's detected count.",
+                  placeholder="one 'filename = count' per line"),
+        ]
+        current = {
+            "seg_buffer": self.seg_buffer.value(),
+            "peak_height": self.peak_height.value(),
+            "peak_distance": self.peak_distance.value(),
+            "peak_width": self.peak_width.value(),
+            "avg_resamp": self.avg_resamp.value(),
+            "ptp_baseline": self.ptp_baseline.value(),
+            "breath_counts": self.breath_counts_edit.toPlainText(),
+        }
+        dlg = AdvancedDialog("Mechanics — advanced", fields, current, parent=self,
+                             intro="Breath detection and the averaging grid. The defaults "
+                                   "suit ordinary recordings; reach for these when a "
+                                   "recording is segmenting badly.")
+        if dlg.exec() != QDialog.Accepted:
+            return
+        staged = dlg.values()
+        if staged == current:
+            return                      # OK without an edit: no dirty flag, no recompute
+        prev, self._loading = self._loading, True
+        try:
+            self.seg_buffer.setValue(int(staged["seg_buffer"]))
+            self.peak_height.setValue(float(staged["peak_height"]))
+            self.peak_distance.setValue(float(staged["peak_distance"]))
+            self.peak_width.setValue(float(staged["peak_width"]))
+            self.avg_resamp.setValue(int(staged["avg_resamp"]))
+            self.ptp_baseline.setValue(float(staged["ptp_baseline"]))
+            self.breath_counts_edit.setPlainText(staged["breath_counts"])
+        finally:
+            self._loading = prev
+        self._on_field_changed()        # the ordinary commit: dirty + sync + recompute scope
 
     def _open_channel_setup(self, initial=None):
         """Show the visual channel-assignment modal over the valid data files matching the
