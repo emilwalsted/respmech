@@ -443,10 +443,11 @@ def test_open_channel_setup_applies_mapping_on_ok(qapp, monkeypatch):
     monkeypatch.setattr(csd, "ChannelSetupDialog", lambda *a, **k: _StubDialog(accept=True))
     win, sc = _screen_pointed_at_input(qapp)
     assert sc._open_channel_setup(initial={}) is True
-    assert sc.col_flow.value() == 5 and sc.col_volume.value() == 6
-    assert sc.col_poes.value() == 7 and sc.col_pgas.value() == 8 and sc.col_pdi.value() == 9
-    assert sc.cols_emg.text().replace(" ", "") == "2,3,4"
-    assert sc.cols_entropy.text().replace(" ", "") == "10,11,12"
+    ch = sc.state.settings.input.channels
+    assert (ch.flow, ch.volume, ch.poes, ch.pgas, ch.pdi) == (5, 6, 7, 8, 9)
+    assert ch.emg == [2, 3, 4] and ch.entropy == [10, 11, 12]
+    # and it reached the readout the user actually sees
+    assert "Flow signal: Column #5" in sc.channel_summary.texts()
     win.close()
 
 
@@ -469,9 +470,9 @@ def test_open_channel_setup_cancel_changes_nothing(qapp, monkeypatch):
     import respmech.ui.channel_setup_dialog as csd
     monkeypatch.setattr(csd, "ChannelSetupDialog", lambda *a, **k: _StubDialog(accept=False))
     win, sc = _screen_pointed_at_input(qapp)
-    before = sc.cols_emg.text()
+    before = list(sc.state.settings.input.channels.emg)
     assert sc._open_channel_setup(initial={}) is False
-    assert sc.cols_emg.text() == before
+    assert sc.state.settings.input.channels.emg == before
     win.close()
 
 
@@ -574,8 +575,11 @@ def test_all_ok_rejects_a_multi_pattern_mask(qapp, tmp_path):
     (tmp_path / "a.csv").write_text("t,f,p,g,d\n0,1,2,3,4\n1,1,2,3,4\n")
     win = MainWindow(AppState()); sc = win.settings_screen
     sc.in_folder.setText(str(tmp_path)); sc.samp_freq.setValue(1000)
-    sc.col_flow.setValue(2); sc.col_poes.setValue(3); sc.col_pgas.setValue(4); sc.col_pdi.setValue(5)
-    sc.col_volume.setValue(0); sc.integrate.setChecked(True)
+    sc._apply_channel_mapping({"flow": 2, "volume": None, "poes": 3, "pgas": 4,
+                               "pdi": 5, "emg": [], "entropy": []})
+    sc._apply_channel_mapping({"flow": 5, "volume": None, "poes": 7, "pgas": 8,
+                               "pdi": 9, "emg": [], "entropy": []})
+    sc.integrate.setChecked(True)
     sc.out_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv"); sc._on_field_changed()
     assert sc._all_ok()                              # a single, valid mask is ready
     sc.state.settings.input.files = "*.csv, *.txt"   # a mask the core runner cannot glob
@@ -638,15 +642,20 @@ def test_valid_input_files_tie_break_prefers_widest_and_missing_folder(qapp, tmp
     win.close()
 
 
-def test_apply_channel_mapping_writes_widgets(qapp):
+def test_apply_channel_mapping_writes_the_model_and_the_readout(qapp):
+    """It is the ONLY writer of input.channels now — to_state deliberately leaves it alone,
+    so anything this fails to set stays unset."""
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState())
     sc = win.settings_screen
     sc._apply_channel_mapping({"flow": 3, "volume": None, "poes": 4, "pgas": 5,
                                "pdi": 6, "emg": [1, 2], "entropy": []})
-    assert sc.col_flow.value() == 3 and sc.col_poes.value() == 4
-    assert sc.col_volume.value() == 0             # unassigned volume -> 0
-    assert sc.cols_emg.text().replace(" ", "") == "1,2"
+    ch = sc.state.settings.input.channels
+    assert (ch.flow, ch.poes, ch.pgas, ch.pdi) == (3, 4, 5, 6) and ch.emg == [1, 2]
+    assert ch.volume is None                      # unassigned stays unassigned, not 0
+    rows = sc.channel_summary.texts()
+    assert "Flow signal: Column #3" in rows
+    assert not any(r.startswith("Volume") for r in rows)
     assert "assigned" in sc.status.text().lower()
     win.close()
 

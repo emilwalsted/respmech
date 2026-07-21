@@ -98,6 +98,16 @@ def test_a_column_absent_from_the_new_file_is_blanked_not_stale(qapp):
     assert np.all(np.isnan(st.curves[0].getData()[1]))
 
 
+def test_a_column_the_file_does_not_have_is_blank_not_a_crash(qapp):
+    """A saved mapping can outlive the file it was made against — a re-export with fewer
+    channels. The row must still say which column it points at."""
+    m, names = _matrix(cols=5)
+    st = ColumnStack(1000, columns=[0, 6]).build(m, names)
+    assert len(st.plots) == 2
+    assert np.all(np.isnan(st.curves[1].getData()[1]))
+    assert st.headers[1].text().startswith("Column 7")
+
+
 def test_one_column_is_accepted(qapp):
     """A single-channel recording arrives as a 1-D array from some paths."""
     st = ColumnStack(1000, columns=[0]).build(np.arange(50.0), ["only"])
