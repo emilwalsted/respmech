@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import traceback
 
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
                                QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
                                QScrollArea, QSpinBox, QVBoxLayout, QWidget)
@@ -49,6 +49,9 @@ class SettingsScreen(QWidget):
         self._build()
         self.from_state()
         self._wire_reactivity()
+        # conditional cards default to visible as built, so settle them once against the
+        # analysis we just loaded rather than waiting for the first edit
+        self._apply_card_visibility()
         self._loading = False
 
     # -- UI construction ----------------------------------------------------
@@ -281,6 +284,25 @@ class SettingsScreen(QWidget):
         # defaults (only the folder was surfaced); this makes every workbook/CSV/figure an
         # explicit, per-run choice. Lives in the 'rest' stage so the guided Output step stays
         # to just the folder.
+        # Entropy ----------------------------------------------------------
+        # Shown only when a column is actually assigned to entropy — see _cond_cards. Its two
+        # parameters are meaningless otherwise, and burying them in "Advanced (rarely
+        # changed)" hid them from the users who DO compute entropy.
+        gent = QGroupBox("Sample entropy")
+        fent = QFormLayout(gent)
+        fent.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        self.ent_epochs = QSpinBox(); self.ent_epochs.setRange(1, 100)
+        self._row(fent, "Embedding (m)", self.ent_epochs, "processing.entropy.epochs",
+                  "Embedding dimension (m) for sample entropy; 2 by convention.")
+        self.ent_tol = QDoubleSpinBox(); self.ent_tol.setRange(0.0, 10.0)
+        self.ent_tol.setDecimals(4); self.ent_tol.setSingleStep(0.05)
+        self._row(fent, "Tolerance (r)", self.ent_tol, "processing.entropy.tolerance",
+                  "Matching tolerance (r) for sample entropy; 0.1 by convention.")
+        _enthint = QLabel("Computed on the columns ticked as Entropy in the channel picker.")
+        _enthint.setWordWrap(True); _enthint.setProperty("status", "muted")
+        fent.addRow("", _enthint)
+        root.addWidget(gent)
+
         gsave = QGroupBox("Output — what to save")
         fsv = QFormLayout(gsave)
         fsv.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
@@ -357,13 +379,6 @@ class SettingsScreen(QWidget):
         self.ptp_baseline.setDecimals(4); self.ptp_baseline.setSingleStep(0.01); self.ptp_baseline.setSuffix(" s")
         self._row(fa, "PTP baseline window", self.ptp_baseline, "processing.ptp.baseline_window_s",
                   "End-expiratory window whose mean is the pressure-time-product baseline.")
-        self.ent_epochs = QSpinBox(); self.ent_epochs.setRange(1, 100)
-        self._row(fa, "Entropy — embedding (m)", self.ent_epochs, "processing.entropy.epochs",
-                  "Embedding dimension (m) for sample entropy.")
-        self.ent_tol = QDoubleSpinBox(); self.ent_tol.setRange(0.0, 10.0)
-        self.ent_tol.setDecimals(4); self.ent_tol.setSingleStep(0.05)
-        self._row(fa, "Entropy — tolerance (r)", self.ent_tol, "processing.entropy.tolerance",
-                  "Matching tolerance (r) for sample entropy.")
         self.noise_nfft = QSpinBox(); self.noise_nfft.setRange(16, 8192)
         self._row(fa, "Noise STFT window (n_fft)", self.noise_nfft, "processing.emg.noise.n_fft",
                   "FFT window length (samples) for the spectral noise gate; a power of two.")
@@ -469,6 +484,14 @@ class SettingsScreen(QWidget):
             [gin],                                   # 0: Input (always shown)
             [gout],                                  # 1: Output (after Input is valid)
             [gch, gpr, gemg, gecg, ggate, gns, gsave, gadv],  # 2: the rest (after Output is valid)
+        ]
+        # Cards whose relevance depends on the analysis itself. Deliberately NOT in
+        # _stage_cards: that loop forces every registered card visible outside "new" mode, so
+        # a predicate there would be overwritten on the next keystroke — and
+        # test_startup_flow's "open mode reveals everything" walk would fail on a default
+        # AppState. Kept separate, ANDed in its own pass.
+        self._cond_cards = [
+            (gent, lambda: bool(self.state.settings.input.channels.entropy)),
         ]
         self._stage_gate = [self._input_stage_ok, self._output_stage_ok]
         self._mode = "full"          # "full" = every card+tab visible (default/open); "new" = guided
@@ -1233,6 +1256,15 @@ class SettingsScreen(QWidget):
             visible = (self._mode != "new") or (i < self._revealed)
             for c in cards:
                 c.setVisible(visible)
+        # Conditional cards break this function's monotonicity promise ("a card never
+        # retracts once shown"), so they get the one exemption that keeps that promise
+        # honest where it matters: a card holding the widget the user is typing in is never
+        # yanked out from under them.
+        staged = (self._mode != "new") or (len(self._stage_cards) - 1 < self._revealed)
+        for card, relevant in self._cond_cards:
+            if card.isVisible() and card.isAncestorOf(QApplication.focusWidget()):
+                continue
+            card.setVisible(staged and relevant())
 
     def _new_mode_status(self, ready):
         """The guided-flow status line for the stage the user is on. The Input/Output
