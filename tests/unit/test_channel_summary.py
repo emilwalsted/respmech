@@ -68,16 +68,34 @@ def test_derived_volume_says_so_instead_of_naming_an_ignored_column(qapp):
     assert describe(ch, "volume", integrate_from_flow=False) == "Volume: Column #6"
 
 
-def test_a_column_carrying_two_roles_is_listed_twice_but_drawn_once(qapp):
+def test_a_column_carrying_two_roles_is_drawn_once_and_names_both(qapp):
     """Entropy is non-exclusive, so column 5 can be both the flow signal and an entropy
-    channel — it belongs in both rows, but only one trace."""
+    channel. One trace, one header, both roles named."""
     ch = _channels(flow=5, poes=7, entropy=[5, 11])
     m, names = _matrix()
     su = ChannelSummary().show_mapping(ch, matrix=m, names=names)
-    assert "Flow signal: Column #5" in su.texts()
-    assert "Entropy: Columns #5, #11" in su.texts()
     assert assigned_columns(ch) == [5, 7, 11]
     assert len(su.stack.plots) == 3
+    assert su.texts()[0].startswith("Flow signal + Entropy  ·  Column 5")
+    assert su.texts()[2].startswith("Entropy  ·  Column 11")
+
+
+def test_there_is_no_separate_legend(qapp):
+    """Each graph names itself, so a list above repeating the same facts would only be a
+    second place to keep in sync."""
+    ch = _channels(flow=5, poes=7)
+    m, names = _matrix()
+    su = ChannelSummary().show_mapping(ch, matrix=m, names=names)
+    assert su.rows == su.stack.headers
+    assert not any(t.startswith("Flow signal:") for t in su.texts())
+
+
+def test_a_two_role_header_carries_both_settings_paths(qapp):
+    ch = _channels(flow=5, entropy=[5])
+    m, names = _matrix()
+    su = ChannelSummary().show_mapping(ch, matrix=m, names=names)
+    tip = su.stack.headers[0].toolTip()
+    assert "input.channels.flow" in tip and "input.channels.entropy" in tip
 
 
 def test_the_role_wins_the_colour_of_a_shared_column(qapp):
@@ -110,7 +128,7 @@ def test_every_row_names_its_settings_variable(qapp):
     """test_gui_hardening asserted this on sc.col_flow / sc.cols_emg; the rows are its new
     home, so hovering still tells the user which TOML key they are looking at."""
     ch = _channels(flow=5, volume=6, poes=7, pgas=8, pdi=9, emg=[2], entropy=[3])
-    su = ChannelSummary().show_mapping(ch)
+    su = ChannelSummary().show_mapping(ch)          # no file -> the plain fallback list
     for role, lab in zip(ORDER, su.rows):
         var = ROLE_HELP[role][0]
         assert var in lab.toolTip(), f"{var} missing from {lab.toolTip()!r}"
