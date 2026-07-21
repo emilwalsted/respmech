@@ -22,7 +22,14 @@ try:
 except Exception:  # pragma: no cover
     _theme = None
 
+#: every role a channel mapping can carry
+ASSIGNABLE = ("flow", "volume", "poes", "pgas", "pdi", "emg", "entropy")
 #: role key -> dropdown label. "" is the (unused) sentinel and must stay first.
+#: Entropy is deliberately absent: it is the one NON-EXCLUSIVE role — sample entropy may be
+#: computed on a column that already carries flow or a pressure, and the shipped example
+#: config does exactly that — so it gets its own per-column checkbox instead. A dropdown
+#: cannot express "this column is both", and pretending otherwise is what used to delete
+#: assignments on OK.
 ROLES = [
     ("", "(unused)"),
     ("flow", "Flow"),
@@ -31,7 +38,6 @@ ROLES = [
     ("pgas", "Pgas — gastric pressure"),
     ("pdi", "Pdi — transdiaphragmatic"),
     ("emg", "EMG — diaphragm"),
-    ("entropy", "Entropy"),
 ]
 #: role key -> how a summary row names it (a sentence, not a menu entry)
 ROLE_NAMES = {
