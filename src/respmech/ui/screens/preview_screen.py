@@ -114,6 +114,13 @@ def _kinds_for_settings_path(path):
     if path == "input.channels.emg":
         return frozenset(("mech", "ecg", "emg_all", "emg_detail", "noise"))
     if path.startswith("processing.emg"):
+        if path.startswith("processing.emg.robust_peak"):
+            # Writes-only, draws-nothing — like output.* above. The cardiac-gated peak adds
+            # columns to the workbook; no preview panel plots a per-breath maximum, so there
+            # is nothing to redraw. Without this rule it would fall through to the EMG
+            # conditioning case below and re-run ECG + both EMG panels + the noise frontier
+            # on every tick of a checkbox that changes none of them.
+            return frozenset()
         if path == "processing.emg.outlier_rms_sd_limit":
             return frozenset(("batch",))          # a batch-table outlier flag only
         if path in ("processing.emg.normalization", "processing.emg.save_sound",

@@ -85,6 +85,10 @@ class MainWindow(QMainWindow):
         # .toml too, so a user edit there must dirty the analysis like any Setup edit —
         # the title, the close guard and Save-gating all read the same flag.
         pv.settings_edited.connect(sc._mark_dirty)
+        # A Setup caution can depend on a field the Preview owns (the gated peak needs
+        # remove_ecg, written by the ECG tab), so the strip has to be recomputed when Preview
+        # edits the model — not only when Setup's own widgets change.
+        pv.settings_edited.connect(sc.refresh_qc)
         # P19: "Process & write this file" on Preview → run just that file on the Run screen
         pv.process_file_requested.connect(self._process_single_file)
         # P20: double-clicking a file in the Run results drills back into Preview
@@ -274,6 +278,7 @@ class MainWindow(QMainWindow):
 
     def _on_tab_changed(self, index):
         self.settings_screen.to_state()             # belt-and-suspenders sync
+        self.settings_screen.refresh_qc()           # cautions can depend on Preview-owned fields
         w = self.tabs.widget(index)
         if w is self.preview_screen:
             self.preview_screen.refresh_files()
