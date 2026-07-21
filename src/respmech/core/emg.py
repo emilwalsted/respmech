@@ -159,6 +159,123 @@ def peak_window_rms(channel, peaks_samples, samplingfrequency, halfwidth_s=0.04)
     return float(np.sqrt(np.mean(np.concatenate(segs) ** 2)))
 
 
+# --- Cardiac-gated peak EMG (opt-in; default off -> golden-neutral) ---------
+
+def rolling_rms(channel, rms_s, samplingfrequency):
+    """The rolling RMS that :func:`calculate_rms` maximises, as (values, start_indices).
+
+    Deliberately reproduces calculate_rms's exact grid rather than an idealised one, so the
+    gated statistic is comparable with the shipped one sample for sample: the window is the
+    99-sample slice ``channel[i:i+rws-1]`` evaluated for i in range(rws//2, len-rws//2), and
+    the final windows are clipped by the array end. calculate_rms itself is pinned by the
+    golden tests and is not touched; ``tests/unit/test_robust_peak.py`` asserts that the max
+    of what this returns equals calculate_rms's value.
+    """
+    x = np.asarray(channel, dtype=float)
+    n = len(x)
+    rws = int(rms_s * samplingfrequency)
+    lo, hi = rws // 2, n - rws // 2
+    if rws < 2 or hi <= lo:
+        return np.array([]), np.array([], dtype=int)
+    idx = np.arange(lo, hi)
+    ends = np.minimum(idx + rws - 1, n)
+    csum = np.concatenate([[0.0], np.cumsum(np.square(x))])
+    return np.sqrt((csum[ends] - csum[idx]) / np.maximum(ends - idx, 1)), idx
+
+
+def detection_quality(peaks_s, ecg_min_distance_s, *, long_rr_factor=1.6,
+                      max_long_rr_frac=0.02, hr_ceiling_margin=0.10):
+    """Is this R-peak set complete enough to gate on? Returns a dict with ``ok`` + ``reason``.
+
+    Two failure modes matter. A missed beat shows up as an RR interval near a multiple of the
+    median, so an excess of long intervals means the set is incomplete. And a heart rate close
+    to 60/ecg_min_distance_s means the detector's own refractory floor is about to start
+    rejecting real beats, which is where misses begin.
+    """
+    peaks = np.asarray(peaks_s, dtype=float)
+    ceiling_bpm = 60.0 / ecg_min_distance_s if ecg_min_distance_s > 0 else float("inf")
+    out = {"n_peaks": int(peaks.size), "median_rr_s": float("nan"), "hr_bpm": float("nan"),
+           "long_rr_frac": float("nan"), "ceiling_bpm": float(ceiling_bpm),
+           "ok": False, "reason": ""}
+    if peaks.size < 4:
+        out["reason"] = f"only {peaks.size} R-peaks detected"
+        return out
+    rr = np.diff(np.sort(peaks))
+    med = float(np.median(rr))
+    out["median_rr_s"] = med
+    out["hr_bpm"] = 60.0 / med if med > 0 else float("nan")
+    out["long_rr_frac"] = float(np.mean(rr > long_rr_factor * med))
+    if out["long_rr_frac"] > max_long_rr_frac:
+        out["reason"] = (f"{100*out['long_rr_frac']:.1f}% of RR intervals exceed "
+                         f"{long_rr_factor:g}x the median — beats are being missed")
+        return out
+    if out["hr_bpm"] >= ceiling_bpm * (1.0 - hr_ceiling_margin):
+        out["reason"] = (f"heart rate {out['hr_bpm']:.0f} bpm is within "
+                         f"{100*hr_ceiling_margin:.0f}% of the detector ceiling "
+                         f"{ceiling_bpm:.0f} bpm set by ecg_min_distance_s")
+        return out
+    out["ok"] = True
+    return out
+
+
+def _longest_run(mask):
+    """Length of the longest contiguous True run — the cardiac-free 'island'."""
+    m = np.asarray(mask, dtype=bool)
+    if not m.any():
+        return 0
+    edges = np.diff(np.concatenate([[0], m.view(np.int8), [0]]))
+    return int((np.flatnonzero(edges == -1) - np.flatnonzero(edges == 1)).max())
+
+
+def gated_peak_rms(emgchannels, peak_samples, rms_s, samplingfrequency, *,
+                   gate_half_width_s=0.120, min_survival=0.40, min_island_s=0.20):
+    """Per-channel max of the rolling RMS, ignoring samples within +/- gate of an R-peak.
+
+    ``peak_samples`` are R-peak positions in samples relative to the START of this segment
+    (they may fall outside it; those are simply ignored). Returns
+    ``(values + [max, mean], qc)`` with the same shape calculate_rms returns, so the caller
+    can build columns identically. When too little cardiac-free signal survives, every value
+    is NaN and ``qc['ok']`` is False — an honest refusal beats a number nobody can trust.
+    """
+    cols = np.asarray(emgchannels, dtype=float)
+    if cols.ndim == 1:
+        cols = cols[:, None]
+    nch = cols.shape[1]
+    gate = int(round(gate_half_width_s * samplingfrequency))
+    _, idx = rolling_rms(cols[:, 0], rms_s, samplingfrequency)
+    qc = {"survival": 0.0, "island_s": 0.0, "ok": False, "reason": ""}
+    if idx.size == 0:
+        qc["reason"] = "segment shorter than the RMS window"
+        return [float("nan")] * (nch + 2), qc
+
+    clean = np.ones(cols.shape[0], dtype=bool)
+    for p in np.asarray(peak_samples, dtype=float):
+        if not np.isfinite(p):
+            continue
+        # Peaks outside this segment are normal — the caller passes the whole file's peak
+        # train and lets each phase take the ones that reach it. Both bounds must be clamped
+        # into range BEFORE slicing: a negative stop index means "from the end" in Python, so
+        # a peak just before the segment would otherwise blank nearly all of it.
+        lo = max(0, int(round(p)) - gate)
+        hi = min(clean.size, int(round(p)) + gate + 1)
+        if hi > lo:
+            clean[lo:hi] = False
+    keep = clean[idx]
+    qc["survival"] = float(keep.mean())
+    qc["island_s"] = _longest_run(keep) / float(samplingfrequency)
+    if qc["survival"] < min_survival or qc["island_s"] < min_island_s:
+        qc["reason"] = (f"only {100*qc['survival']:.0f}% of the phase survives the gate "
+                        f"(longest cardiac-free island {1000*qc['island_s']:.0f} ms)")
+        return [float("nan")] * (nch + 2), qc
+
+    qc["ok"] = True
+    vals = []
+    for ci in range(nch):
+        env, _ = rolling_rms(cols[:, ci], rms_s, samplingfrequency)
+        vals.append(float(np.max(env[keep])))
+    return vals + [float(np.max(vals)), float(np.mean(vals))], qc
+
+
 # --- ECG auto-suggest (UI helper; NOT used by run_batch -> golden-neutral) ---
 _ECG_DEFAULTS = {"ecg_min_height": 0.0005, "ecg_min_distance_s": 0.5,
                  "ecg_min_width_s": 0.001, "ecg_window_s": 0.4}

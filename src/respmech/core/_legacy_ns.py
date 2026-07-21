@@ -86,6 +86,9 @@ def to_legacy_ns(s: Settings) -> SimpleNamespace:
                 noise_profile=emg.noise_profile,
                 save_sound=emg.save_sound,
                 emgplotyscale=emg.plot_yscale,
+                # passed through as the dataclass — read-only, and keeping one name avoids
+                # inventing a second vocabulary for a setting that has no v1 ancestor
+                robust_peak=emg.robust_peak,
             ),
             entropy=SimpleNamespace(
                 entropy_epochs=ent.epochs,

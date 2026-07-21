@@ -355,7 +355,47 @@ def calculateentropy(breath, settings, phase=None, cancel_check=None):
 
 # --- per-breath mechanics (the big one) ------------------------------------
 
-def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, settings, cancel_check=None):
+def _add_gated_peaks(retbreath, breath, settings, peaks_s, detection_ok, detection_reason):
+    """Attach the opt-in cardiac-gated peak RMS for whole breath / inspiration / expiration.
+
+    Does nothing at all unless processing.emg.robust_peak.enabled, so with the feature off no
+    new keys appear and the result DataFrames are untouched. ``peaks_s`` are ABSOLUTE R-peak
+    times in seconds; breath["time"] runs on the same absolute clock (compute.trim does not
+    rebase it), so mapping to phase-local samples is a plain subtraction.
+    """
+    rp = getattr(settings.processing.emg, "robust_peak", None)
+    if rp is None or not rp.enabled:
+        return
+    fs = settings.input.format.samplingfrequency
+    nch = len(settings.input.data.columns_emg)
+    keys = ("rms_gated", "rms_gated_insp", "rms_gated_exp")
+    peaks = np.asarray(peaks_s, dtype=float) if peaks_s is not None else None
+
+    if peaks is None or peaks.size == 0 or not detection_ok:
+        reason = detection_reason or ("no R-peaks available — is processing.emg.remove_ecg on?"
+                                      if peaks is None or peaks.size == 0 else "")
+        for key in keys:
+            retbreath[key] = [float("nan")] * (nch + 2)
+        retbreath["rms_gated_qc"] = {"ok": False, "reason": reason}
+        return
+
+    qc_all = {"ok": True, "reason": ""}
+    for key, seg in zip(keys, (breath, breath["inspiration"], breath["expiration"])):
+        cols = seg["emgcols"]
+        t0 = float(np.asarray(seg["time"], dtype=float)[0])
+        local = (peaks - t0) * fs
+        vals, qc = emglib.gated_peak_rms(
+            cols, local, settings.processing.emg.rms_s, fs,
+            gate_half_width_s=rp.gate_half_width_s, min_survival=rp.min_survival,
+            min_island_s=rp.min_island_s)
+        retbreath[key] = vals
+        if not qc["ok"]:
+            qc_all = {"ok": False, "reason": f"{key}: {qc['reason']}"}
+    retbreath["rms_gated_qc"] = qc_all
+
+
+def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, settings,
+                       cancel_check=None, peaks_s=None, detection_ok=True, detection_reason=""):
     check(cancel_check)   # per-breath abort point (no-op when cancel_check is None -> golden-safe)
     retbreath = breath
     retbreath["inspiration"]["volumeavg"] = avgvolumein
@@ -441,6 +481,7 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
         retbreath["rms"], retbreath["intemg"] = emglib.calculate_rms(breath["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
         retbreath["rms_insp"], retbreath["intemg_insp"] = emglib.calculate_rms(breath["inspiration"]["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
         retbreath["rms_exp"], retbreath["intemg_exp"] = emglib.calculate_rms(breath["expiration"]["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
+        _add_gated_peaks(retbreath, breath, settings, peaks_s, detection_ok, detection_reason)
 
     if len(settings.input.data.columns_entropy) > 0:
         entropy = calculateentropy(breath, settings, cancel_check=cancel_check)

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import warnings
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -398,6 +399,28 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
 
             avgvolumein, avgvolumeex, avgpoesin, avgpoesex = compute.calculateaveragebreaths(breaths, s)
 
+            # Opt-in cardiac-gated peak EMG needs the R-peaks the ECG-removal stage already
+            # found, plus one per-file judgement of whether that peak set is complete enough
+            # to gate on. An undetected beat is neither subtracted nor blanked, so gating a
+            # file with missed beats reports a heartbeat with extra confidence — hence the
+            # guard, evaluated once here rather than per breath.
+            gate_peaks, gate_ok, gate_reason = None, True, ""
+            if s.processing.emg.robust_peak.enabled:
+                gate_peaks = np.asarray(ecg_diag["peaks_s"], float) if ecg_diag else None
+                if gate_peaks is None or gate_peaks.size == 0:
+                    gate_ok = False
+                    gate_reason = "no R-peaks available — is processing.emg.remove_ecg on?"
+                else:
+                    dq = emglib.detection_quality(
+                        gate_peaks, s.processing.emg.mindistance,
+                        long_rr_factor=s.processing.emg.robust_peak.long_rr_factor,
+                        max_long_rr_frac=s.processing.emg.robust_peak.max_long_rr_frac,
+                        hr_ceiling_margin=s.processing.emg.robust_peak.hr_ceiling_margin)
+                    gate_ok, gate_reason = dq["ok"], dq["reason"]
+                    if not gate_ok:
+                        warnings.warn(f"{filename}: cardiac-gated peak EMG reported as NaN — "
+                                      f"{gate_reason}")
+
             total = sum(1 for b in breaths.values() if not b["ignored"])
             done = 0
             for breathno in breaths:
@@ -405,7 +428,8 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                 if breath["ignored"]:
                     continue
                 compute.calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, s,
-                                           cancel_check=cancel_check)
+                                           cancel_check=cancel_check, peaks_s=gate_peaks,
+                                           detection_ok=gate_ok, detection_reason=gate_reason)
                 done += 1
                 _emit(progress, ProgressEvent("breath", file=filename, breath=done, total_breaths=total))
 
