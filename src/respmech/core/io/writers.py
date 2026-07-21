@@ -161,12 +161,23 @@ def _write_cohort_summary(result, settings, datadir, when) -> list[str]:
 # --------------------------------------------------------------------------- #
 def _write_figures(result, settings, outputfolder):
     """Returns (written_paths, failures). Failures — including matplotlib being
-    absent — are surfaced in the run report, never silently dropped."""
+    absent — are surfaced in the run report, never silently dropped.
+
+    The work goes to a separate process when the environment allows it: this runs on the
+    GUI's worker thread, and matplotlib is not thread-safe while the Preview screen is using
+    it on the GUI thread. See ``_figure_process`` — every failure mode falls back to doing it
+    here, so the isolation can only ever be a no-op."""
     try:
-        from respmech.core import plots
+        from respmech.core import plots  # noqa: F401 - import probe: is plotting available?
     except Exception as e:                       # pragma: no cover - plotting optional
         return [], [("figures", f"plotting unavailable: {e}")]
-    return plots.write_figures(result, settings, outputfolder)
+    from respmech.core.io import _figure_process
+    notes = []
+    written, failures = _figure_process.write_figures(
+        result, settings, outputfolder, on_fallback=notes.append)
+    # A fallback is not a failure — the figures are written either way — but it belongs in the
+    # run report, because it is the difference between the isolated and the shared path.
+    return written, failures + [("figures", n) for n in notes]
 
 
 # --------------------------------------------------------------------------- #

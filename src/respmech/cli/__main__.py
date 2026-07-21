@@ -112,6 +112,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    # See ui/app.main: figures are written in a spawned child, and a packaged binary must not
+    # re-run main() when it is started as one. No-op when not frozen.
+    import multiprocessing
+    multiprocessing.freeze_support()
+
     # On Windows the console is often cp1252; a file name or message carrying a
     # non-cp1252 character (Excel exports, é/ø/…) would otherwise abort a whole run
     # with UnicodeEncodeError. Degrade unencodable characters instead of crashing.
