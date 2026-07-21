@@ -26,6 +26,44 @@ CLI (`respmech run/validate/migrate`). Settings are declarative **TOML**.
 - CI: `.github/workflows/ci.yml` (GUI smoke on win/mac + numerical golden on
   ubuntu), runs on every branch.
 
+## Dev environment — check which interpreter you are actually running
+
+`respmech-gui` is a console script, and on a machine with more than one environment it may
+**not** be the repo's `.venv`. On the maintainer's Mac it resolves to
+`/opt/anaconda3/bin/respmech-gui`; `.venv/bin/respmech-gui` exists alongside it. Both are
+*editable* installs of the same `src/respmech`, so the **code is identical** — but the Qt
+version underneath is not, and GUI behaviour follows Qt.
+
+```bash
+which respmech-gui
+/opt/anaconda3/bin/python3.13 -c "from PySide6.QtCore import qVersion; print(qVersion())"
+.venv/bin/python              -c "from PySide6.QtCore import qVersion; print(qVersion())"
+```
+
+Before reproducing any GUI report, confirm you are on the interpreter the reporter used. A
+repro in the wrong environment yields confident false negatives that look like eliminations.
+
+### Known non-issue: `modalSession has been exited prematurely`
+
+macOS/AppKit prints this on stderr under **Qt 6.11.0**; it is **silent on 6.11.1**. Verified by
+a controlled A/B — same code, same flow, same session, only the interpreter swapped. It is an
+upstream Qt bug fixed in the patch release, with no functional consequence, and **not** a
+RespMech defect. Fix by running `.venv/bin/respmech-gui` or upgrading PySide6 in the other env.
+(Packaged builds pin their own PySide6, so end users are unaffected.)
+
+There is a separate, genuine instance of this pattern that *was* ours and is fixed:
+`StartupDialog._choose_open` called `accept()` from inside the stack the native macOS open
+panel returned into. Opening a native panel from within a Qt modal dialog nests two AppKit
+modal sessions; ending them out of order is what produces the message. If you add a native
+panel inside a modal, defer the `accept()`/`reject()` by one event-loop turn.
+
+### What the test suite structurally cannot see
+
+Tests run with `QT_QPA_PLATFORM=offscreen` **and** set `AA_DontUseNativeDialogs`
+(`tests/unit/conftest.py`). So no native macOS panel is ever opened and no AppKit modal session
+is ever created — neither locally nor in CI. Bugs in that class are invisible to all 358 unit
+tests by construction; they surface only in a real, native, interactive run.
+
 ## Releases (`.github/workflows/release.yml` = "Build installers")
 
 - Trigger: push a `v*` tag (or manual dispatch). Builds a Windows **MSI** and a
