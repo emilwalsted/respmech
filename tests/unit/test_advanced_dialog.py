@@ -150,3 +150,99 @@ def test_the_committed_value_reaches_the_widget_that_still_owns_it(qapp, tmp_pat
     pv._open_ecg_advanced()
     assert pv.ecg_min_width.value() == 0.005
     pv.shutdown()
+
+
+# -- the Mechanics modal -------------------------------------------------------
+def _settings_screen(qapp, tmp_path):
+    from respmech.ui.screens.settings_screen import SettingsScreen
+    sc = SettingsScreen(AppState(synth_settings(str(tmp_path), data_out=_OUT)))
+    sc._mark_clean()
+    return sc
+
+
+def test_the_advanced_card_is_gone(qapp, tmp_path):
+    from PySide6.QtWidgets import QGroupBox
+    sc = _settings_screen(qapp, tmp_path)
+    titles = {g.title() for g in sc.findChildren(QGroupBox)}
+    assert "Advanced (rarely changed)" not in titles
+    assert "Mechanics" in titles, "the Processing card should now say what it is"
+
+
+def test_the_moved_widgets_still_round_trip(qapp, tmp_path):
+    """They keep their widgets — not laid out, but still the path from_state/to_state uses,
+    which is what keeps the analysis file honest."""
+    sc = _settings_screen(qapp, tmp_path)
+    s = sc.state.settings
+    assert sc.seg_buffer.value() == s.processing.segmentation.buffer
+    assert sc.ptp_baseline.value() == s.processing.ptp.baseline_window_s
+    sc.seg_buffer.setValue(321)
+    assert sc.to_state().processing.segmentation.buffer == 321
+
+
+@pytest.mark.parametrize("accept", [True, False])
+def test_mech_ok_commits_and_cancel_changes_nothing(qapp, tmp_path, accept, monkeypatch):
+    import respmech.ui.advanced_dialog as ad
+    sc = _settings_screen(qapp, tmp_path)
+    before = sc.state.settings.processing.segmentation.buffer
+    real = ad.AdvancedDialog
+
+    class _Stub(real):
+        def exec(self):
+            self.widget("seg_buffer").setValue(777)
+            return QDialog.Accepted if accept else QDialog.Rejected
+
+    monkeypatch.setattr(ad, "AdvancedDialog", _Stub)
+    sc._open_mech_advanced()
+
+    if accept:
+        assert sc.to_state().processing.segmentation.buffer == 777
+        assert sc.is_dirty(), "an accepted edit did not mark the analysis modified"
+    else:
+        assert sc.to_state().processing.segmentation.buffer == before
+        assert not sc.is_dirty(), "Cancel marked the analysis modified"
+
+
+def test_mech_ok_without_an_edit_is_not_an_edit(qapp, tmp_path, monkeypatch):
+    import respmech.ui.advanced_dialog as ad
+    sc = _settings_screen(qapp, tmp_path)
+    real = ad.AdvancedDialog
+
+    class _Stub(real):
+        def exec(self):
+            return QDialog.Accepted
+
+    monkeypatch.setattr(ad, "AdvancedDialog", _Stub)
+    sc._open_mech_advanced()
+    assert not sc.is_dirty()
+
+
+def test_breath_count_overrides_survive_the_modal(qapp, tmp_path, monkeypatch):
+    """A multi-line, structured field — the one thing in here that is not a number."""
+    import respmech.ui.advanced_dialog as ad
+    sc = _settings_screen(qapp, tmp_path)
+    real = ad.AdvancedDialog
+
+    class _Stub(real):
+        def exec(self):
+            self.widget("breath_counts").setPlainText("synth_case_A.csv = 12")
+            return QDialog.Accepted
+
+    monkeypatch.setattr(ad, "AdvancedDialog", _Stub)
+    sc._open_mech_advanced()
+    counts = sc.to_state().processing.breath_counts
+    assert [(c.file, c.count) for c in counts] == [("synth_case_A.csv", 12)]
+
+
+def test_only_one_screen_writes_the_stft_length(qapp, tmp_path):
+    """Regression: the EMG Advanced modal gained an n_fft control while Setup still had one,
+    so a modal edit was reverted on the next tab change — to_state rewrites everything Setup
+    owns. Measured before the fix: 512 became 256 again."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(str(tmp_path), noise=True, data_out=_OUT)))
+    assert not hasattr(win.settings_screen, "noise_nfft"), "a second n_fft writer is back"
+    n = win.state.settings.processing.emg.noise
+    n.n_fft = 512
+    for _ in range(3):
+        win.settings_screen.to_state()
+    assert n.n_fft == 512
+    win.close()
