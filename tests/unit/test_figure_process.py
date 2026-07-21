@@ -140,3 +140,32 @@ def test_entry_points_call_freeze_support():
     assert "freeze_support" in inspect.getsource(cli.main)
     from respmech.ui import app
     assert "freeze_support" in inspect.getsource(app.main)
+
+
+# -- a blank column is a normal outcome, not a fault ---------------------------
+
+def test_an_all_nan_rms_column_normalises_without_warning():
+    """The cardiac-gated columns are NaN for a whole file when the quality guards refuse it,
+    which made per_file_max normalisation emit "All-NaN slice encountered" on every run. The
+    result was already right; only the noise was wrong."""
+    import warnings
+    import numpy as np
+    import pandas as pd
+    from respmech.core import summary
+    from respmech.core.settings import Settings
+
+    s = Settings.from_dict({"processing": {"emg": {"normalization": "per_file_max"}}})
+    tbl = pd.DataFrame({
+        "breath_no": [1, 2, 3],
+        "rms_col_2": [0.1, 0.2, 0.4],           # a normal column
+        "rms_gated_col_2": [np.nan] * 3,        # refused by the guards
+        "rms_gated_max": [np.nan] * 3,
+    })
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)     # any All-NaN warning now fails
+        out = summary.normalize_emg_table(tbl, s)
+
+    assert out is not None
+    assert out["rms_col_2_pct"].tolist() == [25.0, 50.0, 100.0]   # unchanged behaviour
+    assert out["rms_gated_col_2_pct"].isna().all()                # still blank, as it should be
+    assert out["rms_gated_max_pct"].isna().all()
