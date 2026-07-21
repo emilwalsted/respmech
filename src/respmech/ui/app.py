@@ -29,6 +29,13 @@ def _fatal_startup(tb: str) -> None:
 
 
 def main(argv=None) -> int:
+    # Diagnostic figures are written in a spawned child (core/io/_figure_process). In a
+    # PACKAGED app sys.executable is this very binary, so without this call a spawned child
+    # would re-run main() and launch a second copy of the GUI instead of doing its job. It is
+    # a no-op everywhere else, and must run before anything else can spawn.
+    import multiprocessing
+    multiprocessing.freeze_support()
+
     from PySide6.QtWidgets import QApplication, QMessageBox
     from PySide6.QtCore import QTimer, QLoggingCategory
     from respmech.ui import theme
