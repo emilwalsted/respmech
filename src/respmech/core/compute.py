@@ -129,12 +129,18 @@ def _phase_dicts(sl_in, sl_ex, timecol, flow, volume, poes, pgas, pdi, entropyco
     insp = {'time': timecol[instart:inend].squeeze(), 'flow': flow[instart:inend].squeeze(),
             'poes': poes[instart:inend].squeeze(), 'pgas': pgas[instart:inend].squeeze(),
             'pdi': pdi[instart:inend].squeeze(), 'volume': volume[instart:inend].squeeze()}
+    # NO .squeeze() on the phase slices: they stay (samples, channels). A single-channel
+    # recording would otherwise collapse to 1-D here even when the loader got it right (the
+    # .mat path always did), and calculate_rms then iterates emgchannels.T over a 1-D array,
+    # yielding scalars and raising "TypeError: object of type 'numpy.float64' has no len()".
+    # For >= 2 channels the squeeze only ever fired on a one-sample phase, which crashes the
+    # run today either way, so no analysis that currently completes can change.
     if len(entropycolumns) > 0:
-        exp['entcols'] = entropycolumns[exstart:exend, :].squeeze()
-        insp['entcols'] = entropycolumns[instart:inend, :].squeeze()
+        exp['entcols'] = entropycolumns[exstart:exend, :]
+        insp['entcols'] = entropycolumns[instart:inend, :]
     if len(emgcolumns) > 0:
-        exp['emgcols'] = emgcolumns[exstart:exend, :].squeeze()
-        insp['emgcols'] = emgcolumns[instart:inend, :].squeeze()
+        exp['emgcols'] = emgcolumns[exstart:exend, :]
+        insp['emgcols'] = emgcolumns[instart:inend, :]
 
     entlen = exend - instart
     if len(entropycolumns) > 0:

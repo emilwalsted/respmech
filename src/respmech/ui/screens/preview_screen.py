@@ -47,6 +47,7 @@ from respmech.core.settings import ExcludeEntry
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
 from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
+from respmech.ui import wheel as _wheel
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
                                   stage_ecg_reduction, stage_mechanics_preview,
@@ -541,6 +542,14 @@ class PreviewScreen(QWidget):
         self._emg_tab = self._build_emg_tab()
         self.subtabs.addTab(self._mech_tab, _TAB_MECH)
         root.addWidget(self.subtabs, 1)
+
+        # The control strips sit directly above wheel-zoomable plots, so an overshoot while
+        # zooming used to land on a spin box and step it — and every ECG/noise parameter here
+        # writes straight into the analysis, marks it modified and schedules a recompute.
+        # file_combo was worse still: one notch silently switched the previewed recording.
+        # Nothing on this screen scrolls, so the wheel should do nothing at all.
+        self._wheel_guard = _wheel.swallow_wheel(
+            root=self, extra=[self.subtabs.tabBar()])
 
         # one spinner overlay per panel (each fed by exactly one job kind)
         self._overlays = {
@@ -1395,6 +1404,16 @@ class PreviewScreen(QWidget):
         path = self._current_file()
         if not path:
             return
+        # EVERY kind loads the recording, and every load resolves the channel columns — so an
+        # incomplete mapping has to gate them all, not just "batch". This used to be masked by
+        # the Setup spin boxes, whose minimum of 1 meant a required channel could never be
+        # unset; with the assignment dialog as the sole writer it genuinely can be, and each
+        # ungated kind would render a panel full of raw loader traceback instead.
+        ok, why = self._settings_ok()
+        if not ok:
+            self._clear_panel_overlays(*_PANELS[kind])
+            self._set_status(f"Settings incomplete: {why}")
+            return
         has_emg = bool(self.state.settings.input.channels.emg)
         # snapshot the settings on the GUI thread so a worker never reads them while
         # the GUI mutates them in place (Settings is a plain, deep-copyable model)
@@ -1408,9 +1427,6 @@ class PreviewScreen(QWidget):
                 return
             worker = FnWorker(stage_ecg_reduction, snap, path)
         elif kind == "batch":
-            ok, _ = self._settings_ok()
-            if not ok:
-                return
             # MECHANICS-ONLY test run: drop EMG so run_batch skips ECG removal, EMG RMS
             # and noise reduction (that work is shown separately in the EMG tab).
             snap.input.channels.emg = []

@@ -18,6 +18,30 @@ class DataValidationError(ValueError):
     """Raised when an input column is missing, non-numeric, NaN, or mismatched."""
 
 
+def _column(value, name, ncols, filepath):
+    """Resolve a 1-based column setting to a 0-based index, or say exactly what is wrong.
+
+    This is the only place that knows both the setting and the file, so it is the only place
+    the range check can be right. Without it an unassigned channel reached pandas as ``None``
+    and surfaced as "unsupported operand type(s) for -: 'NoneType' and 'int'", and — worse —
+    column 0 became ``iloc[:, -1]``, silently analysing the LAST column of the recording
+    instead of reporting anything at all."""
+    # NaN reaches here only from a hand-edited settings file (the model uses None, and
+    # _legacy_ns maps only the optional volume column to NaN, which callers test first).
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        raise DataValidationError(
+            f"{name} is not assigned. Pick a column with 'Assign channels from data…' in Setup.")
+    v = int(value)
+    if v < 1:
+        raise DataValidationError(
+            f"{name} is set to column {v}, but columns are numbered from 1.")
+    if v > ncols:
+        raise DataValidationError(
+            f"{name} is set to column {v}, but {os.path.basename(filepath)} has "
+            f"only {ncols} column{'s' if ncols != 1 else ''}.")
+    return v - 1
+
+
 def _read_table(f, **kw):
     """Read a CSV/TSV tolerantly across encodings. Excel's "Unicode Text" export is
     UTF-16 (BOM-prefixed); European instrument exports are often cp1252/latin-1 — the
@@ -85,13 +109,24 @@ def load(filepath, settings):
     d = settings.input.data
 
     def _cols_from_df(df):
-        flow = df.iloc[:, d.column_flow - 1].to_numpy()
-        volume = [] if np.isnan(d.column_volume) else df.iloc[:, d.column_volume - 1].to_numpy()
-        poes = df.iloc[:, d.column_poes - 1].to_numpy()
-        pgas = df.iloc[:, d.column_pgas - 1].to_numpy()
-        pdi = df.iloc[:, d.column_pdi - 1].to_numpy()
-        ent = [] if len(d.columns_entropy) == 0 else df.iloc[:, np.array(d.columns_entropy) - 1].to_numpy().squeeze()
-        emg = [] if len(d.columns_emg) == 0 else df.iloc[:, np.array(d.columns_emg) - 1].to_numpy().squeeze()
+        n = df.shape[1]
+        col = lambda v, name: _column(v, name, n, filepath)          # noqa: E731
+        flow = df.iloc[:, col(d.column_flow, "Flow channel")].to_numpy()
+        volume = ([] if np.isnan(d.column_volume)
+                  else df.iloc[:, col(d.column_volume, "Volume channel")].to_numpy())
+        poes = df.iloc[:, col(d.column_poes, "Oesophageal pressure channel")].to_numpy()
+        pgas = df.iloc[:, col(d.column_pgas, "Gastric pressure channel")].to_numpy()
+        pdi = df.iloc[:, col(d.column_pdi, "Trans-diaphragmatic pressure channel")].to_numpy()
+        # NO .squeeze() on these two: entropy/EMG are (samples, channels) matrices and every
+        # consumer indexes them 2-D. Squeezing collapsed a single-channel selection to 1-D,
+        # which made validatedata's .shape[1] raise "IndexError: tuple index out of range"
+        # before the recording had even finished loading. The .mat branch below uses
+        # np.column_stack and was always correct; this keeps the two paths honest. For >= 2
+        # channels the squeeze was a no-op, so existing analyses are unaffected.
+        ent_ix = [col(c, "Entropy channel") for c in d.columns_entropy]
+        emg_ix = [col(c, "EMG channel") for c in d.columns_emg]
+        ent = [] if not ent_ix else df.iloc[:, ent_ix].to_numpy()
+        emg = [] if not emg_ix else df.iloc[:, emg_ix].to_numpy()
         return flow, volume, poes, pgas, pdi, ent, emg
 
     def loadxls(f):
@@ -120,11 +155,19 @@ def load(filepath, settings):
                 "Cannot load MATLAB file – verify the MATLAB file format setting "
                 "(windows/mac). Only simple LabChart exports are supported; otherwise "
                 "export to CSV.") from e
-        flow = get(d.column_flow)
-        volume = [] if np.isnan(d.column_volume) else get(d.column_volume)
-        poes, pgas, pdi = get(d.column_poes), get(d.column_pgas), get(d.column_pdi)
-        ent = [] if len(d.columns_entropy) == 0 else np.column_stack([get(c) for c in d.columns_entropy])
-        emg = [] if len(d.columns_emg) == 0 else np.column_stack([get(c) for c in d.columns_emg])
+        # same resolution as the DataFrame path: a negative index would otherwise wrap
+        # round to the end of the list and analyse a wholly unrelated channel.
+        n = len(cols)
+        get1 = lambda v, name: get(_column(v, name, n, f) + 1)       # noqa: E731
+        flow = get1(d.column_flow, "Flow channel")
+        volume = [] if np.isnan(d.column_volume) else get1(d.column_volume, "Volume channel")
+        poes = get1(d.column_poes, "Oesophageal pressure channel")
+        pgas = get1(d.column_pgas, "Gastric pressure channel")
+        pdi = get1(d.column_pdi, "Trans-diaphragmatic pressure channel")
+        ent = ([] if len(d.columns_entropy) == 0 else
+               np.column_stack([get1(c, "Entropy channel") for c in d.columns_entropy]))
+        emg = ([] if len(d.columns_emg) == 0 else
+               np.column_stack([get1(c, "EMG channel") for c in d.columns_emg]))
         return flow, volume, poes, pgas, pdi, ent, emg
 
     loaders = {'.xls': loadxls, '.xlsx': loadxls, '.csv': loadcsv, '.mat': loadmat, '.txt': loadtxt}
