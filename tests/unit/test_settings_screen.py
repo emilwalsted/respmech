@@ -13,11 +13,19 @@ from _helpers import INPUT, requires_synth, synth_settings
 pytestmark = requires_synth()
 
 
+def _assign(sc, **roles):
+    """Assign channels the only way the app can now: through _apply_channel_mapping, which
+    is what the picker calls. Writing widgets is no longer possible — there are none."""
+    m = {"flow": None, "volume": None, "poes": None, "pgas": None, "pdi": None,
+         "emg": [], "entropy": []}
+    m.update(roles)
+    sc._apply_channel_mapping(m)
+
+
 def _valid(sc, tmp):
     sc.in_folder.setText(INPUT); sc.in_files.setText("synth_case_*.csv")
     sc.samp_freq.setValue(1000); sc.out_folder.setText(str(tmp))
-    sc.col_flow.setValue(5); sc.col_volume.setValue(6); sc.col_poes.setValue(7)
-    sc.col_pgas.setValue(8); sc.col_pdi.setValue(9); sc.cols_emg.setText("2,3,4")
+    _assign(sc, flow=5, volume=6, poes=7, pgas=8, pdi=9, emg=[2, 3, 4])
     sc._on_field_changed()
 
 
@@ -26,7 +34,7 @@ def test_required_channel_on_the_time_column_blocks(qapp, tmp_path):
     win = MainWindow(AppState()); sc = win.settings_screen
     _valid(sc, tmp_path)
     assert sc._all_ok()                                  # a good mapping is ready
-    sc.col_poes.setValue(1); sc._on_field_changed()      # poes -> column 1 (the time axis)
+    _assign(sc, flow=5, volume=6, poes=1, pgas=8, pdi=9, emg=[2, 3, 4])   # poes -> the time axis
     assert not sc._all_ok()
     assert "column 1" in sc._channel_collision().lower()
     win.close()
@@ -36,7 +44,7 @@ def test_two_required_channels_sharing_a_column_blocks(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState()); sc = win.settings_screen
     _valid(sc, tmp_path)
-    sc.col_pgas.setValue(7); sc._on_field_changed()      # pgas == poes column
+    _assign(sc, flow=5, volume=6, poes=7, pgas=7, pdi=9, emg=[2, 3, 4])   # pgas == poes column
     assert not sc._all_ok()
     assert "same column" in sc._channel_collision().lower()
     win.close()
@@ -75,7 +83,7 @@ def test_qc_strip_flags_cautions_and_clears(qapp, tmp_path):
     win = MainWindow(AppState()); sc = win.settings_screen
     _valid(sc, tmp_path)
     assert sc.qc.property("status") == "ok" and "no warnings" in sc.qc.text().lower()
-    sc.cols_emg.setText("5,2,3"); sc._on_field_changed()  # EMG col 5 == the flow column
+    _assign(sc, flow=5, volume=6, poes=7, pgas=8, pdi=9, emg=[5, 2, 3])   # EMG col 5 == flow
     assert sc.qc.property("status") == "warn"
     assert "overlap" in sc.qc.text().lower()
     win.close()
@@ -179,12 +187,15 @@ def test_form_fields_are_bounded_not_full_width(qapp, tmp_path):
     win.resize(1700, 950); win.show(); qapp.processEvents()
 
     capped = {sc.seg_method: "compact", sc.wob_from: "compact", sc.trend_method: "compact",
-              sc.in_files: "compact", sc.cols_emg: "compact", sc.cols_entropy: "compact",
+              sc.in_files: "compact",
               sc.matlab_variant: "wide", sc.emg_norm: "wide",
               sc.breath_counts_edit: "wide", sc.group_regex: "wide"}
     for w, kind in capped.items():
         assert w.property("formField") == kind, f"{w} lost its {kind} cap"
         assert w.width() < win.width() / 3, f"{w} stretched full width ({w.width()})"
+    # the channel picker is a button, not a banner: it must not stretch the card's width
+    assert sc.btn_assign_channels.property("compact") is True
+    assert sc.btn_assign_channels.width() < win.width() / 3
     # the caps really order by band (compact < wide), independent of the absolute font size
     widest_compact = max(w.width() for w, k in capped.items() if k == "compact")
     narrowest_wide = min(w.width() for w, k in capped.items() if k == "wide")
@@ -245,14 +256,14 @@ def test_save_is_refused_while_the_settings_are_invalid(qapp, tmp_path, monkeypa
     win = MainWindow(AppState(synth_settings(str(tmp_path))))
     sc = win.settings_screen
     assert sc.can_save()
-    sc.col_flow.setValue(5); sc.col_poes.setValue(5)          # one column, two signals
+    _assign(sc, flow=5, volume=6, poes=5, pgas=8, pdi=9, emg=[2, 3, 4])   # one column, two signals
     sc._on_field_changed()
     assert not sc.can_save() and sc._save_blocker()
     warned = []
     monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.append(a[1]))
     assert sc.save_analysis_as() is False and warned          # refused, with a reason
     # a path problem is NOT a save blocker: the analysis itself is still coherent
-    sc.col_poes.setValue(7); sc._on_field_changed()
+    _assign(sc, flow=5, volume=6, poes=7, pgas=8, pdi=9, emg=[2, 3, 4])   # a coherent mapping again
     sc.state.settings.input.folder = str(tmp_path / "unmounted")
     assert sc.can_save()
     win.close()
@@ -390,7 +401,7 @@ def test_discard_guard_is_reentrant_safe_and_hides_save_when_unsavable(qapp, tmp
     assert len(seen) == 1                                 # exactly ONE box, no stacking
     assert seen[0][1] & QMessageBox.Save                  # savable settings offer Save
     # unsavable settings must not offer Save at all
-    sc.col_flow.setValue(5); sc.col_poes.setValue(5); sc._on_field_changed()
+    _assign(sc, flow=5, volume=6, poes=5, pgas=8, pdi=9, emg=[2, 3, 4])
     assert not sc.can_save()
     seen.clear()
     monkeypatch.setattr(QMessageBox, "question",
