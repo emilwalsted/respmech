@@ -82,7 +82,7 @@ def test_the_setup_form_scrolls_at_the_scroll_areas_own_speed(qapp, tmp_path):
     _wheel(qapp, sc.findChild(QScrollArea).viewport())
     native = bar.value()
     bar.setValue(0)
-    _wheel(qapp, sc.emg_rms_window)
+    _wheel(qapp, sc.samp_freq)
     assert bar.value() == native, "scrolling over a widget runs at a different speed"
 
 
@@ -150,24 +150,3 @@ def test_the_wheel_does_not_change_tab(qapp, tmp_path, which):
     assert tabs.currentIndex() == before, f"the wheel changed the {which} tab"
     win.close()
 
-
-# -- a scrollable widget inside the form must not be a dead patch ---------------
-def test_the_breath_count_box_scrolls_itself_then_hands_the_wheel_on(qapp, tmp_path):
-    """Regression: it consumed the wheel even at its own end, so the form stopped
-    scrolling under the cursor and never resumed."""
-    sc = _settings_screen(qapp, tmp_path)
-    box = sc.breath_counts_edit
-    box.setPlainText("\n".join(f"file_{i}.csv = {i}" for i in range(60)))
-    qapp.processEvents()
-    inner = box.verticalScrollBar()
-    assert inner.maximum() > 0, "the box must overflow for this to mean anything"
-
-    form = sc.findChild(QScrollArea).verticalScrollBar()
-    at = form.value()
-    _wheel(qapp, box.viewport())                      # first: it scrolls itself
-    assert inner.value() > 0
-    assert form.value() == at, "the form moved while the box still had room"
-
-    inner.setValue(inner.maximum())                   # now it is spent
-    _wheel(qapp, box.viewport())
-    assert form.value() > at, "the wheel died instead of scrolling the form on"

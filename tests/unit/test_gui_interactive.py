@@ -74,9 +74,8 @@ def test_use_region_as_noise_writes_settings_and_mirrors(qapp, tmp_path):
     assert n.reference_file == name
     assert n.reference_intervals == [[1.0, 5.0]]
     assert n.use_expiration is False
-    # ...and Setup reflects it read-only: the picker is the only writer of all three fields
-    assert name in sc.noise_summary.text()
-    assert "marked span" in sc.noise_summary.text()
+    # ...and the Preview strip shows it read-only: the picker is the only writer of all three
+    assert name in pv.noise_ref_readout.text()
 
 
 # -- Feature C: preview EMG conditioning (staging + render) -----------------

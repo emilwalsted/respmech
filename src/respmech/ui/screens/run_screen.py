@@ -74,6 +74,11 @@ class RunScreen(QWidget):
         root.addLayout(bar)
 
         self.progress = QProgressBar()
+        # The bar's own centred % text is drawn in one colour over a two-tone track (dark
+        # accent fill + light trough), so it can never contrast with both — black on dark
+        # blue in light mode. Hide it and put the % in the status label below, which the
+        # theme keeps readable in either mode.
+        self.progress.setTextVisible(False)
         root.addWidget(self.progress)
         self.status = QLabel("Idle.")
         self.status.setWordWrap(True)
@@ -283,10 +288,12 @@ class RunScreen(QWidget):
         elif ev.kind == "stage":
             self._append(f"  {ev.message}…")
         elif ev.kind == "breath":
+            pct = ""
             if ev.total_breaths:
                 self.progress.setRange(0, ev.total_breaths)
                 self.progress.setValue(ev.breath)
-            self._set_status(f"{ev.file}: breath {ev.breath}/{ev.total_breaths}")
+                pct = f" — {ev.breath / ev.total_breaths:.0%}"
+            self._set_status(f"{ev.file}: breath {ev.breath}/{ev.total_breaths}{pct}")
         elif ev.kind == "file_done":
             self._append(f"  done ({ev.message})")
         elif ev.kind == "finished":
