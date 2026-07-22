@@ -443,7 +443,8 @@ def test_integrate_from_flow_unlocks_without_a_volume_column(qapp, tmp_path):
     assert not win.tabs.isTabEnabled(win._i_preview)
     assert "volume" in sc.status.text().lower()
     # ...ticking 'Calculate volume from flow' makes the volume column optional -> unlock
-    sc.integrate.setChecked(True); sc._on_field_changed()
+    sc.state.settings.processing.volume.integrate_from_flow = True   # Preview-owned now
+    sc._update_disclosure()
     assert sc._all_ok()
     assert win.tabs.isTabEnabled(win._i_preview)
     win.close()
@@ -576,10 +577,10 @@ def test_save_open_roundtrip_preserves_surfaced_fields(qapp, tmp_path):
     # set non-defaults across the groups
     sc._apply_channel_mapping({"flow": 5, "volume": 6, "poes": 7, "pgas": 8,
                                "pdi": 9, "emg": [2, 3, 4], "entropy": [10, 11, 12]})
-    sc.seg_method.setCurrentText("Volume")        # display text; canonical token "volume" is userData
-    sc.wob_from.setCurrentText("Individual")
-    sc.emg_rms_window.setValue(0.1)
-    sc.emg_outlier_sd.setValue(2.5)
+    # mechanics + EMG conditioning are Preview-owned; set them on the shared model
+    s0 = sc.state.settings.processing
+    s0.segmentation.method = "volume"; s0.wob.calc_from = "individual"
+    s0.emg.rms_window_s = 0.1; s0.emg.outlier_rms_sd_limit = 2.5
     # ECG removal moved from the Settings screen to the Preview "› EMG – ECG reduction" tab;
     # set it on the shared model and verify it still round-trips through the TOML.
     e0 = sc.state.settings.processing.emg
@@ -593,10 +594,9 @@ def test_save_open_roundtrip_preserves_surfaced_fields(qapp, tmp_path):
     sc2 = win2.settings_screen
     assert sc2.open_analysis(str(p)) is True
     assert any("Entropy" in t and "Column 10" in t for t in sc2.channel_summary.texts())
-    assert sc2.seg_method.currentData() == "volume"      # model token restored via userData
-    assert sc2.wob_from.currentData() == "individual"
-    assert abs(sc2.emg_rms_window.value() - 0.1) < 1e-9
-    assert abs(sc2.emg_outlier_sd.value() - 2.5) < 1e-9
+    p2 = sc2.state.settings.processing   # mechanics/EMG are Preview-owned; assert the model
+    assert p2.segmentation.method == "volume" and p2.wob.calc_from == "individual"
+    assert abs(p2.emg.rms_window_s - 0.1) < 1e-9 and abs(p2.emg.outlier_rms_sd_limit - 2.5) < 1e-9
     e2 = sc2.state.settings.processing.emg          # ECG params persist at the model level
     assert e2.remove_ecg is True
     assert abs(e2.ecg_window_s - 0.35) < 1e-9

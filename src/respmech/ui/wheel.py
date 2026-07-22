@@ -85,14 +85,6 @@ class NestedWheelChain(QObject):
                 return True
         return super().eventFilter(obj, ev)
 
-
-def chain_nested(area, inner):
-    """Let ``inner`` scroll itself, then pass the wheel out to ``area``. Keep the result."""
-    chain = NestedWheelChain(area, inner, parent=inner)
-    inner.viewport().installEventFilter(chain)
-    return chain
-
-
 def _install(guard, targets):
     for w in targets:
         if w is not None:
