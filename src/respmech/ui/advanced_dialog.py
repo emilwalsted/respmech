@@ -14,9 +14,9 @@ would have to invent one.
 """
 from __future__ import annotations
 
-from PySide6.QtWidgets import (QCheckBox, QDialog, QDoubleSpinBox, QFormLayout, QHBoxLayout,
-                               QLabel, QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout,
+                               QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QSpinBox,
+                               QVBoxLayout, QWidget)
 
 from respmech.ui.help_text import tooltip as _tip
 
@@ -29,21 +29,29 @@ except Exception:  # pragma: no cover
 class Field:
     """One row: how to build it, how to read it, and what it is.
 
-    ``kind`` is "int", "float", "bool" or "text". ``path`` is the dotted settings path the
-    tooltip names, so a control keeps saying which TOML key it writes even after it moves
-    screens.
+    ``kind`` is "int", "float", "bool", "text" or "choice" (a combo — ``options`` is a list
+    of ``(label, value)`` pairs and the stored value is the chosen data value). ``path`` is
+    the dotted settings path the tooltip names, so a control keeps saying which TOML key it
+    writes even after it moves screens.
     """
 
     def __init__(self, key, label, kind, path, help, *, lo=0, hi=1_000_000, step=1,
-                 decimals=0, suffix="", prefix="", note=None, placeholder=""):
+                 decimals=0, suffix="", prefix="", note=None, placeholder="", options=None):
         self.key, self.label, self.kind = key, label, kind
         self.path, self.help, self.note = path, help, note
         self.lo, self.hi, self.step = lo, hi, step
         self.decimals, self.suffix, self.prefix = decimals, suffix, prefix
         self.placeholder = placeholder
+        self.options = options or []
 
     def build(self, value):
-        if self.kind == "text":
+        if self.kind == "choice":
+            w = QComboBox()
+            for label, val in self.options:
+                w.addItem(label, val)
+            idx = w.findData(value)
+            w.setCurrentIndex(idx if idx >= 0 else 0)
+        elif self.kind == "text":
             w = QPlainTextEdit()
             w.setPlainText(value or "")
             w.setFixedHeight(90)
@@ -67,6 +75,8 @@ class Field:
         return w
 
     def read(self, w):
+        if self.kind == "choice":
+            return w.currentData()
         if self.kind == "text":
             return w.toPlainText()
         return w.isChecked() if self.kind == "bool" else w.value()
@@ -111,7 +121,8 @@ class AdvancedDialog(QDialog):
                 hint.setProperty("status", "muted")
                 form.addRow("", hint)
             sig = (getattr(w, "toggled", None) or getattr(w, "valueChanged", None)
-                   or getattr(w, "textChanged", None))
+                   or getattr(w, "textChanged", None)
+                   or getattr(w, "currentIndexChanged", None))
             if sig is not None:
                 sig.connect(self._refresh_derived)
         v.addLayout(form)

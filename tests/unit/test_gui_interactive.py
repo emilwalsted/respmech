@@ -74,9 +74,8 @@ def test_use_region_as_noise_writes_settings_and_mirrors(qapp, tmp_path):
     assert n.reference_file == name
     assert n.reference_intervals == [[1.0, 5.0]]
     assert n.use_expiration is False
-    # ...and Setup reflects it read-only: the picker is the only writer of all three fields
-    assert name in sc.noise_summary.text()
-    assert "marked span" in sc.noise_summary.text()
+    # ...and the Preview strip shows it read-only: the picker is the only writer of all three
+    assert name in pv.noise_ref_readout.text()
 
 
 # -- Feature C: preview EMG conditioning (staging + render) -----------------
@@ -932,11 +931,12 @@ def test_breath_labels_stay_pinned_to_the_view_top_under_zoom(qapp, tmp_path):
     win.close()
 
 
-def test_emg_legends_are_a_single_row_at_the_top(qapp):
-    """The pipeline-stage / channel legends read as one line at the top of the plot. The
-    column count must be re-applied on EVERY render, not just at construction: clear()
-    empties the legend and the entry count varies (the detail plot gains 'noise-reduced'
-    only when noise conditioning ran; the result plot has one entry per ticked channel)."""
+def test_emg_legends_are_a_single_row_at_the_bottom(qapp):
+    """The pipeline-stage / channel legends read as one line along the BOTTOM of the plot,
+    clear of the breath numbers pinned at the top. The column count must be re-applied on
+    EVERY render, not just at construction: clear() empties the legend and the entry count
+    varies (the detail plot gains 'noise-reduced' only when noise conditioning ran; the
+    result plot has one entry per ticked channel)."""
     import numpy as np
     from respmech.ui.main_window import MainWindow
     s = synth_settings("")
@@ -950,8 +950,9 @@ def test_emg_legends_are_a_single_row_at_the_top(qapp):
         assert len(leg.items) >= 2                      # a 1-entry legend proves nothing
         assert leg.columnCount == len(leg.items)
         assert leg.layout.rowCount() == 1               # the real grid, not the bookkeeping attr
-        gap = leg.sceneBoundingRect().top() - p.getViewBox().sceneBoundingRect().top()
-        assert gap <= 8                                 # "foroven": tucked under the top edge
+        vb = p.getViewBox().sceneBoundingRect()
+        gap = vb.bottom() - leg.sceneBoundingRect().bottom()
+        assert 0 <= gap <= 12, gap                       # tucked along the bottom edge, above it
 
     # detail plot, both entry counts (4 with noise reduction, 3 without)
     pv.render_emg_time({"t": t, "raw": raw, "ecg": raw * .9, "noise": raw * .8, "noise_applied": True})

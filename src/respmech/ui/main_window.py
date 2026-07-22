@@ -93,6 +93,10 @@ class MainWindow(QMainWindow):
         # remove_ecg, written by the ECG tab), so the strip has to be recomputed when Preview
         # edits the model — not only when Setup's own widgets change.
         pv.settings_edited.connect(sc.refresh_qc)
+        # Mechanics + EMG conditioning are Preview-owned now: integrate_from_flow drives the
+        # Setup channel summary's 'derived from flow' row, and normalisation drives the
+        # 'You will get' normalised-EMG-sheet line — so both must refresh on a Preview edit.
+        pv.settings_edited.connect(sc.sync_from_preview)
         # P19: "Process & write this file" on Preview → run just that file on the Run screen
         pv.process_file_requested.connect(self._process_single_file)
         # P20: double-clicking a file in the Run results drills back into Preview

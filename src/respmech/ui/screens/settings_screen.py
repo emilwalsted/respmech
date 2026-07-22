@@ -107,14 +107,6 @@ class SettingsScreen(QWidget):
         root.addWidget(gin)
 
         # Output (second in the flow: an analysis reads as Input -> Output -> rest) --
-        gout = QGroupBox("Output")
-        fo = QFormLayout(gout)
-        fo.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
-        self.out_folder = QLineEdit()
-        self._browse_row(fo, "Output folder", self.out_folder, "output.folder",
-                         "Where results are saved; files are written to a 'data' subfolder inside it; defaults to 'output'.", folder=True)
-        root.addWidget(gout)
-
         # Channels ---------------------------------------------------------
         gch = QGroupBox("Channels")
         fc = QVBoxLayout(gch)
@@ -135,143 +127,16 @@ class SettingsScreen(QWidget):
         fc.addWidget(self.channel_summary)
         root.addWidget(gch)
 
+        gout = QGroupBox("Output")
+        fo = QFormLayout(gout)
+        fo.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
+        self.out_folder = QLineEdit()
+        self._browse_row(fo, "Output folder", self.out_folder, "output.folder",
+                         "Where results are saved; files are written to a 'data' subfolder inside it; defaults to 'output'.", folder=True)
+        root.addWidget(gout)
+
+
         # Processing — breath mechanics ------------------------------------
-        gpr = QGroupBox("Mechanics")
-        fp = QFormLayout(gpr)
-        fp.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
-        self.seg_method = QComboBox()
-        self.seg_method.setProperty("formField", "compact")   # (theme.py)
-        self.seg_method.addItem("Flow", "flow"); self.seg_method.addItem("Volume", "volume")
-        self.wob_from = QComboBox()
-        self.wob_from.setProperty("formField", "compact")
-        self.wob_from.addItem("Average", "average"); self.wob_from.addItem("Individual", "individual")
-        self.integrate = QCheckBox("Calculate volume from flow")
-        self._row(fp, "Signal used to split breaths", self.seg_method, "processing.segmentation.method",
-                  "Which signal marks where each breath begins and ends — flow (the default) or volume.")
-        self._row(fp, "Work of breathing calculation", self.wob_from, "processing.wob.calc_from",
-                  "Compute work of breathing from one averaged breath (the default), or from each breath separately and then average.")
-        self._check_row(fp, self.integrate, "processing.volume.integrate_from_flow",
-                        "Derive volume by integrating the flow signal instead of reading a separate volume channel; off by default.")
-
-        # -- Volume & drift transforms. These CHANGE the volume trace, the Campbell loop
-        #    area and therefore WOB, so they are surfaced (not left to hidden model defaults);
-        #    correct_drift in particular defaults ON. --
-        _vsub = QLabel("Volume and drift corrections"); _vsub.setProperty("status", "muted")
-        _vsub.setContentsMargins(0, 8, 0, 0)
-        fp.addRow(_vsub)
-        self.correct_drift = QCheckBox("Correct volume drift")
-        self.correct_trend = QCheckBox("Correct end-expiratory trend")
-        self.trend_method = QComboBox()
-        self.trend_method.setProperty("formField", "compact")
-        for _lbl, _tok in (("Linear", "linear"), ("Nearest", "nearest"), ("Cubic", "cubic"),
-                           ("Quadratic", "quadratic"), ("Previous", "previous"), ("Next", "next")):
-            self.trend_method.addItem(_lbl, _tok)
-        self.inverse_flow = QCheckBox("Invert the flow signal")
-        self.inverse_volume = QCheckBox("Invert the volume signal")
-        self.resample = QCheckBox("Resample before analysis")
-        self.resample_hz = QSpinBox(); self.resample_hz.setRange(1, 1_000_000); self.resample_hz.setSuffix(" Hz")
-        self._check_row(fp, self.correct_drift, "processing.volume.correct_drift",
-                        "Remove slow baseline drift from the volume trace before analysis; ON by default.")
-        self._check_row(fp, self.correct_trend, "processing.volume.correct_trend",
-                        "Remove a between-breath trend in end-expiratory lung volume; off by default.")
-        self._row(fp, "Trend interpolation", self.trend_method, "processing.volume.trend_method",
-                  "How the end-expiratory trend is interpolated between breaths (a scipy interp1d kind).")
-        self._check_row(fp, self.inverse_flow, "processing.volume.inverse_flow",
-                        "Flip the sign of the flow signal, if inspiration reads positive in your recordings.")
-        self._check_row(fp, self.inverse_volume, "processing.volume.inverse_volume",
-                        "Flip the sign of the volume signal.")
-        self._check_row(fp, self.resample, "processing.sampling.resample",
-                        "Resample every recording to a common frequency before analysis; off by default.")
-        self._row(fp, "Resample to", self.resample_hz, "processing.sampling.resample_to_frequency",
-                  "Target sampling frequency (Hz) used when 'Resample before analysis' is on.")
-        _rshint = QLabel("Keep ≥ ~1000 Hz when EMG channels are present — a low rate discards EMG "
-                         "energy and degrades RMS / entropy / noise reduction.")
-        _rshint.setWordWrap(True); _rshint.setProperty("status", "muted")
-        fp.addRow("", _rshint)
-        self.btn_mech_advanced = QPushButton("Advanced…")
-        self.btn_mech_advanced.setProperty("compact", True)
-        self.btn_mech_advanced.setToolTip("Breath-detection tuning, the averaging grid, the "
-                                          "PTP baseline and per-file breath-count overrides.")
-        self.btn_mech_advanced.clicked.connect(self._open_mech_advanced)
-        _mrow = QWidget(); _ml = QHBoxLayout(_mrow)
-        _ml.setContentsMargins(0, 0, 0, 0)
-        _ml.addWidget(self.btn_mech_advanced); _ml.addStretch(1)
-        fp.addRow("", _mrow)
-        root.addWidget(gpr)
-
-        # EMG — RMS envelope -----------------------------------------------
-        gemg = QGroupBox("EMG — RMS envelope")
-        gemg.setToolTip("How the diaphragm-EMG amplitude is quantified for each breath.")
-        fe = QFormLayout(gemg)
-        fe.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
-        self.emg_rms_window = QDoubleSpinBox()
-        self.emg_rms_window.setRange(0.01, 0.5); self.emg_rms_window.setSingleStep(0.01)
-        self.emg_rms_window.setDecimals(3); self.emg_rms_window.setSuffix(" s")
-        self.emg_outlier_sd = QDoubleSpinBox()
-        self.emg_outlier_sd.setRange(0.0, 10.0); self.emg_outlier_sd.setSingleStep(0.5)
-        self.emg_outlier_sd.setDecimals(1); self.emg_outlier_sd.setSuffix(" SD")
-        self.emg_outlier_sd.setSpecialValueText("off (0)")   # minimum (0.0) reads as disabled
-        self._row(fe, "EMG RMS window length", self.emg_rms_window, "processing.emg.rms_window_s",
-                  "Sliding-window length for the EMG RMS envelope, in seconds; each breath takes its largest windowed value (default 0.05).")
-        self._row(fe, "EMG RMS outlier limit", self.emg_outlier_sd, "processing.emg.outlier_rms_sd_limit",
-                  "Replace any breath's EMG RMS value lying more than this many standard deviations from the across-breath mean; 0 = off (default).")
-        self.emg_norm = QComboBox()
-        self.emg_norm.setProperty("formField", "wide")   # its choices are sentences, not words
-        for _label, _token in (("None — raw amplitude", "none"),
-                               ("Per-file maximum (% of peak breath)", "per_file_max"),
-                               ("Per-file mean (% of mean breath)", "per_file_mean")):
-            self.emg_norm.addItem(_label, _token)
-        self._row(fe, "EMG amplitude normalisation", self.emg_norm, "processing.emg.normalization",
-                  "Also report each file's EMG RMS as a percentage of a per-file reference so amplitudes "
-                  "compare across subjects/electrodes. Adds a normalised sheet to the output; never changes "
-                  "the raw RMS (default: per-file maximum).")
-        root.addWidget(gemg)
-
-        # EMG — ECG removal is tuned LIVE on the Preview screen now (the "› EMG – ECG
-        # reduction" tab shows the detected R-peak capture on every EMG channel), so it no
-        # longer lives here — only a pointer remains.
-        gecg = QLabel("EMG — ECG removal is now tuned live on the Preview screen, on the "
-                      "“› EMG – ECG reduction” tab (pick the capture channel + parameters, "
-                      "or use Auto-suggest, and watch the detected heartbeats).")
-        gecg.setProperty("status", "muted"); gecg.setWordWrap(True)
-        root.addWidget(gecg)
-
-        # EMG — noise reduction (shared profile) ---------------------------
-        gns = QGroupBox("EMG — noise reduction (shared profile)")
-        gns.setToolTip("One shared noise profile + one parameter set are built from the "
-                       "reference and applied IDENTICALLY to every file in the test. "
-                       "Tune the noise window visually on the Preview screen's "
-                       "› EMG – noise reduction tab.")
-        fn = QFormLayout(gns)
-        fn.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
-        self.remove_noise = QCheckBox("Reduce EMG background noise")
-        self._check_row(fn, self.remove_noise, "processing.emg.noise.enabled",
-                        "Subtracts a shared spectral noise profile, built from a rest reference, from every EMG channel; off by default.")
-        # READ-ONLY. The reference used to be settable here as well as in the picker, and the
-        # two disagreed in both directions: Browse stored an ABSOLUTE path (so the analysis
-        # stopped being portable, and only worked at all because os.path.join ignores its base
-        # when the second argument is absolute) while the picker stores a bare file name; and
-        # the "from expiration" checkbox here was silently unticked by the picker whenever a
-        # span was marked, then — re-ticked — silently made that span inert. The picker owns
-        # both halves now, and this says what it chose.
-        self.noise_summary = QLabel("")
-        self.noise_summary.setWordWrap(True)
-        self.noise_summary.setToolTip(_tip(
-            "processing.emg.noise.reference_file",
-            "The rest recording, and which part of it, that defines the noise profile applied "
-            "to every file in the test. Chosen with 'Set noise profile' on the Preview "
-            "screen's › EMG – noise reduction tab."))
-        fn.addRow("Reference", self.noise_summary)
-        hint = QLabel("Pick the reference — and the suppression and fidelity target — with "
-                      "'Set noise profile' on the Preview screen's › EMG – noise reduction tab.")
-        hint.setWordWrap(True); hint.setProperty("status", "muted")
-        fn.addRow("", hint)
-        root.addWidget(gns)
-
-        # Output — what to save. The deliverable set was previously governed by hidden model
-        # defaults (only the folder was surfaced); this makes every workbook/CSV/figure an
-        # explicit, per-run choice. Lives in the 'rest' stage so the guided Output step stays
-        # to just the folder.
         # Entropy ----------------------------------------------------------
         # Shown only when a column is actually assigned to entropy — see _cond_cards. Its two
         # parameters are meaningless otherwise, and burying them in "Advanced (rarely
@@ -291,9 +156,8 @@ class SettingsScreen(QWidget):
         fent.addRow("", _enthint)
         root.addWidget(gent)
 
-        gsave = QGroupBox("Output — what to save")
-        fsv = QFormLayout(gsave)
-        fsv.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
+        # 'What to save' lives inside the Output card now (one place for everything the run
+        # produces and where it goes), so these rows attach to the Output form (fo).
         self.save_average = QCheckBox("Average breath-data workbook")
         self.save_bbb = QCheckBox("Breath-by-breath workbook (per file)")
         self.save_processed = QCheckBox("Processed-signal CSV (per file)")
@@ -304,7 +168,7 @@ class SettingsScreen(QWidget):
         self.save_trimmed_fig = QCheckBox("Trimmed-signal figures")
         self.save_drift_fig = QCheckBox("Drift-correction figures")
         self.save_emg_fig = QCheckBox("EMG channel overviews")
-        _lt = QLabel("Tables"); _lt.setProperty("status", "muted"); _lt.setContentsMargins(0, 8, 0, 0); fsv.addRow(_lt)
+        _lt = QLabel("Tables"); _lt.setProperty("status", "muted"); _lt.setContentsMargins(0, 8, 0, 0); fo.addRow(_lt)
         for cb, var, tip in (
                 (self.save_average, "output.data.save_average", "The across-breath average workbook."),
                 (self.save_bbb, "output.data.save_breath_by_breath", "A per-file breath-by-breath workbook."),
@@ -312,8 +176,8 @@ class SettingsScreen(QWidget):
                 (self.include_ignored, "output.data.include_ignored_breaths",
                  "Include the breaths you've excluded in the per-file processed-signal CSV only. "
                  "Excluded breaths are always left out of the averages and workbooks; this does not change them.")):
-            self._check_row(fsv, cb, var, tip)
-        _lf = QLabel("Diagnostic figures"); _lf.setProperty("status", "muted"); _lf.setContentsMargins(0, 8, 0, 0); fsv.addRow(_lf)
+            self._check_row(fo, cb, var, tip)
+        _lf = QLabel("Diagnostic figures"); _lf.setProperty("status", "muted"); _lf.setContentsMargins(0, 8, 0, 0); fo.addRow(_lf)
         for cb, var, tip in (
                 (self.save_pv_avg, "output.diagnostics.save_pv_average", "The averaged Campbell (pressure–volume) diagram."),
                 (self.save_pv_ind, "output.diagnostics.save_pv_individual", "A Campbell diagram per individual breath."),
@@ -323,8 +187,8 @@ class SettingsScreen(QWidget):
                 (self.save_emg_fig, "output.diagnostics.save_emg",
                  "Per-channel EMG overview figures (raw / ECG-removed / noise-reduced) with the flow "
                  "reference and R-peak capture markers.")):
-            self._check_row(fsv, cb, var, tip)
-        _lg = QLabel("Cohort summary"); _lg.setProperty("status", "muted"); _lg.setContentsMargins(0, 8, 0, 0); fsv.addRow(_lg)
+            self._check_row(fo, cb, var, tip)
+        _lg = QLabel("Cohort summary"); _lg.setProperty("status", "muted"); _lg.setContentsMargins(0, 8, 0, 0); fo.addRow(_lg)
         self.group_regex = QLineEdit()
         # 'wide', not 'compact': the placeholder below measures 281px at the 13pt macOS
         # font — it fits the 320px 'wide' contents box but would elide in the spin column,
@@ -332,34 +196,13 @@ class SettingsScreen(QWidget):
         # a clipped one.
         self.group_regex.setProperty("formField", "wide")
         self.group_regex.setPlaceholderText("leading filename token (e.g. P03_120W → P03)")
-        self._row(fsv, "Group files by", self.group_regex, "output.group_regex",
+        self._row(fo, "Group files by", self.group_regex, "output.group_regex",
                   "How files are grouped (subject / condition) for the by-group summary. Leave blank to use "
                   "the leading filename token; or enter a regular expression whose first capture group is the key.")
         self.save_preview = QLabel(""); self.save_preview.setWordWrap(True)
         self.save_preview.setProperty("banner", True)
         self.save_preview.setProperty("status", "info")
-        fsv.addRow("You will get", self.save_preview)
-        root.addWidget(gsave)
-
-        # --- Advanced (rarely changed): knobs that were previously TOML-only (audit #16/17/22-26)
-        # The Mechanics "Advanced…" settings keep their widgets — from_state/to_state still
-        # round-trip through them, which is what keeps the analysis file honest — but they are
-        # no longer laid out anywhere. The modal edits its own copies and commits into these,
-        # so Cancel costs nothing and the commit funnel is unchanged.
-        self.seg_buffer = QSpinBox(); self.seg_buffer.setRange(0, 100_000)
-        self.peak_height = QDoubleSpinBox(); self.peak_height.setRange(0.0, 1_000_000.0)
-        self.peak_height.setDecimals(4); self.peak_height.setSingleStep(0.01)
-        self.peak_distance = QDoubleSpinBox(); self.peak_distance.setRange(0.0, 60.0)
-        self.peak_distance.setDecimals(4); self.peak_distance.setSingleStep(0.05); self.peak_distance.setSuffix(" s")
-        self.peak_width = QDoubleSpinBox(); self.peak_width.setRange(0.0, 60.0)
-        self.peak_width.setDecimals(4); self.peak_width.setSingleStep(0.05); self.peak_width.setSuffix(" s")
-        self.avg_resamp = QSpinBox(); self.avg_resamp.setRange(10, 100_000)
-        self.ptp_baseline = QDoubleSpinBox(); self.ptp_baseline.setRange(0.0, 1.0)
-        self.ptp_baseline.setDecimals(4); self.ptp_baseline.setSingleStep(0.01); self.ptp_baseline.setSuffix(" s")
-        self.breath_counts_edit = QPlainTextEdit()
-        self.breath_counts_edit.setProperty("formField", "wide")   # holds 'filename = count' lines (theme.py)
-        self.breath_counts_edit.setPlaceholderText("one 'filename = count' per line")
-        self.breath_counts_edit.setFixedHeight(64)
+        fo.addRow("You will get", self.save_preview)
 
         # Status text is shown in the window's bottom status bar (see main_window). This
         # label is kept only as a hidden text holder mirroring that message — showing it
@@ -376,10 +219,6 @@ class SettingsScreen(QWidget):
         # marked the analysis modified and scheduled a recompute — a wheel over "EMG RMS
         # window" moved it from 0.05 s to 0.02 s, which changes every reported EMG number.
         self._wheel_guard = _wheel.guard_scroll_area(scroll)
-        # The breath-count box has its own scrollbar, so it was a dead patch in the middle of
-        # the form: it ate the wheel even when already at its own end. Let it scroll itself
-        # first, then hand the wheel out.
-        self._wheel_chain = _wheel.chain_nested(scroll, self.breath_counts_edit)
         outer.addWidget(scroll, 1)
 
         # Live QC strip, pinned below the (scrolling) form: every current caution at a
@@ -397,7 +236,8 @@ class SettingsScreen(QWidget):
         self._stage_cards = [
             [gin],                                   # 0: Input (always shown)
             [gout],                                  # 1: Output (after Input is valid)
-            [gch, gpr, gecg, gns, gsave],  # 2: the rest (after Output is valid)
+            [gch],  # 2: Channels (after Output is valid). Output stays stage 1
+                    # so the guided flow still gates the channel picker between them.
         ]
         # Cards whose relevance depends on the analysis itself. Deliberately NOT in
         # _stage_cards: that loop forces every registered card visible outside "new" mode, so
@@ -405,7 +245,6 @@ class SettingsScreen(QWidget):
         # test_startup_flow's "open mode reveals everything" walk would fail on a default
         # AppState. Kept separate, ANDed in its own pass.
         self._cond_cards = [
-            (gemg, lambda: bool(self.state.settings.input.channels.emg)),
             (gent, lambda: bool(self.state.settings.input.channels.entropy)),
         ]
         self._stage_gate = [self._input_stage_ok, self._output_stage_ok]
@@ -477,21 +316,7 @@ class SettingsScreen(QWidget):
             self.in_folder.setText(s.input.folder)
             self.in_files.setText(s.input.files)
             self.samp_freq.setValue(s.input.format.sampling_frequency or 2000)
-            ch = s.input.channels
             self._refresh_channel_view()
-            _si = self.seg_method.findData(s.processing.segmentation.method)
-            self.seg_method.setCurrentIndex(_si if _si >= 0 else 0)
-            _wi = self.wob_from.findData(s.processing.wob.calc_from)
-            self.wob_from.setCurrentIndex(_wi if _wi >= 0 else 0)
-            self.integrate.setChecked(s.processing.volume.integrate_from_flow)
-            self.correct_drift.setChecked(s.processing.volume.correct_drift)
-            self.correct_trend.setChecked(s.processing.volume.correct_trend)
-            _ti = self.trend_method.findData(s.processing.volume.trend_method)
-            self.trend_method.setCurrentIndex(_ti if _ti >= 0 else 0)
-            self.inverse_flow.setChecked(s.processing.volume.inverse_flow)
-            self.inverse_volume.setChecked(s.processing.volume.inverse_volume)
-            self.resample.setChecked(s.processing.sampling.resample)
-            self.resample_hz.setValue(s.processing.sampling.resample_to_frequency or 200)
             d, dg = s.output.data, s.output.diagnostics
             self.save_average.setChecked(d.save_average)
             self.save_bbb.setChecked(d.save_breath_by_breath)
@@ -504,32 +329,15 @@ class SettingsScreen(QWidget):
             self.save_drift_fig.setChecked(dg.save_drift)
             self.save_emg_fig.setChecked(getattr(dg, "save_emg", True))
             self.group_regex.setText(s.output.group_regex or "")
-
-            emg, n = s.processing.emg, s.processing.emg.noise
-            # EMG RMS envelope
-            self.emg_rms_window.setValue(emg.rms_window_s)
-            self.emg_outlier_sd.setValue(emg.outlier_rms_sd_limit)
-            _ni = self.emg_norm.findData(emg.normalization)
-            self.emg_norm.setCurrentIndex(_ni if _ni >= 0 else 0)
-            # Noise reduction (enable + reference file; tuning lives in the EMG tab). ECG
-            # removal is tuned on the Preview "› EMG – ECG reduction" tab, not here.
-            self.remove_noise.setChecked(n.enabled)               # rebind to the real gate
-            self._refresh_noise_summary()
             self.out_folder.setText(s.output.folder)
-            # Advanced (rarely changed)
-            seg, peak = s.processing.segmentation, s.processing.segmentation.peak
-            self.seg_buffer.setValue(seg.buffer)
-            self.peak_height.setValue(peak.height)
-            self.peak_distance.setValue(peak.distance_s)
-            self.peak_width.setValue(peak.width_s)
-            self.avg_resamp.setValue(s.processing.wob.avg_resampling_obs)
-            self.ptp_baseline.setValue(s.processing.ptp.baseline_window_s)
             self.ent_epochs.setValue(s.processing.entropy.epochs)
             self.ent_tol.setValue(s.processing.entropy.tolerance)
             _mi = self.matlab_variant.findData(s.input.format.matlab_variant)
             self.matlab_variant.setCurrentIndex(_mi if _mi >= 0 else 0)
-            self.breath_counts_edit.setPlainText(
-                "\n".join(f"{e.file} = {e.count}" for e in s.processing.breath_counts))
+            # Mechanics, EMG conditioning, noise reduction and the gated peak are all
+            # PREVIEW-OWNED now (their controls live on the Preview sub-tabs and their
+            # Advanced… modals, writing the model directly); Setup neither fills nor reads
+            # their widgets — it has none.
             self._sync_widgets()
         finally:
             self._loading = prev
@@ -541,21 +349,11 @@ class SettingsScreen(QWidget):
         s.input.folder = self.in_folder.text()
         s.input.files = self.in_files.text()
         s.input.format.sampling_frequency = self.samp_freq.value()
-        ch = s.input.channels
-        # input.channels is written ONLY by _apply_channel_mapping, from the picker. It has
-        # no widget here, so rewriting it from one would mean rewriting it from nothing —
-        # and to_state runs on every tab change, which would erase the mapping on the first
-        # switch away from Setup.
-        s.processing.segmentation.method = self.seg_method.currentData()
-        s.processing.wob.calc_from = self.wob_from.currentData()
-        s.processing.volume.integrate_from_flow = self.integrate.isChecked()
-        s.processing.volume.correct_drift = self.correct_drift.isChecked()
-        s.processing.volume.correct_trend = self.correct_trend.isChecked()
-        s.processing.volume.trend_method = self.trend_method.currentData()
-        s.processing.volume.inverse_flow = self.inverse_flow.isChecked()
-        s.processing.volume.inverse_volume = self.inverse_volume.isChecked()
-        s.processing.sampling.resample = self.resample.isChecked()
-        s.processing.sampling.resample_to_frequency = self.resample_hz.value()
+        # input.channels is written ONLY by _apply_channel_mapping (the picker). Everything
+        # under Mechanics, EMG conditioning, noise reduction and the gated peak is
+        # Preview-owned and model-direct, so to_state must NOT rewrite any of it — this runs
+        # on every tab change, and a Setup write would revert the Preview edit on the first
+        # switch away.
         d, dg = s.output.data, s.output.diagnostics
         d.save_average = self.save_average.isChecked()
         d.save_breath_by_breath = self.save_bbb.isChecked()
@@ -568,88 +366,33 @@ class SettingsScreen(QWidget):
         dg.save_drift = self.save_drift_fig.isChecked()
         dg.save_emg = self.save_emg_fig.isChecked()
         s.output.group_regex = self.group_regex.text().strip() or None
-
-        emg, n = s.processing.emg, s.processing.emg.noise
-        # EMG RMS envelope
-        emg.rms_window_s = self.emg_rms_window.value()
-        emg.outlier_rms_sd_limit = self.emg_outlier_sd.value()
-        emg.normalization = self.emg_norm.currentData()
-        # ECG removal (remove_ecg / detect_channel / ecg_*) is written by the Preview
-        # "› EMG – ECG reduction" tab, not here — leave those model fields untouched.
-        # Noise reduction (enable + reference file; tuning owned by the EMG tab)
-        n.enabled = self.remove_noise.isChecked()
-        # reference_file / use_expiration / reference_intervals are written ONLY by the
-        # noise picker (preview_screen._apply_noise_reference / _apply_noise_expiration).
-        # to_state runs on every tab change, so rewriting them from here — where they have no
-        # widget — would erase the choice on the first switch away from Setup.
         s.output.folder = self.out_folder.text()
-        # Advanced (rarely changed)
-        s.processing.segmentation.buffer = self.seg_buffer.value()
-        s.processing.segmentation.peak.height = self.peak_height.value()
-        s.processing.segmentation.peak.distance_s = self.peak_distance.value()
-        s.processing.segmentation.peak.width_s = self.peak_width.value()
-        s.processing.wob.avg_resampling_obs = self.avg_resamp.value()
-        s.processing.ptp.baseline_window_s = self.ptp_baseline.value()
         s.processing.entropy.epochs = self.ent_epochs.value()
         s.processing.entropy.tolerance = self.ent_tol.value()
-        # noise.n_fft is written by the Preview EMG tab's Advanced modal, alongside
-        # win_length and hop_length. Keeping a second writer here silently reverted it
-        # on the next tab change — measured.
-        # processing.emg.robust_peak is written ONLY by the Preview EMG tab, which is where
-        # its controls now live — beside the EMG they change, and one tab from the ECG removal
-        # they depend on. to_state runs on every tab change, so rewriting it from here would
-        # erase a gated-peak edit on the first switch to Setup.
         s.input.format.matlab_variant = self.matlab_variant.currentData()
-        bcs = []
-        for line in self.breath_counts_edit.toPlainText().splitlines():
-            line = line.strip()
-            if not line or "=" not in line:
-                continue
-            fpart, _, cpart = line.rpartition("=")      # split on the LAST '=' (filenames may contain '=')
-            try:
-                cnt = int(cpart.strip())
-            except ValueError:
-                continue
-            if fpart.strip():
-                bcs.append(BreathCountEntry(fpart.strip(), cnt))
-        s.processing.breath_counts = bcs
         if self.on_settings_changed:
             self.on_settings_changed()
         return s
 
     def set_noise_reference(self, file, intervals, use_expiration):
-        """Reflect a noise reference chosen in the picker. The picker has already written all
-        three fields into state — it is their only writer — so this just re-renders the
-        read-only summary and records that the analysis changed."""
-        self._refresh_noise_summary()
+        """Record that the picker chose a noise reference. The picker (Preview) is the only
+        writer of the three fields and shows the read-out itself now; Setup just marks the
+        analysis modified."""
         self._mark_dirty()   # a picked noise reference is a user edit that lands in the .toml
         where = "every expiration" if use_expiration else "a marked rest span"
         self._set_status(f"Noise reference set from {file}: {where}.")
 
-    def _refresh_noise_summary(self):
-        """What the picker chose, in words. Empty is a real state and says so, because the
-        alternative — a blank line beside a ticked 'Reduce EMG background noise' — reads as
-        configured when nothing will run."""
-        n = self.state.settings.processing.emg.noise
-        if not n.reference_file:
-            self.noise_summary.setText("Not set — noise reduction will not run.")
-            self.noise_summary.setProperty("status", "muted")
-        elif n.use_expiration or not n.reference_intervals:
-            self.noise_summary.setText(f"{n.reference_file} · every expiration")
-            self.noise_summary.setProperty("status", None)
-        else:
-            spans = ", ".join(f"{a:.2f}–{b:.2f} s" for a, b in n.reference_intervals)
-            self.noise_summary.setText(f"{n.reference_file} · marked span {spans}")
-            self.noise_summary.setProperty("status", None)
-        self.noise_summary.style().unpolish(self.noise_summary)
-        self.noise_summary.style().polish(self.noise_summary)
+    def sync_from_preview(self):
+        """A Preview-owned edit (mechanics / EMG conditioning / noise) may change what the
+        Setup channel summary and the 'You will get' line say — integrate_from_flow drives
+        the 'Volume: derived from flow' row, normalisation drives the normalised-EMG-sheet
+        deliverable — so refresh both when Preview signals an edit."""
+        self._refresh_channel_view(force=True)
+        self._update_save_preview()
 
     # -- helpers ------------------------------------------------------------
     def _sync_widgets(self):
-        self._refresh_noise_summary()
-        self._refresh_channel_view()   # 'Volume: derived from flow' follows the checkbox
-        self.trend_method.setEnabled(self.correct_trend.isChecked())
-        self.resample_hz.setEnabled(self.resample.isChecked())
+        self._refresh_channel_view()   # 'Volume: derived from flow' follows the model
         self._update_save_preview()
 
     def _update_save_preview(self):
@@ -663,7 +406,8 @@ class SettingsScreen(QWidget):
             got.append("cohort summary (mean ± SD, CV%, by group)")   # always paired with the average
         if self.save_bbb.isChecked():
             got.append("breath-by-breath workbook")
-            if self.emg_norm.currentData() != "none" and self.state.settings.input.channels.emg:
+            emg = self.state.settings.processing.emg
+            if emg.normalization != "none" and self.state.settings.input.channels.emg:
                 got.append("normalised-EMG sheet")     # only when EMG channels are configured
         if self.save_processed.isChecked():
             got.append("processed CSV")
@@ -680,20 +424,11 @@ class SettingsScreen(QWidget):
         self.in_files.editingFinished.connect(self._on_inputs_changed)
         for le in (self.out_folder, self.group_regex):
             le.editingFinished.connect(self._on_field_changed)
-        self.breath_counts_edit.textChanged.connect(self._on_field_changed)   # QPlainTextEdit: no editingFinished
-        for sb in (self.samp_freq, self.resample_hz,
-                   self.seg_buffer, self.avg_resamp, self.ent_epochs):
+        for sb in (self.samp_freq, self.ent_epochs):
             sb.valueChanged.connect(self._on_field_changed)
-        for dsb in (self.emg_rms_window, self.emg_outlier_sd, self.peak_height,
-                    self.peak_distance, self.peak_width, self.ptp_baseline, self.ent_tol):
-            dsb.valueChanged.connect(self._on_field_changed)
-        for cb in (self.seg_method, self.wob_from, self.trend_method):
-            cb.currentTextChanged.connect(self._on_field_changed)
-        self.emg_norm.currentIndexChanged.connect(self._on_field_changed)
+        self.ent_tol.valueChanged.connect(self._on_field_changed)
         self.matlab_variant.currentIndexChanged.connect(self._on_field_changed)
-        for chk in (self.integrate, self.remove_noise,
-                    self.correct_drift, self.correct_trend, self.inverse_flow, self.inverse_volume,
-                    self.resample, self.save_average, self.save_bbb, self.save_processed,
+        for chk in (self.save_average, self.save_bbb, self.save_processed,
                     self.include_ignored, self.save_pv_avg, self.save_pv_ind, self.save_raw_fig,
                     self.save_trimmed_fig, self.save_drift_fig, self.save_emg_fig):
             chk.toggled.connect(self._on_field_changed)
@@ -944,79 +679,6 @@ class SettingsScreen(QWidget):
         self._open_channel_setup(initial={})     # fresh analysis -> no pre-selection
         self._update_disclosure()                # reveal the rest (OK applied, or cancelled)
 
-    def _open_mech_advanced(self):
-        """Breath detection, the averaging grid, the PTP baseline and the per-file breath
-        counts. Real settings, but not ones anyone sets while getting a result out.
-
-        The screen's own widgets still exist and still round-trip through from_state/to_state
-        — they are simply not laid out any more. The dialog edits its own copies and commits
-        into them, so Cancel costs nothing and the commit funnel below is the same one an
-        ordinary field edit uses, which is what keeps the dirty flag and the recompute scope
-        right without repeating either here."""
-        from respmech.ui.advanced_dialog import AdvancedDialog, Field
-        fields = [
-            Field("seg_buffer", "Breath-separation buffer", "int",
-                  "processing.segmentation.buffer",
-                  "Guard samples added around each detected breath boundary.",
-                  lo=0, hi=100_000, step=10),
-            Field("peak_height", "Breath peak — minimum height", "float",
-                  "processing.segmentation.peak.height",
-                  "Minimum peak height for breath detection (volume-based separation).",
-                  lo=0.0, hi=1_000_000.0, step=0.01, decimals=4),
-            Field("peak_distance", "Breath peak — minimum distance", "float",
-                  "processing.segmentation.peak.distance_s",
-                  "Minimum time between detected breath peaks.",
-                  lo=0.0, hi=60.0, step=0.05, decimals=4, suffix=" s"),
-            Field("peak_width", "Breath peak — minimum width", "float",
-                  "processing.segmentation.peak.width_s",
-                  "Minimum width of a detected breath peak.",
-                  lo=0.0, hi=60.0, step=0.05, decimals=4, suffix=" s"),
-            Field("avg_resamp", "Average-breath resampling points", "int",
-                  "processing.wob.avg_resampling_obs",
-                  "Points each breath is resampled to when building the average breath / WOB.",
-                  lo=10, hi=100_000, step=10),
-            Field("ptp_baseline", "PTP baseline window", "float",
-                  "processing.ptp.baseline_window_s",
-                  "End-expiratory window whose mean is the pressure-time-product baseline.",
-                  lo=0.0, hi=1.0, step=0.01, decimals=4, suffix=" s"),
-            Field("breath_counts", "Breath-count overrides", "text",
-                  "processing.breath_counts",
-                  "Per-file override of the breath count used for per-minute rate scaling — "
-                  "one 'filename = count' per line, e.g. 'RIU_H5_40W.txt = 12'. Blank means "
-                  "each file's detected count.",
-                  placeholder="one 'filename = count' per line"),
-        ]
-        current = {
-            "seg_buffer": self.seg_buffer.value(),
-            "peak_height": self.peak_height.value(),
-            "peak_distance": self.peak_distance.value(),
-            "peak_width": self.peak_width.value(),
-            "avg_resamp": self.avg_resamp.value(),
-            "ptp_baseline": self.ptp_baseline.value(),
-            "breath_counts": self.breath_counts_edit.toPlainText(),
-        }
-        dlg = AdvancedDialog("Mechanics — advanced", fields, current, parent=self,
-                             intro="Breath detection and the averaging grid. The defaults "
-                                   "suit ordinary recordings; reach for these when a "
-                                   "recording is segmenting badly.")
-        if dlg.exec() != QDialog.Accepted:
-            return
-        staged = dlg.values()
-        if staged == current:
-            return                      # OK without an edit: no dirty flag, no recompute
-        prev, self._loading = self._loading, True
-        try:
-            self.seg_buffer.setValue(int(staged["seg_buffer"]))
-            self.peak_height.setValue(float(staged["peak_height"]))
-            self.peak_distance.setValue(float(staged["peak_distance"]))
-            self.peak_width.setValue(float(staged["peak_width"]))
-            self.avg_resamp.setValue(int(staged["avg_resamp"]))
-            self.ptp_baseline.setValue(float(staged["ptp_baseline"]))
-            self.breath_counts_edit.setPlainText(staged["breath_counts"])
-        finally:
-            self._loading = prev
-        self._on_field_changed()        # the ordinary commit: dirty + sync + recompute scope
-
     def _open_channel_setup(self, initial=None):
         """Show the visual channel-assignment modal over the valid data files matching the
         input mask, and on OK write the channel columns into the form. Returns True iff a
@@ -1131,8 +793,8 @@ class SettingsScreen(QWidget):
         ch = self.state.settings.input.channels
         f = self.state.settings.input.format
         return (ch.flow, ch.volume, ch.poes, ch.pgas, ch.pdi, tuple(ch.emg), tuple(ch.entropy),
-                self.integrate.isChecked(), f.sampling_frequency, f.decimal,
-                self.in_folder.text(), self.in_files.text())
+                self.state.settings.processing.volume.integrate_from_flow,  # Preview-owned now
+                f.sampling_frequency, f.decimal, self.in_folder.text(), self.in_files.text())
 
     def _refresh_channel_view(self, force=False):
         """Re-render the read-only channel summary. The traces need a readable data file; the
@@ -1207,11 +869,13 @@ class SettingsScreen(QWidget):
                 n_visible += 1
             else:
                 break
-        # the visual channel-assignment modal sits between Output (stage 1) and the rest
-        # (stage 2): once Output is valid, hold the remaining cards until the modal has
-        # been dealt with, auto-opening it once
-        if n_visible >= 3 and not self._channel_modal_done:
-            n_visible = 2
+        # the visual channel-assignment modal sits between the Output stage and the Channels
+        # stage: once Output is valid, hold the Channels card until the modal has been dealt
+        # with, auto-opening it once. Derive the Channels stage index from the registry so
+        # this stays correct if a stage is added or reordered (rather than a bare literal 3).
+        _channels_stage = len(self._stage_cards)          # reveal count that first shows Channels
+        if n_visible >= _channels_stage and not self._channel_modal_done:
+            n_visible = _channels_stage - 1
             if not self._channel_modal_pending:
                 self._channel_modal_pending = True
                 QTimer.singleShot(0, self._open_channel_setup_for_flow)

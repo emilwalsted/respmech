@@ -144,11 +144,7 @@ def test_settings_widgets_expose_varpath_and_description_on_hover(qapp, tmp_path
     sc = SettingsScreen(AppState(_settings(str(tmp_path))))
     checks = {
         sc.samp_freq: "input.format.sampling_frequency",
-        sc.emg_rms_window: "processing.emg.rms_window_s",
-        sc.remove_noise: "processing.emg.noise.enabled",
-        sc.noise_summary: "processing.emg.noise.reference_file",
         sc.out_folder: "output.folder",
-        sc.integrate: "processing.volume.integrate_from_flow",
     }
     for w, var in checks.items():
         tip = w.toolTip()
@@ -184,7 +180,8 @@ def test_every_settings_tooltip_names_a_real_settings_field(qapp, tmp_path):
             assert hasattr(obj, part), f"{m.group(1)} does not resolve: no '{part}' on {obj!r}"
             obj = getattr(obj, part)
         seen += 1
-    assert seen > 20, f"only {seen} tooltips carried a settings path — the regex likely broke"
+    assert seen > 12, f"only {seen} tooltips carried a settings path — the regex likely broke"
+    # (Setup is lean now — most conditioning tooltips live in the Preview Advanced modals)
 
 
 def test_preview_noise_params_expose_varpath_on_hover(qapp, tmp_path):

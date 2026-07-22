@@ -579,7 +579,7 @@ def test_all_ok_rejects_a_multi_pattern_mask(qapp, tmp_path):
                                "pdi": 5, "emg": [], "entropy": []})
     sc._apply_channel_mapping({"flow": 5, "volume": None, "poes": 7, "pgas": 8,
                                "pdi": 9, "emg": [], "entropy": []})
-    sc.integrate.setChecked(True)
+    sc.state.settings.processing.volume.integrate_from_flow = True
     sc.out_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv"); sc._on_field_changed()
     assert sc._all_ok()                              # a single, valid mask is ready
     sc.state.settings.input.files = "*.csv, *.txt"   # a mask the core runner cannot glob
