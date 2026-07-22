@@ -14,11 +14,15 @@ under 10 ms, which is negligible beside the figure writing itself.
 
 SAFETY. This can never make things worse than doing the work in-process:
 
-  * The child is probed once with a trivial task. A packaged app whose ``sys.executable`` is
-    the GUI binary could, without ``multiprocessing.freeze_support()``, re-launch the app
-    instead of running a worker — the probe catches that (it times out) and this module then
-    stays in-process for the rest of the session. The entry points call ``freeze_support()``
-    as well, which is the actual fix for that case.
+  * A PACKAGED app (briefcase bundle) whose ``sys.executable`` is the GUI binary would, on a
+    ``spawn``, re-launch the whole app instead of running a Python worker — and it does so
+    TWICE (the resource tracker and the worker). ``multiprocessing.freeze_support()`` does NOT
+    prevent this: a briefcase bundle is not ``sys.frozen``, so ``freeze_support()`` is a no-op.
+    So we do not probe at all unless ``sys.executable`` is a real Python interpreter; in a
+    bundle we go straight to the in-process path (no extra windows, no probe-timeout hang).
+    In a normal dev/venv install ``sys.executable`` IS python, so the child isolation is used.
+  * The child (when used) is still probed once with a trivial task; a caching verdict means a
+    spawn failure is paid for once per process, not per batch.
   * Every failure mode — no probe, spawn error, pickling error, timeout, child crash —
     falls back to calling ``plots.write_figures`` directly, which is exactly today's
     behaviour.
@@ -26,6 +30,7 @@ SAFETY. This can never make things worse than doing the work in-process:
 from __future__ import annotations
 
 import os
+import sys
 
 # One trivial spawn decides whether this environment can run children at all. None = not yet
 # probed; True/False = the answer for the rest of the process.
@@ -66,10 +71,32 @@ def _executor():
     return ProcessPoolExecutor(max_workers=1, mp_context=mp.get_context("spawn"))
 
 
+def _spawn_relaunches_the_app() -> bool:
+    """True when a multiprocessing ``spawn`` would re-launch THIS app instead of running a Python
+    child — i.e. a packaged build. That is the shipped v2.3.0 bug: on every batch's figure step
+    the probe opened two extra GUI windows (the resource tracker and the worker) and then hung
+    for the probe timeout. ``multiprocessing.freeze_support()`` does not help (a briefcase bundle
+    is not ``sys.frozen``). So when this is true we never spawn/probe — figures go in-process.
+
+    Packaged is detected three ways: a real frozen build (``sys.frozen``, PyInstaller/py2exe);
+    ``sys.executable`` not being a Python interpreter (the briefcase binary is named after the
+    app); or ``sys.executable`` living inside a macOS ``.app`` bundle. Any false positive only
+    costs the (safe, identical) in-process path, so we err toward not spawning."""
+    if getattr(sys, "frozen", False):
+        return True
+    exe = (sys.executable or "").replace("\\", "/")         # normalise for a Windows path anywhere
+    base = os.path.basename(exe).lower()
+    if not (base.startswith("python") or base.startswith("pypy")):
+        return True
+    if ".app/contents/" in exe.lower():
+        return True
+    return False
+
+
 def _can_spawn() -> bool:
     global _CAN_SPAWN
     if _CAN_SPAWN is None:
-        if os.environ.get(_DISABLE_ENV):
+        if os.environ.get(_DISABLE_ENV) or _spawn_relaunches_the_app():
             _CAN_SPAWN = False
             return _CAN_SPAWN
         try:

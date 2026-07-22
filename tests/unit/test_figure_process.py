@@ -121,6 +121,36 @@ def test_a_failed_probe_is_remembered_and_does_not_respawn(tmp_path, monkeypatch
     assert len(calls) == 1, "the probe re-ran instead of caching its verdict"
 
 
+def test_packaged_app_never_probes_and_re_launches(monkeypatch):
+    """The shipped v2.3.0 bug: in a briefcase bundle sys.executable is the app binary, so the
+    probe's ProcessPoolExecutor re-launched the whole GUI TWICE (resource tracker + worker) and
+    then hung for the probe timeout before figures were written in-process. When sys.executable
+    is not a Python interpreter, _can_spawn must decide False WITHOUT ever spawning."""
+    monkeypatch.setattr(fp, "_CAN_SPAWN", None)
+    monkeypatch.setattr(fp.sys, "executable",
+                        "/Applications/RespMech.app/Contents/MacOS/RespMech")
+    calls = []
+    monkeypatch.setattr(fp, "_executor", lambda: calls.append(1))
+    assert fp._can_spawn() is False
+    assert calls == [], "a packaged app spawned a probe child — the re-launch-twice bug"
+
+
+def test_spawn_relaunch_detection(monkeypatch):
+    """Dev/venv installs (python) keep the child isolation; every packaged shape is detected."""
+    monkeypatch.setattr(fp.sys, "frozen", False, raising=False)
+    for exe in ("/opt/anaconda3/bin/python3.13", "/x/.venv/bin/python", r"C:\Py\pythonw.exe"):
+        monkeypatch.setattr(fp.sys, "executable", exe)
+        assert fp._spawn_relaunches_the_app() is False, exe
+    for exe in ("/Applications/RespMech.app/Contents/MacOS/RespMech",       # briefcase binary
+                "/Applications/RespMech.app/Contents/Resources/python",     # python INSIDE a .app
+                r"C:\Prog\RespMech.exe", ""):                               # windows binary / unknown
+        monkeypatch.setattr(fp.sys, "executable", exe)
+        assert fp._spawn_relaunches_the_app() is True, exe
+    monkeypatch.setattr(fp.sys, "executable", "/x/.venv/bin/python")        # sys.frozen also counts
+    monkeypatch.setattr(fp.sys, "frozen", True, raising=False)
+    assert fp._spawn_relaunches_the_app() is True
+
+
 # -- the writers.py seam -------------------------------------------------------
 
 def test_writers_reports_the_fallback_in_its_failure_list(tmp_path, monkeypatch):
