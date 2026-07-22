@@ -58,6 +58,84 @@ try:
 except Exception:  # pragma: no cover
     _theme = None
 
+_SUP = str.maketrans("0123456789-", "⁰¹²³⁴⁵⁶⁷⁸⁹⁻")
+
+
+class SciAxis(pg.AxisItem):
+    """A left axis that centres its (two-line) channel label and, when pyqtgraph auto-scales
+    the ticks, annotates the scale as ``·10⁻³`` rather than pyqtgraph's default ``(x0.001)``.
+
+    The name and unit are set separately via ``set_channel_label`` so the two can stack on
+    two centred lines and so the scale annotation can be inserted next to the unit.
+    """
+
+    def __init__(self, *a, **k):
+        self._name = ""
+        self._unit = ""             # set before super(): its __init__ calls labelString()
+        super().__init__(*a, **k)
+
+    def set_channel_label(self, name, unit=""):
+        self._name, self._unit = name, unit
+        self.labelUnits = unit          # keep pyqtgraph's own SI-scaling of the tick values
+        self.label.setHtml(self.labelString())
+        self._adjustSize() if hasattr(self, "_adjustSize") else None
+
+    def _scale_annotation(self):
+        scale = getattr(self, "autoSIPrefixScale", 1.0)
+        if not self.autoSIPrefix or scale == 1.0:
+            return ""
+        import math
+        exp = int(round(math.log10(1.0 / scale)))   # displayed = value·10^exp
+        return "·10" + str(exp).translate(_SUP)
+
+    def labelString(self):
+        scale = self._scale_annotation()
+        if scale and self._unit:
+            second = f"({scale} {self._unit})"
+        elif scale:
+            second = f"({scale})"
+        elif self._unit:
+            second = f"({self._unit})"
+        else:
+            second = ""
+        inner = self._name + (f"<br>{second}" if second else "")
+        style = ";".join(f"{k}: {v}" for k, v in self.labelStyle.items())
+        return f"<span style='{style}'><div style='text-align:center'>{inner}</div></span>"
+
+
+def _parse_breath_counts(text, entry_cls):
+    """Parse the 'filename = count' lines of the breath-count override box into entries.
+    Splits on the LAST '=' so a filename may itself contain one; skips blank/malformed lines."""
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        fpart, _, cpart = line.rpartition("=")
+        try:
+            cnt = int(cpart.strip())
+        except ValueError:
+            continue
+        if fpart.strip():
+            out.append(entry_cls(fpart.strip(), cnt))
+    return out
+
+
+def _restrict_body_wheel_to_x(vb):
+    """Make a channel plot's scroll wheel zoom the TIME axis only, never y.
+
+    pyqtgraph's ViewBox zooms both axes on a body wheel; the mechanics channels have
+    different units, so a stray scroll re-scaled whichever graph the cursor was over and left
+    the rest alone — jarring. The AxisItem's own wheel (over the y-axis) still passes an
+    explicit axis and so keeps working, which is the one place y-zoom should happen.
+    """
+    _orig = vb.wheelEvent
+
+    def wheelEvent(ev, axis=None):
+        _orig(ev, axis=0 if axis is None else axis)   # body wheel (axis=None) -> x only
+
+    vb.wheelEvent = wheelEvent
+
 # channel -> (axis label with units, pen colour by physiological meaning)
 _CHANNELS = [
     ("flow", "Flow (L/s)", (44, 110, 155)),
@@ -595,6 +673,25 @@ class PreviewScreen(QWidget):
 
     def _build_mech_tab(self):
         w = QWidget(); v = QVBoxLayout(w); v.setContentsMargins(0, 6, 0, 0)
+        # Cursor read-out (time, value at the pointer) — above the graphs, right-aligned, and
+        # never wrapping: it updates on every mouse move, so a wrapping label made the whole
+        # stack jump a row up and down. A fixed single line on top stays put.
+        self.crosshair_label = QLabel("")
+        self.crosshair_label.setProperty("status", "muted")
+        self.crosshair_label.setWordWrap(False)
+        self.crosshair_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        # All the mechanics settings live behind here now (they left the Setup screen); this
+        # is the tab they shape, so it is where they belong.
+        self.btn_mech_advanced = QPushButton("Advanced…")
+        self.btn_mech_advanced.setProperty("compact", True)
+        self.btn_mech_advanced.setToolTip(
+            "Breath segmentation, work-of-breathing source, volume/drift corrections, "
+            "resampling and per-file breath-count overrides.")
+        self.btn_mech_advanced.clicked.connect(self._open_mech_advanced)
+        _xh = QHBoxLayout(); _xh.setContentsMargins(6, 0, 6, 0)
+        _xh.addWidget(self.btn_mech_advanced)
+        _xh.addStretch(1); _xh.addWidget(self.crosshair_label, 0, Qt.AlignRight)
+        v.addLayout(_xh)
         split = QSplitter(Qt.Vertical)
         self.plots = pg.GraphicsLayoutWidget()
         self.plots.setBackground(_plot_pal()["bg"])
@@ -622,8 +719,6 @@ class PreviewScreen(QWidget):
         self.qc_overview.setProperty("banner", True)   # box baked at first polish (theme.py)
         self.qc_overview.setProperty("status", "muted")
         self.qc_overview.setToolTip("Quality overview of the most recent test run.")
-        self.crosshair_label = QLabel("")
-        self.crosshair_label.setProperty("status", "muted")
         self.btn_export_fig = QPushButton("Export Campbell…")
         self.btn_export_fig.setEnabled(False)          # enabled once a diagram is drawn
         self.btn_export_fig.setToolTip("Save the Campbell diagram as a PNG or PDF.")
@@ -635,7 +730,6 @@ class PreviewScreen(QWidget):
         self.btn_process_file.setToolTip("Run and write output for the previewed file only.")
         self.btn_process_file.clicked.connect(self._process_this_file)
         bar.addWidget(self.qc_overview); bar.addStretch(1)
-        bar.addWidget(self.crosshair_label); bar.addSpacing(12)
         bar.addWidget(self.btn_process_file); bar.addWidget(self.btn_export_fig)
         v.addLayout(bar)
         return w
@@ -723,6 +817,16 @@ class PreviewScreen(QWidget):
                                       "channels as the shared noise reference for this test.")
         self.btn_set_noise.clicked.connect(self._open_noise_profile_dialog)
 
+        # The on/off toggle for EMG-noise processing — the one control the user asked to keep
+        # on the tab (it left the Setup screen with the rest of the noise settings).
+        self.noise_enabled = QCheckBox("Reduce EMG noise")
+        self.noise_enabled.setToolTip(_help_tip(
+            "processing.emg.noise.enabled",
+            "Subtract a shared spectral noise profile (built from a rest reference) from every "
+            "EMG channel. Pick the reference with 'Set noise profile'; off by default."))
+        self.noise_enabled.toggled.connect(self._on_noise_enabled_changed)
+        self.noise_ref_readout = QLabel("")
+        self.noise_ref_readout.setProperty("status", "muted")
         self.noise_auto = QCheckBox("Auto")
         self.noise_auto.setToolTip(_help_tip(
             "processing.emg.noise.auto_prop",
@@ -763,7 +867,7 @@ class PreviewScreen(QWidget):
         # tight caption→field pairing (4 px) with a wider gap (10 px) BETWEEN groups so
         # 'Strength [ ]', 'Keep ≥ [ ]', 'Gate [ ]' read as clusters, not an even bead line
         nrow = QHBoxLayout(self.noise_opts); nrow.setContentsMargins(11, 3, 11, 3); nrow.setSpacing(4)
-        nrow.addWidget(_cap("Noise reduction"))
+        nrow.addWidget(_cap("Noise", self.noise_auto.toolTip()))
         nrow.addSpacing(8); nrow.addWidget(self.noise_auto)
         nrow.addSpacing(10); nrow.addWidget(_cap("Strength", self.noise_prop.toolTip())); nrow.addWidget(self.noise_prop)
         nrow.addSpacing(10); nrow.addWidget(_cap("Keep ≥", self.noise_target.toolTip())); nrow.addWidget(self.noise_target)
@@ -776,11 +880,12 @@ class PreviewScreen(QWidget):
         self.emg_gated = QCheckBox("Gated peak")
         self.emg_gated.setToolTip(_help_tip(
             "processing.emg.robust_peak.enabled",
-            "The reported peak EMG is the largest windowed value in the breath, which on a "
-            "strongly heart-coupled recording is usually a leftover heartbeat rather than "
-            "diaphragm activity. This blanks a window around every detected heartbeat and "
-            "takes the peak of what survives, reported as extra 'gated' columns beside the "
-            "existing ones; the existing columns never change."))
+            "The peak EMG of a breath is its single loudest moment — but on a recording where "
+            "the heartbeat bleeds into the EMG, that moment is often a leftover heartbeat, not "
+            "the diaphragm. Tick this to ALSO measure the peak from just the heartbeat-free "
+            "stretches of each breath. It has no effect on the live plots here: it adds extra "
+            "'gated' columns to the saved data, which you see after a run. The existing "
+            "numbers never change."))
         self.emg_gate_width = QDoubleSpinBox()
         self.emg_gate_width.setRange(0.02, 0.5); self.emg_gate_width.setSingleStep(0.01)
         self.emg_gate_width.setDecimals(3); self.emg_gate_width.setSuffix(" s")
@@ -803,6 +908,13 @@ class PreviewScreen(QWidget):
         grow.addWidget(self.emg_gated)
         grow.addSpacing(10); grow.addWidget(_cap("Blank", self.emg_gate_width.toolTip()))
         grow.addWidget(self.emg_gate_width)
+        # say plainly that this is an output-only add-on: nothing on this tab changes when it
+        # is ticked, so without a word the empty response reads as "it did nothing"
+        _gcap = _cap("→ extra columns in the saved output",
+                     "The gated peak is not drawn here — it appears as extra columns in the "
+                     "data files after a run.")
+        _gcap.setProperty("status", "muted")
+        grow.addSpacing(8); grow.addWidget(_gcap)
 
         self.btn_emg_advanced = QPushButton("Advanced…")
         self.btn_emg_advanced.setProperty("compact", True)
@@ -811,7 +923,13 @@ class PreviewScreen(QWidget):
         self.btn_emg_advanced.clicked.connect(self._open_emg_advanced)
 
         strip = QHBoxLayout(); strip.setSpacing(10)
+        # The on/off checkbox lives on the STRIP, not inside the noise_opts chip: that chip is
+        # disabled whenever noise is off, and a Qt child of a disabled parent cannot be
+        # re-enabled — so a checkbox to turn noise ON, placed inside it, would grey itself out
+        # exactly when it is needed. On the strip it stays reachable (gated only on ECG being on).
+        strip.addWidget(self.noise_enabled)
         strip.addWidget(self.btn_set_noise)
+        strip.addWidget(self.noise_ref_readout)
         strip.addWidget(self.noise_opts)
         strip.addWidget(self.gate_opts)
         strip.addStretch(1)
@@ -835,23 +953,26 @@ class PreviewScreen(QWidget):
         self.emg_plots.setLabel("bottom", "Time (s)"); self.emg_plots.setLabel("left", "EMG (a.u.)")
         self.emg_psd_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 3)))
 
+        self.fidelity_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 3)))
         split = QSplitter(Qt.Vertical)
-        top = QSplitter(Qt.Horizontal)
-        top.addWidget(self._titled("Raw EMG channels", self.emg_raw_plots))
-        top.addWidget(self._titled("Detail channel",       # pipeline stages are in the plot legend
-                                   self.emg_plots, corner=self.emg_channel))
-        split.addWidget(top)
-        # Conditioned result spans the full width: it is EMG against time, so width is what
-        # makes it readable. The two small diagnostics below share a row — the fidelity
-        # frontier and the PSD are compact curves that gain nothing from the extra width.
+        # Detail channel and Conditioned result are the two working views — the conditioning
+        # stages and the finished EMG, each against time — so both span the full width, where
+        # width is what makes them readable. Their legends sit along the bottom edge, clear of
+        # the breath numbers pinned at the top (see _legend_one_row).
+        split.addWidget(self._titled("Detail channel",       # pipeline stages are in the plot legend
+                                     self.emg_plots, corner=self.emg_channel))
         split.addWidget(self._titled("Conditioned result",   # the corner picker names the channels
                                      self.emg_result_plots, corner=self.result_checks_holder))
-        self.fidelity_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 3)))
-        mid = QSplitter(Qt.Horizontal)
-        mid.addWidget(self._titled("Noise fidelity frontier (1 = untouched)", self.fidelity_canvas))
-        mid.addWidget(self._titled("Detail PSD", self.emg_psd_canvas))
-        self._emg_diag_row = mid          # the two small diagnostics share the bottom row
-        split.addWidget(mid)
+        # The bottom row holds three reference panels: the raw channels alongside the two
+        # compact diagnostics (the fidelity frontier and the detail PSD). None needs the width,
+        # and the raw stack is a reference the working views are read against.
+        bottom = QSplitter(Qt.Horizontal)
+        bottom.addWidget(self._titled("Raw EMG channels", self.emg_raw_plots))
+        bottom.addWidget(self._titled("Noise fidelity frontier (1 = untouched)", self.fidelity_canvas))
+        bottom.addWidget(self._titled("Detail PSD", self.emg_psd_canvas))
+        self._emg_diag_row = bottom
+        split.addWidget(bottom)
+        split.setStretchFactor(0, 3); split.setStretchFactor(1, 3); split.setStretchFactor(2, 2)
         v.addWidget(split, 1)
         # clicking a numbered breath in any EMG plot toggles its exclusion too
         self.emg_raw_plots.scene().sigMouseClicked.connect(self._on_emg_raw_clicked)
@@ -1090,6 +1211,24 @@ class PreviewScreen(QWidget):
                   "lower Min gap on the › EMG – ECG reduction tab, not to raise this.",
                   lo=0.0, hi=0.5, step=0.05, decimals=2),
         ]
+        emg_fields = [
+            Field("rms_window_s", "RMS window length", "float", "processing.emg.rms_window_s",
+                  "Sliding-window length for the EMG RMS envelope; each breath takes its "
+                  "largest windowed value (default 0.05). Defines the reported EMG number.",
+                  lo=0.01, hi=0.5, step=0.01, decimals=3, suffix=" s"),
+            Field("outlier_rms_sd_limit", "RMS outlier limit", "float",
+                  "processing.emg.outlier_rms_sd_limit",
+                  "Replace any breath's EMG RMS lying more than this many SD from the "
+                  "across-breath mean; 0 = off (default).",
+                  lo=0.0, hi=10.0, step=0.5, decimals=1, suffix=" SD"),
+            Field("normalization", "Amplitude normalisation", "choice",
+                  "processing.emg.normalization",
+                  "Also report each file's EMG RMS as a percentage of a per-file reference "
+                  "(adds a normalised sheet to the output; never changes the raw RMS).",
+                  options=[("None — raw amplitude", "none"),
+                           ("Per-file maximum (% of peak breath)", "per_file_max"),
+                           ("Per-file mean (% of mean breath)", "per_file_mean")]),
+        ]
         out_fields = [
             Field("save_sound", "Export each EMG stage as WAV", "bool",
                   "processing.emg.save_sound",
@@ -1103,7 +1242,8 @@ class PreviewScreen(QWidget):
                     f"hop {1000 * v['hop_length'] / fs:.0f} ms, "
                     f"n_fft {1000 * v['n_fft'] / fs:.0f} ms.")
 
-        prefixed = ([("noise", f) for f in noise_fields]
+        prefixed = ([("emg", f) for f in emg_fields]
+                    + [("noise", f) for f in noise_fields]
                     + [("robust_peak", f) for f in gate_fields]
                     + [("emg", f) for f in out_fields])
         owner = {"noise": n, "robust_peak": rp, "emg": e}
@@ -1125,7 +1265,112 @@ class PreviewScreen(QWidget):
         self._load_noise_params()
         self._load_gated_params()
         self.settings_edited.emit()
-        self._request_autorun({"ecg", "emg_all", "emg_detail", "noise"})
+        # RMS window / normalisation feed the EMG panels; the outlier limit feeds the batch
+        # (test run) table, so 'batch' is in the set now that the modal edits it.
+        self._request_autorun({"ecg", "emg_all", "emg_detail", "noise", "batch"})
+
+    def _open_mech_advanced(self):
+        """Every mechanics setting: breath segmentation, work-of-breathing source, the volume
+        and drift corrections, resampling, and the per-file breath counts. They left the Setup
+        screen and live here, beside the Mechanics preview they shape, editing the model
+        directly (like the ECG params) so Setup never reverts them on a tab change."""
+        from respmech.core.settings import BreathCountEntry
+        from respmech.ui.advanced_dialog import AdvancedDialog, Field, apply_values
+        s = self.state.settings
+        seg, peak = s.processing.segmentation, s.processing.segmentation.peak
+        vol, samp, wob, ptp = (s.processing.volume, s.processing.sampling,
+                               s.processing.wob, s.processing.ptp)
+        fields = [
+            ("seg", Field("method", "Signal used to split breaths", "choice",
+                          "processing.segmentation.method",
+                          "Which signal marks where each breath begins and ends.",
+                          options=[("Flow", "flow"), ("Volume", "volume")])),
+            ("wob", Field("calc_from", "Work of breathing from", "choice",
+                          "processing.wob.calc_from",
+                          "One averaged breath (default), or each breath then averaged.",
+                          options=[("Average", "average"), ("Individual", "individual")])),
+            ("vol", Field("integrate_from_flow", "Calculate volume from flow", "bool",
+                          "processing.volume.integrate_from_flow",
+                          "Derive volume by integrating flow instead of a separate channel.")),
+            ("vol", Field("correct_drift", "Correct volume drift", "bool",
+                          "processing.volume.correct_drift",
+                          "Remove slow baseline drift from the volume trace; ON by default.")),
+            ("vol", Field("correct_trend", "Correct end-expiratory trend", "bool",
+                          "processing.volume.correct_trend",
+                          "Remove a between-breath trend in end-expiratory lung volume.")),
+            ("vol", Field("trend_method", "Trend interpolation", "choice",
+                          "processing.volume.trend_method",
+                          "How the end-expiratory trend is interpolated between breaths.",
+                          options=[("Linear", "linear"), ("Nearest", "nearest"),
+                                   ("Cubic", "cubic"), ("Quadratic", "quadratic"),
+                                   ("Previous", "previous"), ("Next", "next")])),
+            ("vol", Field("inverse_flow", "Invert the flow signal", "bool",
+                          "processing.volume.inverse_flow",
+                          "Flip the flow sign if inspiration reads positive.")),
+            ("vol", Field("inverse_volume", "Invert the volume signal", "bool",
+                          "processing.volume.inverse_volume", "Flip the volume sign.")),
+            ("samp", Field("resample", "Resample before analysis", "bool",
+                           "processing.sampling.resample",
+                           "Resample every recording to a common rate first; off by default.")),
+            ("samp", Field("resample_to_frequency", "Resample to", "int",
+                           "processing.sampling.resample_to_frequency",
+                           "Target rate (Hz). Keep ≥ ~1000 Hz with EMG channels present.",
+                           lo=1, hi=1_000_000, step=100, suffix=" Hz")),
+            ("seg", Field("buffer", "Breath-separation buffer", "int",
+                          "processing.segmentation.buffer",
+                          "Guard samples added around each detected breath boundary.",
+                          lo=0, hi=100_000, step=10)),
+            ("peak", Field("height", "Breath peak — minimum height", "float",
+                           "processing.segmentation.peak.height",
+                           "Minimum peak height for breath detection (volume-based).",
+                           lo=0.0, hi=1_000_000.0, step=0.01, decimals=4)),
+            ("peak", Field("distance_s", "Breath peak — minimum distance", "float",
+                           "processing.segmentation.peak.distance_s",
+                           "Minimum time between detected breath peaks.",
+                           lo=0.0, hi=60.0, step=0.05, decimals=4, suffix=" s")),
+            ("peak", Field("width_s", "Breath peak — minimum width", "float",
+                           "processing.segmentation.peak.width_s",
+                           "Minimum width of a detected breath peak.",
+                           lo=0.0, hi=60.0, step=0.05, decimals=4, suffix=" s")),
+            ("wob", Field("avg_resampling_obs", "Average-breath resampling points", "int",
+                          "processing.wob.avg_resampling_obs",
+                          "Points each breath is resampled to for the average breath / WOB.",
+                          lo=10, hi=100_000, step=10)),
+            ("ptp", Field("baseline_window_s", "PTP baseline window", "float",
+                          "processing.ptp.baseline_window_s",
+                          "End-expiratory window whose mean is the PTP baseline.",
+                          lo=0.0, hi=1.0, step=0.01, decimals=4, suffix=" s")),
+        ]
+        owner = {"seg": seg, "peak": peak, "vol": vol, "samp": samp, "wob": wob, "ptp": ptp}
+        values = {f.key: getattr(owner[grp], f.key) for grp, f in fields}
+        # breath counts round-trip as one 'file = count' line each, edited as text
+        bc_field = Field("breath_counts", "Breath-count overrides", "text",
+                         "processing.breath_counts",
+                         "Per-file override of the breath count used for per-minute scaling — "
+                         "one 'filename = count' per line. Blank = each file's detected count.",
+                         placeholder="one 'filename = count' per line")
+        bc_text = "\n".join(f"{e.file} = {e.count}" for e in s.processing.breath_counts)
+        all_fields = [f for _g, f in fields] + [bc_field]
+        vals = dict(values); vals["breath_counts"] = bc_text
+        dlg = AdvancedDialog("Mechanics — advanced", all_fields, vals, parent=self,
+                             intro="How breaths are detected, how work of breathing is "
+                                   "computed, and the volume/drift corrections. The defaults "
+                                   "suit ordinary recordings.")
+        if dlg.exec() != QDialog.Accepted:
+            return
+        staged = dlg.values()
+        changed = False
+        for grp, f in fields:
+            if apply_values(owner[grp], {f.key: staged[f.key]}):
+                changed = True
+        parsed = _parse_breath_counts(staged["breath_counts"], BreathCountEntry)
+        if parsed != s.processing.breath_counts:
+            s.processing.breath_counts = parsed
+            changed = True
+        if not changed:
+            return                       # OK without an edit: no dirty flag, no recompute
+        self.settings_edited.emit()
+        self._request_autorun()          # mechanics feed mech + batch (+ the noise clip)
 
     def _open_ecg_advanced(self):
         """The two ECG parameters that are not worth strip space.
@@ -1215,7 +1460,6 @@ class PreviewScreen(QWidget):
         cols = data.get("cols", [])
         proc = data.get("processed", [])
         cycle = pal["emg_cycle"]
-        prev = None
         for i, ch in enumerate(proc):
             p = self.ecg_processed_plots.addPlot(row=i, col=0)
             p.showGrid(x=True, y=True, alpha=0.12)
@@ -1225,13 +1469,11 @@ class PreviewScreen(QWidget):
             p.plot(t, np.asarray(ch), pen=_pen(cycle[i % len(cycle)]))
             add_flow_background(p, t, data.get("flow"), pal)
             add_ecg_capture_markers(p, peaks, pal)
-            if i == len(proc) - 1:
-                p.setLabel("bottom", "Time (s)")
-            if prev is not None:
-                p.setXLink(prev)
-            prev = p
             self._limit_x(p, t)
             self._ecg_capture_subplots.append(p)
+        # x-values on the bottom channel only; y-zoom shared (all ECG-processed EMG)
+        self._style_channel_stack(self.ecg_processed_plots, self._ecg_capture_subplots,
+                                  link_y=True)
 
         npk = int(np.asarray(peaks).size)
         col = data.get("detect_col", "?")
@@ -1242,8 +1484,59 @@ class PreviewScreen(QWidget):
             self._set_status(f"ECG reduction — capture on col {col}: {npk} R-peaks · {state}.")
 
     @staticmethod
-    def _legend_one_row(plot, offset=(10, 4)):
-        """Lay a plot's legend out as a single horizontal row tucked under the top edge.
+    def _style_channel_stack(glw, plots, *, link_y=False, time_label="Time (s)"):
+        """Shared styling for a vertical stack of channel subplots in a GraphicsLayoutWidget.
+
+        - x tick VALUES appear only on the bottom plot; the rest give that strip back to the
+          trace, so a tall stack reads as one aligned block rather than a ladder of axes.
+        - the rows sit tight, a hairline apart.
+        - x is always linked: pan or zoom the time axis once and every channel follows.
+        - y is linked only when the channels share units — the EMG and ECG-processed stacks
+          do, so zooming one zooms all; the mechanics stack mixes L/s, L and cmH2O, so it
+          must NOT, or the pressures would flatten the flow.
+        """
+        if not plots:
+            return
+        try:
+            glw.ci.layout.setVerticalSpacing(2)
+        except Exception:                        # pragma: no cover — spacing is cosmetic
+            pass
+        first = plots[0]
+        for i, p in enumerate(plots):
+            last = i == len(plots) - 1
+            ax = p.getAxis("bottom")
+            ax.setStyle(showValues=last)
+            if last:
+                if time_label:
+                    p.setLabel("bottom", time_label)
+            else:
+                # keep the axis (its ticks still drive the x-grid) but collapse the strip the
+                # tick numbers used to occupy
+                ax.setLabel(None)
+                ax.setHeight(8)
+            if i > 0:
+                p.setXLink(first)
+                if link_y:
+                    p.setYLink(first)
+        if link_y and len(plots) > 1:
+            # A shared y makes zooming one channel zoom all — but pyqtgraph collapses every
+            # linked plot onto plots[0]'s range, which would clip a louder electrode down to
+            # a quieter first one (and overflow its flow silhouette). Set the shared range to
+            # the UNION of every channel's data instead, so the sync never hides signal.
+            ys = [p.getViewBox().childrenBounds()[1] for p in plots]
+            ys = [b for b in ys if b and b[0] is not None and b[1] is not None]
+            if ys:
+                lo, hi = min(b[0] for b in ys), max(b[1] for b in ys)
+                pad = (hi - lo) * 0.05 or 1.0
+                first.getViewBox().setYRange(lo - pad, hi + pad, padding=0)
+
+    @staticmethod
+    def _legend_one_row(plot, offset=(10, -4)):
+        """Lay a plot's legend out as a single horizontal row along the BOTTOM edge.
+
+        The breath numbers are pinned to the top of the view, so a top-anchored legend sat on
+        top of them; the bottom edge is clear. (Anchoring bottom-left needs itemPos and
+        parentPos at (0, 1) with a negative y offset — see below.)
 
         ``plot`` must be the PlotItem, never the PlotWidget: PlotWidget.__getattr__ only
         forwards callables, so a widget yields legend=None and this silently does nothing.
@@ -1262,7 +1555,7 @@ class PreviewScreen(QWidget):
             if not n:
                 return                       # setColumnCount(0) divides by zero
             leg.setColumnCount(n)
-            leg.anchor(itemPos=(0, 0), parentPos=(0, 0), offset=offset)
+            leg.anchor(itemPos=(0, 1), parentPos=(0, 1), offset=offset)
         except Exception:                    # noqa: BLE001 — legend chrome is cosmetic
             pass
 
@@ -1366,12 +1659,34 @@ class PreviewScreen(QWidget):
         n = self.state.settings.processing.emg.noise
         self._loading_noise = True
         try:
+            self.noise_enabled.setChecked(n.enabled)
             self.noise_auto.setChecked(n.auto_prop)
             self.noise_prop.setValue(n.prop_decrease)
             self.noise_target.setValue(n.fidelity_target)
             self.noise_nstd.setValue(n.n_std_thresh)
         finally:
             self._loading_noise = False
+        self._refresh_noise_readout()
+
+    def _refresh_noise_readout(self):
+        """What reference the picker chose, beside the enable toggle. 'Not set' is a real
+        state and says so — a ticked 'Reduce EMG noise' with no reference runs nothing."""
+        n = self.state.settings.processing.emg.noise
+        if not n.reference_file:
+            self.noise_ref_readout.setText("· no reference set")
+        elif n.use_expiration or not n.reference_intervals:
+            self.noise_ref_readout.setText(f"· {n.reference_file}, every expiration")
+        else:
+            spans = ", ".join(f"{a:.2f}–{b:.2f} s" for a, b in n.reference_intervals)
+            self.noise_ref_readout.setText(f"· {n.reference_file}, {spans}")
+
+    def _on_noise_enabled_changed(self, *_):
+        if self._loading_noise:
+            return
+        self.state.settings.processing.emg.noise.enabled = self.noise_enabled.isChecked()
+        self.settings_edited.emit()
+        self._update_actions(status=False)          # the reference/opts gate follows the toggle
+        self._request_autorun({"emg_all", "emg_detail", "noise", "batch"})
 
     def _on_noise_param_changed(self, *_):
         if self._loading_noise:
@@ -1499,10 +1814,13 @@ class PreviewScreen(QWidget):
         jr = self._job_running
         self.btn_refresh_all.setEnabled(has_file)
         self.emg_channel.setEnabled(has_emg)
+        # The enable checkbox and the reference picker only need ECG removal on (so the user
+        # can turn noise on and choose a reference); the parameter chip additionally needs
+        # noise actually enabled with a reference set.
+        self.noise_enabled.setEnabled(has_emg and ecg_on)
         self.btn_set_noise.setEnabled(has_file and has_emg and ecg_on)
-        # noise-window options only active with a reference file (Emil's requirement)
         self.noise_opts.setEnabled(bool(has_emg and ecg_on and noise_on and ref))
-        for w in (self.btn_set_noise, self.noise_opts):
+        for w in (self.noise_enabled, self.btn_set_noise, self.noise_opts):
             w.setToolTip("" if ecg_on else NEEDS_ECG_HINT)
         # The gated peak reuses the heartbeats the ECG stage detects; with ECG removal off
         # there are none and its columns come back blank. On Setup this could only ever be a
@@ -1947,27 +2265,28 @@ class PreviewScreen(QWidget):
         self.plots.clear()
         self._channel_plots = []
         self._crosshair_lines = []                       # cleared with the plots; rebuilt below
-        prev = None
-        n = len(_CHANNELS)
         pal = _plot_pal()
         for i, (key, label, colour) in enumerate(_CHANNELS):
-            p = self.plots.addPlot(row=i, col=0)
+            p = self.plots.addPlot(row=i, col=0, axisItems={"left": SciAxis(orientation="left")})
             p.showGrid(x=True, y=True, alpha=pal["grid_alpha"])
-            p.setLabel("left", label)
+            # name over unit on two centred lines — "Poes (cmH₂O)" on one line is taller than
+            # the short stacked plot and the rotated label overran its neighbour
+            name, _, unit = label.partition(" (")
+            p.getAxis("left").set_channel_label(name, unit.rstrip(")"))
             if _theme is not None:
                 _theme.align_left_axis(p)          # keep the stacked channels x-aligned
+            # scroll over the graph zooms time only; y-zoom is reserved for the y-axis itself
+            _restrict_body_wheel_to_x(p.getViewBox())
             y = series[key]
             p.plot(t[:len(y)], y, pen=_pen(pal["channels"].get(key, colour)))
             # P22: a subtle zero-reference baseline on every channel, so the sign and
             # excursion of each signal read at a glance.
             p.addLine(y=0, pen=pg.mkPen(pal["separator"], width=1, style=Qt.DashLine))
-            if i == n - 1:
-                p.setLabel("bottom", "Time (s)")
-            if prev is not None:
-                p.setXLink(prev)
-            prev = p
             self._limit_x(p, t[:len(y)])          # can't zoom/pan past the data
             self._channel_plots.append(p)
+        # x-values on the bottom channel only; y-zoom is NOT shared — flow, volume and the
+        # pressures are different units, so a common y-range would flatten most of them
+        self._style_channel_stack(self.plots, self._channel_plots, link_y=False)
         # P17: one crosshair line per channel, hidden until the cursor enters the stack
         self._crosshair_lines = []
         for p in self._channel_plots:
@@ -2009,23 +2328,23 @@ class PreviewScreen(QWidget):
             return
         cols = list(self.state.settings.input.channels.emg)
         t = np.arange(emg.shape[0]) / fs
-        prev = None
         cycle = _plot_pal()["emg_cycle"]
         for i in range(emg.shape[1]):
             p = self.emg_raw_plots.addPlot(row=i, col=0)
             p.showGrid(x=True, y=True, alpha=0.12)
             p.setLabel("left", f"col {cols[i]}" if i < len(cols) else f"EMG {i + 1}")
+            # This is now a compact reference panel (bottom-row third), so the channels are
+            # short. Drop pyqtgraph's "(×0.001)" SI suffix: rotated, it made the label longer
+            # than the channel is tall, and the three labels overran each other.
+            p.getAxis("left").enableAutoSIPrefix(False)
             if _theme is not None:
                 _theme.align_left_axis(p)          # keep the stacked channels x-aligned
             p.plot(t, emg[:, i], pen=_pen(cycle[i % len(cycle)]))
             add_flow_background(p, t, flow, _plot_pal())   # discrete respiration reference, behind
-            if i == emg.shape[1] - 1:
-                p.setLabel("bottom", "Time (s)")
-            if prev is not None:
-                p.setXLink(prev)
-            prev = p
             self._limit_x(p, t)
             self._emg_raw_subplots.append(p)
+        # x-values on the bottom channel only; y-zoom shared across the raw EMG channels
+        self._style_channel_stack(self.emg_raw_plots, self._emg_raw_subplots, link_y=True)
         self._ensure_noise_region()
         self._raw_label_y = self._safe_top(emg[:, 0])
         self._repaint_view_breaths("raw")
@@ -2375,8 +2694,9 @@ class PreviewScreen(QWidget):
             return
         for p in plot_items:
             # a click on the plot's legend (text/frame) is unaccepted by pyqtgraph
-            # and would otherwise fall through to the breath underneath it — the
-            # legend sits top-left over breath 1 on the detail/result plots
+            # and would otherwise fall through to the breath underneath it — the legend
+            # sits bottom-left on the detail/result plots (sceneBoundingRect tracks it
+            # wherever it is anchored, so this guard follows the move)
             leg = getattr(p, "legend", None)
             if leg is not None and leg.isVisible() and leg.sceneBoundingRect().contains(pos):
                 return
@@ -2429,6 +2749,7 @@ class PreviewScreen(QWidget):
         n.reference_intervals = []
         n.use_expiration = True
         self.noise_reference_changed.emit(name, [], True)
+        self._refresh_noise_readout()
         self._set_status(f"Noise profile ← {name}, built from every expiration. "
                          "Enable 'Reduce EMG noise' to apply it.")
         self._update_actions()
@@ -2459,6 +2780,7 @@ class PreviewScreen(QWidget):
         except Exception:                            # noqa: BLE001 — indicator is cosmetic
             pass
         self.noise_reference_changed.emit(name, [[t0, t1]], False)
+        self._refresh_noise_readout()
         self._set_status(
             f"Noise profile ← {name} [{t0:.2f}–{t1:.2f} s]: {span} samples ≈ {nframes} STFT frames "
             + ("(good)" if nframes >= 8 else "(short — pick a longer rest span)")

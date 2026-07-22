@@ -72,18 +72,6 @@ def test_an_unrelated_edit_does_not_un_hide_it(qapp, tmp_path):
     qapp.processEvents()
     assert not card.isVisible(), "an unrelated keystroke revealed an irrelevant card"
 
-
-def test_the_rms_card_follows_the_emg_assignment(qapp, tmp_path):
-    """Same mechanism, second user: the EMG RMS parameters mean nothing with no EMG channel."""
-    sc = _screen(qapp, tmp_path)
-    card = _card(sc, "EMG — RMS envelope")
-    assert card.isVisible()
-    sc.state.settings.input.channels.emg = []
-    sc._update_disclosure()
-    qapp.processEvents()
-    assert not card.isVisible()
-
-
 def test_the_conditional_card_is_not_in_the_staged_registry(qapp, tmp_path):
     """Structural: test_startup_flow walks every staged card and asserts it is visible after
     enter_open_mode. A conditional card there fails that on a default AppState."""

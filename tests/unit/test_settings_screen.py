@@ -88,28 +88,6 @@ def test_qc_strip_flags_cautions_and_clears(qapp, tmp_path):
     assert "overlap" in sc.qc.text().lower()
     win.close()
 
-
-def test_signal_transforms_surfaced_and_bound(qapp):
-    from respmech.ui.main_window import MainWindow
-    win = MainWindow(AppState()); sc = win.settings_screen
-    # drift correction is ON by default — it silently changes results, so it must show it
-    assert sc.correct_drift.isChecked()
-    sc.correct_drift.setChecked(False)
-    sc.inverse_flow.setChecked(True)
-    sc.correct_trend.setChecked(True)
-    sc.resample.setChecked(True); sc.resample_hz.setValue(500)
-    sc._on_field_changed()
-    v = sc.state.settings.processing.volume
-    smp = sc.state.settings.processing.sampling
-    assert v.correct_drift is False and v.inverse_flow is True and v.correct_trend is True
-    assert smp.resample is True and smp.resample_to_frequency == 500
-    # dependent fields only enable when their toggle is on
-    assert sc.trend_method.isEnabled() and sc.resample_hz.isEnabled()
-    sc.correct_trend.setChecked(False); sc.resample.setChecked(False); sc._on_field_changed()
-    assert not sc.trend_method.isEnabled() and not sc.resample_hz.isEnabled()
-    win.close()
-
-
 def test_output_checklist_binds_and_previews(qapp):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState()); sc = win.settings_screen
@@ -151,24 +129,21 @@ def test_advanced_panel_roundtrips_toml_only_knobs(qapp, tmp_path):
     # a filename containing a comma must survive the round-trip (one entry per line)
     s.processing.breath_counts = [BreathCountEntry("a,b.txt", 12)]
     win = MainWindow(AppState(s)); sc = win.settings_screen
-    assert sc.seg_buffer.value() == 640 and sc.avg_resamp.value() == 750
-    # n_fft has no Setup widget any more — the Preview EMG tab's Advanced modal owns it,
-    # alongside win_length and hop_length (test_advanced_dialog.py). It must still SURVIVE a
-    # Setup round trip, which is the thing this test is really about.
-    assert sc.to_state().processing.emg.noise.n_fft == 512
-    assert sc.matlab_variant.currentData() == "windows"
-    assert sc.breath_counts_edit.toPlainText() == "a,b.txt = 12"
-    assert [(e.file, e.count) for e in sc.to_state().processing.breath_counts] == [("a,b.txt", 12)]
-    # edit + write back
-    sc.seg_buffer.setValue(900); sc.ent_epochs.setValue(4)
-    sc.matlab_variant.setCurrentIndex(sc.matlab_variant.findData("mac"))
-    sc.breath_counts_edit.setPlainText("x.txt = 5\ny.txt = 9")
+    # The mechanics/EMG knobs (seg_buffer, avg_resamp, n_fft, breath_counts) are Preview-owned
+    # now; Setup's to_state must LEAVE them untouched — a round trip through Setup preserves
+    # them rather than reverting to a widget default.
     out = sc.to_state()
-    assert out.processing.segmentation.buffer == 900 and out.processing.entropy.epochs == 4
-    assert out.input.format.matlab_variant == "mac"
-    assert [(e.file, e.count) for e in out.processing.breath_counts] == [("x.txt", 5), ("y.txt", 9)]
+    assert out.processing.segmentation.buffer == 640 and out.processing.wob.avg_resampling_obs == 750
+    assert out.processing.emg.noise.n_fft == 512
+    assert [(e.file, e.count) for e in out.processing.breath_counts] == [("a,b.txt", 12)]
+    # matlab_variant + entropy STAY Setup-owned and bound
+    assert sc.matlab_variant.currentData() == "windows"
+    sc.ent_epochs.setValue(4)
+    sc.matlab_variant.setCurrentIndex(sc.matlab_variant.findData("mac"))
+    out2 = sc.to_state()
+    assert out2.processing.entropy.epochs == 4
+    assert out2.input.format.matlab_variant == "mac"
     win.close()
-
 
 def test_form_fields_are_bounded_not_full_width(qapp, tmp_path):
     """Fusion's QFormLayout grows every uncapped field to the whole form width, so these
@@ -190,10 +165,8 @@ def test_form_fields_are_bounded_not_full_width(qapp, tmp_path):
     sc = win.settings_screen
     win.resize(1700, 950); win.show(); qapp.processEvents()
 
-    capped = {sc.seg_method: "compact", sc.wob_from: "compact", sc.trend_method: "compact",
-              sc.in_files: "compact",
-              sc.matlab_variant: "wide", sc.emg_norm: "wide",
-              sc.breath_counts_edit: "wide", sc.group_regex: "wide"}
+    capped = {sc.in_files: "compact",
+              sc.matlab_variant: "wide", sc.group_regex: "wide"}
     for w, kind in capped.items():
         assert w.property("formField") == kind, f"{w} lost its {kind} cap"
         assert w.width() < win.width() / 3, f"{w} stretched full width ({w.width()})"

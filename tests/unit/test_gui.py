@@ -145,8 +145,8 @@ def test_reactive_file_list_and_noise_gating(qapp, tmp_path):
     # ECG removal has to be on first: it is the earlier prerequisite, and while it is off
     # the button that PICKS a reference is itself disabled, so asking for one would send
     # the user after something they cannot do.
-    sc.remove_noise.setChecked(True); sc._on_field_changed()
-    pv.state.settings.processing.emg.noise.reference_file = None   # the picker's field now
+    pv.noise_enabled.setChecked(True)             # noise enable is on the Preview strip now
+    pv.state.settings.processing.emg.noise.reference_file = None
     pv.state.settings.processing.emg.remove_ecg = True
     pv.file_combo.setCurrentIndex(0); pv._update_actions()
     assert pv.noise_opts.isEnabled() is False
@@ -162,16 +162,18 @@ def test_reactive_file_list_and_noise_gating(qapp, tmp_path):
     assert pv.noise_opts.isEnabled() is True
 
 
-def test_remove_noise_checkbox_binds_noise_enabled(qapp, tmp_path):
-    from respmech.ui.screens.settings_screen import SettingsScreen
-    sc = SettingsScreen(AppState(_settings(str(tmp_path))))
-    sc.remove_noise.setChecked(True)
-    sc.to_state()
-    # one gate, one writer: the legacy processing.emg.remove_noise mirror is gone. It was
-    # never read by the compute and never fed the real gate on load either — a TOML setting
-    # only the mirror left noise.enabled False — so nothing about it was load-bearing.
-    assert sc.state.settings.processing.emg.noise.enabled is True
-    assert not hasattr(sc.state.settings.processing.emg, "remove_noise")
+def test_noise_enable_checkbox_binds_noise_enabled(qapp, tmp_path):
+    """The noise on/off toggle moved from Setup to the Preview EMG-noise strip, model-direct."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    assert not hasattr(win.settings_screen, "remove_noise"), "the Setup checkbox is gone"
+    pv.noise_enabled.setChecked(True)
+    assert pv.state.settings.processing.emg.noise.enabled is True
+    assert not hasattr(pv.state.settings.processing.emg, "remove_noise")   # legacy mirror gone
+    pv.noise_enabled.setChecked(False)
+    assert pv.state.settings.processing.emg.noise.enabled is False
+    win.close()
 
 
 def test_empty_input_folder_is_handled(qapp, tmp_path):

@@ -160,77 +160,101 @@ def _settings_screen(qapp, tmp_path):
     return sc
 
 
-def test_the_advanced_card_is_gone(qapp, tmp_path):
+def test_the_mechanics_card_left_setup_for_the_preview_tab(qapp, tmp_path):
     from PySide6.QtWidgets import QGroupBox
     sc = _settings_screen(qapp, tmp_path)
     titles = {g.title() for g in sc.findChildren(QGroupBox)}
-    assert "Advanced (rarely changed)" not in titles
-    assert "Mechanics" in titles, "the Processing card should now say what it is"
+    # Setup is lean now: Input, Channels, Output, and the conditional Sample entropy card.
+    assert "Mechanics" not in titles and "Advanced (rarely changed)" not in titles
+    assert titles == {"Input", "Channels", "Output", "Sample entropy"}
+    pv = _preview(qapp, tmp_path)
+    assert hasattr(pv, "btn_mech_advanced"), "the Preview Mechanics tab hosts Advanced…"
+    pv.shutdown()
 
 
-def test_the_moved_widgets_still_round_trip(qapp, tmp_path):
-    """They keep their widgets — not laid out, but still the path from_state/to_state uses,
-    which is what keeps the analysis file honest."""
-    sc = _settings_screen(qapp, tmp_path)
-    s = sc.state.settings
-    assert sc.seg_buffer.value() == s.processing.segmentation.buffer
-    assert sc.ptp_baseline.value() == s.processing.ptp.baseline_window_s
-    sc.seg_buffer.setValue(321)
-    assert sc.to_state().processing.segmentation.buffer == 321
+def _mech_stub(monkeypatch, edit, accept=True):
+    import respmech.ui.advanced_dialog as ad
+    real = ad.AdvancedDialog
+
+    class _Stub(real):
+        def exec(self):
+            edit(self)
+            return QDialog.Accepted if accept else QDialog.Rejected
+    monkeypatch.setattr(ad, "AdvancedDialog", _Stub)
 
 
 @pytest.mark.parametrize("accept", [True, False])
 def test_mech_ok_commits_and_cancel_changes_nothing(qapp, tmp_path, accept, monkeypatch):
-    import respmech.ui.advanced_dialog as ad
-    sc = _settings_screen(qapp, tmp_path)
-    before = sc.state.settings.processing.segmentation.buffer
-    real = ad.AdvancedDialog
-
-    class _Stub(real):
-        def exec(self):
-            self.widget("seg_buffer").setValue(777)
-            return QDialog.Accepted if accept else QDialog.Rejected
-
-    monkeypatch.setattr(ad, "AdvancedDialog", _Stub)
-    sc._open_mech_advanced()
-
+    pv = _preview(qapp, tmp_path)
+    s = pv.state.settings
+    before = s.processing.segmentation.buffer
+    edits = []
+    pv.settings_edited.connect(lambda: edits.append(1))
+    _mech_stub(monkeypatch, lambda d: d.widget("buffer").setValue(777), accept=accept)
+    pv._open_mech_advanced()
     if accept:
-        assert sc.to_state().processing.segmentation.buffer == 777
-        assert sc.is_dirty(), "an accepted edit did not mark the analysis modified"
+        assert s.processing.segmentation.buffer == 777
+        assert edits, "an accepted edit did not mark the analysis modified"
     else:
-        assert sc.to_state().processing.segmentation.buffer == before
-        assert not sc.is_dirty(), "Cancel marked the analysis modified"
+        assert s.processing.segmentation.buffer == before
+        assert not edits, "Cancel marked the analysis modified"
+    pv.shutdown()
+
+
+def test_mech_modal_is_model_direct_and_setup_cannot_revert_it(qapp, tmp_path, monkeypatch):
+    """The whole point of the move: Setup.to_state runs on every tab change and must not own
+    these any more, or the Preview edit reverts on the first switch to Setup."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(str(tmp_path), data_out=_OUT)))
+    pv, sc = win.preview_screen, win.settings_screen
+
+    def edit(d):
+        d.widget("method").setCurrentIndex(1)        # Volume
+        d.widget("buffer").setValue(321)
+    _mech_stub(monkeypatch, edit)
+    pv._open_mech_advanced()
+    for _ in range(3):
+        sc.to_state()
+    assert win.state.settings.processing.segmentation.method == "volume"
+    assert win.state.settings.processing.segmentation.buffer == 321
+    win.close()
 
 
 def test_mech_ok_without_an_edit_is_not_an_edit(qapp, tmp_path, monkeypatch):
-    import respmech.ui.advanced_dialog as ad
-    sc = _settings_screen(qapp, tmp_path)
-    real = ad.AdvancedDialog
-
-    class _Stub(real):
-        def exec(self):
-            return QDialog.Accepted
-
-    monkeypatch.setattr(ad, "AdvancedDialog", _Stub)
-    sc._open_mech_advanced()
-    assert not sc.is_dirty()
+    pv = _preview(qapp, tmp_path)
+    edits = []
+    pv.settings_edited.connect(lambda: edits.append(1))
+    _mech_stub(monkeypatch, lambda d: None)
+    pv._open_mech_advanced()
+    assert not edits
+    pv.shutdown()
 
 
 def test_breath_count_overrides_survive_the_modal(qapp, tmp_path, monkeypatch):
     """A multi-line, structured field — the one thing in here that is not a number."""
-    import respmech.ui.advanced_dialog as ad
-    sc = _settings_screen(qapp, tmp_path)
-    real = ad.AdvancedDialog
-
-    class _Stub(real):
-        def exec(self):
-            self.widget("breath_counts").setPlainText("synth_case_A.csv = 12")
-            return QDialog.Accepted
-
-    monkeypatch.setattr(ad, "AdvancedDialog", _Stub)
-    sc._open_mech_advanced()
-    counts = sc.to_state().processing.breath_counts
+    pv = _preview(qapp, tmp_path)
+    _mech_stub(monkeypatch, lambda d: d.widget("breath_counts").setPlainText("synth_case_A.csv = 12"))
+    pv._open_mech_advanced()
+    counts = pv.state.settings.processing.breath_counts
     assert [(c.file, c.count) for c in counts] == [("synth_case_A.csv", 12)]
+    pv.shutdown()
+
+
+def test_the_emg_advanced_modal_hosts_the_rms_settings(qapp, tmp_path, monkeypatch):
+    """RMS window, outlier limit and normalisation left Setup for the EMG Advanced modal."""
+    pv = _preview(qapp, tmp_path)
+    e = pv.state.settings.processing.emg
+    edits = []
+    pv.settings_edited.connect(lambda: edits.append(1))
+
+    def edit(d):
+        d.widget("rms_window_s").setValue(0.08)
+        d.widget("normalization").setCurrentIndex(0)   # None
+    _mech_stub(monkeypatch, edit)
+    pv._open_emg_advanced()
+    assert e.rms_window_s == 0.08 and e.normalization == "none"
+    assert edits
+    pv.shutdown()
 
 
 def test_only_one_screen_writes_the_stft_length(qapp, tmp_path):

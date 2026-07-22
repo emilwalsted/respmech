@@ -153,20 +153,21 @@ def test_to_state_does_not_touch_the_reference_fields(qapp, tmp_path):
     assert n.use_expiration is False
 
 
-def test_setup_shows_which_part_of_the_reference_is_used(qapp, tmp_path):
-    from respmech.ui.screens.settings_screen import SettingsScreen
+def test_the_preview_strip_shows_which_part_of_the_reference_is_used(qapp, tmp_path):
+    from respmech.ui.screens.preview_screen import PreviewScreen
     s = synth_settings(str(tmp_path), noise=True, data_out=_OUT)
-    sc = SettingsScreen(AppState(s))
-    assert "marked span" in sc.noise_summary.text()
+    pv = PreviewScreen(AppState(s))
+    assert "synth_case_A.csv" in pv.noise_ref_readout.text()
 
-    n = sc.state.settings.processing.emg.noise
+    n = pv.state.settings.processing.emg.noise
     n.use_expiration, n.reference_intervals = True, []
-    sc._refresh_noise_summary()
-    assert "every expiration" in sc.noise_summary.text()
+    pv._refresh_noise_readout()
+    assert "every expiration" in pv.noise_ref_readout.text()
 
     n.reference_file = None
-    sc._refresh_noise_summary()
-    assert "not set" in sc.noise_summary.text().lower(), "an empty reference must say so"
+    pv._refresh_noise_readout()
+    assert "no reference" in pv.noise_ref_readout.text().lower()
+    pv.shutdown()
 
 
 def test_the_picker_writes_both_halves_together(qapp, tmp_path):
@@ -186,3 +187,30 @@ def test_the_picker_writes_both_halves_together(qapp, tmp_path):
     pv._apply_noise_reference(2.0, 4.0)
     assert n.use_expiration is False and n.reference_intervals == [[2.0, 4.0]]
     win.close()
+
+
+def test_the_noise_enable_checkbox_is_reachable_to_turn_noise_on(qapp, tmp_path):
+    """Regression (change 5): the enable checkbox was placed inside the noise_opts chip,
+    which _update_actions disables while noise is off — and a Qt child of a disabled parent
+    cannot be re-enabled, so the control to turn noise ON greyed itself out exactly when it
+    was needed, with no UI path to enable noise at all. It lives on the strip now.
+
+    The suite missed this because setChecked() fires even on a disabled widget; this asserts
+    isEnabled(), which is what a real click depends on."""
+    pv = _preview(qapp, tmp_path, ecg=True)
+    pv.state.settings.processing.emg.noise.enabled = False
+    pv._update_actions()
+    assert pv.noise_enabled.isEnabled(), "cannot turn noise on: the checkbox is disabled while off"
+    # and it is not a one-way trap: turning it on then off leaves it reachable
+    pv.noise_enabled.setChecked(True); pv._update_actions()
+    pv.noise_enabled.setChecked(False); pv._update_actions()
+    assert pv.noise_enabled.isEnabled(), "unticking disabled its own control (one-way trap)"
+    pv.shutdown()
+
+
+def test_the_noise_enable_checkbox_still_waits_for_ecg_removal(qapp, tmp_path):
+    from respmech.ui.screens.preview_screen import NEEDS_ECG_HINT
+    pv = _preview(qapp, tmp_path, ecg=False)
+    assert not pv.noise_enabled.isEnabled()
+    assert NEEDS_ECG_HINT in pv.noise_enabled.toolTip()
+    pv.shutdown()
