@@ -114,7 +114,11 @@ def write_figures(result, settings, outputfolder: str, *, on_fallback=None):
     record why in the run report rather than have it happen invisibly.
     """
     if not _can_spawn():
-        if on_fallback:
+        # A packaged build ALWAYS writes in-process by design (a spawn would re-launch the app),
+        # so that is the intended path, not a fault — no per-run note. A genuine spawn failure in
+        # an environment that should support it, or an explicit RESPMECH_NO_FIGURE_SUBPROCESS, is
+        # still reported so the run report can record why the child was not used.
+        if on_fallback and not _spawn_relaunches_the_app():
             on_fallback("figure subprocess unavailable; wrote figures in-process")
         return _in_process(result, settings, outputfolder)
 

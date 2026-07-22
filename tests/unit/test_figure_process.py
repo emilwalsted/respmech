@@ -135,6 +135,36 @@ def test_packaged_app_never_probes_and_re_launches(monkeypatch):
     assert calls == [], "a packaged app spawned a probe child — the re-launch-twice bug"
 
 
+def test_packaged_in_process_is_silent_but_real_failures_still_report(tmp_path, monkeypatch):
+    """A packaged build writes figures in-process BY DESIGN, so it must not log a per-run
+    'subprocess unavailable' note; a genuine spawn failure elsewhere still reports."""
+    res, s = _result(tmp_path)
+    real_exe = sys.executable          # capture BEFORE monkeypatching (fp.sys is the real sys)
+    # packaged build -> writes in-process, silently
+    monkeypatch.setattr(fp, "_CAN_SPAWN", None)
+    monkeypatch.setattr(fp.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(fp.sys, "executable",
+                        "/Applications/RespMech.app/Contents/MacOS/RespMech")
+    (tmp_path / "pkg").mkdir()
+    notes = []
+    written, _ = fp.write_figures(res, s, str(tmp_path / "pkg"), on_fallback=notes.append)
+    assert written, "figures must still be written in-process"
+    assert notes == [], f"packaged in-process should be silent, got {notes}"
+
+    # a genuine spawn failure on a real interpreter is still reported
+    monkeypatch.setattr(fp, "_CAN_SPAWN", None)
+    monkeypatch.setattr(fp.sys, "executable", real_exe)
+
+    class Boom:
+        def __enter__(self): raise OSError("no spawn here")
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(fp, "_executor", lambda: Boom())
+    (tmp_path / "fail").mkdir()
+    notes2 = []
+    fp.write_figures(res, s, str(tmp_path / "fail"), on_fallback=notes2.append)
+    assert notes2 and "in-process" in notes2[0], "a genuine spawn failure must still be reported"
+
+
 def test_spawn_relaunch_detection(monkeypatch):
     """Dev/venv installs (python) keep the child isolation; every packaged shape is detected."""
     monkeypatch.setattr(fp.sys, "frozen", False, raising=False)
