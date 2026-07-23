@@ -6,6 +6,7 @@ window **maximized** (not fullscreen) once a short minimum splash time has passe
 from __future__ import annotations
 
 import sys
+import threading
 import time
 import traceback
 
@@ -122,6 +123,11 @@ def main(argv=None) -> int:
                 splash.finish(win)
         win.raise_()
         win.activateWindow()
+        # Start the warm-up HERE, before begin_session() below: that call opens the modal
+        # New/Open chooser and blocks until the user picks, so anything after it would not
+        # run until the choice is already made. Starting it here spends exactly the idle
+        # time we want — the seconds the user spends in the chooser.
+        _warm_compute_core()
         if startup_error is not None:
             fn, tb = startup_error
             box = QMessageBox(win)
@@ -136,6 +142,29 @@ def main(argv=None) -> int:
             win.begin_session(cli_path=toml_arg if startup_error is None else None)
         except Exception:               # noqa: BLE001 — never let the chooser break startup
             traceback.print_exc()
+
+    def _warm_compute_core():
+        """Import the compute core in the background, once the window is up.
+
+        The GUI no longer imports ``respmech.core.pipeline`` at startup (that cost 1.4 s
+        of a 2.0 s launch), but deferring an import only *moves* the stall — it would
+        otherwise land inside the user's first Run or file load, where it is more
+        annoying. Doing it here spends the idle time instead.
+
+        A plain daemon thread, deliberately: it touches no Qt object, so there is no
+        thread affinity to get wrong (a QThreadPool/QRunnable would invite exactly that).
+        Python's import system is thread-safe per module and these are leaf-ward imports
+        with no cycle back into ``respmech.ui``, so there is no deadlock path; if the user
+        is faster than the thread, the import lock simply makes the foreground import wait
+        for the same work.
+        """
+        def _warm():
+            try:
+                import respmech.core.pipeline        # noqa: F401
+                import respmech.core.io.writers      # noqa: F401
+            except Exception:                        # noqa: BLE001 — best-effort only
+                pass
+        threading.Thread(target=_warm, name="respmech-warm-core", daemon=True).start()
 
     delay = (max(0, _MIN_SPLASH_MS - int((time.monotonic() - t0) * 1000))
              if splash is not None else 0)

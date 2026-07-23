@@ -22,10 +22,28 @@ import traceback
 import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
 
-from respmech.core.pipeline import run_batch
-from respmech.core.io.writers import write_batch
 from respmech.core.settings import Settings
 from respmech.core._cancel import Cancelled
+
+
+# ``run_batch`` and ``write_batch`` are the two imports that pulled scipy and pandas into
+# GUI startup. They are deliberately module-level *shims* rather than imports moved inside
+# BatchWorker.run: the unit suite monkeypatches these names on this module
+# (tests/unit/test_gui_hardening.py), which needs them to exist as module attributes.
+# Because BatchWorker.run resolves the module global at call time, the monkeypatch still
+# takes effect through the shim. Settings/Cancelled stay eager -- they are cheap, and
+# Settings is used in annotations.
+
+def run_batch(*args, **kwargs):
+    """Lazy shim for :func:`respmech.core.pipeline.run_batch` — see the note above."""
+    from respmech.core.pipeline import run_batch as _fn
+    return _fn(*args, **kwargs)
+
+
+def write_batch(*args, **kwargs):
+    """Lazy shim for :func:`respmech.core.io.writers.write_batch` — see the note above."""
+    from respmech.core.io.writers import write_batch as _fn
+    return _fn(*args, **kwargs)
 
 
 class BatchWorker(QObject):
