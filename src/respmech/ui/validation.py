@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import os
 
-from respmech.core.pipeline import match_input_files
+# NB ``match_input_files`` is imported lazily inside ``matching_files`` below. It needs
+# nothing but os/fnmatch, but importing it at module level drags the whole compute core
+# -- scipy.interpolate, pandas, scipy.signal -- into GUI startup, which cost 1.4 s of the
+# 2.0 s it took to open a window. See tests/unit/test_startup_imports.py.
 
 
 def matching_files(folder: str, mask: str) -> list:
@@ -17,6 +20,7 @@ def matching_files(folder: str, mask: str) -> list:
     ';' or ',' so a mask like '*.csv; *.txt' works in the UI. Delegates to the core matcher
     (``match_input_files``) so the file list the UI shows is exactly the set the batch will
     process — case-insensitive and folder-metacharacter-safe on both platforms."""
+    from respmech.core.pipeline import match_input_files
     patterns = [p.strip() for p in (mask or "*.*").replace(";", ",").split(",") if p.strip()]
     out = set()
     for pat in (patterns or ["*.*"]):
