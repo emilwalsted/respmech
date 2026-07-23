@@ -46,6 +46,7 @@ from matplotlib.figure import Figure
 from respmech.core.settings import ExcludeEntry
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
+from respmech.ui import plot_perf
 from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
 from respmech.ui import wheel as _wheel
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
@@ -943,11 +944,13 @@ class PreviewScreen(QWidget):
         self.emg_raw_plots = pg.GraphicsLayoutWidget()
         self.emg_raw_plots.setBackground(_bg)
         self.emg_result_plots = pg.PlotWidget()
+        plot_perf.tune_widget(self.emg_result_plots)
         self._style_legend(self.emg_result_plots.addLegend())
         self.emg_result_plots.setBackground(_bg)
         self.emg_result_plots.setLabel("bottom", "Time (s)")
         self.emg_result_plots.setLabel("left", "EMG (a.u.)")   # "Conditioned" is in the panel title
         self.emg_plots = pg.PlotWidget()
+        plot_perf.tune_widget(self.emg_plots)
         self._style_legend(self.emg_plots.addLegend())
         self.emg_plots.setBackground(_bg)
         self.emg_plots.setLabel("bottom", "Time (s)"); self.emg_plots.setLabel("left", "EMG (a.u.)")
@@ -1053,6 +1056,7 @@ class PreviewScreen(QWidget):
 
         _bg = _plot_pal()["bg"]
         self.ecg_capture_plot = pg.PlotWidget(); self.ecg_capture_plot.setBackground(_bg)
+        plot_perf.tune_widget(self.ecg_capture_plot)
         self.ecg_capture_plot.setLabel("bottom", "Time (s)")
         # Just the unit: this panel is the 1/4-height slot of the splitter below (stretch 1:3,
         # ~71px of viewbox at the default window), and a pyqtgraph left label is rotated, so
@@ -1502,6 +1506,8 @@ class PreviewScreen(QWidget):
         except Exception:                        # pragma: no cover — spacing is cosmetic
             pass
         first = plots[0]
+        for p in plots:
+            plot_perf.tune(p)                    # decimation + view clipping (display only)
         for i, p in enumerate(plots):
             last = i == len(plots) - 1
             ax = p.getAxis("bottom")
