@@ -114,38 +114,94 @@ def sample_entropy(time_series, sample_length, tolerance = None, cancel_check = 
         tolerance = 0.1*np.std(time_series)
 
     n = len(time_series)
+    x = time_series
 
     #Ntemp is a vector that holds the number of matches. N[k] holds matches templates of length k
     Ntemp = np.zeros(M + 2)
     #Templates of length 0 matches by definition:
     Ntemp[0] = n*(n - 1) / 2
 
+    # --- Sorted-candidate counting -------------------------------------------------
+    # This replaces the original per-template scan over the whole tail (O(n^2) element
+    # work *and* O(n) Python iterations per template) with a sorted range lookup.
+    #
+    # WHY THIS IS BIT-IDENTICAL, not merely "within tolerance":
+    # ``Ntemp`` accumulates nothing but integer counts, and the only predicate anywhere
+    # in this function is ``|a - b| < tolerance`` -- an exact comparison of
+    # exactly-computed floats. The sole floating-point arithmetic is the final
+    # ``-np.log(Ntemp[1:] / Ntemp[:-1])``, evaluated once from those integers. So as long
+    # as we count *the same pairs*, the returned array is identical: there is no
+    # summation order to preserve and no reassociation risk.
+    #
+    # HOW the candidates are found: fl(a - b) is monotone in b, so for a fixed x[i] the
+    # match set {j : |x[i] - x[j]| < tolerance} is a contiguous range once x is sorted.
+    # ``np.searchsorted`` locates that range. The bounds are computed as x[i] +/- tolerance,
+    # which rounds differently from the predicate's x[i] - x[j], so they are widened by a
+    # few ULP to guarantee a *superset* -- and every surviving candidate is then re-tested
+    # with the original predicate below. Widening can therefore only cost a few wasted
+    # candidates; it can never change a count, which is why the constant need not be tight.
+    imax = n - M - 1              # template starts -- exactly the old range(n - M - 1)
+    if imax > 0:
+        order = np.argsort(x, kind="stable")
+        xs = x[order]
+        xi = x[:imax]
+        pad = 16.0 * np.spacing(np.abs(xi) + abs(tolerance) + 1.0)
+        lo = np.searchsorted(xs, xi - tolerance - pad, side="left")
+        hi = np.searchsorted(xs, xi + tolerance + pad, side="right")
+        counts = (hi - lo).astype(np.int64)
+        ends = np.cumsum(counts)
 
-    for i in range(n - M - 1):
-        check(cancel_check)   # cooperative abort point (no-op when cancel_check is None -> golden-safe)
-        template = time_series[i:(i+M+1)];#We have 'M+1' elements in the template
-        rem_time_series = time_series[i+1:]
+        # Work in blocks bounded by candidate-pair count so peak memory stays predictable
+        # on pathological (near-constant) signals, where every pair matches. ~48 MB peak.
+        MAXPAIRS = 1_000_000
+        blocks = [0]
+        while blocks[-1] < imax:
+            a = blocks[-1]
+            base = ends[a - 1] if a > 0 else 0
+            b = int(np.searchsorted(ends, base + MAXPAIRS, side="right"))
+            blocks.append(min(max(b, a + 1), imax))
 
-        searchlist = np.nonzero(np.abs(rem_time_series - template[0]) < tolerance)[0]
-
-        go = len(searchlist) > 0;
-
-        length = 1;
-
-        Ntemp[length] += len(searchlist)
-
-        while go:
-            length += 1
-            nextindxlist = searchlist + 1;
-            nextindxlist = nextindxlist[nextindxlist < n - 1 - i]#Remove candidates too close to the end
-            nextcandidates = rem_time_series[nextindxlist]
-            hitlist = np.abs(nextcandidates - template[length-1]) < tolerance
-            searchlist = nextindxlist[hitlist]
-
-            Ntemp[length] += np.sum(hitlist)
-
-            go = any(hitlist) and length < M + 1
-
+        for bi in range(len(blocks) - 1):
+            # Cooperative abort point (no-op when cancel_check is None -> golden-safe).
+            # Granularity is now per block rather than per template; for breath-length
+            # calls that is a single block, i.e. ~1.5 ms of work -- still far finer than
+            # the per-file granularity the GUI needs. See tests/unit/test_cancel.py.
+            check(cancel_check)
+            a, b = blocks[bi], blocks[bi + 1]
+            c = counts[a:b]
+            tot = int(c.sum())
+            if tot == 0:
+                continue
+            # Expand the per-template candidate ranges into one flat (owner, candidate)
+            # pair list, then map back through ``order`` to original indices.
+            owner = np.repeat(np.arange(a, b, dtype=np.int64), c)
+            off = np.cumsum(c) - c
+            flat = (np.arange(tot, dtype=np.int64) - np.repeat(off, c)
+                    + np.repeat(lo[a:b].astype(np.int64), c))
+            j = order[flat]
+            keep = j > owner                             # the old loop only looked forward
+            i_ = owner[keep]
+            j_ = j[keep]
+            live = np.abs(x[i_] - x[j_]) < tolerance     # THE original predicate
+            i_ = i_[live]
+            j_ = j_[live]
+            Ntemp[1] += i_.size
+            # Chain to longer templates exactly as the original did: a length-L match
+            # requires a length-(L-1) match, so the surviving pair list only shrinks --
+            # which is also why the original's ``go = any(hitlist) and ...`` early exit is
+            # equivalent to the candidate list becoming empty.
+            for L in range(2, M + 2):
+                if i_.size == 0:
+                    break
+                ok = (j_ + (L - 1)) <= (n - 1)           # old: nextindxlist < n - 1 - i
+                i_ = i_[ok]
+                j_ = j_[ok]
+                if i_.size == 0:
+                    break
+                live = np.abs(x[i_ + (L - 1)] - x[j_ + (L - 1)]) < tolerance
+                i_ = i_[live]
+                j_ = j_[live]
+                Ntemp[L] += i_.size
 
     sampen =  - np.log(Ntemp[1:] / Ntemp[:-1])
     return sampen
