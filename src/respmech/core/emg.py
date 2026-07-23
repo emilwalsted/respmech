@@ -15,6 +15,7 @@ shared-profile path in ``core.noise``.
 import numpy as np
 import scipy as sp
 from scipy import signal
+from numpy.lib.stride_tricks import sliding_window_view as _swv
 
 # librosa is only needed when noise reduction is used; the STFT helpers import it
 # lazily so ECG removal / RMS work without it.
@@ -30,11 +31,44 @@ def calculate_rms(emgchannels, rms_s, samplingfrequency):
         rollstart = 0
         rollend = rollingwindowsize - 1
 
+        # NB two properties of this grid are load-bearing and must NOT be "tidied up":
+        #  1. The window is ``rollend`` = rollingwindowsize - 1 samples wide (the slice is
+        #     emgch[i:i+rws-1], not i:i+rws). See rolling_rms() below, which documents the
+        #     same quirk, and tests/unit/test_robust_peak.py, which asserts the two agree.
+        #  2. The last rollingwindowsize//2 - 1 windows run past the end of the array and
+        #     are therefore SHORTER than rollend -- numpy slicing truncates them silently.
+        # The golden tables are the maximum over exactly this grid, so both are reproduced
+        # below rather than corrected.
         r = []
         try:
-            for i in range(0 + int(rollingwindowsize / 2), len(emgch) - int(rollingwindowsize / 2)):
-                r += [np.sqrt(np.mean(np.square(emgch[i + rollstart:i + rollend])))]
-            rmsch = np.max(r)
+            half = int(rollingwindowsize / 2)
+            n = len(emgch)
+            stop = n - half                 # exclusive end of the window-start range
+            if rollend < 1:
+                # Degenerate window (rms_s * fs < 2): emgch[i:i+0] is empty and np.mean of
+                # an empty slice yields NaN. Keep the original scalar path so that is
+                # reproduced exactly -- a vectorised mean would produce 0.0 instead.
+                for i in range(0 + half, stop):
+                    r += [np.sqrt(np.mean(np.square(emgch[i + rollstart:i + rollend])))]
+                rmsch = np.max(r)
+            else:
+                sq = np.square(emgch)
+                # A window starting at i is full-length iff i + rollend <= n.
+                last_full = min(stop, n - rollend + 1)
+                parts = []
+                if last_full > half:
+                    # sliding_window_view's window axis is contiguous, so numpy applies the
+                    # same pairwise summation to each window that np.mean applied to the
+                    # equivalent contiguous slice -- hence bit-identical, not just close.
+                    # (A cumsum-difference window would NOT be: its error grows with the
+                    # recording length.)
+                    parts.append(_swv(sq, rollend)[half:last_full].mean(axis=-1))
+                if stop > last_full:
+                    # The clipped tail windows (property 2 above) keep the original
+                    # expression; at most rollingwindowsize//2 iterations.
+                    parts.append(np.array([np.mean(sq[i:i + rollend])
+                                           for i in range(max(half, last_full), stop)]))
+                rmsch = np.max(np.sqrt(np.concatenate(parts)))
         except Exception:
             # If breath is too small (i.e. invalid and should be ignored)
             rmsch = 0
