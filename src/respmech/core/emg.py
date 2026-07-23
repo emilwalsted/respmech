@@ -95,11 +95,94 @@ def timeshift(inputarray, shift):
     return ret
 
 
+# --- Candidate narrowing for the two ECG template fits -----------------------------
+#
+# ``timeshift_average`` (801 candidate shifts) and ``amplitude_average`` (1000 candidate
+# amplitudes) are brute-force sweeps, and together they were ~57 % of a production run.
+# The helpers below compute the same sum-of-squared-differences in closed form so that
+# candidates which provably cannot be the minimum are skipped.
+#
+# THEY DO NOT DECIDE THE WINNER, AND MUST NOT BE MADE TO.
+# Both functions return an *argmin*, and the array they return is subtracted from the EMG
+# downstream. Two adjacent grid points can sit within 1e-16 of each other in SSD while
+# their amplitudes differ by a full grid step (2.5/999 ~ 0.0025 relative). Choosing the
+# minimum from a reassociated expression can therefore select a different-but-equally-good
+# candidate and change the subtracted template by ~1e-3 -- a thousandfold over the
+# numerical budget these results are pinned to. So these helpers only *narrow*: the
+# original loop still evaluates the original expression on the survivors and picks the
+# winner, which also preserves its exact tie-breaking (first candidate wins) and its
+# behaviour on non-finite data (nothing beats np.inf, so it returns ``(0, None)``).
+#
+# Every helper falls back to the full candidate list whenever its bound cannot be trusted.
+
+def _ssd_band(approx, terms_scale, nterms, candidates):
+    """Candidates whose exact SSD could still be the minimum, or all of them on doubt."""
+    if not np.all(np.isfinite(approx)):
+        # Non-finite data: hand the whole sweep back so the original loop reproduces its
+        # documented (0, None) result rather than picking an arbitrary candidate.
+        return candidates
+    bound = 64.0 * (nterms + 1) * np.finfo(float).eps * terms_scale + np.finfo(float).tiny
+    keep = np.flatnonzero(approx <= approx.min() + 2.0 * bound)
+    if keep.size == 0 or keep.size > 64:
+        return candidates          # safety valve -- correct, just not fast
+    return candidates[keep]
+
+
+def _shift_candidates(ecg, avg, shifts):
+    """Narrow the shift sweep using SSD(t) = <e,e> - 2*corr(t) + <s_t,s_t>."""
+    L = avg.size
+    if L == 0 or shifts.size == 0 or ecg.shape != avg.shape:
+        return shifts
+    if not (np.issubdtype(ecg.dtype, np.floating) and np.issubdtype(avg.dtype, np.floating)):
+        return shifts
+    see = float(np.dot(ecg, ecg))
+    full = np.correlate(ecg, avg, mode="full")
+    csq = np.concatenate([[0.0], np.cumsum(avg * avg)])
+    # The zero-padding makes the template's OWN energy shift-dependent -- easy to get
+    # wrong, so it is written out rather than folded into a constant.
+    saa = np.where(shifts >= 0,
+                   csq[L - np.clip(shifts, 0, L)],
+                   csq[L] - csq[np.clip(-shifts, 0, L)])
+    cross = np.zeros(shifts.size)
+    overlap = (shifts > -L) & (shifts < L)
+    cross[overlap] = full[shifts[overlap] + (L - 1)]
+    # timeshift() returns the array UNSHIFTED when shift >= len(array). That never fires at
+    # the shipped shiftinterval, but it is cheap to mirror and expensive to rediscover.
+    whole = shifts >= L
+    if whole.any():
+        saa = np.where(whole, csq[L], saa)
+        cross = np.where(whole, float(np.dot(ecg, avg)), cross)
+    approx = see - 2.0 * cross + saa
+    scale = see + 2.0 * np.abs(cross).max() + saa.max()
+    return _ssd_band(approx, scale, L, shifts)
+
+
+def _amplitude_candidates(ecg, avg, amps):
+    """Narrow the amplitude sweep using SSD(a) = <e,e> - 2a<e,v> + a^2<v,v>."""
+    if amps.size == 0 or ecg.size == 0 or ecg.shape != avg.shape:
+        return amps
+    if not (np.issubdtype(ecg.dtype, np.floating) and np.issubdtype(avg.dtype, np.floating)):
+        return amps
+    see = float(np.dot(ecg, ecg))
+    sea = float(np.dot(ecg, avg))
+    saa = float(np.dot(avg, avg))
+    approx = see - 2.0 * amps * sea + amps * amps * saa
+    amax = float(np.abs(amps).max())
+    scale = see + 2.0 * amax * abs(sea) + amax * amax * saa
+    return _ssd_band(approx, scale, ecg.size, amps)
+
+
 def timeshift_average(ecgdata, avgdata, tmin, tmax):
+    # Narrowing only -- the loop below is the original, unchanged.
+    shifts = np.arange(tmin, tmax + 1)
+    _e = ecgdata if type(ecgdata) is np.ndarray else np.array(ecgdata)
+    candidates = _shift_candidates(_e, np.asarray(avgdata), shifts)
+
     lowest = np.inf
     tlowest = 0
     tavg = None
-    for t in range(tmin, tmax + 1):
+    for t in candidates:
+        t = int(t)
         shiftedavg = timeshift(avgdata, t)
         ecg = ecgdata if type(ecgdata) is np.ndarray else np.array(ecgdata)
         newl = np.sum(np.square(ecg - shiftedavg))
@@ -111,11 +194,14 @@ def timeshift_average(ecgdata, avgdata, tmin, tmax):
 
 
 def amplitude_average(ecgdata, avgdata, rangefactor, steps):
+    amplitudes = np.linspace(-1 * rangefactor, rangefactor, steps)
+    # Narrowing only -- the loop below is the original, unchanged.
+    candidates = _amplitude_candidates(np.asarray(ecgdata), np.asarray(avgdata), amplitudes)
+
     lowest = np.inf
     alowest = 0
     aavg = None
-    amplitudes = np.linspace(-1 * rangefactor, rangefactor, steps)
-    for a in amplitudes:
+    for a in candidates:
         ampavg = avgdata * a
         newa = np.sum(np.square(ecgdata - ampavg))
         if newa < lowest:
