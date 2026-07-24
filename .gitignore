@@ -116,6 +116,23 @@ tests/golden/_work/
 !/tests/golden/production/README.md
 tests/golden/_prod_work/
 
+# CLINICAL / PATIENT DATA — never commit (repo is public). Belt-and-braces against an
+# accidental `git add` of real recordings. The clinical examples live OUTSIDE this repo
+# (../respmech-clinical-examples) and are not version-controlled; these patterns catch a
+# copy of that folder, or stray recordings, if one ever lands inside the tree. The only
+# CSVs that belong here are the synthetic goldens under tests/golden/input/ — raw patient
+# CSV/TXT recordings must never be added anywhere else.
+*clinical-examples/
+clinical/
+patient-data/
+# raw recording binary formats — none are legitimate tracked files in this repo
+*.mat
+*.h5
+*.hdf5
+*.edf
+*.adicht
+*.adidat
+
 # macOS
 .DS_Store
 tests/golden/_prod_work_newcore/
