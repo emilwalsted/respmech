@@ -179,20 +179,72 @@ def _ecg_remove(s, emgcolumnsraw, cancel_check=None):
     return emgcols, diag
 
 
-def _ecg_remove_trim(s, emgcolumnsraw, startix, endix, cancel_check=None):
-    """ECG removal (no diagnostics) then trim — used for internal reference building."""
-    emgcols, _ = _ecg_remove(s, emgcolumnsraw, cancel_check=cancel_check)
-    return emgcols[startix:endix]
+# --- Per-run load + ECG-removal cache (Wave 2.4) -----------------------------------
+#
+# When shared-profile noise reduction is on, the noise-building phase loads and ECG-removes
+# the reference file and the first auto_prop files, and then the main loop loads and
+# ECG-removes them AGAIN — the reference file is processed up to three times (reference clip,
+# auto_prop, main loop). ``_load_and_ecg`` memoises ``(_load, _ecg_remove)`` by absolute path
+# for one ``run_batch``, so each file is loaded and ECG-removed at most once.
+#
+# CACHE-AND-COPY, so this is provably identical to computing fresh every time: the cache
+# holds a private pristine snapshot that is never handed out, and every consumer gets either
+# its own fresh computation (miss) or a copy (hit). No aliasing, so no consumer can perturb
+# another's arrays — exactly the guarantee the old code got from `_ecg_remove` returning a
+# fresh `np.array` on every call. Both `_load` and `_ecg_remove` are pure functions of
+# (path/array, settings), which are fixed for the run, so a cached result equals a fresh one.
+_LOAD_CACHE_MAX = 8          # bound: a many-tiny-files run degrades to today's recompute, not OOM
 
 
-def _process_emg(s, emgcolumnsraw, startix, endix, noise_set=None):
+def _copy_snapshot(snap):
+    """Deep-ish copy of a ``(_load result, emgcols_ecg, ecg_diag)`` snapshot — every ndarray
+    is copied so the returned snapshot shares no storage with the cached one."""
+    load_result, emgcols_ecg, ecg_diag = snap
+    lr = tuple(x.copy() if isinstance(x, np.ndarray) else x for x in load_result)
+    ecg = emgcols_ecg.copy() if isinstance(emgcols_ecg, np.ndarray) else emgcols_ecg
+    if ecg_diag is None:
+        diag = None
+    else:
+        diag = dict(ecg_diag)
+        ps = diag.get("peaks_s")
+        if isinstance(ps, np.ndarray):
+            diag["peaks_s"] = ps.copy()
+    return (lr, ecg, diag)
+
+
+def _load_and_ecg(path, s, cache=None, cancel_check=None):
+    """``(_load(path), *_ecg_remove(emg))`` for one file, memoised per run by abspath.
+
+    Returns ``(load_result, emgcols_ecg, ecg_diag)``. On a hit, a fresh copy is returned and
+    the cached snapshot is left pristine; on a miss the fresh computation is returned and a
+    copy is stored (so the cache never shares storage with any caller)."""
+    key = os.path.abspath(path)
+    if cache is not None and key in cache:
+        return _copy_snapshot(cache[key])
+    load_result = _load(path, s)
+    emg = load_result[6]
+    emgcols_ecg, ecg_diag = _ecg_remove(s, emg, cancel_check=cancel_check)
+    snap = (load_result, emgcols_ecg, ecg_diag)
+    if cache is not None and len(cache) < _LOAD_CACHE_MAX:
+        cache[key] = _copy_snapshot(snap)
+    return snap
+
+
+def _process_emg(s, emgcolumnsraw, startix, endix, noise_set=None, ecg_precomputed=None):
     """ECG removal -> trim -> shared-profile noise reduction (applied identically to
     every file when ``noise_set`` is provided). Returns (emgcols, ecg_diag, stages) where
     ``stages`` holds the trimmed EMG at each conditioning step (raw / ECG-removed /
     noise-reduced) for the diagnostic figures — ``None`` for a step that did not run.
-    The returned ``emgcols`` is byte-identical to the previous behaviour."""
+    The returned ``emgcols`` is byte-identical to the previous behaviour.
+
+    ``ecg_precomputed`` is an optional ``(emgcols_ecg, ecg_diag)`` from the per-run cache
+    (Wave 2.4); when given, the ECG-removal step is reused rather than recomputed. It is the
+    output of ``_ecg_remove(s, emgcolumnsraw)`` on the same file, so the result is unchanged."""
     raw_trim = np.asarray(emgcolumnsraw, dtype=float)[startix:endix]
-    emgcols_ecg, ecg_diag = _ecg_remove(s, emgcolumnsraw)
+    if ecg_precomputed is not None:
+        emgcols_ecg, ecg_diag = ecg_precomputed
+    else:
+        emgcols_ecg, ecg_diag = _ecg_remove(s, emgcolumnsraw)
     ecg_trim = np.asarray(emgcols_ecg, dtype=float)[startix:endix]
     emgcols = ecg_trim
     if noise_set is not None:
@@ -203,15 +255,17 @@ def _process_emg(s, emgcolumnsraw, startix, endix, noise_set=None):
     return emgcols, ecg_diag, stages
 
 
-def _emg_segmented(path, s, cancel_check=None):
+def _emg_segmented(path, s, cache=None, cancel_check=None):
     """Load a file, ECG-remove + trim its EMG, and segment breaths (by flow).
     Returns (emg_ecg_trimmed, insp_mask, exp_mask). Used to build the noise
-    reference (expiration) and to gather active/quiet EMG for prop selection."""
-    flow, vol, poes, pgas, pdi, ent, emg = _load(path, s)
+    reference (expiration) and to gather active/quiet EMG for prop selection.
+    ``cache`` (Wave 2.4) memoises the load + ECG removal across the run."""
+    (flow, vol, poes, pgas, pdi, ent, emg), emgcols_ecg, _diag = _load_and_ecg(
+        path, s, cache=cache, cancel_check=cancel_check)
     tc = np.arange(len(flow)) / s.input.format.samplingfrequency
     tcT, fT, vT, pT, gT, dT, _e, si, ei = compute.trim(
         tc, flow, vol, poes, pgas, pdi, np.array(emg) if len(emg) else np.array([]), s)
-    emg_full = _ecg_remove_trim(s, emg, si, ei, cancel_check=cancel_check)
+    emg_full = emgcols_ecg[si:ei]                 # ECG-removed (cached) then trimmed, as before
     volc = compute.correctdrift(compute.zero(vT), s) if s.processing.mechanics.correctvolumedrift else compute.zero(vT)
     br = compute.separateintobreaths("flow", os.path.basename(path), tcT, fT, volc,
                                      pT, gT, dT, [], emg_full, s)
@@ -223,7 +277,7 @@ def _emg_segmented(path, s, cancel_check=None):
     return emg_full[:n], ins[:n], ex[:n]
 
 
-def _reference_noise_clip(settings, s, cancel_check=None):
+def _reference_noise_clip(settings, s, cache=None, cancel_check=None):
     """Build the EMG-free noise reference clip (multichannel) once per test."""
     ns_cfg = settings.processing.emg.noise
     ref = ns_cfg.reference_file
@@ -234,17 +288,17 @@ def _reference_noise_clip(settings, s, cancel_check=None):
     # Prefer expiration-based reference (many STFT frames -> stable estimate). Explicit
     # intervals are used only when use_expiration is False (a deliberate override).
     if ns_cfg.use_expiration or not ns_cfg.reference_intervals:
-        emg_full, ins, ex = _emg_segmented(path, s, cancel_check=cancel_check)
+        emg_full, ins, ex = _emg_segmented(path, s, cache=cache, cancel_check=cancel_check)
         clip = emg_full[ex]   # diaphragm-quiet expiration of the rest reference
     else:
-        flow, vol, poes, pgas, pdi, ent, emg = _load(path, s)
-        emg_ecg = _ecg_remove_trim(s, emg, 0, len(emg), cancel_check=cancel_check)  # full length (no trim)
+        _load_result, emg_ecg, _diag = _load_and_ecg(path, s, cache=cache, cancel_check=cancel_check)
         parts = [emg_ecg[int(t0 * fs):int(t1 * fs)] for t0, t1 in ns_cfg.reference_intervals]
         clip = np.concatenate(parts, axis=0)
     return clip
 
 
-def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=None, stft=None):
+def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=None, stft=None,
+                     cache=None):
     from respmech.core import noise as noiselib
     cfg = settings.processing.emg.noise
     # ``stft`` (n_fft, hop, win) overrides the configured window when a pre-analysis
@@ -253,7 +307,7 @@ def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=
     # ``clip`` lets the PREVIEW pass a shared/cached reference clip; batch/CLI pass None
     # (default) and build it here exactly as before — byte-identical for the golden path.
     if clip is None:
-        clip = _reference_noise_clip(settings, s, cancel_check=cancel_check)
+        clip = _reference_noise_clip(settings, s, cache=cache, cancel_check=cancel_check)
     profiles = noiselib.build_profiles(
         clip, s.input.format.samplingfrequency, n_fft=n_fft, hop_length=hop_length,
         win_length=win_length, n_std_thresh=cfg.n_std_thresh,
@@ -263,7 +317,8 @@ def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=
         # Gather active/quiet EMG across the test (capped) to choose prop ONCE.
         act, qui, cap = [], [], 40000
         for fi in files:
-            emg_full, ins, ex = _emg_segmented(os.path.abspath(fi), s, cancel_check=cancel_check)
+            emg_full, ins, ex = _emg_segmented(os.path.abspath(fi), s, cache=cache,
+                                               cancel_check=cancel_check)
             act.append(emg_full[ins]); qui.append(emg_full[ex])
             if sum(len(a) for a in act) >= cap:
                 break
@@ -349,9 +404,14 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
     # full test even when only_files restricts processing (e.g. a GUI test run), so a
     # single file is denoised exactly as it would be in the full batch.
     noise_set = None
+    # Per-run load + ECG-removal cache (Wave 2.4). Only useful when the noise-building phase
+    # runs (it is the sole source of duplicate load/ECG work); the main loop drains it by
+    # popping each file it reaches, so it never holds more than the noise phase loaded.
+    load_cache: dict = {}
     if settings.processing.emg.noise.enabled and len(s.input.data.columns_emg) > 0:
         _emit(progress, ProgressEvent("stage", message="building shared noise profile"))
-        noise_set, result.noise_report = _build_noise_set(settings, s, allfiles, progress, stft=stft_override)
+        noise_set, result.noise_report = _build_noise_set(settings, s, allfiles, progress,
+                                                          stft=stft_override, cache=load_cache)
 
     for fi in files:
         if cancel_check is not None and cancel_check():
@@ -361,7 +421,17 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
         filename = os.path.basename(file)
         _emit(progress, ProgressEvent("file_start", file=filename, message="loading"))
         try:
-            flowraw, volumeraw, poesraw, pgasraw, pdiraw, entropycolumnsraw, emgcolumnsraw = _load(file, s)
+            # Reuse the load + ECG removal if the noise-building phase already did it for this
+            # file (Wave 2.4). pop() → the entry is consumed once and freed, so the cache never
+            # outgrows the noise phase. Miss ⇒ load fresh and let _process_emg do ECG removal.
+            _cached = load_cache.pop(file, None)
+            if _cached is not None:
+                (flowraw, volumeraw, poesraw, pgasraw, pdiraw, entropycolumnsraw,
+                 emgcolumnsraw), _ecg_full, _ecg_diag_full = _cached
+                ecg_precomputed = (_ecg_full, _ecg_diag_full)
+            else:
+                flowraw, volumeraw, poesraw, pgasraw, pdiraw, entropycolumnsraw, emgcolumnsraw = _load(file, s)
+                ecg_precomputed = None
             timecolraw = np.arange(0, len(flowraw), dtype=int) / s.input.format.samplingfrequency
 
             _emit(progress, ProgressEvent("stage", file=filename, message="trimming"))
@@ -377,7 +447,8 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
             emg_stages = None
             if len(emgcolumnsraw) > 0:
                 _emit(progress, ProgressEvent("stage", file=filename, message="processing EMG"))
-                emgcolumns, ecg_diag, emg_stages = _process_emg(s, emgcolumnsraw, startix, endix, noise_set)
+                emgcolumns, ecg_diag, emg_stages = _process_emg(
+                    s, emgcolumnsraw, startix, endix, noise_set, ecg_precomputed=ecg_precomputed)
 
             _emit(progress, ProgressEvent("stage", file=filename, message="volume correction"))
             vol_uncorrected = volume                                  # trimmed, pre-zero
