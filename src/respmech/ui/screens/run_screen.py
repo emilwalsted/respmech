@@ -10,7 +10,7 @@ from __future__ import annotations
 import copy
 import os
 
-from PySide6.QtCore import Qt, Signal, QThread, QUrl
+from PySide6.QtCore import Qt, Signal, QThread, QTimer, QUrl, QElapsedTimer
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QHBoxLayout, QHeaderView, QLabel, QMessageBox, QProgressBar,
                                QPushButton, QTableWidget, QTableWidgetItem,
@@ -102,6 +102,17 @@ class RunScreen(QWidget):
 
         self.table = QTableWidget(0, 0)     # the averaged-metrics table (unchanged)
         root.addWidget(self.table, 1)
+
+        # Heartbeat for the write phase. The busy progress bar animates on its own, but the
+        # figure step can be tens of seconds of silence, and we do not want the window's only
+        # sign of life to depend on whether the styled bar animates on a given platform. This
+        # ticking elapsed counter is a guaranteed-visible "still working" signal, and it also
+        # tells the user how long the write is taking.
+        self._write_clock = QElapsedTimer()
+        self._write_stage = ""
+        self._heartbeat = QTimer(self)
+        self._heartbeat.setInterval(1000)
+        self._heartbeat.timeout.connect(self._tick_write)
 
     # -- helpers ------------------------------------------------------------
     def _settings_ok(self):
@@ -282,11 +293,20 @@ class RunScreen(QWidget):
             self._worker.cancel()
             self._append("cancelling…")
 
+    def _tick_write(self):
+        """Once-a-second heartbeat during the write phase — see __init__."""
+        secs = self._write_clock.elapsed() // 1000
+        stage = f" — {self._write_stage}" if self._write_stage else ""
+        self._set_status(f"Writing output… {secs}s{stage}")
+
     def _on_progress(self, ev):
         if ev.kind == "file_start":
             self._append(f"\n{ev.file}: {ev.message}")
         elif ev.kind == "stage":
             self._append(f"  {ev.message}…")
+            if self._heartbeat.isActive():        # keep the heartbeat's label current
+                self._write_stage = ev.message
+                self._tick_write()
         elif ev.kind == "breath":
             pct = ""
             if ev.total_breaths:
@@ -296,10 +316,22 @@ class RunScreen(QWidget):
             self._set_status(f"{ev.file}: breath {ev.breath}/{ev.total_breaths}{pct}")
         elif ev.kind == "file_done":
             self._append(f"  done ({ev.message})")
+        elif ev.kind == "writing":
+            # The compute phase left the bar at a static, determinate 100%; writing (figures
+            # especially) can take longer than the compute did, with no per-breath ticks to
+            # move it. Return to the animated busy state and start the elapsed-time heartbeat
+            # so the window visibly keeps working even during the long, quiet figure step.
+            self.progress.setRange(0, 0)
+            self._append(f"\n{ev.message}…")
+            self._write_stage = ""
+            self._write_clock.restart()
+            self._heartbeat.start()
+            self._tick_write()
         elif ev.kind == "finished":
             self._set_status(ev.message)
 
     def _on_finished(self, result):
+        self._heartbeat.stop()                    # end the write-phase heartbeat, any outcome
         self._set_running(False)                  # always re-enable first
         fatal = self._fatal_msg is not None
         cancelled = result is None and not fatal

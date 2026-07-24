@@ -467,8 +467,10 @@ QProgressBar {
 }
 QProgressBar::chunk {
     background-color: $accent;
-    border-radius: 6px;
-    margin: 1px;
+    border-radius: 5px;
+    /* 2px keeps a visible trough ring around the fill even at 100%, so a full bar reads as
+       "contained", not as blue bleeding to the window edge (the bar is full-bleed width). */
+    margin: 2px;
 }
 
 /* ---- splitters (used heavily on the preview screen) ------------------ */

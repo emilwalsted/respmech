@@ -99,14 +99,33 @@ def _write_xlsx(df: pd.DataFrame, path: str, settings=None, when=None, extra_she
         _autofit(writer)
 
 
-def write_batch(result, settings, outputfolder: str, when: datetime | None = None) -> list[str]:
+def write_batch(result, settings, outputfolder: str, when: datetime | None = None,
+                progress=None) -> list[str]:
     """Write all enabled outputs plus summary, figures and provenance; returns the
-    list of files written."""
+    list of files written.
+
+    ``progress`` is an optional callback taking a ``pipeline.ProgressEvent``. The writing
+    phase used to be entirely silent — on a batch with diagnostics on, figure writing alone
+    is far longer than the compute it follows, so the GUI looked frozen from the last file's
+    "done" to "Finished". Emitting ``stage`` events here lets the Run screen keep the log
+    scrolling and the busy bar animating. The events reuse the same vocabulary the compute
+    phase already emits, so the Run screen renders them through the existing path; ``None``
+    (the CLI's default) keeps the old silent behaviour."""
+    # Lazy import: keeps ``core.pipeline`` (and scipy/pandas via it) out of GUI startup — by
+    # the time write_batch runs, run_batch has already imported it, so this is free. See the
+    # Wave-1.4 lazy-import note in ui/workers.py.
+    from respmech.core.pipeline import ProgressEvent
+
+    def _emit(message, file=None):
+        if progress is not None:
+            progress(ProgressEvent("stage", file=file, message=message))
+
     datadir = os.path.join(outputfolder, "data")
     os.makedirs(datadir, exist_ok=True)
     written = []
 
     if settings.output.data.save_breath_by_breath:
+        _emit("writing breath-by-breath data")
         for fname, fr in result.ok_files.items():
             p = os.path.join(datadir, f"{fname}.breathdata.xlsx")
             extra = {}
@@ -119,17 +138,25 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
     if settings.output.data.save_processed:
         for fname, fr in result.ok_files.items():
             if fr.processed is not None:
+                _emit(f"writing processed data — {fname}", file=fname)
                 p = os.path.join(datadir, f"{fname} – Processed data.csv")
                 fr.processed.to_csv(p, index=False)
                 written.append(p)
 
     if settings.output.data.save_average and result.average_table is not None:
+        _emit("writing average + cohort summary")
         p = os.path.join(datadir, "Average breathdata.xlsx")
         _write_xlsx(result.average_table, p, settings=settings, when=when)
         written.append(p)
         written += _write_cohort_summary(result, settings, datadir, when)   # P8/P15
 
-    fig_written, fig_failures = _write_figures(result, settings, outputfolder)  # P11
+    _emit("writing diagnostic figures (the slow step)")
+    # Per-file figure callback — fires only when figures run in-process (a packaged build, or
+    # RESPMECH_NO_FIGURE_SUBPROCESS=1). In the child-process path it is simply not passed
+    # across, so those runs get the single message above plus the animated busy bar.
+    fig_progress = (lambda fname: _emit(f"figures — {fname}", file=fname)) if progress else None
+    fig_written, fig_failures = _write_figures(result, settings, outputfolder,
+                                               progress=fig_progress)  # P11
     written += fig_written
 
     # provenance — always written, so a folder of results carries its own recipe (P7)
@@ -159,14 +186,17 @@ def _write_cohort_summary(result, settings, datadir, when) -> list[str]:
 # --------------------------------------------------------------------------- #
 # diagnostic figures (P11)
 # --------------------------------------------------------------------------- #
-def _write_figures(result, settings, outputfolder):
+def _write_figures(result, settings, outputfolder, progress=None):
     """Returns (written_paths, failures). Failures — including matplotlib being
     absent — are surfaced in the run report, never silently dropped.
 
     The work goes to a separate process when the environment allows it: this runs on the
     GUI's worker thread, and matplotlib is not thread-safe while the Preview screen is using
     it on the GUI thread. See ``_figure_process`` — every failure mode falls back to doing it
-    here, so the isolation can only ever be a no-op."""
+    here, so the isolation can only ever be a no-op.
+
+    ``progress`` is an optional ``callable(fname)`` fired once per file, used only on the
+    in-process path (the child process can't call back across the boundary)."""
     try:
         from respmech.core import plots  # noqa: F401 - import probe: is plotting available?
     except Exception as e:                       # pragma: no cover - plotting optional
@@ -174,7 +204,7 @@ def _write_figures(result, settings, outputfolder):
     from respmech.core.io import _figure_process
     notes = []
     written, failures = _figure_process.write_figures(
-        result, settings, outputfolder, on_fallback=notes.append)
+        result, settings, outputfolder, on_fallback=notes.append, progress=progress)
     # A fallback is not a failure — the figures are written either way — but it belongs in the
     # run report, because it is the difference between the isolated and the shared path.
     return written, failures + [("figures", n) for n in notes]
