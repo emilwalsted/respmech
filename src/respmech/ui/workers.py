@@ -94,8 +94,15 @@ class BatchWorker(QObject):
         # click that lands during writing can't be reported as "no output written".
         cancelled = self._cancel
         if self._write and not cancelled:
+            # Signal the Run screen that the (previously silent) write phase has begun, so it
+            # can switch the progress bar to its animated busy state and stop looking frozen.
+            # Lazy import keeps pipeline out of GUI startup (Wave 1.4); it is already loaded
+            # here because run_batch above imported it.
+            from respmech.core.pipeline import ProgressEvent
+            self._on_event(ProgressEvent("writing", message="writing output"))
             try:
-                write_batch(result, self._settings, self._settings.output.folder)
+                write_batch(result, self._settings, self._settings.output.folder,
+                            progress=self._on_event)
             except Exception:
                 self.failed.emit(
                     "Analysis completed, but writing the output failed. Some files may be "

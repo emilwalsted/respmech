@@ -308,8 +308,8 @@ def test_output_pdfs_are_always_light(monkeypatch):
     from respmech.core import plots
     seen = {}
     monkeypatch.setattr(plots, "_write_figures_impl",
-                        lambda r, s, o: (seen.update(face=mpl.rcParams["axes.facecolor"]),
-                                         ([], []))[1])
+                        lambda r, s, o, progress=None: (seen.update(face=mpl.rcParams["axes.facecolor"]),
+                                                        ([], []))[1])
     assert plots.write_figures(None, None, "") == ([], [])
     assert seen["face"] == "#FFFFFF"                              # light INSIDE the writer
     assert mpl.rcParams["axes.facecolor"] == dark_ground          # ...dark restored after

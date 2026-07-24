@@ -58,9 +58,9 @@ def _run_write_figures(result, settings, outputfolder: str):
     return plots.write_figures(result, settings, outputfolder)
 
 
-def _in_process(result, settings, outputfolder: str):
+def _in_process(result, settings, outputfolder: str, progress=None):
     from respmech.core import plots
-    return plots.write_figures(result, settings, outputfolder)
+    return plots.write_figures(result, settings, outputfolder, progress=progress)
 
 
 def _executor():
@@ -107,11 +107,15 @@ def _can_spawn() -> bool:
     return _CAN_SPAWN
 
 
-def write_figures(result, settings, outputfolder: str, *, on_fallback=None):
+def write_figures(result, settings, outputfolder: str, *, on_fallback=None, progress=None):
     """``plots.write_figures``, in a child process when that works, else here.
 
     ``on_fallback(reason)`` is called when the in-process path is taken, so a caller can
     record why in the run report rather than have it happen invisibly.
+
+    ``progress`` is an optional ``callable(fname)`` for per-file progress. It is honoured
+    only on the in-process path — a spawned child cannot call back into this process — so
+    the child path reports figures as a single stage, which the animated busy bar covers.
     """
     if not _can_spawn():
         # A packaged build ALWAYS writes in-process by design (a spawn would re-launch the app),
@@ -120,7 +124,7 @@ def write_figures(result, settings, outputfolder: str, *, on_fallback=None):
         # still reported so the run report can record why the child was not used.
         if on_fallback and not _spawn_relaunches_the_app():
             on_fallback("figure subprocess unavailable; wrote figures in-process")
-        return _in_process(result, settings, outputfolder)
+        return _in_process(result, settings, outputfolder, progress=progress)
 
     try:
         with _executor() as ex:
@@ -132,4 +136,4 @@ def write_figures(result, settings, outputfolder: str, *, on_fallback=None):
         if on_fallback:
             on_fallback(f"figure subprocess failed ({type(e).__name__}: {e}); "
                         "wrote figures in-process")
-        return _in_process(result, settings, outputfolder)
+        return _in_process(result, settings, outputfolder, progress=progress)

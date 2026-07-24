@@ -36,7 +36,7 @@ from respmech.core._legacy_ns import to_legacy_ns
 
 @dataclass
 class ProgressEvent:
-    kind: str                      # file_start|stage|breath|file_done|file_error|finished
+    kind: str                      # file_start|stage|breath|file_done|file_error|writing|finished
     file: Optional[str] = None
     message: str = ""
     breath: Optional[int] = None

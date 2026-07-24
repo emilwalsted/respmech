@@ -443,19 +443,22 @@ def _write_emg_audio(fr, fname, fs, figdir):
 # --------------------------------------------------------------------------- #
 # orchestration
 # --------------------------------------------------------------------------- #
-def write_figures(result, settings, outputfolder: str) -> tuple[list, list]:
+def write_figures(result, settings, outputfolder: str, progress=None) -> tuple[list, list]:
     """Write every enabled diagnostic figure (and WAV export). Returns (written_paths,
     failures) where failures is a list of ``(name, error)`` — a bad figure is skipped,
     not fatal, so a run always finishes even if one plot cannot be drawn.
 
     Figures are written in the light style whatever theme the GUI is wearing: the GUI's
     dark theme installs its colours into global matplotlib rcParams, which the figures
-    below would otherwise inherit at Figure()/add_subplot()/savefig() time."""
+    below would otherwise inherit at Figure()/add_subplot()/savefig() time.
+
+    ``progress`` is an optional ``callable(fname)`` fired before each file's figures — the
+    slowest part of a batch — so the GUI can show which file is being drawn."""
     with plot_style.light_rc_context():
-        return _write_figures_impl(result, settings, outputfolder)
+        return _write_figures_impl(result, settings, outputfolder, progress=progress)
 
 
-def _write_figures_impl(result, settings, outputfolder: str) -> tuple[list, list]:
+def _write_figures_impl(result, settings, outputfolder: str, progress=None) -> tuple[list, list]:
     dg = settings.output.diagnostics
     emg = settings.processing.emg
     cols, rows = dg.pv_columns, dg.pv_rows
@@ -485,6 +488,11 @@ def _write_figures_impl(result, settings, outputfolder: str) -> tuple[list, list
     os.makedirs(figdir, exist_ok=True)
 
     for fname, fr in result.ok_files.items():
+        if progress is not None:
+            try:
+                progress(fname)
+            except Exception:               # noqa: BLE001 — progress is cosmetic, never fatal
+                pass
         for label, fn, suffix in jobs:
             path = os.path.join(figdir, f"{fname} – {suffix}")
             try:
