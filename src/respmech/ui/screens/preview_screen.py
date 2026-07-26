@@ -49,6 +49,7 @@ from respmech.ui.help_text import tooltip as _help_tip
 from respmech.ui import plot_perf
 from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
 from respmech.ui import wheel as _wheel
+from respmech.ui.flow_layout import FlowLayout, elide as _elide
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
                                   stage_ecg_reduction, stage_mechanics_preview,
@@ -923,7 +924,11 @@ class PreviewScreen(QWidget):
                                          "guards and the diagnostic exports.")
         self.btn_emg_advanced.clicked.connect(self._open_emg_advanced)
 
-        strip = QHBoxLayout(); strip.setSpacing(10)
+        # A WRAPPING row, not a QHBoxLayout: these chips together are ~1700 px wide, and a
+        # non-wrapping row's minimum is their SUM, which Qt propagates up as the main window's
+        # minimum width — the window then could not be resized to fit a laptop screen and ran
+        # off the right edge. Wrapping makes the minimum the widest single chip instead.
+        strip = FlowLayout(h=10, v=6)
         # The on/off checkbox lives on the STRIP, not inside the noise_opts chip: that chip is
         # disabled whenever noise is off, and a Qt child of a disabled parent cannot be
         # re-enabled — so a checkbox to turn noise ON, placed inside it, would grey itself out
@@ -933,7 +938,6 @@ class PreviewScreen(QWidget):
         strip.addWidget(self.noise_ref_readout)
         strip.addWidget(self.noise_opts)
         strip.addWidget(self.gate_opts)
-        strip.addStretch(1)
         strip.addWidget(self.btn_emg_advanced)
         v.addLayout(strip)
 
@@ -1049,8 +1053,8 @@ class PreviewScreen(QWidget):
                                          "the right thing to change.")
         self.btn_ecg_advanced.clicked.connect(self._open_ecg_advanced)
 
-        strip = QHBoxLayout(); strip.setSpacing(10)
-        strip.addWidget(self.ecg_opts); strip.addStretch(1)
+        strip = FlowLayout(h=10, v=6)          # wraps rather than forcing the window wide
+        strip.addWidget(self.ecg_opts)
         strip.addWidget(self.btn_ecg_advanced); strip.addWidget(self.btn_ecg_autosuggest)
         v.addLayout(strip)
 
@@ -1678,13 +1682,16 @@ class PreviewScreen(QWidget):
         """What reference the picker chose, beside the enable toggle. 'Not set' is a real
         state and says so — a ticked 'Reduce EMG noise' with no reference runs nothing."""
         n = self.state.settings.processing.emg.noise
+        # Elided: a real recording's filename is far longer than the sample's, and a QLabel's
+        # minimum width is its whole text — un-elided it would push the strip (and with it the
+        # window's minimum width) arbitrarily wide. The full text stays in the tooltip.
         if not n.reference_file:
-            self.noise_ref_readout.setText("· no reference set")
+            _elide(self.noise_ref_readout, "· no reference set")
         elif n.use_expiration or not n.reference_intervals:
-            self.noise_ref_readout.setText(f"· {n.reference_file}, every expiration")
+            _elide(self.noise_ref_readout, f"· {n.reference_file}, every expiration")
         else:
             spans = ", ".join(f"{a:.2f}–{b:.2f} s" for a, b in n.reference_intervals)
-            self.noise_ref_readout.setText(f"· {n.reference_file}, {spans}")
+            _elide(self.noise_ref_readout, f"· {n.reference_file}, {spans}")
 
     def _on_noise_enabled_changed(self, *_):
         if self._loading_noise:
