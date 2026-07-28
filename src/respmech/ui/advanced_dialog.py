@@ -36,13 +36,18 @@ class Field:
     """
 
     def __init__(self, key, label, kind, path, help, *, lo=0, hi=1_000_000, step=1,
-                 decimals=0, suffix="", prefix="", note=None, placeholder="", options=None):
+                 decimals=0, suffix="", prefix="", note=None, placeholder="", options=None,
+                 depends_on=None):
         self.key, self.label, self.kind = key, label, kind
         self.path, self.help, self.note = path, help, note
         self.lo, self.hi, self.step = lo, hi, step
         self.decimals, self.suffix, self.prefix = decimals, suffix, prefix
         self.placeholder = placeholder
         self.options = options or []
+        # the key of a "bool" field in the same dialog this one is meaningless without —
+        # e.g. "Resample to" only means something once "Resample before analysis" is on.
+        # Must name a field built earlier in the same dialog's field list.
+        self.depends_on = depends_on
 
     def build(self, value):
         if self.kind == "choice":
@@ -120,6 +125,12 @@ class AdvancedDialog(QDialog):
                 hint.setWordWrap(True)
                 hint.setProperty("status", "muted")
                 form.addRow("", hint)
+            if f.depends_on is not None:
+                # the depended-on checkbox must have been built already (earlier in
+                # ``fields``); a field naming a later or unknown key is a caller bug.
+                dep = self._widgets[f.depends_on]
+                w.setEnabled(dep.isChecked())
+                dep.toggled.connect(w.setEnabled)
             sig = (getattr(w, "toggled", None) or getattr(w, "valueChanged", None)
                    or getattr(w, "textChanged", None)
                    or getattr(w, "currentIndexChanged", None))

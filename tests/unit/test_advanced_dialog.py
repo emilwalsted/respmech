@@ -50,6 +50,34 @@ def test_editing_stages_without_touching_anything_outside(qapp):
     assert dlg.values() == {"a": 7, "b": 0.5, "c": True}
 
 
+def test_a_field_that_depends_on_a_checkbox_follows_it(qapp):
+    """A detail field that only means something once its checkbox is on (e.g. 'Resample
+    to' beside 'Resample before analysis') must start disabled when the checkbox is
+    unticked, and re-enable/disable live as the checkbox is toggled — not just once,
+    at dialog build time."""
+    fields = [
+        Field("on", "Turn it on", "bool", "processing.emg.on", "help"),
+        Field("detail", "Detail", "int", "processing.emg.detail", "help",
+              lo=0, hi=10, depends_on="on"),
+    ]
+    dlg = AdvancedDialog("T", fields, {"on": False, "detail": 5})
+    assert dlg.widget("detail").isEnabled() is False
+    dlg.widget("on").setChecked(True)
+    assert dlg.widget("detail").isEnabled() is True
+    dlg.widget("on").setChecked(False)
+    assert dlg.widget("detail").isEnabled() is False
+
+
+def test_a_field_that_depends_on_a_checked_checkbox_starts_enabled(qapp):
+    fields = [
+        Field("on", "Turn it on", "bool", "processing.emg.on", "help"),
+        Field("detail", "Detail", "int", "processing.emg.detail", "help",
+              lo=0, hi=10, depends_on="on"),
+    ]
+    dlg = AdvancedDialog("T", fields, {"on": True, "detail": 5})
+    assert dlg.widget("detail").isEnabled() is True
+
+
 def test_apply_reports_whether_anything_actually_changed(qapp):
     """Pressing OK without editing must not mark the analysis modified or schedule work."""
     class T:
@@ -198,6 +226,67 @@ def test_mech_ok_commits_and_cancel_changes_nothing(qapp, tmp_path, accept, monk
     else:
         assert s.processing.segmentation.buffer == before
         assert not edits, "Cancel marked the analysis modified"
+    pv.shutdown()
+
+
+def test_resample_off_by_default_and_hz_field_follows_the_checkbox(qapp, tmp_path, monkeypatch):
+    """A fresh analysis has resampling off (P1 bug: it must stay off until the user opts in,
+    and be genuinely toggleable). The 'Resample to' Hz field is meaningless while the
+    checkbox is unticked, so it must start disabled and re-enable/disable as the checkbox
+    is toggled — otherwise an unticked box next to a live-looking '200 Hz' reads as
+    resampling being on and stuck there."""
+    pv = _preview(qapp, tmp_path)
+    s = pv.state.settings
+    assert s.processing.sampling.resample is False
+
+    seen = {}
+
+    def edit(d):
+        cb, hz = d.widget("resample"), d.widget("resample_to_frequency")
+        seen["checked_initially"] = cb.isChecked()
+        seen["hz_enabled_initially"] = hz.isEnabled()
+        cb.setChecked(True)
+        seen["hz_enabled_after_check"] = hz.isEnabled()
+        cb.setChecked(False)
+        seen["hz_enabled_after_uncheck"] = hz.isEnabled()
+
+    _mech_stub(monkeypatch, edit)
+    pv._open_mech_advanced()
+
+    assert seen == {
+        "checked_initially": False,
+        "hz_enabled_initially": False,
+        "hz_enabled_after_check": True,
+        "hz_enabled_after_uncheck": False,
+    }
+    assert s.processing.sampling.resample is False   # left unticked -> still off after OK
+    pv.shutdown()
+
+
+def test_trend_method_field_follows_correct_trend_checkbox(qapp, tmp_path, monkeypatch):
+    """P2: every checkbox-gated detail field in the Mechanics — advanced dialog follows its
+    checkbox, not just resample. 'Trend interpolation' only means something once 'Correct
+    end-expiratory trend' is ticked."""
+    pv = _preview(qapp, tmp_path)
+
+    seen = {}
+
+    def edit(d):
+        cb, method = d.widget("correct_trend"), d.widget("trend_method")
+        seen["method_enabled_initially"] = method.isEnabled()
+        cb.setChecked(True)
+        seen["method_enabled_after_check"] = method.isEnabled()
+        cb.setChecked(False)
+        seen["method_enabled_after_uncheck"] = method.isEnabled()
+
+    _mech_stub(monkeypatch, edit)
+    pv._open_mech_advanced()
+
+    assert seen == {
+        "method_enabled_initially": False,        # correct_trend is off by default
+        "method_enabled_after_check": True,
+        "method_enabled_after_uncheck": False,
+    }
     pv.shutdown()
 
 
