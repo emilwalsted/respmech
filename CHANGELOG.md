@@ -37,6 +37,7 @@ settings on Preview/Mechanics/EMG, and refined plot layouts.
 - Cardiac-gated peak EMG exposed as an opt-in per-breath statistic, selectable from Setup
 - Flow silhouette is now drawn around zero rather than around the EMG midpoint
 - Diagnostic figures are now written in a separate process
+- Fixed three silent-mutation bugs: an unassigned channel could silently analyse the wrong (last) column instead of raising an error, opening the channel-assignment dialog could silently drop the EMG role from analysis, and scrolling the mouse wheel over a form could silently change the setting under the cursor — including the EMG RMS window, which changes every reported EMG value. If you ran analyses on an affected build, it is worth re-checking the results
 - Numerous plot-theming, spin-box and dialog fixes for Windows/macOS parity
 - Releases are now published as full GitHub releases rather than pre-releases
 
@@ -51,7 +52,6 @@ A packaging-only fix.
 First PyPI publish.
 
 - RespMech is now published to PyPI (`pip install respmech`) via Trusted Publishing — no tokens involved
-- Added the CLAUDE.md project memory file
 - README refreshed with new screenshots and feature graphics for the 2.2 UI, including a live before/after EMG noise-reduction example
 - Sample data made more realistic: EMG bursts confined to inspiration, ECG artefact scaled to dwarf the EMG as in real recordings
 - A new release now automatically notifies respmech.dk to re-publish
@@ -70,7 +70,6 @@ full UI polish round.
 - A discrete flow silhouette is now superimposed behind every EMG time-domain graph
 - UI polish across all screens (labels, alignment, spacing, button rendering)
 - The v1 monolith moved into `legacy/`, and the README rewritten for the 2.x app
-- Fixed a Python 3.11 teardown segfault during tests
 
 ## v2.1.1 — 2026-07-14
 
