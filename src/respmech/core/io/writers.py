@@ -282,9 +282,17 @@ def _write_run_report(result, settings, outputfolder: str,
     # ECG / noise numeric diagnostics (audit #14): persist the R-peak counts, suppression,
     # chosen prop_decrease and per-channel fidelity/ΔSNR — previously only shown in-app.
     nr = getattr(result, "noise_report", None)
+    ecg_auto = getattr(result, "ecg_auto_report", None)
     ecg_files = [(f, fr.ecg) for f, fr in ok.items() if getattr(fr, "ecg", None)]
-    if nr or ecg_files:
+    if nr or ecg_files or ecg_auto:
         L.append("DIAGNOSTICS")
+        if ecg_auto:
+            diag = ecg_auto.get("_diagnostics", {})
+            bpm = diag.get("est_bpm")
+            L.append(f"  ECG auto-detect: settings derived from {ecg_auto.get('reference_file')}, "
+                     f"channel {ecg_auto.get('detect_channel')}, confidence {diag.get('confidence')}"
+                     + (f" (~{bpm:.0f} bpm)" if bpm else "") + ". Check the per-file R-peak counts "
+                     "below against this file count for any file the shared settings may not fit.")
         if ecg_files:
             L.append("  ECG removal (R-peaks captured / peak-window RMS suppression):")
             for f, d in ecg_files:

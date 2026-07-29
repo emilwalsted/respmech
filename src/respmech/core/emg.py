@@ -396,7 +396,8 @@ def gated_peak_rms(emgchannels, peak_samples, rms_s, samplingfrequency, *,
     return vals + [float(np.max(vals)), float(np.mean(vals))], qc
 
 
-# --- ECG auto-suggest (UI helper; NOT used by run_batch -> golden-neutral) ---
+# --- ECG auto-suggest (also used by run_batch when processing.emg.ecg_auto_detect is on;
+# that flag defaults to False, so the golden/default path is unaffected) ---
 _ECG_DEFAULTS = {"ecg_min_height": 0.0005, "ecg_min_distance_s": 0.5,
                  "ecg_min_width_s": 0.001, "ecg_window_s": 0.4}
 
@@ -410,9 +411,10 @@ def _mad(x):
 
 
 def suggest_ecg_settings(emg_matrix, fs, *, hr_min_bpm=40.0, hr_max_bpm=180.0, max_hr_bpm=240.0):
-    """Suggest ECG-capture settings from raw EMG channels — a UI helper for the
-    "EMG – ECG reduction" tab's *Auto-suggest* button. Pure numpy/scipy; NOT called by
-    ``run_batch`` (so the golden output is unaffected).
+    """Suggest ECG-capture settings from raw EMG channels — the analysis behind the
+    "EMG – ECG reduction" tab's *Auto-suggest* button, and (since ``processing.emg.
+    ecg_auto_detect``, off by default) also behind ``pipeline._auto_detect_ecg_settings``
+    for CLI/batch runs. Pure numpy/scipy.
 
     Picks the channel whose R-waves are clearest — most periodic *and* towering over the
     baseline — then derives ``find_peaks`` parameters (as ``remove_ecg`` consumes them) that
