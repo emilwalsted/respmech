@@ -32,6 +32,13 @@ environment (e.g. required reviewer, or restrict to tags) for a manual gate befo
    the user-visible changes (`git log <previous-tag>..HEAD --oneline` is the source list; write
    it for a reader, not a commit dump). This is also what respmech.dk's changelog page
    reproduces, so keep it accurate and free of internal-only detail.
+   - If an **Unreleased** section already sits above the previous release, it is a
+     hand-maintained draft of exactly this list (updated only when explicitly asked, not on
+     every commit). Fold its bullets into the new dated entry — double-check nothing landed
+     since its last update and nothing in it has gone stale — rather than re-deriving the
+     list from scratch. Afterwards, collapse the section back to its empty placeholder and
+     wrap it in an HTML comment (see the comment already in CHANGELOG.md) so it stays
+     invisible until asked for again.
 2. **Bump the version** — `src/respmech/__init__.py`'s `__version__` is the single source
    of truth (the PyPI version derives from it). Keep `[tool.briefcase] version` in
    `pyproject.toml` in sync (briefcase can't read the dynamic version):
