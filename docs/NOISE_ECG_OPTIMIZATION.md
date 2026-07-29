@@ -220,6 +220,33 @@ strongly-coupled breath-channels. See
 cardiac-gated statistic (`processing.emg.robust_peak`), and the list of approaches that were
 tried and rejected — including further template refinements, so they are not re-attempted here.
 
+## 4c. ECG auto-detect exposed to the batch pipeline / CLI (opt-in)
+
+`core.emg.suggest_ecg_settings` (the analysis behind the GUI ECG tab's *Auto-suggest*
+button) was, until now, only reachable interactively — a settings.toml/CLI-only
+workflow had no way to derive `detect_channel`/`ecg_min_height`/`ecg_min_distance_s`/
+`ecg_min_width_s`/`ecg_window_s` without opening the GUI first. `processing.emg.
+ecg_auto_detect` (off by default) closes that gap: `pipeline._auto_detect_ecg_settings`
+runs the same analysis ONCE per test on a reference file (`processing.emg.
+ecg_reference_file`, or the batch's first matched file) and applies the 5 derived
+parameters identically to every file — mirroring `noise.auto_prop`'s "selected once,
+applied identically, never re-tuned per file" model. This is exactly the split the
+milestone-2 status above already established: **detection** parameters are shared
+across the test; **template subtraction** (`subtractecg`) still rebuilds its ECG
+template per file from that file's own beats, unchanged.
+
+Because the 5 shared parameters (in particular `ecg_min_distance_s`, derived from the
+reference file's own median R-R interval) come from ONE file, a sibling file with a
+materially different heart rate or R-amplitude can have real beats missed without the
+run failing. `run_batch` now runs `emg.detection_quality` per file whenever
+`ecg_auto_detect` is on (the same guard `processing.emg.robust_peak` already uses) and
+emits a `warnings.warn` naming the file and the reference it diverged from — it never
+fails the run, so an unsupervised batch keeps going but leaves a visible trail of files
+worth revisiting. `BatchResult.ecg_auto_report` (reference file, chosen channel,
+confidence, estimated bpm) is also printed by `respmech run` and written to
+`run-report.txt`, so a CLI-only user can actually see when auto-detect fell back to a
+low-confidence/middle-channel guess.
+
 ## 5. Status
 
 **Done:** the `n_fft`/`win_length` bug fix (fixed STFT params); the shared,

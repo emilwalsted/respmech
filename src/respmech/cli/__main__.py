@@ -42,6 +42,14 @@ def cmd_run(args) -> int:
     settings.validate()
     result = run_batch(settings, progress=_progress_printer())
 
+    if result.ecg_auto_report:
+        d = result.ecg_auto_report
+        diag = d.get("_diagnostics", {})
+        bpm = diag.get("est_bpm")
+        print(f"\nECG auto-detect: settings from {d.get('reference_file')}, channel "
+              f"{d.get('detect_channel')}, confidence {diag.get('confidence')}"
+              + (f" (~{bpm:.0f} bpm)" if bpm else "") + ".")
+
     if not args.dry_run:
         written = write_batch(result, settings, settings.output.folder)
         print(f"\nWrote {len(written)} file(s) to {settings.output.folder}/data")
