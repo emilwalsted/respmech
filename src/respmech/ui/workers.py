@@ -794,12 +794,22 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
             "startix": 0, "endix": len(flow), "nbreaths": 0, "emg": _emg2d(emg),
             "emg_flow": np.asarray(flow, dtype=float),   # UNTRIMMED (aligns with the untrimmed 'emg')
             "trim_error": str(e),
+            "trend_error": None,
+            "vol_drift": None,
         }
 
-    volc = (compute.correctdrift(compute.zero(volT), s)
-            if s.processing.mechanics.correctvolumedrift else compute.zero(volT))
+    voldrift = (compute.correctdrift(compute.zero(volT), s)
+                if s.processing.mechanics.correctvolumedrift else compute.zero(volT))
+    volc, trend_error = voldrift, None
     if s.processing.mechanics.correctvolumetrend:      # match the batch pipeline (audit #11)
-        volc = compute.correcttrend(volc, s)
+        try:
+            volc = compute.correcttrend(voldrift, s)
+        except compute.VolumeTrendError as e:
+            # A precondition failure, not a bug: keep the DRIFT-corrected volume so the
+            # channels stay readable and the thresholds can be tuned right here. Same soft
+            # landing TrimError gets above — but the batch still refuses the file, so the
+            # status line has to say so.
+            trend_error = str(e)
     breaths = compute.separateintobreaths(
         s.processing.mechanics.separateby, name, tcT, flowT,
         volc, poesT, pgasT, pdiT, [], [], s)
@@ -818,6 +828,10 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
         "nbreaths": len(breaths), "emg": _emg2d(emg),
         "emg_flow": np.asarray(flow, dtype=float),   # UNTRIMMED (aligns with the untrimmed 'emg')
         "trim_error": None,
+        "trend_error": trend_error,
+        # drift-corrected volume: what the trend detector actually sees, so the advanced
+        # dialog can count anchors for THIS file live while the thresholds are edited.
+        "vol_drift": np.asarray(voldrift, float),
     }
 
 

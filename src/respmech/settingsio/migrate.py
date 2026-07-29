@@ -133,13 +133,22 @@ def migrate_dict(legacy: dict) -> tuple[Settings, MigrationReport]:
         "correct_drift": mech.get("correctvolumedrift", True),
         "correct_trend": mech.get("correctvolumetrend", False),
         "trend_method": mech.get("volumetrendadjustmethod", "linear"),
-        "trend_peak_min_height": mech.get("volumetrendpeakminheight", 0.8),
+        # Absent -> unset (the scale-free rule). v1's own default was an absolute 0.8,
+        # which is a v1 DEFAULT rather than a user value; an explicit 0.8 is upgraded the
+        # same way by the schema-1 -> 2 upgrade in Settings.from_dict, which reports it.
+        "trend_peak_min_height": mech.get("volumetrendpeakminheight"),
         "trend_peak_min_distance_s": mech.get("volumetrendpeakmindistance", 0.4),
     }
     m("mechanics.{inverseflow,integratevolumefromflow,inversevolume,correctvolume*,"
       "volumetrend*}->processing.volume.*")
     if "volumetrendpeakminwidth" in mech:
         r.dropped.append("mechanics.volumetrendpeakminwidth (never read by the code)")
+    if mech.get("correctvolumetrend") and "volumetrendpeakminheight" not in mech:
+        r.normalised.append(
+            "mechanics.volumetrendpeakminheight was absent (the v1 default, 0.8, is an "
+            "absolute depth below the recording's highest volume and matches no trough "
+            "on ordinary tidal breathing) -> processing.volume.trend_peak_min_height "
+            "unset = troughs detected relative to each recording's own volume range")
 
     # --- wob: normalise the drift (calc_from can come from wob or mechanics) ---
     if "calcwobfrom" in wob:
@@ -262,6 +271,9 @@ def migrate_dict(legacy: dict) -> tuple[Settings, MigrationReport]:
       "output.diagnostics.savedataview*->save_raw/trimmed/drift")
 
     settings = Settings.from_dict(new)
+    # schema upgrades applied while building (e.g. the retired absolute trend threshold)
+    # belong in the migration report too, not only in Settings.notices.
+    r.normalised.extend(settings.notices)
     return settings, r
 
 

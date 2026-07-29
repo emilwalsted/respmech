@@ -37,7 +37,7 @@ class Field:
 
     def __init__(self, key, label, kind, path, help, *, lo=0, hi=1_000_000, step=1,
                  decimals=0, suffix="", prefix="", note=None, placeholder="", options=None,
-                 depends_on=None):
+                 depends_on=None, auto_text=""):
         self.key, self.label, self.kind = key, label, kind
         self.path, self.help, self.note = path, help, note
         self.lo, self.hi, self.step = lo, hi, step
@@ -48,6 +48,11 @@ class Field:
         # e.g. "Resample to" only means something once "Resample before analysis" is on.
         # Must name a field built earlier in the same dialog's field list.
         self.depends_on = depends_on
+        # for an optional numeric setting: the caption shown AT the minimum, which reads
+        # back as None ("unset"). Lets a spin box express "let the code decide" without a
+        # separate checkbox. Costs the ability to enter the minimum itself, so only use it
+        # where that value is meaningless anyway.
+        self.auto_text = auto_text
 
     def build(self, value):
         if self.kind == "choice":
@@ -75,7 +80,10 @@ class Field:
                 w.setSuffix(self.suffix)
             if self.prefix:
                 w.setPrefix(self.prefix)
-            w.setValue((int if self.kind == "int" else float)(value))
+            if self.auto_text:
+                w.setSpecialValueText(self.auto_text)   # shown when value == self.lo
+            w.setValue((int if self.kind == "int" else float)(
+                self.lo if (value is None and self.auto_text) else value))
         w.setToolTip(_tip(self.path, self.help))
         return w
 
@@ -84,7 +92,11 @@ class Field:
             return w.currentData()
         if self.kind == "text":
             return w.toPlainText()
-        return w.isChecked() if self.kind == "bool" else w.value()
+        if self.kind == "bool":
+            return w.isChecked()
+        if self.auto_text and w.value() == self.lo:
+            return None
+        return w.value()
 
 
 class AdvancedDialog(QDialog):
@@ -120,6 +132,7 @@ class AdvancedDialog(QDialog):
             row = QLabel(f.label)
             row.setToolTip(_tip(f.path, f.help))
             form.addRow(row, w)
+            hint = None
             if f.note:
                 hint = QLabel(f.note)
                 hint.setWordWrap(True)
@@ -129,8 +142,12 @@ class AdvancedDialog(QDialog):
                 # the depended-on checkbox must have been built already (earlier in
                 # ``fields``); a field naming a later or unknown key is a caller bug.
                 dep = self._widgets[f.depends_on]
-                w.setEnabled(dep.isChecked())
-                dep.toggled.connect(w.setEnabled)
+                # the label and note grey out with the control — a bright caption above a
+                # disabled spin box reads as an active setting.
+                for part in (w, row, hint):
+                    if part is not None:
+                        part.setEnabled(dep.isChecked())
+                        dep.toggled.connect(part.setEnabled)
             sig = (getattr(w, "toggled", None) or getattr(w, "valueChanged", None)
                    or getattr(w, "textChanged", None)
                    or getattr(w, "currentIndexChanged", None))
