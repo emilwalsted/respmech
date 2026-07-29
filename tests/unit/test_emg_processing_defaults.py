@@ -154,19 +154,26 @@ def test_to_state_does_not_touch_the_reference_fields(qapp, tmp_path):
 
 
 def test_the_preview_strip_shows_which_part_of_the_reference_is_used(qapp, tmp_path):
+    """Read the tooltip, not the rendered text: the read-out is ELIDED to a fixed pixel budget
+    (flow_layout.elide), so how much of it survives depends on the platform's font metrics —
+    on Windows even this short sample name came back as '· synth_ca….00–5.00 s' and turned a
+    real assertion into a font measurement. The tooltip is the full string by contract, and
+    test_window_fits_screen.py::test_the_noise_reference_readout_is_elided_not_unbounded is
+    what guards the rendering side of it."""
     from respmech.ui.screens.preview_screen import PreviewScreen
     s = synth_settings(str(tmp_path), noise=True, data_out=_OUT)
     pv = PreviewScreen(AppState(s))
-    assert "synth_case_A.csv" in pv.noise_ref_readout.text()
+    assert "synth_case_A.csv" in pv.noise_ref_readout.toolTip()
+    assert pv.noise_ref_readout.text(), "the read-out must still show something"
 
     n = pv.state.settings.processing.emg.noise
     n.use_expiration, n.reference_intervals = True, []
     pv._refresh_noise_readout()
-    assert "every expiration" in pv.noise_ref_readout.text()
+    assert "every expiration" in pv.noise_ref_readout.toolTip()
 
     n.reference_file = None
     pv._refresh_noise_readout()
-    assert "no reference" in pv.noise_ref_readout.text().lower()
+    assert "no reference" in pv.noise_ref_readout.toolTip().lower()
     pv.shutdown()
 
 
