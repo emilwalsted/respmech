@@ -21,6 +21,11 @@ name: Build installers
 
 on:
   workflow_dispatch:
+    inputs:
+      adhoc_sign:
+        description: "Ad-hoc sign the dmg (skip Developer ID + notarisation) — interim test builds only"
+        type: boolean
+        default: false
   push:
     tags: ["v*"]
 
@@ -80,13 +85,20 @@ jobs:
           pip install "briefcase>=0.3.19"
 
       # Sign+notarise only when the Developer ID secrets are configured; else ad-hoc sign.
+      # A manual run can also ask for ad-hoc explicitly: an interim dmg built for someone to
+      # click through does not need a notarisation round-trip, and notarisation is the slow,
+      # rate-limited part. `inputs` is empty on a tag push, so the release path is unaffected.
       - name: Detect signing config
         id: check
         env:
           APPLE_DEV_ID_IDENTITY: ${{ secrets.APPLE_DEV_ID_IDENTITY }}
           APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          ADHOC_REQUESTED: ${{ inputs.adhoc_sign }}
         run: |
-          if [ -n "$APPLE_DEV_ID_IDENTITY" ] && [ -n "$APPLE_CERTIFICATE_P12_BASE64" ]; then
+          if [ "$ADHOC_REQUESTED" = "true" ]; then
+            echo "sign=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Ad-hoc signing requested for this manual run — the dmg is NOT Developer ID-signed or notarised. Open it with right-click ▸ Open."
+          elif [ -n "$APPLE_DEV_ID_IDENTITY" ] && [ -n "$APPLE_CERTIFICATE_P12_BASE64" ]; then
             echo "sign=true" >> "$GITHUB_OUTPUT"
           else
             echo "sign=false" >> "$GITHUB_OUTPUT"
