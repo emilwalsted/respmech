@@ -81,6 +81,71 @@ def test_noise_strip_stays_compact_across_tab_switches(qapp, tmp_path):
     win.close()
 
 
+def test_ecg_auto_batch_checkbox_reflects_and_writes_settings(qapp, tmp_path):
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    s.processing.emg.ecg_auto_detect = True
+    pv = _win(s).preview_screen
+    assert pv.ecg_auto_batch.isChecked() is True                # loaded from settings
+    pv.ecg_auto_batch.setChecked(False)
+    assert s.processing.emg.ecg_auto_detect is False             # written straight back
+    pv.ecg_auto_batch.setChecked(True)
+    assert s.processing.emg.ecg_auto_detect is True
+
+
+def test_ecg_auto_batch_greys_out_the_fields_it_overrides(qapp, tmp_path):
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    pv = _win(s).preview_screen
+    manual = (pv.ecg_capture_channel, pv.ecg_min_height, pv.ecg_min_distance, pv.btn_ecg_advanced)
+    assert all(w.isEnabled() for w in manual)                    # auto off -> editable
+    pv.ecg_auto_batch.setChecked(True)
+    assert all(not w.isEnabled() for w in manual)                # auto on -> greyed out
+    pv.ecg_auto_batch.setChecked(False)
+    assert all(w.isEnabled() for w in manual)                    # back off -> editable again
+
+
+def test_ecg_auto_batch_disabled_without_remove_ecg(qapp, tmp_path):
+    # Mirrors Settings.validate()'s requirement: auto-detect needs Remove ECG on, so the
+    # checkbox that would enable it is itself disabled until Remove ECG is ticked.
+    s = synth_settings(str(tmp_path), remove_ecg=False, data_out=_DATA_OUT)
+    pv = _win(s).preview_screen
+    assert pv.ecg_auto_batch.isEnabled() is False
+    pv.remove_ecg.setChecked(True)
+    assert pv.ecg_auto_batch.isEnabled() is True
+    pv.remove_ecg.setChecked(False)
+    assert pv.ecg_auto_batch.isEnabled() is False
+
+
+def test_unchecking_remove_ecg_clears_stuck_auto_batch(qapp, tmp_path):
+    # Regression: turning Remove ECG off while Auto (whole batch) is on used to leave
+    # ecg_auto_detect=True stuck (an invalid combination Settings.validate rejects) with the
+    # checkbox itself disabled-but-checked and no way to untick it short of re-enabling
+    # Remove ECG first.
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    pv = _win(s).preview_screen
+    pv.ecg_auto_batch.setChecked(True)
+    assert s.processing.emg.ecg_auto_detect is True
+    pv.remove_ecg.setChecked(False)
+    assert s.processing.emg.remove_ecg is False
+    assert s.processing.emg.ecg_auto_detect is False         # cleared, not left stuck
+    assert pv.ecg_auto_batch.isChecked() is False             # widget reflects the clear
+    s.validate()                                              # the resulting settings are valid
+
+
+def test_ecg_auto_batch_also_gates_autosuggest(qapp, tmp_path):
+    # Regression: Auto-suggest writes the same 5 fields the batch auto-detect will overwrite
+    # anyway, so it must grey out alongside them — otherwise a click looks like it did
+    # something a real run silently discards.
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    pv = _win(s).preview_screen
+    assert pv.btn_ecg_autosuggest.isEnabled() is True
+    pv.ecg_auto_batch.setChecked(True)
+    assert pv.btn_ecg_autosuggest.isEnabled() is False
+    assert pv.btn_ecg_autosuggest.toolTip() != ""              # explains why, not just blank
+    pv.ecg_auto_batch.setChecked(False)
+    assert pv.btn_ecg_autosuggest.isEnabled() is True
+    assert "clearest ECG" in pv.btn_ecg_autosuggest.toolTip()  # original help text restored
+
+
 def test_autosuggest_writes_settings_and_selects_channel(qapp, tmp_path, monkeypatch):
     from respmech.core import emg as emglib
     s = synth_settings(str(tmp_path), remove_ecg=False, data_out=_DATA_OUT)

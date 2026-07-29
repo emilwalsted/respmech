@@ -315,6 +315,21 @@ class Settings:
                 "quadratic", "cubic", "previous", "next"):
             raise SettingsError(
                 "processing.volume.trend_method must be a valid scipy interp1d kind")
+
+        # Mirrors the runtime guard in core.pipeline.run_batch, so both the CLI
+        # ('respmech validate'/'run') and the GUI (Preview's _settings_ok, which
+        # greys out Run on failure) catch a misconfigured auto-detect BEFORE a batch
+        # starts, instead of only via run_batch's own raise mid-run.
+        emg = self.processing.emg
+        if emg.ecg_auto_detect:
+            if not emg.remove_ecg:
+                raise SettingsError(
+                    "processing.emg.ecg_auto_detect requires processing.emg.remove_ecg "
+                    "to be enabled")
+            if not ch.emg:
+                raise SettingsError(
+                    "processing.emg.ecg_auto_detect requires input.channels.emg "
+                    "to be configured")
         return self
 
 
