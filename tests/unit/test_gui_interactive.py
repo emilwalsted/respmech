@@ -74,8 +74,11 @@ def test_use_region_as_noise_writes_settings_and_mirrors(qapp, tmp_path):
     assert n.reference_file == name
     assert n.reference_intervals == [[1.0, 5.0]]
     assert n.use_expiration is False
-    # ...and the Preview strip shows it read-only: the picker is the only writer of all three
-    assert name in pv.noise_ref_readout.text()
+    # ...and the Preview strip shows it read-only: the picker is the only writer of all three.
+    # Via the tooltip: the read-out itself is elided to a pixel budget, so the rendered text is
+    # a function of the platform's font metrics (it failed on Windows and only there).
+    assert name in pv.noise_ref_readout.toolTip()
+    assert pv.noise_ref_readout.text(), "the read-out must still show something"
 
 
 # -- Feature C: preview EMG conditioning (staging + render) -----------------

@@ -209,18 +209,18 @@ def test_save_writes_back_to_the_opened_file_after_confirming(qapp, tmp_path, mo
     p = tmp_path / "study.toml"
     win = MainWindow(AppState(synth_settings(str(tmp_path))))
     sc = win.settings_screen
-    sc.state.save_toml(str(p)); before = p.read_text()
+    sc.state.save_toml(str(p)); before = p.read_text(encoding="utf-8")
     sc.state.settings_path = str(p)
     sc.samp_freq.setValue(1234); sc._on_field_changed()       # an edit to save
     asked = []
     monkeypatch.setattr(QMessageBox, "question",
                         lambda *a, **k: (asked.append(a[1]), QMessageBox.No)[1])
     assert sc.save_analysis() is False                        # declined
-    assert asked and p.read_text() == before                  # ...nothing written
+    assert asked and p.read_text(encoding="utf-8") == before                  # ...nothing written
     assert sc.is_dirty()                                      # ...and still dirty
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
     assert sc.save_analysis() is True
-    assert "1234" in p.read_text() and not sc.is_dirty()      # written to the SAME file
+    assert "1234" in p.read_text(encoding="utf-8") and not sc.is_dirty()      # written to the SAME file
     win.close()
 
 
