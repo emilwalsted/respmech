@@ -14,6 +14,8 @@ Faithful port of the validated legacy ``respmech.py`` calculation functions
 Settings are read via the legacy attribute shape (see ``_legacy_ns``) to keep the
 numerics byte-identical to the golden reference.
 """
+import warnings
+
 import numpy as np
 import scipy as sp
 import scipy.interpolate  # noqa: F401  (sp.interpolate)
@@ -42,20 +44,163 @@ def correctdrift(volume, settings):
     return corvol
 
 
+class VolumeTrendError(ValueError):
+    """Raised when the end-expiratory trend envelope cannot be fitted (a precondition
+    failure, not a bug): too few end-expiratory troughs were detected for the chosen
+    interpolation, or the volume signal is not finite."""
+
+
+# Default for the scale-free anchor rule: an end-expiratory trough must be flanked by
+# an inspiration of at least this fraction of the recording's own volume range. On the 13
+# real recordings measured for this (11 production + the 2 reported), the anchor set is
+# identical anywhere in 0.005-0.20 — a noise gate, not a tuning knob. It is still exposed,
+# because a recording combining very shallow breaths with a large manoeuvre (which inflates
+# the range) is the one shape that can need a lower value.
+TREND_MIN_PROMINENCE_FRAC = 0.05
+
+# Anchors scipy's interp1d needs per kind; every other accepted kind needs 2. Below
+# these it raises "The number of derivatives at boundaries does not match: ...", which
+# names neither the setting nor the recording.
+_TREND_MIN_ANCHORS = {"quadratic": 3, "cubic": 4}
+
+# How far above the predicted end-expiratory level a record's own end may still sit and
+# count as end-expiratory, in multiples of the minimum breath depth. Measured: at 3x, the
+# accepted anchors are identical to accepting both ends unconditionally on all 11 real
+# trend-on recordings, while a record cut at peak inspiration is correctly rejected (its
+# invented trend was a full tidal volume). At 1x, legitimate ends on RIU_H5_IC and
+# RIU_H6_60W are rejected and the residual end-expiratory error more than doubles.
+_END_ANCHOR_TOL_MULT = 3.0
+
+
+def trend_anchors(vol, fs, *, min_height=None,
+                  min_prominence_frac=TREND_MIN_PROMINENCE_FRAC, min_distance_s=0.4):
+    """Indices of the end-expiratory troughs the trend envelope is fitted through.
+
+    ``vol`` is the drift-corrected volume; troughs are the peaks of ``max(vol) - vol``.
+    Single source of truth for the compute path AND the diagnostic figure, which used
+    to re-implement the detection and could therefore draw anchors that were never
+    subtracted (or omit a figure for a run that computed fine).
+
+    ``min_height is None`` (the default) selects the scale-free rule: a trough qualifies
+    on its PROMINENCE — the smaller of the two inspiratory excursions flanking it, i.e.
+    about one tidal volume — as a fraction of the recording's own volume range. Being a
+    per-trough measure it is invariant to tidal volume and to the volume unit, and it
+    does not care where the file's global maximum sits.
+
+    The recording's own first and last samples are considered too, because an edge is
+    never a local maximum and ``find_peaks`` can therefore never return one — without
+    that, every recording loses its two outermost anchors and the envelope extrapolates
+    past the outermost trough (which is what leaves a NaN head/tail under the
+    'previous'/'next' kinds). They are only ACCEPTED when they really sit at an
+    end-expiratory level, tested by ``_end_is_expiratory``: ``trim`` ends the window at
+    the last sample with ``flow >= 0``, which is "in expiration", not "at end-expiration",
+    and it returns 0 for a file that already begins mid-inspiration. Anchoring an end
+    that sits part way up a breath invents a trend and distorts that breath.
+
+    An explicit ``min_height`` keeps the legacy absolute gate byte-for-byte: the trough
+    must lie at least that many litres below the file's GLOBAL volume maximum. It is
+    retained only so an older analysis reproduces exactly; see the module docstring of
+    ``respmech.settingsio.migrate`` for why it is no longer the default.
+    """
+    from scipy import signal
+    vol = np.asarray(vol, float).ravel()
+    # scipy rejects distance < 1 with a message that names none of our settings. The
+    # clamp is a no-op for any sane rate (0.4 s x 2000 Hz = 800 samples).
+    distance = max(1.0, float(min_distance_s) * float(fs))
+    inv = (vol * -1) + max(vol)
+    if min_height is not None:
+        return signal.find_peaks(inv, height=min_height, distance=distance)[0]
+    span = float(np.ptp(inv))
+    if span <= 0:
+        return np.empty(0, dtype=int)
+    found = signal.find_peaks(inv, prominence=float(min_prominence_frac) * span,
+                              distance=distance)[0]
+    if found.size == 0:
+        # No breath-sized trough anywhere. The two record ends alone would still fit a
+        # straight line, so the run would "correct the trend" and subtract almost nothing
+        # while the report claimed otherwise — refuse instead, and let the caller explain.
+        return found
+    tol = _END_ANCHOR_TOL_MULT * float(min_prominence_frac) * span
+    ends = [i for i in (0, vol.size - 1) if _end_is_expiratory(vol, found, i, tol)]
+    return np.unique(np.concatenate((ends, found))).astype(int)
+
+
+def _end_is_expiratory(vol, found, idx, tol):
+    """Is the recording's first/last sample at an end-expiratory level?
+
+    Compared against the level the interior troughs themselves predict at that position
+    (linear, extrapolated beyond the outermost one), NOT against a fixed level —
+    end-expiratory volume is exactly what trends here, so a start sitting well above a
+    later trough may still be a perfectly good end-expiratory point. An end left part way
+    up a breath sits above that prediction by a large fraction of a tidal volume, and is
+    rejected.
+    """
+    if found.size == 1:
+        predicted = float(vol[found[0]])
+    elif found[0] <= idx <= found[-1]:
+        predicted = float(np.interp(idx, found, vol[found]))
+    else:
+        predicted = float(np.polyval(np.polyfit(found[[0, -1]], vol[found[[0, -1]]], 1), idx))
+    return bool(vol[idx] <= predicted + tol)
+
+
+def _trend_anchor_message(vol, found, need, kind, mech):
+    """One line — the GUI's short_error only shows the last one."""
+    span = float(np.ptp(np.asarray(vol, float)))
+    head = (f"Could not correct the end-expiratory trend: found {found} end-expiratory "
+            f"trough(s), but '{kind}' interpolation needs {need}.")
+    if mech.volumetrendpeakminheight is not None:
+        return (f"{head} This analysis pins the legacy absolute threshold "
+                f"(processing.volume.trend_peak_min_height = "
+                f"{mech.volumetrendpeakminheight:g}), which requires a trough at least "
+                f"that far below the recording's highest volume — but this recording's "
+                f"whole volume range is only {span:.2f}. Set 'Trend anchor — absolute "
+                f"threshold (legacy)' back to Auto under Mechanics — Advanced…, or lower "
+                f"it below {span:.2f}.")
+    frac = getattr(mech, "trend_peak_min_prominence_frac", TREND_MIN_PROMINENCE_FRAC)
+    return (f"{head} A trough must be flanked by an inspiration of at least {frac:g} × "
+            f"the recording's volume range ({frac * span:.3f}), and troughs must be "
+            f"{mech.volumetrendpeakmindistance:g} s apart. Lower 'Trend anchor — minimum "
+            f"breath depth' under Mechanics — Advanced…, or turn 'Correct end-expiratory "
+            f"trend' off.")
+
+
 def correcttrend(volume, settings):
     """Compute-only volume trend correction (no plot). Returns the corrected
     volume; the diagnostic plot is produced separately by the plots layer."""
-    from scipy import signal
+    m = settings.processing.mechanics
     vol = volume.squeeze()
-    peaks = signal.find_peaks(
-        (vol * -1) + max(vol),
-        height=settings.processing.mechanics.volumetrendpeakminheight,
-        distance=settings.processing.mechanics.volumetrendpeakmindistance * settings.input.format.samplingfrequency,
-    )[0]
-    f = sp.interpolate.interp1d(peaks, vol[peaks],
-                                settings.processing.mechanics.volumetrendadjustmethod,
-                                fill_value="extrapolate")
+    if not np.isfinite(vol).all():
+        raise VolumeTrendError(
+            "Could not correct the end-expiratory trend: the volume signal contains "
+            "missing or infinite samples. Check the volume channel under Setup (or "
+            "'Calculate volume from flow' under Mechanics — Advanced…).")
+    peaks = trend_anchors(
+        vol, settings.input.format.samplingfrequency,
+        min_height=m.volumetrendpeakminheight,
+        min_prominence_frac=getattr(m, "trend_peak_min_prominence_frac",
+                                    TREND_MIN_PROMINENCE_FRAC),
+        min_distance_s=m.volumetrendpeakmindistance)
+    kind = m.volumetrendadjustmethod
+    need = _TREND_MIN_ANCHORS.get(kind, 2)
+    if peaks.size < need:
+        # Below this, interp1d either raises numpy's "cannot reshape array of size 0
+        # into shape (0,newaxis)" (0 anchors) or — worse — accepts a single anchor and
+        # silently returns an ALL-NaN envelope, so the run "succeeds" with NaN in every
+        # VT/VE/PTP/WOB cell. Both are one actionable failure now.
+        raise VolumeTrendError(_trend_anchor_message(vol, peaks.size, need, kind, m))
+    f = sp.interpolate.interp1d(peaks, vol[peaks], kind, fill_value="extrapolate")
     peaksresampled = f(np.linspace(0, vol.size - 1, vol.size))
+    if not np.isfinite(peaksresampled).all():
+        # 'previous'/'next' leave everything outside the outermost anchor undefined. The
+        # scale-free rule anchors both ends so it cannot happen there; the legacy gate
+        # can, and always has — warn rather than fail a run that used to complete, since
+        # those samples were already NaN before this change.
+        bad = int((~np.isfinite(peaksresampled)).sum())
+        warnings.warn(
+            f"end-expiratory trend: '{kind}' interpolation leaves {bad} of {vol.size} "
+            f"samples undefined (outside the outermost detected trough); those samples "
+            f"become NaN. Use 'Linear' to cover the whole recording.")
     return volume - peaksresampled
 
 
@@ -94,6 +239,36 @@ def trim(timecol, flow, volume, poes, pgas, pdi, emgcolumns, settings):
 
 
 # --- breath segmentation ---------------------------------------------------
+
+class NoBreathsError(ValueError):
+    """Raised when a recording yields no breath to analyse (a precondition failure, not
+    a bug): either segmentation detected none, or every detected breath is excluded."""
+
+
+def check_breaths(breaths, filename, settings):
+    """Fail early, and by name, when a file has nothing to analyse.
+
+    Without this the empty set travels on and only surfaces further downstream as
+    ``AttributeError: 'list' object has no attribute 'mean'`` from the results layer's
+    ``mechs.mean()`` — reported verbatim as that file's error, naming neither the file's
+    real problem nor a setting to change.
+    """
+    used = sum(1 for b in breaths.values() if not b["ignored"])
+    if used:
+        return
+    if breaths:
+        raise NoBreathsError(
+            f"All {len(breaths)} breath(s) detected in {filename} are excluded, so there "
+            f"is nothing to analyse. Re-include at least one — click a shaded breath in "
+            f"Preview & QC, or clear this file's entry under processing.exclude_breaths.")
+    by = settings.processing.mechanics.separateby
+    channel = "flow" if by == "flow" else "volume"
+    raise NoBreathsError(
+        f"No breaths were detected in {filename}. Breaths are split on the {by} signal, so "
+        f"check that the {channel} channel is the right column under Setup, and the "
+        f"'Signal used to split breaths' and 'Breath peak' settings under Preview & QC — "
+        f"Mechanics — Advanced… (processing.segmentation).")
+
 
 def ignorebreaths(curfile, settings):
     d = dict(settings.processing.mechanics.excludebreaths)

@@ -9,6 +9,8 @@ export builds EMG column names from the actual channel count instead of a hardco
 import numpy as np
 import pandas as pd
 
+from respmech.core.compute import NoBreathsError
+
 
 def _getbreathdata(breath, datacol, colsprefix, appendcols, colsettings):
     df = pd.DataFrame(breath[datacol]).transpose()
@@ -75,6 +77,15 @@ def build_breath_table(file, breaths, settings):
             dfmech = dfmech.join(_getbreathdata(breath, "entropy_exp", "sample_entropy_exp_col_", ['sample_entropy_exp_max', 'sample_entropy_exp_min', 'sample_entropy_exp_mean'], entcols), how="outer", sort=False)
 
         mechs = dfmech if len(mechs) == 0 else pd.concat([mechs, dfmech], sort=False)
+
+    if len(mechs) == 0:
+        # No row was built, so there is no table and no average to take. The pipeline
+        # already refuses such a file by name (compute.check_breaths); this keeps the
+        # promise for any other caller instead of failing as 'list' has no attribute
+        # 'mean' further down, or inside processoutliers.
+        raise NoBreathsError(
+            f"No breaths to build a result table from in {file} — every detected breath "
+            f"is excluded, or none was detected.")
 
     if settings.processing.emg.outlierrmssdlimit > 0:
         mechs = processoutliers(mechs, settings)

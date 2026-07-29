@@ -170,6 +170,17 @@ NEEDS_ECG_GATE_HINT = ("Turn on 'Remove ECG' first: the gate is built from the h
                        "the ECG stage detects, so with it off there are none to blank and "
                        "the gated columns come back empty.")
 
+# Per-file errors that mean "this recording cannot support this step", not "something
+# broke". The mech preview lands them softly and explains them in the status line, so the
+# batch panel must not also paint a hard 'Test run failed' card over the same thing.
+_SOFT_FILE_ERRORS = ("TrimError", "VolumeTrendError", "NoBreathsError")
+
+# The Mechanics-advanced fields that change the volume the trend detector sees. The live
+# trough count is only valid while these still match the rendered preview it was taken
+# from (see _trend_hint).
+_TREND_PROBE_KEYS = ("integrate_from_flow", "correct_drift", "inverse_flow",
+                     "inverse_volume", "resample", "resample_to_frequency")
+
 _PANELS = {"mech": ["channels", "raw"], "batch": ["table", "campbell"],
            "ecg": ["ecg_capture", "ecg_stack"],
            "emg_all": ["result"], "emg_detail": ["detail", "detail_psd"], "noise": ["fidelity"]}
@@ -547,6 +558,11 @@ class PreviewScreen(QWidget):
         self._last_synced_settings = None   # snapshot for dependency-scoped invalidation (diff)
         self._noise_has_result = False   # has the fidelity panel a current result? (first-compute guard)
         self._previewed_file = None
+        # drift-corrected volume of the previewed file + its name: the live anchor count
+        # in Mechanics — advanced… counts troughs in this (see _trend_hint).
+        self._trend_probe = None
+        self._trend_probe_file = ""
+        self._trend_probe_shape = None
         self._blanked_for_invalid = False   # see _schedule's settings gate
         self._loading_noise = False
         self._loading_ecg = False
@@ -1313,6 +1329,36 @@ class PreviewScreen(QWidget):
                                    ("Cubic", "cubic"), ("Quadratic", "quadratic"),
                                    ("Previous", "previous"), ("Next", "next")],
                           depends_on="correct_trend")),
+            ("vol", Field("trend_peak_min_prominence_frac",
+                          "Trend anchor — minimum breath depth", "float",
+                          "processing.volume.trend_peak_min_prominence_frac",
+                          "How deep a trough must be, as a fraction of the recording's own "
+                          "volume range, to count as end-expiratory.",
+                          lo=0.001, hi=0.999, step=0.01, decimals=3,
+                          depends_on="correct_trend",
+                          note="Scales with each recording, so it works at any tidal volume "
+                               "and in any volume unit. Lower it only if breaths are missed "
+                               "on a recording that also contains a large manoeuvre.")),
+            ("vol", Field("trend_peak_min_distance_s", "Trend anchor — minimum spacing",
+                          "float", "processing.volume.trend_peak_min_distance_s",
+                          "Minimum time between two detected end-expiratory troughs.",
+                          lo=0.001, hi=60.0, step=0.05, decimals=4, suffix=" s",
+                          depends_on="correct_trend")),
+            ("vol", Field("trend_peak_min_height",
+                          "Trend anchor — absolute threshold (legacy)", "float",
+                          "processing.volume.trend_peak_min_height",
+                          "Fixed depth below the recording's HIGHEST volume that a trough "
+                          "must reach. Overrides the breath-depth rule above.",
+                          # the sentinel sits just BELOW zero because 0 is itself a legal
+                          # legacy value ("no absolute gate"); sharing the minimum would
+                          # silently rewrite such an analysis to Auto on the next OK. With
+                          # decimals=3 the only reachable negative IS the sentinel.
+                          lo=-0.001, hi=1_000_000.0, step=0.05, decimals=3,
+                          auto_text="Auto — use minimum breath depth",
+                          depends_on="correct_trend",
+                          note="Only for reproducing an analysis made before v2.3.3. It is "
+                               "measured against the whole recording, so a value larger than "
+                               "the recording's volume range finds no troughs at all.")),
             ("vol", Field("inverse_flow", "Invert the flow signal", "bool",
                           "processing.volume.inverse_flow",
                           "Flip the flow sign if inspiration reads positive.")),
@@ -1362,10 +1408,39 @@ class PreviewScreen(QWidget):
         bc_text = "\n".join(f"{e.file} = {e.count}" for e in s.processing.breath_counts)
         all_fields = [f for _g, f in fields] + [bc_field]
         vals = dict(values); vals["breath_counts"] = bc_text
+        def _trend_hint(v):
+            """Count the anchors the trend correction would find in the previewed file,
+            live, as the thresholds are edited — this is the number that decides whether
+            the run succeeds, and it cannot be read off the settings alone."""
+            if not v.get("correct_trend"):
+                return "End-expiratory trend correction is off."
+            from respmech.core import compute
+            need = compute._TREND_MIN_ANCHORS.get(v["trend_method"], 2)
+            probe = self._trend_probe
+            if probe is None or not len(probe):
+                return f"Needs at least {need} end-expiratory troughs in every file."
+            # The probe is the drift-corrected volume from the LAST rendered preview. This
+            # same dialog also stages the settings that BUILD that volume, so once any of
+            # them is touched the probe describes a signal the run will not use — and a
+            # confident "OK"/"will fail" about the wrong signal is worse than no count.
+            if {k: v.get(k) for k in _TREND_PROBE_KEYS} != self._trend_probe_shape:
+                return ("Volume conditioning changed — press OK, then reopen this dialog "
+                        f"for a trough count. Needs at least {need}.")
+            n = compute.trend_anchors(
+                probe, s.input.format.sampling_frequency,
+                min_height=v["trend_peak_min_height"],
+                min_prominence_frac=v["trend_peak_min_prominence_frac"],
+                min_distance_s=v["trend_peak_min_distance_s"]).size
+            return (f"In {self._trend_probe_file}: volume range {float(np.ptp(probe)):.2f}, "
+                    f"{n} trough(s) found — "
+                    + ("OK." if n >= need
+                       else f"NOT ENOUGH (needs {need}); the run will fail this file."))
+
         dlg = AdvancedDialog("Mechanics — advanced", all_fields, vals, parent=self,
                              intro="How breaths are detected, how work of breathing is "
                                    "computed, and the volume/drift corrections. The defaults "
-                                   "suit ordinary recordings.")
+                                   "suit ordinary recordings.",
+                             derived=_trend_hint)
         if dlg.exec() != QDialog.Accepted:
             return
         staged = dlg.values()
@@ -2243,6 +2318,13 @@ class PreviewScreen(QWidget):
         ov = self._overlays.get(key)
         return ov.error if ov is not None else None
 
+    def _trend_probe_settings(self):
+        """The volume-conditioning settings behind the current trend probe, in the same
+        shape the advanced dialog stages them (see _TREND_PROBE_KEYS / _trend_hint)."""
+        vol, samp = self.state.settings.processing.volume, self.state.settings.processing.sampling
+        src = {**vars(vol), **vars(samp)}
+        return {k: src.get(k) for k in _TREND_PROBE_KEYS}
+
     def _clear_panel_overlays(self, *keys):
         """Dismiss any spinner/error card on these panels — called by the
         synchronous render paths so a successful redraw never leaves a stale
@@ -2315,10 +2397,22 @@ class PreviewScreen(QWidget):
         self._repaint_view_breaths("result")
 
         self._previewed_file = data["name"]
+        # what the trend detector sees for THIS file — feeds the live anchor count in
+        # Mechanics — advanced… (see _trend_hint), together with the volume-conditioning
+        # settings it was produced under, so the count can be withdrawn once they change
+        self._trend_probe = data.get("vol_drift")
+        self._trend_probe_file = data["name"]
+        self._trend_probe_shape = self._trend_probe_settings()
         self.btn_process_file.setEnabled(True)       # a file is loaded → can process just it
         if data.get("trim_error"):
             self._set_status(f"{data['name']}: showing raw channels — could not detect "
                              f"breaths. {data['trim_error']}")
+        elif data.get("trend_error"):
+            # Deliberately showing something the batch will NOT produce, so say so.
+            self._set_status(f"{data['name']}: {data['nbreaths']} breaths, showing the "
+                             f"DRIFT-corrected volume — the end-expiratory trend correction "
+                             f"was skipped here and will fail this file in a run. "
+                             f"{data['trend_error']}")
         else:
             nign = sum(1 for _n, _a, _b, ig in spans if ig)
             self._set_status(
@@ -2968,12 +3062,18 @@ class PreviewScreen(QWidget):
             fr = result.files.get(cur) or next(iter(result.files.values()), None)
         if fr is None or getattr(fr, "error", None):
             err = getattr(fr, "error", None) or "The run produced no result for this file."
-            if str(err).startswith("TrimError"):
-                # same precondition failure the mech preview already handled softly
-                # (raw channels + a 'could not detect breaths' status): leave the table
-                # + Campbell blank, no hard 'Test run failed' card, don't touch the status.
+            kind = getattr(fr, "error_kind", None) or str(err).split(":", 1)[0]
+            if kind in _SOFT_FILE_ERRORS:
+                # A precondition failure of THIS recording, not a fault: the mech preview
+                # keeps drawing the channels, so don't raise a 'Test run failed' card over
+                # them. The reason still has to live on these two panels — the status line
+                # is a single shared label that the EMG/ECG jobs overwrite moments later,
+                # which would leave a blank table and Campbell explaining nothing.
                 self.table.setRowCount(0); self.table.setColumnCount(0)
                 self.campbell.figure.clear(); self.campbell.draw()
+                for p in _PANELS["batch"]:
+                    self._overlays[p].show_error(
+                        f"Not processed — {short_error(str(err))}", str(err))
                 return
             # raise so _on_job_done paints a copyable "Test run failed" error card
             raise _FileRunError(err)

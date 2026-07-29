@@ -153,6 +153,19 @@ coordinates — see §6 latent issue (2).
   numeric result identical unless deliberately corrected.
 - `correcttrend()` (optional) — subtracts an interpolated envelope through detected
   volume peaks (`volumetrendadjustmethod` = interp kind); also emits a plot.
+  **Deliberate v2 divergence** (v2.3.3): legacy gates the troughs on
+  `volumetrendpeakminheight`, an *absolute* depth below the file's global volume
+  maximum, defaulting to `0.8`. No trough on ordinary tidal breathing reaches it, so
+  `find_peaks` returns an empty array and `interp1d` raises `cannot reshape array of
+  size 0 into shape (0,newaxis)`; one trough is worse, since `interp1d` accepts it and
+  returns an all-NaN envelope silently. v2 keeps that gate byte-for-byte when the
+  setting is given, and otherwise selects a per-trough **prominence** ≥
+  `trend_peak_min_prominence_frac` × the recording's own volume range. The first and last
+  samples are considered as anchors too (an edge is never a local maximum, so `find_peaks`
+  can never return one), but only accepted when they actually sit at an end-expiratory
+  level — `trim` ends the window at the last `flow >= 0` sample, which is *in* expiration,
+  not *at* end-expiration, and returns 0 for a file that already begins mid-inspiration.
+  See `compute.trend_anchors` / `_end_is_expiratory`; `legacy/` keeps the original.
 
 ### 5.3 Breath segmentation
 - **By flow** (`separateintobreathsbyflow`, default): walk the signal; an
