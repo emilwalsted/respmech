@@ -94,6 +94,12 @@ Confirmed 29-07-2026 while baselining a documentation-only change (no Python tou
   release (see `docs/RELEASING.md`), before bumping the version. `respmech-website`'s
   `changelog.html` mirrors it in a version trimmed to what an app user cares about
   (no CI/packaging-only notes); update both together.
+- **`## Unreleased`** (added 29-07-2026) is a hand-maintained draft sitting above the
+  latest dated release, describing everything since the last tag. It is updated only
+  when explicitly asked to, never automatically per commit. At release time (step 1
+  above), fold it into the new dated entry and collapse it back to an HTML-commented,
+  empty placeholder — see the mechanism documented directly in `CHANGELOG.md` and in
+  `docs/RELEASING.md`.
 
 ## Website (respmech.dk)
 
