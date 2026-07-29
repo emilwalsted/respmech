@@ -165,6 +165,14 @@ class EmgSettings:
     ecg_min_distance_s: float = 0.5
     ecg_min_width_s: float = 0.001
     ecg_window_s: float = 0.4
+    # Auto-detect the 5 fields above ONCE per test from a reference file's raw EMG
+    # (core.emg.suggest_ecg_settings — the same analysis the GUI's ECG "Auto-suggest"
+    # button runs) and apply the result identically to every file, mirroring
+    # noise.auto_prop. Off by default -> existing behaviour/golden output unchanged.
+    # ecg_reference_file: file (relative to input.folder) to analyse; None -> the
+    # first file the batch's input pattern matches.
+    ecg_auto_detect: bool = False
+    ecg_reference_file: str | None = None
     outlier_rms_sd_limit: float = 0.0
     # EMG amplitude normalisation for the OUTPUT tables (P14): each file's RMS columns
     # are also reported as a % of a per-file reference so amplitudes compare across
