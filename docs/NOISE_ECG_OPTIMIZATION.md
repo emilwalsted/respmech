@@ -247,6 +247,19 @@ confidence, estimated bpm) is also printed by `respmech run` and written to
 `run-report.txt`, so a CLI-only user can actually see when auto-detect fell back to a
 low-confidence/middle-channel guess.
 
+The GUI now has an equivalent entry point: an **"Auto (whole batch)"** checkbox on the
+Preview ECG tab (`ui/screens/preview_screen.py`, bound to `ecg_auto_detect`), placed
+next to *Remove ECG* and mirroring `noise.auto_prop`'s "Auto" checkbox exactly —
+including greying out the capture-channel/min-height/min-gap/Advanced controls it
+overrides once ticked. Before this, the field could only be set by hand-editing a
+settings.toml outside the app: the underlying analysis (`suggest_ecg_settings`) was
+already the one function shared by both the GUI's manual *Auto-suggest* button and the
+CLI's automatic per-batch detection, but only CLI/TOML users could reach the
+batch-wide behaviour. `Settings.validate()` also gained the `ecg_auto_detect` ⇒
+`remove_ecg` + `input.channels.emg` cross-check that `pipeline.run_batch` already
+enforced at runtime, so both `respmech validate`/`run` and the GUI's Run-button gate
+now catch the same misconfiguration before a batch starts, not just mid-run.
+
 ## 5. Status
 
 **Done:** the `n_fft`/`win_length` bug fix (fixed STFT params); the shared,
