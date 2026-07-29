@@ -10,8 +10,12 @@ for the installers themselves.
 updated ONLY when explicitly asked to (not automatically on every commit), and it
 describes everything since the last tag. When a version is tagged, fold these
 bullets into that release's own dated entry as step 1 of docs/RELEASING.md, then
-collapse this section back to the empty placeholder and wrap it in an HTML
-comment (like this one) so it stays invisible until asked for again.
+collapse this section back to the empty placeholder below and wrap it in an HTML
+comment (like this one) so it stays invisible until asked for again:
+
+## Unreleased
+
+(nothing pending — ask for an update to populate this section)
 -->
 
 ## Unreleased
@@ -22,7 +26,10 @@ fix, since v2.3.2.
 - Added `processing.emg.ecg_auto_detect` so ECG auto-detection (previously reachable
   only via the GUI's "Auto-suggest" button) can now drive CLI/batch runs: analysed
   once on a reference file and applied to every file in the batch. Off by default,
-  so existing `settings.toml` behaviour is unchanged
+  so existing `settings.toml` behaviour is unchanged. A per-file `detection_quality`
+  warning (plus the auto-detected settings and confidence) is surfaced in CLI stdout
+  and `run-report.txt`, so an unsupervised batch still leaves a visible trail of any
+  file whose beats the shared parameters seem to be missing
 - Added GUI parity for the above: an "Auto (whole batch)" checkbox on the Preview
   screen's ECG tab, mirroring the existing noise-reduction "Auto" checkbox, plus the
   same ECG/EMG-channel validation the CLI already enforced
@@ -32,8 +39,6 @@ fix, since v2.3.2.
 - Fixed the main window running wider than the screen on Preview & QC: the EMG
   noise and ECG control strips no longer force an oversized minimum window width
 - Added this CHANGELOG.md, covering the full v2.0.0–v2.3.2 release history
-- Hardened `.gitignore` against ever accidentally committing clinical/patient data
-  (defensive only — no clinical data has ever been in this repo)
 
 ## v2.3.2 — 2026-07-24
 
