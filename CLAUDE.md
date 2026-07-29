@@ -64,6 +64,29 @@ Tests run with `QT_QPA_PLATFORM=offscreen` **and** set `AA_DontUseNativeDialogs`
 is ever created — neither locally nor in CI. Bugs in that class are invisible to all 554 unit
 tests by construction; they surface only in a real, native, interactive run.
 
+### macOS has the narrowest font metrics we ship to — layout limits must be checked wider
+
+A pixel budget verified only here is verified on the friendliest platform there is. The same
+Preview chips measure ~1.5x wider on the Windows runner, and that is a routine Windows-only
+red: the `test_window_fits_screen.py` ceiling read 1005 px on macOS and 1516 px on Windows
+from the same code, so adding one checkbox to the ECG strip broke CI while every local run
+stayed green. Two habits follow.
+
+- Anything that measures pixels gets re-measured with the application font inflated
+  (`test_the_window_fits_a_laptop_screen_on_wider_font_metrics_too` uses 1.75x, the smallest
+  multiple at which the shipped Windows regression reproduces on macOS). Restore the font in
+  a `finally`: the `qapp` fixture is shared.
+- Never assert on a QLabel's rendered `text()` when `flow_layout.elide` set it — how much
+  survives is a font measurement. Assert on `toolTip()`, which holds the full string by
+  contract. This is what made two unrelated EMG tests fail on Windows only.
+
+A row of controls only wraps where a layout can break it. `flow_layout.FlowLayout` makes the
+minimum width the widest single ITEM, so a chip built on a plain `QHBoxLayout` is one
+unbreakable item whose minimum is still the sum of its contents. Build chips with
+`install_flow` + `cluster` so each caption+field pair is its own item. `install_flow` also
+sets `QSizePolicy.Preferred` + `setHeightForWidth(True)`: under `Maximum` Qt caps the widget
+at its one-line `sizeHint` height and paints the wrapped row outside it.
+
 ### Known non-issue: a font-resolution test fails on a minimal Linux sandbox
 
 `tests/unit/test_gui.py::test_splash_resolves_fonts_to_installed_families` fails

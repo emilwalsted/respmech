@@ -34,7 +34,7 @@ from dataclasses import dataclass
 import numpy as np
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton,
-                               QSizePolicy, QSplitter, QTableWidget, QTableWidgetItem,
+                               QSplitter, QTableWidget, QTableWidgetItem,
                                QTabWidget, QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt, QEvent, QThread, QTimer, Signal
 from PySide6.QtGui import QFont
@@ -49,7 +49,8 @@ from respmech.ui.help_text import tooltip as _help_tip
 from respmech.ui import plot_perf
 from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
 from respmech.ui import wheel as _wheel
-from respmech.ui.flow_layout import FlowLayout, elide as _elide
+from respmech.ui.flow_layout import (FlowLayout, cluster as _cluster,
+                                     elide as _elide, install_flow as _install_flow)
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
                                   stage_ecg_reduction, stage_mechanics_preview,
@@ -869,16 +870,16 @@ class PreviewScreen(QWidget):
         self.noise_opts.setObjectName("noiseChip")
         self.noise_opts.setStyleSheet(
             "#noiseChip { border: 1px solid rgba(128, 128, 128, 0.30); border-radius: 8px; }")
-        # hug the natural height — never stretch vertically into the plot area
-        self.noise_opts.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         # tight caption→field pairing (4 px) with a wider gap (10 px) BETWEEN groups so
-        # 'Strength [ ]', 'Keep ≥ [ ]', 'Gate [ ]' read as clusters, not an even bead line
-        nrow = QHBoxLayout(self.noise_opts); nrow.setContentsMargins(11, 3, 11, 3); nrow.setSpacing(4)
-        nrow.addWidget(_cap("Noise", self.noise_auto.toolTip()))
-        nrow.addSpacing(8); nrow.addWidget(self.noise_auto)
-        nrow.addSpacing(10); nrow.addWidget(_cap("Strength", self.noise_prop.toolTip())); nrow.addWidget(self.noise_prop)
-        nrow.addSpacing(10); nrow.addWidget(_cap("Keep ≥", self.noise_target.toolTip())); nrow.addWidget(self.noise_target)
-        nrow.addSpacing(10); nrow.addWidget(_cap("Gate", self.noise_nstd.toolTip())); nrow.addWidget(self.noise_nstd)
+        # 'Strength [ ]', 'Keep ≥ [ ]', 'Gate [ ]' read as clusters, not an even bead line.
+        # A FlowLayout, not a QHBoxLayout: a chip built on a plain row is one indivisible item
+        # whose minimum is the SUM of its clusters, and the enclosing strip can only wrap around
+        # it, never inside it (see flow_layout's module docstring).
+        nrow = _install_flow(self.noise_opts, h=10, v=4, margins=(11, 3, 11, 3))
+        nrow.addLayout(_cluster(_cap("Noise", self.noise_auto.toolTip()), self.noise_auto, gap=8))
+        nrow.addLayout(_cluster(_cap("Strength", self.noise_prop.toolTip()), self.noise_prop))
+        nrow.addLayout(_cluster(_cap("Keep ≥", self.noise_target.toolTip()), self.noise_target))
+        nrow.addLayout(_cluster(_cap("Gate", self.noise_nstd.toolTip()), self.noise_nstd))
 
         # Cardiac-gated peak. It lives here, beside the EMG it changes, rather than on Setup:
         # it is an EMG statistic, and its prerequisite (ECG removal) is one tab away rather
@@ -910,18 +911,17 @@ class PreviewScreen(QWidget):
         self.gate_opts = QFrame(); self.gate_opts.setObjectName("gateChip")
         self.gate_opts.setStyleSheet(
             "#gateChip { border: 1px solid rgba(128, 128, 128, 0.30); border-radius: 8px; }")
-        self.gate_opts.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
-        grow = QHBoxLayout(self.gate_opts); grow.setContentsMargins(11, 3, 11, 3); grow.setSpacing(4)
+        grow = _install_flow(self.gate_opts, h=10, v=4, margins=(11, 3, 11, 3))
         grow.addWidget(self.emg_gated)
-        grow.addSpacing(10); grow.addWidget(_cap("Blank", self.emg_gate_width.toolTip()))
-        grow.addWidget(self.emg_gate_width)
+        grow.addLayout(_cluster(_cap("Blank", self.emg_gate_width.toolTip()),
+                                self.emg_gate_width))
         # say plainly that this is an output-only add-on: nothing on this tab changes when it
         # is ticked, so without a word the empty response reads as "it did nothing"
         _gcap = _cap("→ extra columns in the saved output",
                      "The gated peak is not drawn here — it appears as extra columns in the "
                      "data files after a run.")
         _gcap.setProperty("status", "muted")
-        grow.addSpacing(8); grow.addWidget(_gcap)
+        grow.addWidget(_gcap)      # a FlowLayout ignores spacers; its own h gap does the job
 
         self.btn_emg_advanced = QPushButton("Advanced…")
         self.btn_emg_advanced.setProperty("compact", True)
@@ -1056,13 +1056,18 @@ class PreviewScreen(QWidget):
 
         self.ecg_opts = QFrame(); self.ecg_opts.setObjectName("ecgChip")
         self.ecg_opts.setStyleSheet("#ecgChip { border: 1px solid rgba(128, 128, 128, 0.30); border-radius: 8px; }")
-        self.ecg_opts.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)   # hug natural height
-        row = QHBoxLayout(self.ecg_opts); row.setContentsMargins(11, 3, 11, 3); row.setSpacing(4)
-        row.addWidget(_cap("Capture channel")); row.addSpacing(4); row.addWidget(self.ecg_capture_channel)
-        row.addSpacing(12); row.addWidget(self.remove_ecg)
-        row.addSpacing(8); row.addWidget(self.ecg_auto_batch)
-        row.addSpacing(10); row.addWidget(_cap("Min height", self.ecg_min_height.toolTip())); row.addWidget(self.ecg_min_height)
-        row.addSpacing(10); row.addWidget(_cap("Min gap", self.ecg_min_distance.toolTip())); row.addWidget(self.ecg_min_distance)
+        # A FlowLayout of caption+field clusters, not one QHBoxLayout: this chip is the widest
+        # thing on Preview & QC, and as a single unbreakable row its minimum was the sum of all
+        # five clusters — 975 px here, 1486 px on Windows' wider metrics, which put the whole
+        # window past a 1280 px laptop screen (see flow_layout's module docstring).
+        row = _install_flow(self.ecg_opts, h=10, v=4, margins=(11, 3, 11, 3))
+        row.addLayout(_cluster(_cap("Capture channel"), self.ecg_capture_channel))
+        row.addWidget(self.remove_ecg)
+        row.addWidget(self.ecg_auto_batch)
+        row.addLayout(_cluster(_cap("Min height", self.ecg_min_height.toolTip()),
+                               self.ecg_min_height))
+        row.addLayout(_cluster(_cap("Min gap", self.ecg_min_distance.toolTip()),
+                               self.ecg_min_distance))
         # Min width and Window are NOT on the strip: a shape guard at 0.001 s and a
         # physiologically fixed template width are not what anyone reaches for while watching
         # the detected beats, and they crowded out the two that are. They keep their widgets
