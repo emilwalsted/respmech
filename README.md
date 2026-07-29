@@ -108,7 +108,10 @@ positive on expiration — invert it in Setup if your recording is the other way
 must be **inspired volume**; it can be inverted, or integrated from the flow signal if your
 recording has no volume channel. **Volume drift** (common when integrating from flow) is
 corrected automatically, with an optional trend adjustment on top — each breath's end-expiratory
-volume should return to the same baseline, and when it creeps the correction pulls it back:
+volume should return to the same baseline, and when it creeps the correction pulls it back. The
+trend adjustment anchors on the end-expiratory trough of each breath; which troughs count is
+judged **relative to each recording's own volume range**, so it needs no tuning at any tidal
+volume (Preview & QC → Mechanics → Advanced… if a recording does need it):
 
 ![Volume drift correction](docs/img/drift.png)
 

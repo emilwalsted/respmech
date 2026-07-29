@@ -702,10 +702,18 @@ def test_render_preview_trim_error_shows_channels_not_error_card(qapp, tmp_path,
     win.close()
 
 
-def test_batch_trim_error_is_soft_not_a_hard_card(qapp, tmp_path):
-    """The now-automatic mechanics batch must treat a TrimError the SAME soft way the
-    mech preview does — no hard 'Test run failed' card — since the raw channels + a
-    'could not detect breaths' status already explain it."""
+@pytest.mark.parametrize("error,kind", [
+    ("TrimError: the flow signal never crosses zero", "TrimError"),
+    ("VolumeTrendError: found 0 end-expiratory trough(s)", "VolumeTrendError"),
+])
+def test_batch_precondition_error_is_soft_not_a_hard_failure(qapp, tmp_path, error, kind):
+    """A precondition failure of THIS recording must not be reported as a crash: the mech
+    preview still draws the channels, so the batch panels must not raise a 'Test run
+    failed' card with a traceback over them.
+
+    They must still SAY why, on the panels themselves. The status line is one shared
+    label that the ECG/EMG jobs overwrite moments after the mech job writes it, so relying
+    on it left a blank table and Campbell explaining nothing."""
     from respmech.ui.main_window import MainWindow
     from respmech.core.pipeline import BatchResult, FileResult
     s = _settings(str(tmp_path))
@@ -713,13 +721,14 @@ def test_batch_trim_error_is_soft_not_a_hard_card(qapp, tmp_path):
     pv = win.preview_screen
     pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
     result = BatchResult(files={"synth_case_A.csv": FileResult(
-        file="synth_case_A.csv", error="TrimError: the flow signal never crosses zero")})
+        file="synth_case_A.csv", error=error, error_kind=kind)})
     pv._on_batch_result(result)                      # returns normally (no _FileRunError)
-    assert pv.panel_error("campbell") is None        # no hard error card
     assert pv.table.rowCount() == 0                  # table left blank
-    # a genuine (non-TrimError) analysis error still raises -> hard card
+    for panel in ("campbell", "table"):
+        assert pv.panel_error(panel) == error        # the reason is carried on the panel
+    # a genuine analysis error still raises -> the hard 'Test run failed' path
     bad = BatchResult(files={"synth_case_A.csv": FileResult(
-        file="synth_case_A.csv", error="ValueError: bad column 7")})
+        file="synth_case_A.csv", error="ValueError: bad column 7", error_kind="ValueError")})
     with pytest.raises(RuntimeError):
         pv._on_batch_result(bad)
     win.close()

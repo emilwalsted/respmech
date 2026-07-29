@@ -29,6 +29,19 @@ except Exception:  # pragma: no cover - theme is import-safe, but stay defensive
 # referenced) rather than GC'd while running, which would abort the process.
 _ORPHANED_THREADS = []
 
+# Per-file precondition failures the user can act on, and where the control lives. Keyed
+# by FileResult.error_kind.
+_FIX_HINTS = {
+    "VolumeTrendError": "Preview & QC → Mechanics → Advanced… → 'Trend anchor — minimum "
+                        "breath depth' / 'Trend anchor — absolute threshold (legacy)' "
+                        "(or untick 'Correct end-expiratory trend').",
+    "TrimError": "Setup → channel assignment, or 'Invert the flow signal' under "
+                 "Preview & QC → Mechanics → Advanced….",
+    "NoBreathsError": "Preview & QC → Mechanics → Advanced… → 'Signal used to split "
+                      "breaths' and the 'Breath peak' thresholds; or re-include excluded "
+                      "breaths by clicking them in the Preview & QC channel view.",
+}
+
 
 class RunScreen(QWidget):
     status_changed = Signal(str)
@@ -387,6 +400,12 @@ class RunScreen(QWidget):
                 parts.append(f"{len(failed)} file(s) failed during the run:\n")
                 for fname, fr in failed.items():
                     parts.append(f"── {fname} ──\n{getattr(fr, 'error', '') or '(no detail)'}\n")
+                # the message above says what is wrong; this says where to go and change it.
+                # dict.fromkeys de-duplicates while keeping the order files failed in.
+                kinds = dict.fromkeys(getattr(f, "error_kind", None) for f in failed.values())
+                for kind in kinds:
+                    if kind in _FIX_HINTS:
+                        parts.append(f"Where to fix {kind}: {_FIX_HINTS[kind]}\n")
             if self._fatal_msg:
                 if parts:
                     parts.append("")

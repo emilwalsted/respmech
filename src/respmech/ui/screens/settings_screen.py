@@ -1125,12 +1125,22 @@ class SettingsScreen(QWidget):
             return False
         self._set_status(f"Opened {p}")
         self._mark_clean()
+        self.surface_notices()
         prefs.add_recent_analysis(p)                 # P26 recent analyses
         prefs.set_last_folder("analysis", p)
         prefs.save_rig(self.state.settings)          # P25 remember the rig
         self.inputs_changed.emit()
         self.settings_changed.emit()
         return True
+
+    def surface_notices(self):
+        """Tell the user about any schema upgrade applied while loading this analysis.
+
+        A setting this version reads differently from the version that saved the file
+        changes the results, so it is said on screen at open time — not only in the run
+        report, which is written after the numbers already exist."""
+        for note in self.state.settings.notices:
+            QMessageBox.information(self, "Analysis updated for this version", note)
 
     def can_save(self):
         """Whether the current settings may be written to an analysis file."""

@@ -359,3 +359,63 @@ def test_only_one_screen_writes_the_stft_length(qapp, tmp_path):
         win.settings_screen.to_state()
     assert n.n_fft == 512
     win.close()
+
+
+# -- the end-expiratory trend anchor controls ---------------------------------
+
+def test_mech_advanced_exposes_the_trend_anchor_settings(qapp, tmp_path, monkeypatch):
+    """These decide whether the correction can run at all. With none of them on screen a
+    user whose recording found no troughs had no way to fix it — that is what turned a
+    tunable threshold into a dead end."""
+    pv = _preview(qapp, tmp_path)
+    seen = {}
+    _mech_stub(monkeypatch, lambda d: seen.update(
+        {k: d.widget(k) is not None for k in
+         ("trend_peak_min_prominence_frac", "trend_peak_min_distance_s",
+          "trend_peak_min_height")}))
+    pv._open_mech_advanced()
+    assert seen == {"trend_peak_min_prominence_frac": True,
+                    "trend_peak_min_distance_s": True,
+                    "trend_peak_min_height": True}
+    pv.shutdown()
+
+
+def test_trend_anchor_rows_follow_the_correct_trend_checkbox(qapp, tmp_path, monkeypatch):
+    pv = _preview(qapp, tmp_path)
+    seen = {}
+
+    def edit(d):
+        cb = d.widget("correct_trend")
+        frac = d.widget("trend_peak_min_prominence_frac")
+        seen["off"] = frac.isEnabled()
+        cb.setChecked(True)
+        seen["on"] = frac.isEnabled()
+        cb.setChecked(False)
+        seen["off_again"] = frac.isEnabled()
+
+    _mech_stub(monkeypatch, edit)
+    pv._open_mech_advanced()
+    assert seen == {"off": False, "on": True, "off_again": False}
+    pv.shutdown()
+
+
+def test_the_legacy_threshold_reads_back_as_auto_at_its_minimum(qapp, tmp_path, monkeypatch):
+    """The 'Auto' sentinel is the only way to CLEAR an inherited absolute threshold from
+    the GUI; if it ever committed 0.0 instead of None the legacy gate would silently stay
+    selected (and 0.0 admits every plateau wiggle as an anchor)."""
+    pv = _preview(qapp, tmp_path)
+    s = pv.state.settings
+    s.processing.volume.trend_peak_min_height = 0.5
+    seen = {}
+
+    def edit(d):
+        w = d.widget("trend_peak_min_height")
+        seen["shows_value"] = w.value() == 0.5
+        w.setValue(w.minimum())                 # the row now reads "Auto — …"
+        seen["special_text"] = w.specialValueText() != ""
+
+    _mech_stub(monkeypatch, edit)
+    pv._open_mech_advanced()
+    assert seen == {"shows_value": True, "special_text": True}
+    assert s.processing.volume.trend_peak_min_height is None
+    pv.shutdown()

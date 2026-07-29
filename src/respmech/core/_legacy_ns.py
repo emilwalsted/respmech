@@ -65,6 +65,8 @@ def to_legacy_ns(s: Settings) -> SimpleNamespace:
                 volumetrendadjustmethod=vol.trend_method,
                 volumetrendpeakminheight=vol.trend_peak_min_height,
                 volumetrendpeakmindistance=vol.trend_peak_min_distance_s,
+                # v2-named passthrough (no legacy counterpart), like ptp_baseline_window_s
+                trend_peak_min_prominence_frac=vol.trend_peak_min_prominence_frac,
                 excludebreaths=[[e.file, list(e.breaths)] for e in s.processing.exclude_breaths],
                 breathcounts=[[e.file, e.count] for e in s.processing.breath_counts],
                 ptp_baseline_window_s=s.processing.ptp.baseline_window_s,

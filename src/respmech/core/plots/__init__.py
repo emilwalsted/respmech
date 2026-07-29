@@ -301,12 +301,15 @@ def _trend(fr, fname, path, settings):
     fs = sig.get("fs")
     if vol.size < 3 or not fs:
         return None
-    from scipy import signal as _sig
     from scipy.interpolate import interp1d
+    from respmech.core.compute import trend_anchors, _TREND_MIN_ANCHORS
     v = settings.processing.volume
-    peaks = _sig.find_peaks((vol * -1) + vol.max(), height=v.trend_peak_min_height,
-                            distance=max(1, int(v.trend_peak_min_distance_s * fs)))[0]
-    if peaks.size < 2:
+    # ONE detector shared with compute.correcttrend — this used to re-implement it and
+    # could therefore draw anchors that were never subtracted.
+    peaks = trend_anchors(vol, fs, min_height=v.trend_peak_min_height,
+                          min_prominence_frac=v.trend_peak_min_prominence_frac,
+                          min_distance_s=v.trend_peak_min_distance_s)
+    if peaks.size < _TREND_MIN_ANCHORS.get(v.trend_method, 2):
         return None
     f = interp1d(peaks, vol[peaks], v.trend_method, fill_value="extrapolate")
     envelope = f(np.linspace(0, vol.size - 1, vol.size))
@@ -316,7 +319,8 @@ def _trend(fr, fname, path, settings):
     fig = _canvas((11.0, 5.0))
     ax = fig.add_subplot(211)
     ax.plot(t, vol, color=_BRAND, lw=0.7, label="drift-corrected volume")
-    ax.plot(t[peaks], vol[peaks], "o", color=_CAPTURE, ms=3, label="detected end-expiratory peaks")
+    ax.plot(t[peaks], vol[peaks], "o", color=_CAPTURE, ms=3,
+            label=f"detected end-expiratory troughs (n={peaks.size})")
     ax.plot(t, envelope, color=_ACCENT, lw=1.2, label=f"fitted trend ({v.trend_method})")
     ax.legend(loc="best", frameon=False, fontsize=8)
     ax.set_ylabel("Volume (L)", fontsize=9)

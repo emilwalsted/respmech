@@ -117,6 +117,10 @@ class MainWindow(QMainWindow):
         Not called from ``__init__`` so headless/test construction keeps full access."""
         if cli_path:
             self.settings_screen.enter_open_mode()
+            # app.py loaded the file itself, so settings_screen._load never ran — surface
+            # any schema upgrade here instead, or a command-line/drag-drop open would
+            # reinterpret a retired setting with nothing on screen to say so.
+            self.settings_screen.surface_notices()
             return
         from respmech.ui.startup_dialog import StartupDialog
         dlg = StartupDialog(self)
