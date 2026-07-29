@@ -215,7 +215,8 @@ exists – if you found it useful, perhaps they will too.
 
 Every released version has its own DOI. Reference the latest via
 [![DOI](https://zenodo.org/badge/191052676.svg)](https://zenodo.org/badge/latestdoi/191052676),
-or cite a specific version using that version's DOI (click the badge for the list).
+or cite a specific version using that version's DOI (click the badge for the list). See
+[CHANGELOG.md](CHANGELOG.md) for what changed between versions.
 
 An example citation:
 
