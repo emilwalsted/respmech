@@ -32,6 +32,13 @@ jobs:
     env:
       QT_QPA_PLATFORM: offscreen   # headless Qt — no display on the runner
       PYQTGRAPH_QT_LIB: PySide6    # never let pyqtgraph bind PyQt6 (two Qt bindings in one process crash)
+      # Windows' console codepage cannot encode the ·, –, › and — this UI is full of, so pytest
+      # falls back to backslash/replacement escapes and a failure message arrives as
+      # '· synth_ca….00–5.00 s'. Two of them had to be decoded by hand before they could be
+      # diagnosed. This fixes only the OUTPUT stream — deliberately NOT PYTHONUTF8, which would
+      # also change what open() defaults to and hide the cp1252 decoding bugs this job is here
+      # to catch.
+      PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
 
@@ -77,6 +84,16 @@ jobs:
           fi
           if ! grep -qE "[0-9]+ passed" pytest-unit.log; then
             echo "::error::pytest did not reach a passing summary (crashed mid-run?)"; exit 1
+          fi
+          # A GREEN tick on a suite that quietly skipped itself is the failure mode this job
+          # could not see. Most of the unit tests carry `requires_synth()`, which skips when
+          # tests/golden/input/synth_case_A.csv is not found at the path derived from the test
+          # file's location — so a checkout, path or case-sensitivity problem on Windows (the
+          # very class this job exists to catch) reports "N passed, M skipped" and passes both
+          # greps above. Both platforms run the whole suite with zero skips today, so any skip
+          # at all means something did not run and is worth a human look.
+          if grep -qE "[0-9]+ skipped" pytest-unit.log; then
+            echo "::error::tests were SKIPPED — the suite did not fully run (missing fixture data?)"; exit 1
           fi
           echo "Unit suite passed (any non-zero exit was a post-run Qt teardown crash)."
 

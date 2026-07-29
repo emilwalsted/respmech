@@ -241,7 +241,9 @@ def test_auto_detect_is_surfaced_in_cli_stdout_and_run_report(ecg_input, tmp_pat
     assert "ECG auto-detect" in out
     assert "synth_case_A.csv" in out          # the reference file actually used
 
-    report = (outdir / "run-report.txt").read_text()
+    # encoding= is not optional: the report is UTF-8 (it carries ·, — and →) and
+    # Windows would otherwise decode it as cp1252 (see tests/unit/test_core_outputs.py)
+    report = (outdir / "run-report.txt").read_text(encoding="utf-8")
     assert "ECG auto-detect" in report
     assert "synth_case_A.csv" in report
 
