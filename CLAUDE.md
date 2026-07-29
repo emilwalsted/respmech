@@ -72,10 +72,16 @@ red: the `test_window_fits_screen.py` ceiling read 1005 px on macOS and 1516 px 
 from the same code, so adding one checkbox to the ECG strip broke CI while every local run
 stayed green. Two habits follow.
 
-- Anything that measures pixels gets re-measured with the application font inflated
-  (`test_the_window_fits_a_laptop_screen_on_wider_font_metrics_too` uses 1.75x, the smallest
-  multiple at which the shipped Windows regression reproduces on macOS). Restore the font in
-  a `finally`: the `qapp` fixture is shared.
+- Assert **ratios, not pixel figures**, and state every precondition relative to something
+  measured in the same run (`win.minimumSizeHint().width()`, not `860`). A pixel literal in a
+  layout test is a measurement of the developer's fonts: the first cut of the guards in
+  `test_window_fits_screen.py` hard-coded numbers read off macOS and went red on Windows for
+  precisely the reason the guards exist.
+- To reproduce the Windows runner locally, widen the horizontal advance and leave the height
+  alone: `QFont.setStretch(145)` on the application font lands within a few percent of it
+  (modelled 1506-1538 px against CI's measured 1516 px). Scaling the **point size** is the
+  wrong instrument -- it inflates row heights too, so it understates the width problem and
+  invents height failures Windows does not have.
 - Never assert on a QLabel's rendered `text()` when `flow_layout.elide` set it — how much
   survives is a font measurement. Assert on `toolTip()`, which holds the full string by
   contract. This is what made two unrelated EMG tests fail on Windows only.

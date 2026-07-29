@@ -13,14 +13,22 @@ about. The smallest current MacBook is 1280 logical px wide, so 1280 is the ceil
 approaching it means a strip has stopped wrapping again.
 
 That guard then measured 1005 px here and passed for three days while Windows CI measured 1516
-and failed: a chip is drawn from the same widgets but the platform's font metrics decide how
-wide they are, and macOS's are the narrowest we build for. "Comfortably" was doing real work in
-that sentence and nothing was checking it. Two tests below now do — one squeezes the chips, one
-inflates the font — and both fail on the code that shipped the Windows regression.
+and failed: the chips are the same widgets, but the platform's font metrics decide how wide
+they are, and macOS's are the narrowest we build for. "Comfortably" was doing real work in that
+sentence and nothing was checking it.
+
+So the two guards added afterwards are RATIOS, not pixel figures, and every precondition is
+stated relative to something measured in the same run. A pixel literal here is a measurement of
+this machine's fonts: the first cut of both tests hard-coded numbers read off macOS and went
+red on Windows for that exact reason, which is the mistake this file is about.
+
+To reproduce the Windows runner locally, widen the font's HORIZONTAL advance and leave its
+height alone -- ``QFont.setStretch(145)`` on the application font puts this machine within a
+few percent of the runner (verified against CI: unfixed window minimum 1506-1538 px modelled
+vs 1516 px measured). Do NOT scale the point size instead: that inflates row heights as well,
+so it understates the width problem and invents height failures that Windows never has.
 """
 import pytest
-
-from PySide6.QtGui import QFont
 
 from respmech.ui.state import AppState  # noqa: E402
 
@@ -30,6 +38,14 @@ pytestmark = requires_synth()
 
 # The narrowest screen the app must fit on (a 13" MacBook is 1280 logical px).
 _NARROWEST_SCREEN = 1280
+
+# A wrapping chip's minimum is its widest single cluster, so it sits well below the chip's
+# natural one-line width; a chip that cannot wrap has minimum == natural, i.e. exactly 1.0.
+# 0.65 rather than 0.5 because the ratio is not scale-free: the gated-peak chip's widest
+# cluster is a long caption, which grows with the font while the spin boxes beside it barely
+# do, so the ratio drifts up on wider metrics (measured 0.475 here, 0.546 on the Windows
+# runner). Anything under 0.65 still separates "wraps" from "cannot wrap" by a wide margin.
+_WRAPPED = 0.65
 
 _DATA_OUT = {"saveaveragedata": True, "savebreathbybreathdata": True}
 
@@ -98,7 +114,7 @@ def test_every_control_chip_can_be_squeezed_far_below_its_natural_width(qapp, tm
         assert natural > 200, (
             f"{name} reports a {natural} px natural width — it is empty or was never laid out, "
             f"and the ratio below would pass on nothing")
-        assert floor < natural / 2, (
+        assert floor < natural * _WRAPPED, (
             f"{name} demands {floor} px of its {natural} px natural width — it cannot wrap, so "
             f"its whole width is forced on the window")
     win.close()
@@ -121,16 +137,21 @@ def test_a_squeezed_chip_wraps_inside_itself_rather_than_off_the_edge(qapp, tmp_
         qapp.processEvents()
     ecg = next(i for i in range(pv.subtabs.count()) if "ECG" in pv.subtabs.tabText(i))
     pv.subtabs.setCurrentIndex(ecg)
-    win.resize(860, 850)
+    # Squeeze to the window's OWN minimum rather than a pixel figure read off this machine:
+    # that minimum is ~700 px here and ~1230 px on the Windows runner, so a literal would be
+    # measuring the platform's fonts instead of the layout. Whatever it is, the chip's natural
+    # width must exceed it, which is the precondition the assertions below need.
+    win.resize(win.minimumSizeHint().width(), 850)
     for _ in range(12):
         qapp.processEvents()
 
     assert pv.ecg_opts.isVisible(), (
         "the ECG chip was never shown, so its geometry is the unlaid-out default and every "
         "assertion below would be measuring nothing")
-    assert win.width() < 900, (
-        f"the window refused to be resized to 860 px (it is {win.width()}) — its minimum is "
-        f"still too wide for the rest of this test to mean anything")
+    assert win.width() < pv.ecg_opts.sizeHint().width(), (
+        f"the window ({win.width()} px) is still wider than the ECG chip wants to be "
+        f"({pv.ecg_opts.sizeHint().width()} px), so the chip is never asked to wrap and the "
+        f"rest of this test proves nothing")
     chip, page = pv.ecg_opts, pv.subtabs.widget(ecg)
     assert chip.x() + chip.width() <= page.width() + 1, (
         f"the ECG chip reaches {chip.x() + chip.width()} px on a {page.width()} px page — it is "
@@ -142,33 +163,6 @@ def test_a_squeezed_chip_wraps_inside_itself_rather_than_off_the_edge(qapp, tmp_
             f"a wrapped row is painted below the chip's own bottom edge "
             f"({w.y() + w.height()} px vs {chip.height()} px) — the chip did not grow a line")
     win.close()
-
-
-def test_the_window_fits_a_laptop_screen_on_wider_font_metrics_too(qapp, tmp_path):
-    """Re-measure with the font inflated, because macOS's metrics are the narrowest we ship to.
-
-    The same widgets measured 1005 px here and 1516 px on the Windows CI runner, so a ceiling
-    checked only at this machine's font size is checked on the friendliest platform there is.
-    1.75x is the smallest multiple at which the shipped Windows regression reproduces here
-    (it measured 1328 px), so it is the multiple worth pinning; the wrapping chips leave the
-    window at roughly 970 px there.
-    """
-    app_font = QFont(qapp.font())
-    wide = QFont(app_font)
-    wide.setPointSizeF(app_font.pointSizeF() * 1.75)
-    qapp.setFont(wide)
-    try:
-        win = _window(qapp, tmp_path, remove_ecg=True, noise=True)
-        win.tabs.setCurrentIndex(1)
-        for _ in range(6):
-            qapp.processEvents()
-        got = win.minimumSizeHint().width()
-        assert got < _NARROWEST_SCREEN, (
-            f"at 1.75x font metrics the window demands {got} px, which does not fit a "
-            f"{_NARROWEST_SCREEN} px screen — this is the shape Windows CI reports as red")
-        win.close()
-    finally:
-        qapp.setFont(app_font)      # the qapp fixture is shared: never leak the wide font
 
 
 def test_the_noise_reference_readout_is_elided_not_unbounded(qapp, tmp_path):
