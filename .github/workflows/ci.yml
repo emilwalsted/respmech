@@ -89,11 +89,18 @@ jobs:
           # could not see. Most of the unit tests carry `requires_synth()`, which skips when
           # tests/golden/input/synth_case_A.csv is not found at the path derived from the test
           # file's location — so a checkout, path or case-sensitivity problem on Windows (the
-          # very class this job exists to catch) reports "N passed, M skipped" and passes both
-          # greps above. Both platforms run the whole suite with zero skips today, so any skip
-          # at all means something did not run and is worth a human look.
-          if grep -qE "[0-9]+ skipped" pytest-unit.log; then
-            echo "::error::tests were SKIPPED — the suite did not fully run (missing fixture data?)"; exit 1
+          # very class this job exists to catch) reports "158 passed, 396 skipped" and sails
+          # through both greps above.
+          # Proportionate rather than zero-tolerance: a few tests skip themselves for honest
+          # runtime reasons (test_conditional_cards.py skips when the offscreen platform
+          # grants no focus), and failing the build for one of those would be a false alarm
+          # wearing this message. A tenth of the suite going missing is not a runtime detail.
+          passed=$(grep -oE "[0-9]+ passed" pytest-unit.log | tail -1 | grep -oE "^[0-9]+")
+          skipped=$(grep -oE "[0-9]+ skipped" pytest-unit.log | tail -1 | grep -oE "^[0-9]+" || true)
+          skipped=${skipped:-0}
+          echo "pytest reported ${passed} passed, ${skipped} skipped."
+          if [ "$skipped" -gt $((passed / 10)) ]; then
+            echo "::error::${skipped} tests SKIPPED against ${passed} passed — the suite did not really run (fixture data not found?)"; exit 1
           fi
           echo "Unit suite passed (any non-zero exit was a post-run Qt teardown crash)."
 
