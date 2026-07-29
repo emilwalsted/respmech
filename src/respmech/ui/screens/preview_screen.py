@@ -170,6 +170,11 @@ NEEDS_ECG_GATE_HINT = ("Turn on 'Remove ECG' first: the gate is built from the h
                        "the ECG stage detects, so with it off there are none to blank and "
                        "the gated columns come back empty.")
 
+#: why the manual ECG fields (and Auto-suggest) are inert while "Auto (whole batch)" is on
+AUTO_BATCH_HINT = ("'Auto (whole batch)' is on: these values will be overwritten at run "
+                   "time from the reference file, so editing them (or clicking "
+                   "Auto-suggest) here has no lasting effect. Untick it to edit by hand.")
+
 _PANELS = {"mech": ["channels", "raw"], "batch": ["table", "campbell"],
            "ecg": ["ecg_capture", "ecg_stack"],
            "emg_all": ["result"], "emg_detail": ["detail", "detail_psd"], "noise": ["fidelity"]}
@@ -1007,6 +1012,21 @@ class PreviewScreen(QWidget):
         self.remove_ecg = QCheckBox("Remove ECG")
         self.remove_ecg.setToolTip(_help_tip("processing.emg.remove_ecg",
                                    "Subtract an averaged ECG template from every EMG channel; off by default."))
+        # Mirrors noise.auto_prop's "Auto" checkbox: analyse ONE reference file once and apply
+        # the result to every file in the batch, instead of tuning the fields below by hand.
+        # This is the same core.emg.suggest_ecg_settings the button below runs on the previewed
+        # file — Auto-suggest stays a manual, per-file preview aid; this is its unsupervised,
+        # whole-batch counterpart (core.pipeline._auto_detect_ecg_settings), now reachable
+        # without leaving the GUI to hand-edit a settings.toml.
+        self.ecg_auto_batch = QCheckBox("Auto (whole batch)")
+        self.ecg_auto_batch.setToolTip(_help_tip(
+            "processing.emg.ecg_auto_detect",
+            "Detect the settings below ONCE from a reference file (the first matched file, "
+            "unless processing.emg.ecg_reference_file names another) and apply them "
+            "identically to every file in the batch. Requires Remove ECG. A file whose "
+            "heart rate diverges from the reference can have real beats missed without "
+            "the run failing — check run-report.txt after a run for a per-file warning."))
+        self.ecg_auto_batch.toggled.connect(self._on_ecg_param_changed)
         self.ecg_min_height = QDoubleSpinBox()
         self.ecg_min_height.setRange(0.0, 1_000_000.0); self.ecg_min_height.setDecimals(6); self.ecg_min_height.setSingleStep(0.0001)
         self.ecg_min_height.setToolTip(_help_tip("processing.emg.ecg_min_height",
@@ -1040,6 +1060,7 @@ class PreviewScreen(QWidget):
         row = QHBoxLayout(self.ecg_opts); row.setContentsMargins(11, 3, 11, 3); row.setSpacing(4)
         row.addWidget(_cap("Capture channel")); row.addSpacing(4); row.addWidget(self.ecg_capture_channel)
         row.addSpacing(12); row.addWidget(self.remove_ecg)
+        row.addSpacing(8); row.addWidget(self.ecg_auto_batch)
         row.addSpacing(10); row.addWidget(_cap("Min height", self.ecg_min_height.toolTip())); row.addWidget(self.ecg_min_height)
         row.addSpacing(10); row.addWidget(_cap("Min gap", self.ecg_min_distance.toolTip())); row.addWidget(self.ecg_min_distance)
         # Min width and Window are NOT on the strip: a shape guard at 0.001 s and a
@@ -1052,6 +1073,14 @@ class PreviewScreen(QWidget):
         self.btn_ecg_advanced.setToolTip("Detector shape guard and template width — rarely "
                                          "the right thing to change.")
         self.btn_ecg_advanced.clicked.connect(self._open_ecg_advanced)
+
+        # Captured once, before AUTO_BATCH_HINT ever overwrites them: _update_actions restores
+        # each widget's own help tooltip when "Auto (whole batch)" is off, rather than leaving
+        # it blank (unlike NEEDS_ECG_HINT's widgets above, whose "off" tooltip is empty).
+        self._ecg_auto_gated_base_tooltips = {
+            w: w.toolTip() for w in (self.ecg_capture_channel, self.ecg_min_height,
+                                      self.ecg_min_distance, self.btn_ecg_advanced,
+                                      self.btn_ecg_autosuggest)}
 
         strip = FlowLayout(h=10, v=6)          # wraps rather than forcing the window wide
         strip.addWidget(self.ecg_opts)
@@ -1109,6 +1138,7 @@ class PreviewScreen(QWidget):
         try:
             e = self.state.settings.processing.emg
             self.remove_ecg.setChecked(bool(e.remove_ecg))
+            self.ecg_auto_batch.setChecked(bool(e.ecg_auto_detect))
             self.ecg_min_height.setValue(float(e.ecg_min_height))
             self.ecg_min_distance.setValue(float(e.ecg_min_distance_s))
             self.ecg_min_width.setValue(float(e.ecg_min_width_s))
@@ -1124,6 +1154,15 @@ class PreviewScreen(QWidget):
             return
         e = self.state.settings.processing.emg
         e.remove_ecg = self.remove_ecg.isChecked()
+        if not e.remove_ecg and self.ecg_auto_batch.isChecked():
+            # Auto-detect requires Remove ECG (Settings.validate). Clear it here rather than
+            # leave remove_ecg=False with ecg_auto_detect=True stuck: _update_actions would
+            # then disable ecg_auto_batch while it is still checked, and the user could not
+            # untick it again without re-enabling Remove ECG first.
+            self.ecg_auto_batch.blockSignals(True)
+            self.ecg_auto_batch.setChecked(False)
+            self.ecg_auto_batch.blockSignals(False)
+        e.ecg_auto_detect = self.ecg_auto_batch.isChecked()
         e.ecg_min_height = float(self.ecg_min_height.value())
         e.ecg_min_distance_s = float(self.ecg_min_distance.value())
         e.ecg_min_width_s = float(self.ecg_min_width.value())
@@ -1844,6 +1883,20 @@ class PreviewScreen(QWidget):
         self.gate_opts.setEnabled(has_emg and ecg_on)
         self.gate_opts.setToolTip("" if ecg_on else NEEDS_ECG_GATE_HINT)
         self.emg_gate_width.setEnabled(has_emg and ecg_on and self.emg_gated.isChecked())
+        # "Auto (whole batch)" itself needs ECG removal on (same requirement Settings.validate
+        # enforces); once checked, the fields it will overwrite at run time grey out — same
+        # pattern as noise_prop below, so a manual edit there can't look like it did nothing.
+        # The fields themselves keep their existing, always-editable-when-EMG-present
+        # enablement otherwise (pre-configuring before ticking Remove ECG is unaffected).
+        self.ecg_auto_batch.setEnabled(has_emg and ecg_on)
+        auto_batch_on = self.ecg_auto_batch.isChecked()
+        # Auto-suggest writes the same 5 fields the batch auto-detect will overwrite anyway,
+        # so it is gated alongside them — otherwise a click looks like it did something (a
+        # success status, updated widgets, a re-rendered preview) that a real run discards.
+        for w in (self.ecg_capture_channel, self.ecg_min_height, self.ecg_min_distance,
+                  self.btn_ecg_advanced, self.btn_ecg_autosuggest):
+            w.setEnabled(not auto_batch_on)
+            w.setToolTip(AUTO_BATCH_HINT if auto_batch_on else self._ecg_auto_gated_base_tooltips[w])
         if noise_on:
             self.noise_prop.setEnabled(bool(ref) and ecg_on and not self.noise_auto.isChecked())
         if not status:
@@ -1853,6 +1906,11 @@ class PreviewScreen(QWidget):
         elif noise_on and not ref:
             self._set_status("Noise reduction is on — pick a reference file (Settings) or "
                              "click 'Set noise profile' to mark a rest span in this file.")
+        elif ecg_on and auto_batch_on:
+            self._set_status("'Auto (whole batch)' is on — this preview still shows the last "
+                             "manual/Auto-suggest settings; the real run auto-detects its own "
+                             "parameters from the reference file for every file, and reports "
+                             "the per-file result in run-report.txt.")
         elif has_file and not ok:
             self._set_status(f"Settings incomplete: {why}")
 

@@ -49,6 +49,32 @@ def test_enum_validation():
         Settings.from_dict(d).validate()
 
 
+def test_ecg_auto_detect_requires_remove_ecg():
+    d = _minimal()
+    d["processing"] = {"emg": {"ecg_auto_detect": True, "remove_ecg": False}}
+    d["input"]["channels"]["emg"] = [1]
+    with pytest.raises(SettingsError, match="remove_ecg"):
+        Settings.from_dict(d).validate()
+    d["processing"]["emg"]["remove_ecg"] = True
+    Settings.from_dict(d).validate()  # now OK
+
+
+def test_ecg_auto_detect_requires_emg_channels():
+    d = _minimal()
+    d["processing"] = {"emg": {"ecg_auto_detect": True, "remove_ecg": True}}
+    with pytest.raises(SettingsError, match="channels.emg"):
+        Settings.from_dict(d).validate()
+    d["input"]["channels"]["emg"] = [1, 2]
+    Settings.from_dict(d).validate()  # now OK
+
+
+def test_ecg_auto_detect_off_skips_the_cross_check():
+    # Off by default: an otherwise-invalid combination (remove_ecg False, no EMG channels)
+    # must not be rejected when auto-detect itself is not requested.
+    d = _minimal()
+    Settings.from_dict(d).validate()
+
+
 def test_round_trip():
     d = _minimal()
     d["processing"] = {"exclude_breaths": [{"file": "a.txt", "breaths": [1, 2]}]}
