@@ -63,6 +63,7 @@ class BatchResult:
     files: dict = field(default_factory=dict)   # filename -> FileResult
     average_table: object = None                # concatenated average rows
     noise_report: object = None                 # shared-profile prop + per-channel fidelity/ΔSNR
+    ecg_auto_report: object = None              # auto-detected ECG settings + diagnostics (or None)
 
     @property
     def ok_files(self):
@@ -228,6 +229,56 @@ def _load_and_ecg(path, s, cache=None, cancel_check=None):
     if cache is not None and len(cache) < _LOAD_CACHE_MAX:
         cache[key] = _copy_snapshot(snap)
     return snap
+
+
+def _auto_detect_ecg_settings(settings, s, allfiles, progress=None, cache=None):
+    """Auto-detect the ECG-removal detection/template parameters ONCE per test and apply
+    them to every file, mirroring ``noise.auto_prop`` (auto-selected once, applied
+    identically, never re-tuned per file). This is ``core.emg.suggest_ecg_settings`` — the
+    same analysis the GUI's ECG tab "Auto-suggest" button runs on the previewed file — run
+    here on ``ecg_reference_file`` (or the batch's first matched file when unset) so a
+    settings.toml can drive it from the CLI without ever opening the GUI.
+
+    Mutates ``s.processing.emg`` (the legacy namespace ``_ecg_remove`` reads) in place and
+    returns the suggestion dict (plus ``reference_file``) for ``BatchResult.ecg_auto_report``.
+    Primes ``cache`` with this file's load + ECG removal (Wave 2.4 style) so the main loop /
+    noise-profile phase does not reload it."""
+    emg_cfg = settings.processing.emg
+    ref = emg_cfg.ecg_reference_file
+    if ref:
+        path = os.path.abspath(os.path.join(s.input.inputfolder, ref))
+        if not os.path.isfile(path):
+            raise ValueError(
+                f"processing.emg.ecg_reference_file '{ref}' does not exist "
+                f"(resolved to '{path}')")
+    else:
+        path = os.path.abspath(allfiles[0])
+    _emit(progress, ProgressEvent(
+        "stage", message=f"auto-detecting ECG settings from {os.path.basename(path)}"))
+    load_result = _load(path, s)
+    raw_emg = load_result[6]                                  # keep native dtype for _ecg_remove
+    fs = s.input.format.samplingfrequency
+    sug = emglib.suggest_ecg_settings(np.asarray(raw_emg, dtype=float), fs)
+
+    s.processing.emg.column_detect = int(sug["detect_channel"])
+    s.processing.emg.minheight = float(sug["ecg_min_height"])
+    s.processing.emg.mindistance = float(sug["ecg_min_distance_s"])
+    s.processing.emg.minwidth = float(sug["ecg_min_width_s"])
+    s.processing.emg.windowsize = float(sug["ecg_window_s"])
+
+    if cache is not None and len(cache) < _LOAD_CACHE_MAX:
+        # Prime with _ecg_remove(s, raw_emg) -- the SAME (native-dtype) array _load_and_ecg
+        # would pass on a cache miss. Priming with the float-cast copy used for the
+        # suggestion above would make this one file's cached ECG-removal result diverge
+        # from every other file's (e.g. silently higher precision on integer-dtype raw EMG,
+        # since core.emg.subtractecg mutates its input in place), breaking the "applied
+        # identically to every file" guarantee for the reference file specifically.
+        emgcols_ecg, ecg_diag = _ecg_remove(s, raw_emg)
+        cache[path] = _copy_snapshot((load_result, emgcols_ecg, ecg_diag))
+
+    report = dict(sug)
+    report["reference_file"] = os.path.basename(path)
+    return report
 
 
 def _process_emg(s, emgcolumnsraw, startix, endix, noise_set=None, ecg_precomputed=None):
@@ -399,15 +450,29 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
     result = BatchResult()
     average_rows = []
 
+    # Per-run load + ECG-removal cache (Wave 2.4). Only useful when the noise-building phase
+    # or ECG auto-detect runs (they are the sole sources of duplicate load/ECG work); the main
+    # loop drains it by popping each file it reaches, so it never holds more than was primed.
+    load_cache: dict = {}
+
+    # Auto-detect the ECG-removal settings ONCE per test (opt-in; off -> unchanged, golden-safe),
+    # BEFORE the shared noise profile is built below (its EMG segmentation itself ECG-removes
+    # every file) and before the main loop, so every consumer sees the same, final settings.
+    if settings.processing.emg.ecg_auto_detect:
+        if not settings.processing.emg.remove_ecg:
+            raise ValueError(
+                "processing.emg.ecg_auto_detect requires processing.emg.remove_ecg to be enabled")
+        if len(s.input.data.columns_emg) == 0:
+            raise ValueError(
+                "processing.emg.ecg_auto_detect requires input.channels.emg to be configured")
+        result.ecg_auto_report = _auto_detect_ecg_settings(
+            settings, s, allfiles, progress, cache=load_cache)
+
     # ONE shared noise profile + parameter set for the whole test, built once and
     # applied identically to every file (never re-tuned per file). Built from the
     # full test even when only_files restricts processing (e.g. a GUI test run), so a
     # single file is denoised exactly as it would be in the full batch.
     noise_set = None
-    # Per-run load + ECG-removal cache (Wave 2.4). Only useful when the noise-building phase
-    # runs (it is the sole source of duplicate load/ECG work); the main loop drains it by
-    # popping each file it reaches, so it never holds more than the noise phase loaded.
-    load_cache: dict = {}
     if settings.processing.emg.noise.enabled and len(s.input.data.columns_emg) > 0:
         _emit(progress, ProgressEvent("stage", message="building shared noise profile"))
         noise_set, result.noise_report = _build_noise_set(settings, s, allfiles, progress,
@@ -449,6 +514,29 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                 _emit(progress, ProgressEvent("stage", file=filename, message="processing EMG"))
                 emgcolumns, ecg_diag, emg_stages = _process_emg(
                     s, emgcolumnsraw, startix, endix, noise_set, ecg_precomputed=ecg_precomputed)
+
+                # ecg_auto_detect derives the shared detection parameters from ONE reference
+                # file; a heart rate or R-amplitude that differs enough on THIS file can mean
+                # those parameters miss real beats here even though they fit the reference
+                # file fine. Warn per file (never fail the run) so an unsupervised batch
+                # leaves a visible trail of files worth revisiting -- the same detection_quality
+                # check robust_peak already uses, just evaluated unconditionally here.
+                if settings.processing.emg.ecg_auto_detect and ecg_diag is not None:
+                    _peaks = np.asarray(ecg_diag["peaks_s"], float)
+                    if _peaks.size == 0:
+                        warnings.warn(
+                            f"{filename}: ecg_auto_detect (reference "
+                            f"{result.ecg_auto_report['reference_file']}) found no R-peaks on "
+                            "this file -- ECG removal likely did nothing here.")
+                    else:
+                        _dq = emglib.detection_quality(_peaks, s.processing.emg.mindistance)
+                        if not _dq["ok"]:
+                            warnings.warn(
+                                f"{filename}: ecg_auto_detect quality check failed "
+                                f"({_dq['reason']}) -- the shared parameters (from "
+                                f"{result.ecg_auto_report['reference_file']}) may not fit this "
+                                "file; consider processing.emg.ecg_reference_file or manual "
+                                "settings for it.")
 
             _emit(progress, ProgressEvent("stage", file=filename, message="volume correction"))
             vol_uncorrected = volume                                  # trimmed, pre-zero
