@@ -36,8 +36,28 @@ fix, since v2.3.2.
 - Mechanics "Advanced…" dialog: the "Resample to" and "Trend interpolation" detail
   fields now grey out when their own checkbox is unticked, instead of staying
   enabled-looking with no effect
+- Volume trend correction now scales to the recording. The end-expiratory troughs
+  that anchor the trend envelope were selected with an absolute depth threshold
+  inherited from v1 (`processing.volume.trend_peak_min_height`, default 0.8), which
+  matches nothing on ordinary tidal breathing — so on many recordings the correction
+  either did nothing or failed inside numpy. The new
+  `processing.volume.trend_peak_min_prominence_frac` is a fraction of the recording's
+  own volume range, so it works at any tidal volume and in any volume unit, and it is
+  editable in Mechanics ▸ "Advanced…". An analysis that set the old threshold
+  deliberately keeps it and reproduces bit-identically; only the retired 0.8 default
+  is upgraded, and that upgrade is reported in the GUI and in `run-report.txt` rather
+  than applied silently (settings schema 1 → 2)
+- A recording that cannot support a trend fit (no detectable trough, a single anchor,
+  a flat or non-finite volume signal) or in which breath separation finds no breaths
+  is now refused by name and with the reason, instead of surfacing as an opaque numpy
+  or pandas error — and the rest of the batch still runs
 - Fixed the main window running wider than the screen on Preview & QC: the EMG
-  noise and ECG control strips no longer force an oversized minimum window width
+  noise and ECG control strips no longer force an oversized minimum window width.
+  On Windows this was still happening after the first attempt, because each control
+  chip was itself a single unbreakable row: the strip could wrap around a chip but
+  never inside it, so the window demanded 1516 px where a 13" laptop offers 1280.
+  The chips now wrap cluster by cluster, which brings the minimum to 1228 px on
+  Windows and about 700 px on macOS
 - Added this CHANGELOG.md, covering the full v2.0.0–v2.3.2 release history
 
 ## v2.3.2 — 2026-07-24
