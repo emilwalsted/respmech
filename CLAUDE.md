@@ -61,8 +61,21 @@ panel inside a modal, defer the `accept()`/`reject()` by one event-loop turn.
 
 Tests run with `QT_QPA_PLATFORM=offscreen` **and** set `AA_DontUseNativeDialogs`
 (`tests/unit/conftest.py`). So no native macOS panel is ever opened and no AppKit modal session
-is ever created — neither locally nor in CI. Bugs in that class are invisible to all 358 unit
+is ever created — neither locally nor in CI. Bugs in that class are invisible to all 554 unit
 tests by construction; they surface only in a real, native, interactive run.
+
+### Known non-issue: a font-resolution test fails on a minimal Linux sandbox
+
+`tests/unit/test_gui.py::test_splash_resolves_fonts_to_installed_families` fails
+reproducibly (not flaky) on a barebones Linux container with only DejaVu/Bitstream/FreeMono
+installed: `respmech.ui.splash._resolve_svg_fonts()` falls back to
+`QFontDatabase.systemFont(FixedFont).family()`, which on such a container returns the
+generic string `"monospace"` — a name `QFontDatabase.families()` itself never lists (it
+only enumerates concrete family names). The real CI (`ci.yml`) only runs `tests/unit` on
+`windows-latest`/`macos-latest`, both of which have a real `Consolas`/`Menlo` install and
+never hit this fallback path, so this is a sandbox-only artefact, not a product defect.
+Confirmed 29-07-2026 while baselining a documentation-only change (no Python touched):
+553 passed / 1 failed, before and after.
 
 ## Releases (`.github/workflows/release.yml` = "Build installers")
 
@@ -76,6 +89,11 @@ tests by construction; they surface only in a real, native, interactive run.
 - Releases are full releases (the newest is marked **Latest**; `release.yml` passes
   `--latest`). Keep tags clean semver `vX.Y.Z` (no `-rc/-beta`) — the website picks the
   version that way.
+- **`CHANGELOG.md`** (repo root, added 29-07-2026) is the canonical, complete release
+  log — one section per release, newest first. Add its entry as **step 1** of every
+  release (see `docs/RELEASING.md`), before bumping the version. `respmech-website`'s
+  `changelog.html` mirrors it in a version trimmed to what an app user cares about
+  (no CI/packaging-only notes); update both together.
 
 ## Website (respmech.dk)
 
