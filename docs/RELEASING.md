@@ -27,7 +27,12 @@ environment (e.g. required reviewer, or restrict to tags) for a manual gate befo
 
 ## Per release
 
-1. **Bump the version** — `src/respmech/__init__.py`'s `__version__` is the single source
+1. **Add a [CHANGELOG.md](../CHANGELOG.md) entry** — a new `## vX.Y.Z — YYYY-MM-DD` section
+   at the top, above the previous release, with a short lead sentence and bullet points for
+   the user-visible changes (`git log <previous-tag>..HEAD --oneline` is the source list; write
+   it for a reader, not a commit dump). This is also what respmech.dk's changelog page
+   reproduces, so keep it accurate and free of internal-only detail.
+2. **Bump the version** — `src/respmech/__init__.py`'s `__version__` is the single source
    of truth (the PyPI version derives from it). Keep `[tool.briefcase] version` in
    `pyproject.toml` in sync (briefcase can't read the dynamic version):
 
@@ -37,17 +42,17 @@ environment (e.g. required reviewer, or restrict to tags) for a manual gate befo
    #   pyproject.toml           :  [tool.briefcase] version = "2.3.0"
    ```
 
-2. **Verify locally** (optional but recommended):
+3. **Verify locally** (optional but recommended):
 
    ```bash
    python -m pytest tests/unit tests/golden/test_golden.py -q
    python -m build && python -m twine check dist/*
    ```
 
-3. **Commit and land on `master`** — the workflows must exist at the tagged commit, so the
+4. **Commit and land on `master`** — the workflows must exist at the tagged commit, so the
    tag has to point at `master` (as the signing pipeline already requires).
 
-4. **Tag and push:**
+5. **Tag and push:**
 
    ```bash
    git tag v2.3.0            # must equal __version__
