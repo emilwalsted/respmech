@@ -45,6 +45,8 @@ respmech-gui                     # launch the desktop app
 Extras: `gui` (desktop app), `emg` (librosa — spectral noise reduction), `plots` (matplotlib
 diagnostic figures), `dev` (tests). See [docs/INSTALL.md](docs/INSTALL.md) for details.
 
+See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
+
 ## Using the app
 
 ```bash
