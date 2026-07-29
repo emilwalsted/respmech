@@ -20,6 +20,9 @@ class AppState:
     def save_toml(self, path: str):
         save_toml(self.settings, path)
         self.settings_path = path
+        # The upgrade has now been persisted, so "upgraded since this analysis was saved"
+        # is no longer true of the file on disk — stop prepending it to every run report.
+        self.settings.notices = []
 
     def import_legacy(self, path: str) -> str:
         self.settings, report = migrate_file(path)

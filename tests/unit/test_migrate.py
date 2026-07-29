@@ -1,3 +1,4 @@
+import copy
 import textwrap
 
 import pytest
@@ -38,6 +39,11 @@ LEGACY = {
                         "savepvindividualworkload": True, "pvcolumns": 2, "pvrows": 2},
     },
 }
+
+
+def _deep(d):
+    """A copy that may be edited without leaking into the shared LEGACY fixture."""
+    return copy.deepcopy(d)
 
 
 def test_migrate_maps_and_normalises():
@@ -110,3 +116,29 @@ def test_extract_reads_literal_without_executing(tmp_path):
     """))
     d = extract_legacy_dict(p)
     assert d["input"]["format"]["samplingfrequency"] == 2000
+
+
+# -- the end-expiratory trend anchor rule -------------------------------------
+
+def test_v1_without_a_trend_threshold_migrates_to_the_scale_free_rule():
+    """0.8 was v1's DEFAULT, not a user choice — and it is an absolute depth below the
+    recording's global maximum, so it matches no trough on ordinary tidal breathing.
+    Carrying it forward would migrate the bug."""
+    s, r = migrate_dict(LEGACY)                       # sets correctvolumetrend, no height
+    assert s.processing.volume.trend_peak_min_height is None
+    assert any("volumetrendpeakminheight" in n for n in r.normalised)
+
+
+def test_v1_with_a_deliberate_trend_threshold_keeps_the_absolute_gate():
+    legacy = _deep(LEGACY)
+    legacy["processing"]["mechanics"]["volumetrendpeakminheight"] = 0.5
+    s, _r = migrate_dict(legacy)
+    assert s.processing.volume.trend_peak_min_height == 0.5
+
+
+def test_v1_carrying_the_old_default_is_upgraded_and_reported():
+    legacy = _deep(LEGACY)
+    legacy["processing"]["mechanics"]["volumetrendpeakminheight"] = 0.8
+    s, r = migrate_dict(legacy)
+    assert s.processing.volume.trend_peak_min_height is None
+    assert any("retired default" in n for n in r.normalised)

@@ -22,7 +22,16 @@ class SettingsError(ValueError):
     """Raised when settings are missing/invalid, with an actionable message."""
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+# schema 1 wrote processing.volume.trend_peak_min_height into every analysis, including
+# the ones that never touched trend correction — the GUI had no control for it, so the
+# value carried no user intent. It was inherited from legacy v1 and is an ABSOLUTE depth
+# below the recording's global volume maximum, so on ordinary tidal breathing (range <
+# 0.8) it matches no trough at all and the correction cannot run. Reading exactly this
+# value from a schema-1 analysis therefore means "the old default", and is upgraded to
+# the scale-free rule (recorded in Settings.notices, and reported wherever it is loaded).
+RETIRED_TREND_PEAK_MIN_HEIGHT = 0.8
 
 
 # --- sub-sections -----------------------------------------------------------
@@ -83,7 +92,14 @@ class VolumeSettings:
     correct_drift: bool = True
     correct_trend: bool = False
     trend_method: str = "linear"
-    trend_peak_min_height: float = 0.8
+    # Scale-free trough criterion: the fraction of the recording's own volume range that
+    # must flank a trough for it to anchor the trend envelope (see compute.trend_anchors).
+    # Used unless trend_peak_min_height is set.
+    trend_peak_min_prominence_frac: float = 0.05
+    # Legacy absolute gate, in volume units, measured DOWNWARD from the recording's global
+    # volume maximum. None (the default) = use the scale-free rule above. An explicit value
+    # reproduces a pre-2.3.3 analysis exactly, and is never reinterpreted.
+    trend_peak_min_height: Optional[float] = None
     trend_peak_min_distance_s: float = 0.4
 
 
@@ -260,17 +276,22 @@ class Settings:
     output: OutputSettings = field(default_factory=OutputSettings)
     # keys we did not recognise while parsing (kept for a warning, never fatal).
     unknown: dict = field(default_factory=dict)
+    # schema upgrades applied while loading, in plain English. Surfaced by the GUI and
+    # written into the run report so an upgraded setting is never applied silently.
+    notices: list[str] = field(default_factory=list)
 
     # -- (de)serialisation --------------------------------------------------
     @classmethod
     def from_dict(cls, d: dict) -> "Settings":
         unknown: dict = {}
-        obj = _build(cls, d or {}, unknown, path="")
+        d = d or {}
+        obj = _build(cls, d, unknown, path="")
         obj.unknown = unknown
+        obj.notices = _upgrade(obj, d)
         return obj
 
     def to_dict(self) -> dict:
-        return _to_dict(self, drop={"unknown"})
+        return _to_dict(self, drop={"unknown", "notices"})
 
     # -- validation ---------------------------------------------------------
     def validate(self) -> "Settings":
@@ -307,7 +328,59 @@ class Settings:
                 "quadratic", "cubic", "previous", "next"):
             raise SettingsError(
                 "processing.volume.trend_method must be a valid scipy interp1d kind")
+
+        v = self.processing.volume
+        if v.correct_trend:
+            if not 0.0 < v.trend_peak_min_prominence_frac < 1.0:
+                raise SettingsError("processing.volume.trend_peak_min_prominence_frac "
+                                    "must be between 0 and 1 (exclusive)")
+            # 0 is legal and meaningful: find_peaks(height=0) on max(vol) - vol keeps
+            # every trough, i.e. "no absolute gate". A v1 analysis may carry it, and it
+            # is NOT equivalent to omitting the key (which selects the scale-free rule and
+            # gives a different envelope), so it must keep running.
+            if v.trend_peak_min_height is not None and v.trend_peak_min_height < 0:
+                raise SettingsError("processing.volume.trend_peak_min_height cannot be "
+                                    "negative (omit it to scale to each recording)")
+            # The trough spacing is consumed at the ANALYSIS rate, which the pre-analysis
+            # resample replaces after validate() runs — check the rate the code will
+            # actually see, not the file's.
+            samp = self.processing.sampling
+            fs_eff = (samp.resample_to_frequency
+                      if samp.resample and samp.resample_to_frequency > 0
+                      else f.sampling_frequency)
+            if v.trend_peak_min_distance_s * fs_eff < 1:
+                raise SettingsError(
+                    "processing.volume.trend_peak_min_distance_s must be at least one "
+                    f"sample at the analysis rate ({fs_eff} Hz)")
         return self
+
+
+# --- schema upgrades -------------------------------------------------------
+
+def _upgrade(obj: "Settings", raw: dict) -> list[str]:
+    """Apply schema upgrades in place; return a plain-English note for each one.
+
+    ``raw`` is the source dict, so an omitted ``schema_version`` (a hand-written
+    analysis) is read as the CURRENT schema rather than as the oldest one — such a file
+    also omits the retired key, so it lands on the new default either way.
+    """
+    notices: list[str] = []
+    version = raw.get("schema_version", SCHEMA_VERSION)
+    if not isinstance(version, int):
+        return notices
+    if version < 2:
+        v = obj.processing.volume
+        if v.trend_peak_min_height == RETIRED_TREND_PEAK_MIN_HEIGHT:
+            v.trend_peak_min_height = None
+            notices.append(
+                "processing.volume.trend_peak_min_height was the retired default "
+                f"({RETIRED_TREND_PEAK_MIN_HEIGHT}) — an absolute depth below the "
+                "recording's highest volume, which matches no trough at all on ordinary "
+                "tidal breathing. It is now unset, so end-expiratory troughs are detected "
+                "relative to each recording's own volume range. Set it explicitly under "
+                "Mechanics — Advanced… to reproduce an older analysis exactly.")
+    obj.schema_version = SCHEMA_VERSION
+    return notices
 
 
 # --- generic dataclass <-> dict helpers ------------------------------------

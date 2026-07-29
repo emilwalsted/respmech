@@ -1,6 +1,6 @@
 import pytest
 
-from respmech.core.settings import Settings, SettingsError
+from respmech.core.settings import SCHEMA_VERSION, Settings, SettingsError
 
 
 def _minimal():
@@ -55,3 +55,89 @@ def test_round_trip():
     s = Settings.from_dict(d).validate()
     assert s.processing.exclude_breaths[0].file == "a.txt"
     assert Settings.from_dict(s.to_dict()).to_dict() == s.to_dict()
+
+
+# -- the end-expiratory trend anchor rule -------------------------------------
+
+def test_trend_threshold_defaults_to_auto():
+    """The retired default was an ABSOLUTE 0.8 measured below the recording's global
+    maximum, which no ordinary tidal recording can reach; unset means the scale-free
+    per-trough rule (see compute.trend_anchors)."""
+    v = Settings().processing.volume
+    assert v.trend_peak_min_height is None
+    assert v.trend_peak_min_prominence_frac == 0.05
+
+
+def test_auto_threshold_round_trips_as_an_absent_key():
+    from respmech.settingsio.toml_io import dumps_toml
+    assert "trend_peak_min_height" not in dumps_toml(Settings())
+    s = Settings()
+    s.processing.volume.trend_peak_min_height = 0.5
+    assert "trend_peak_min_height = 0.5" in dumps_toml(s)
+    assert Settings.from_dict(s.to_dict()).processing.volume.trend_peak_min_height == 0.5
+
+
+def _trend_settings(**vol):
+    d = _minimal()
+    d["schema_version"] = SCHEMA_VERSION
+    d["processing"] = {"volume": {"correct_trend": True, **vol}}
+    return d
+
+
+def test_schema_1_upgrades_the_retired_trend_default_and_says_so():
+    d = _trend_settings(trend_peak_min_height=0.8)
+    d["schema_version"] = 1
+    s = Settings.from_dict(d)
+    assert s.processing.volume.trend_peak_min_height is None
+    assert s.schema_version == SCHEMA_VERSION
+    assert len(s.notices) == 1 and "trend_peak_min_height" in s.notices[0]
+
+
+def test_schema_1_never_reinterprets_a_deliberate_threshold():
+    d = _trend_settings(trend_peak_min_height=0.5)
+    d["schema_version"] = 1
+    s = Settings.from_dict(d)
+    assert s.processing.volume.trend_peak_min_height == 0.5   # the production value
+    assert s.notices == []
+
+
+def test_notices_are_not_written_back_into_the_analysis():
+    d = _trend_settings(trend_peak_min_height=0.8)
+    d["schema_version"] = 1
+    assert "notices" not in Settings.from_dict(d).to_dict()
+
+
+def test_trend_prominence_fraction_is_range_checked():
+    for bad in (0.0, 1.0, -0.1, 5.0):
+        with pytest.raises(SettingsError):
+            Settings.from_dict(_trend_settings(trend_peak_min_prominence_frac=bad)).validate()
+    Settings.from_dict(_trend_settings(trend_peak_min_prominence_frac=0.5)).validate()
+
+
+def test_trend_checks_are_inert_while_the_correction_is_off():
+    d = _minimal()
+    d["processing"] = {"volume": {"correct_trend": False,
+                                  "trend_peak_min_prominence_frac": 99.0}}
+    Settings.from_dict(d).validate()      # a value that cannot bite must not be fatal
+
+
+def test_trough_spacing_is_checked_against_the_ANALYSIS_rate_not_the_file_rate():
+    """The pre-analysis resample replaces the sampling rate AFTER validate() runs, so a
+    spacing that is fine at the file's rate can be under one sample at the analysis rate
+    — which used to reach scipy as a bare 'distance must be greater or equal to 1'."""
+    d = _trend_settings(trend_peak_min_distance_s=0.004)      # 8 samples at 2000 Hz
+    Settings.from_dict(d).validate()
+    d["processing"]["sampling"] = {"resample": True, "resample_to_frequency": 100}
+    with pytest.raises(SettingsError):                        # 0.4 samples at 100 Hz
+        Settings.from_dict(d).validate()
+
+
+def test_a_legacy_zero_trend_threshold_is_not_rejected():
+    """0 is a legal legacy value meaning 'no absolute gate' — find_peaks(height=0) keeps
+    every trough. It is NOT equivalent to omitting the key (which selects the scale-free
+    rule and gives a different envelope), so refusing it would kill the whole run for an
+    analysis that used to work, with no exact-reproduction path left."""
+    Settings.from_dict(_trend_settings(trend_peak_min_height=0)).validate()
+    Settings.from_dict(_trend_settings(trend_peak_min_height=0.0)).validate()
+    with pytest.raises(SettingsError):
+        Settings.from_dict(_trend_settings(trend_peak_min_height=-0.5)).validate()

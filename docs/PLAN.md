@@ -110,6 +110,9 @@ peak = { height = 0.1, distance_s = 0.1, width_s = 0.5 }
 [processing.volume]
 inverse_flow = false; integrate_from_flow = false; inverse_volume = false
 correct_drift = true; correct_trend = false; trend_method = "linear"
+trend_peak_min_prominence_frac = 0.05   # trough depth as a fraction of the volume range
+trend_peak_min_distance_s = 0.4
+# trend_peak_min_height                 # omitted = auto; set it only to reproduce a pre-2.3.3 run
 
 [processing.wob]
 calc_from = "average"             # "average" | "individual"

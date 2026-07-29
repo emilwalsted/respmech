@@ -56,6 +56,9 @@ class FileResult:
     ecg: object = None                 # ECG-removal diagnostics (n_peaks, suppression)
     signals: object = None             # diagnostic signal arrays for the plotting/audio consumer
     error: Optional[str] = None
+    # exception class name, so consumers can tell a precondition failure of THIS recording
+    # (TrimError, VolumeTrendError) from a real fault without parsing ``error``.
+    error_kind: Optional[str] = None
 
 
 @dataclass
@@ -460,6 +463,10 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
             breaths = compute.separateintobreaths(
                 s.processing.mechanics.separateby, filename, timecol, flow, volume,
                 poes, pgas, pdi, entropycolumns, emgcolumns, s)
+            # Stop here rather than compute mechanics for an empty set: everything below
+            # is per-breath work, and the results layer can only report the empty table as
+            # an opaque internal error.
+            compute.check_breaths(breaths, filename, s)
 
             vefactor = 60 / (len(flow) / s.input.format.samplingfrequency)
             bcnt = len(breaths)
@@ -541,7 +548,8 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
             _emit(progress, ProgressEvent("file_done", file=filename, message=f"{total} breaths"))
 
         except Exception as e:
-            result.files[filename] = FileResult(file=filename, error=f"{type(e).__name__}: {e}")
+            result.files[filename] = FileResult(file=filename, error=f"{type(e).__name__}: {e}",
+                                                error_kind=type(e).__name__)
             _emit(progress, ProgressEvent("file_error", file=filename, message=str(e)))
 
     if average_rows:

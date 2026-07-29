@@ -248,6 +248,12 @@ def _write_run_report(result, settings, outputfolder: str,
     L.append(f"RespMech v{__version__} — run report")
     L.append(f"Generated: {ts}")
     L.append("")
+    # A settings key this version reads differently from the one that wrote the analysis
+    # changes the numbers below, so it is recorded at the TOP of every run it affected.
+    for note in getattr(settings, "notices", ()) or ():
+        L.append("SETTINGS UPGRADED SINCE THIS ANALYSIS WAS SAVED")
+        L.append(f"  {note}")
+        L.append("")
     L.append("INPUT")
     L.append(f"  Folder:   {ip.folder}")
     L.append(f"  Pattern:  {ip.files}")
@@ -269,8 +275,16 @@ def _write_run_report(result, settings, outputfolder: str,
     L.append(f"  Integrate flow → volume: {_yn(vol.integrate_from_flow)}")
     L.append(f"  Invert flow / volume:    {_yn(vol.inverse_flow)} / {_yn(vol.inverse_volume)}")
     L.append(f"  Drift correction:        {_yn(vol.correct_drift)}")
-    L.append(f"  Trend correction:        {_yn(vol.correct_trend)}"
-             + (f" ({vol.trend_method})" if vol.correct_trend else ""))
+    if vol.correct_trend:
+        # An "auto" analysis writes NO threshold key, so the run report is the only place
+        # the rule that was actually applied is recorded.
+        anchor = (f"absolute {vol.trend_peak_min_height:g} below the maximum, legacy"
+                  if vol.trend_peak_min_height is not None
+                  else f"breath depth ≥ {vol.trend_peak_min_prominence_frac:g} × volume range")
+        L.append(f"  Trend correction:        Yes ({vol.trend_method}; {anchor}; troughs "
+                 f"≥ {vol.trend_peak_min_distance_s:g} s apart)")
+    else:
+        L.append("  Trend correction:        No")
     L.append(f"  Resample:                {_yn(samp.resample)}"
              + (f" (→ {samp.resample_to_frequency} Hz)" if samp.resample else ""))
     L.append(f"  Breath separation:       by {seg.method}, buffer {seg.buffer}")
