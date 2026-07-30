@@ -121,8 +121,10 @@ Your keystore contains 1 entry
 41E1C9A2E3A20873F608F834D4B06507, PrivateKeyEntry,
 ```
 
-One entry means jsign needs no `--alias` at all. Passing it anyway costs nothing and keeps the
-command correct if a renewed certificate ever puts a second key on the token.
+That hex id is the certificate's own serial number, so `osslsigncode verify` prints it back as
+`Serial:` under the signer. One entry means jsign needs no `--alias` at all. Passing it anyway
+costs nothing and keeps the command correct if a renewed certificate ever puts a second key on
+the token.
 
 The script downloads the MSI from the release, Authenticode-signs it with
 `jsign` (RFC-3161 timestamp `http://time.certum.pl/`), verifies with `osslsigncode`, and
@@ -133,6 +135,25 @@ uploads the MSI it built with `--clobber`, so a signature applied in the meantim
 by an unsigned asset minutes later, and nothing about the release looks wrong afterwards: same
 name, same version, no signature. A second argument `--force` signs anyway. The case that made
 this worth checking was v2.3.3, whose tag was moved onto a fix, which ran both workflows again.
+
+Two things in a successful run look like problems and are not. `osslsigncode` opens with
+`Warning: MsiDigitalSignatureEx stream doesn't exist`: that second, optional MSI signature
+stream is one jsign does not write, and Windows validates the signature without it. And the
+certificate is only valid for a year (`notAfter` a year after issue). The signature outlives it
+anyway, which is the whole reason `--tsaurl` is not optional: a timestamped signature keeps
+verifying after the certificate expires, so the only thing that needs renewing on time is the
+ability to sign something new.
+
+What a good run ends with, worth comparing against next time:
+
+```
+	Timestamp time: Jul 30 09:49:55 2026 GMT
+Timestamp Server Signature verification: ok
+Signature CRL verification: ok
+Signature verification: ok
+Number of verified signatures: 1
+Succeeded
+```
 
 > **SmartScreen reputation.** A brand-new Certum OSS certificate has no Microsoft SmartScreen
 > reputation, so the first downloads may still show "unrecognised app" even though the
