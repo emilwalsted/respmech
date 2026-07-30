@@ -111,8 +111,18 @@ keytool -list -keystore NONE -storetype PKCS11 \
 
 (On a JDK older than 9, `-providerClass sun.security.pkcs11.SunPKCS11 -providerArg <cfg>`
 instead of `-addprovider`. For the physical card, the same command with the card's own PKCS#11
-config.) The alias is the whole line before the comma, typically
-`Open Source Developer, <your name>`.
+config.) It asks for a keystore password; with the SimplySign session logged in, an empty one
+goes through. The alias is the text before the first comma of the entry line, and on SimplySign
+it is the key's hex id rather than a readable name:
+
+```
+Keystore provider: SunPKCS11-SimplySign
+Your keystore contains 1 entry
+41E1C9A2E3A20873F608F834D4B06507, PrivateKeyEntry,
+```
+
+One entry means jsign needs no `--alias` at all. Passing it anyway costs nothing and keeps the
+command correct if a renewed certificate ever puts a second key on the token.
 
 The script downloads the MSI from the release, Authenticode-signs it with
 `jsign` (RFC-3161 timestamp `http://time.certum.pl/`), verifies with `osslsigncode`, and
