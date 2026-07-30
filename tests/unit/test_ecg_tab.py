@@ -161,3 +161,59 @@ def test_autosuggest_writes_settings_and_selects_channel(qapp, tmp_path, monkeyp
     assert abs(e.ecg_min_distance_s - 0.45) < 1e-9 and abs(e.ecg_window_s - 0.4) < 1e-9
     assert pv.ecg_capture_channel.currentIndex() == 2        # reflected into the widget
     win.close()
+
+
+def test_loading_an_analysis_with_a_stuck_auto_batch_repairs_it(qapp, tmp_path):
+    """Loading is the path the interactive guard above does not cover.
+
+    Emil's S07.toml, 30-07-2026: it carried ``ecg_auto_detect = true`` with
+    ``remove_ecg = false``. Measured before this fix — the checkbox came up ticked AND
+    disabled, ``_settings_ok`` reported the analysis invalid so every preview was gated out
+    with "Settings incomplete", the mechanics test run died on ``SettingsError:
+    processing.emg.ecg_auto_detect requires processing.emg.remove_ecg to be enabled`` behind
+    a raw traceback, and there was no way to untick the box without re-enabling Remove ECG
+    first. The interactive path had a guard (test above); the load path had none.
+
+    Repairing is the right way round here: remove_ecg is the switch the user sees, and
+    auto-detect is a sub-option of it. The CLI still raises on such a file, deliberately —
+    a hand-written config with that pair is a mistake worth reporting, not silently altering.
+    """
+    s = synth_settings(str(tmp_path), remove_ecg=False, data_out=_DATA_OUT)
+    s.processing.emg.ecg_auto_detect = True          # the invalid pair, as stored in the file
+    s.processing.emg.remove_ecg = False
+
+    pv = _win(s).preview_screen
+
+    assert s.processing.emg.ecg_auto_detect is False, "the stored pair must be repaired, not just the widget"
+    assert pv.ecg_auto_batch.isChecked() is False
+    assert pv.ecg_auto_batch.isEnabled() is False     # still gated on Remove ECG
+    # And the analysis must now be runnable at all, which is the whole point.
+    ok, why = pv._settings_ok()
+    assert ok is True, why
+    s.validate()                                      # would raise before the fix
+
+
+def test_the_repair_is_announced_and_marks_the_analysis_dirty(qapp, tmp_path):
+    """A silent repair would change what the file asked for without saying so."""
+    s = synth_settings(str(tmp_path), remove_ecg=False, data_out=_DATA_OUT)
+    s.processing.emg.ecg_auto_detect = True
+    pv = _win(s).preview_screen
+
+    seen = []
+    pv.settings_edited.connect(lambda *_: seen.append(True))
+    pv._announce_ecg_auto_repair()                    # what the deferred timer calls
+    assert seen, "the repair changes the analysis, so it must mark it dirty"
+    # ...and only once: a second call must not re-announce or re-dirty
+    seen.clear()
+    pv._announce_ecg_auto_repair()
+    assert not seen
+
+
+def test_a_consistent_analysis_is_left_alone(qapp, tmp_path):
+    """The repair must not touch a legitimately enabled auto-detect."""
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    s.processing.emg.ecg_auto_detect = True
+    pv = _win(s).preview_screen
+    assert s.processing.emg.ecg_auto_detect is True
+    assert pv.ecg_auto_batch.isChecked() is True
+    assert pv._ecg_auto_repaired is False

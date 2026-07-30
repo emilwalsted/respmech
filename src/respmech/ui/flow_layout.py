@@ -112,6 +112,19 @@ class FlowLayout(QLayout):
         m = self.contentsMargins()
         eff = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
         x, y, line_h = eff.x(), eff.y(), 0
+        # Placement happens a ROW at a time, because an item's vertical position depends on
+        # how tall the tallest item in its row turns out to be — which is not known until the
+        # row is complete. Placing each item as it came put everything flush with the row's
+        # top edge, so on the ECG strip the "Capture channel"/"Min height"/"Min gap" captions
+        # and the two checkboxes sat visibly higher than the spin boxes and buttons beside
+        # them (Emil, 30-07-2026). Buffer the row, then centre each item in it.
+        row: list = []
+
+        def flush(row_h: int) -> None:
+            for item, ix, iw, ih in row:
+                item.setGeometry(QRect(QPoint(ix, y + max(0, (row_h - ih) // 2)), QSize(iw, ih)))
+            row.clear()
+
         for it in self._items:
             hint = it.sizeHint()
             w, h = hint.width(), hint.height()
@@ -127,12 +140,16 @@ class FlowLayout(QLayout):
                 w = eff.width()
                 h = it.heightForWidth(w) if it.hasHeightForWidth() else h
             if x + w > eff.right() + 1 and line_h > 0:      # wrap to the next line
+                if apply:
+                    flush(line_h)
                 x, y = eff.x(), y + line_h + self._v
                 line_h = 0
             if apply:
-                it.setGeometry(QRect(QPoint(x, y), QSize(w, h)))
+                row.append((it, x, w, h))
             x += w + self._h
             line_h = max(line_h, h)
+        if apply:
+            flush(line_h)
         return y + line_h - rect.y() + m.bottom()
 
 
