@@ -122,7 +122,23 @@ Confirmed 29-07-2026 while baselining a documentation-only change (no Python tou
   log — one section per release, newest first. Add its entry as **step 1** of every
   release (see `docs/RELEASING.md`), before bumping the version. `respmech-website`'s
   `changelog.html` mirrors it in a version trimmed to what an app user cares about
-  (no CI/packaging-only notes); update both together.
+  (no CI/packaging-only notes); update both together. Since 30-07-2026 the website
+  side is automatic: on a release its workflow *promotes* the hand-written "Coming
+  next" section into `vX.Y.Z` and takes only the lead sentence from the entry here.
+  So keep "Coming next" on respmech.dk current as you merge, and the release
+  announces itself; the mailing-list e-mail is built from that very section, and a
+  missing one used to mean subscribers silently got nothing.
+- **`tools/check_changelog.py`** (added 30-07-2026) answers "is the entry
+  exhaustive?" with evidence instead of memory. It walks the commits in the range,
+  sets aside the ones touching only tests/docs/CI/tooling, and prints every
+  user-visible change beside the bullet that best matches it, weakest first. It
+  fails on the one thing a word comparison can be certain of: a change with **no**
+  trace in the entry. Weaker matches are a worksheet, not a verdict — three
+  successively cleverer rules were tried and each was measurably foolable on the
+  same data, which is documented in the tool and pinned by
+  `tests/unit/test_check_changelog.py`. A deliberate omission is recorded with
+  `<!-- changelog-skip <sha7> <reason> -->`, never merely silenced. Hard gate on the
+  tag in `publish-pypi.yml`; informational worksheet on every push in `ci.yml`.
 - **`## Unreleased`** (added 29-07-2026) is a hand-maintained draft sitting above the
   latest dated release, describing everything since the last tag. It is updated only
   when explicitly asked to, never automatically per commit. At release time (step 1

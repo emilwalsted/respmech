@@ -69,6 +69,15 @@ jobs:
         working-directory: ${{ runner.temp }}
         run: python -c "import respmech.ui.splash as s; from PySide6.QtWidgets import QApplication; from respmech.ui import theme; from respmech.ui.state import AppState; from respmech.ui.main_window import MainWindow; app=QApplication([]); theme.apply_theme(app); s.make_splash(app); w=MainWindow(AppState()); assert w.tabs.count()==3; print('GUI OK')"
 
+      # Informational on purpose: the changelog is updated deliberately, not on
+      # every commit (see the note in CHANGELOG.md), so this must not fail a
+      # branch. It prints the worksheet — which user-visible changes are covered,
+      # which are weakly matched, which have no trace — so the entry can be kept
+      # honest while the work is fresh instead of reconstructed at release time.
+      # The hard gate lives in publish-pypi.yml, on the tag.
+      - name: Changelog coverage (informational)
+        run: python3 tools/check_changelog.py --warnings-only
+
       - name: Unit suite (headless, offscreen Qt)
         run: |
           # PySide6 can crash at interpreter shutdown on headless CI (macOS Abort trap 6 /
