@@ -78,6 +78,7 @@ feedback during batch runs.
 - Cached file loading and ECG removal per run instead of repeating them
 - Vectorised the sliding-window RMS calculation and the sample-entropy candidate counting
 - Narrowed the ECG template-fit search before evaluating candidates
+  <!-- site: 0 merged "Narrowed the ECG template-fit" the page says it as one faster-EMG-processing bullet -->
 - Removed an unnecessary import of the compute core just to open a window
 - Preview plots now use pyqtgraph decimation and view clipping
 - The Run screen shows progress during the write phase, and the overall progress bar now reaches 100%
@@ -89,6 +90,7 @@ writing batch figures.
 
 - Fixed the packaged app re-launching itself when writing batch figures
 - Regenerated the README screenshots for the v2.3.0 UI
+  <!-- site: 0 docs "Regenerated the README screenshots" repository images only; nothing changes in the app -->
 - More realistic sample EMG, with a recruited motor-unit interference pattern
 
 ## v2.3.0 — 2026-07-22
@@ -99,9 +101,11 @@ settings on Preview/Mechanics/EMG, and refined plot layouts.
 - Setup screen slimmed down; less-common settings moved into "Advanced…" modals on the Preview, Mechanics and EMG screens
 - Channels list is now a read-only readout; the channel picker is the only place that assigns roles
 - A column can now be flagged for sample entropy independently of its other role
-- Cardiac-gated peak EMG exposed as an opt-in per-breath statistic, selectable from Setup
+- Cardiac-gated peak EMG exposed as an opt-in per-breath statistic, on the EMG tab of Preview beside the EMG it changes
 - Flow silhouette is now drawn around zero rather than around the EMG midpoint
+- Noise reduction now says in the interface that it waits for ECG removal first, instead of appearing inert
 - Diagnostic figures are now written in a separate process
+  <!-- site: 0 internal "Diagnostic figures are now written" figures are byte-identical, and it falls back in process -->
 - Fixed three silent-mutation bugs: an unassigned channel could silently analyse the wrong (last) column instead of raising an error, opening the channel-assignment dialog could silently drop the EMG role from analysis, and scrolling the mouse wheel over a form could silently change the setting under the cursor — including the EMG RMS window, which changes every reported EMG value. If you ran analyses on an affected build, it is worth re-checking the results
 - Numerous plot-theming, spin-box and dialog fixes for Windows/macOS parity
 - Releases are now published as full GitHub releases rather than pre-releases
