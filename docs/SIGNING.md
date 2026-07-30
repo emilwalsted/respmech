@@ -90,17 +90,33 @@ After a `v*` tag has published (the release carries the **unsigned** MSI), run:
 
 ```bash
 # physical card (default)
-CERTUM_PIN=<card-PIN> CERTUM_ALIAS="<cert alias>" scripts/sign-msi-certum.sh v2.1.1
+scripts/sign-msi-certum.sh v2.1.1
 
 # SimplySign cloud instead
 CERTUM_STORETYPE=PKCS11 CERTUM_PKCS11_CFG=~/certum-pkcs11.cfg \
-  CERTUM_PIN=<PIN> CERTUM_ALIAS="<alias>" scripts/sign-msi-certum.sh v2.1.1
+  scripts/sign-msi-certum.sh v2.1.1
 ```
+
+Neither `CERTUM_ALIAS` nor `CERTUM_PIN` is normally needed. There is one key on the token, so
+jsign uses it without being told which, and while the SimplySign Desktop session is logged in
+the token is already unlocked. Set them only when something asks for them.
+
+**If you do need the alias, `jsign` will not tell you.** Run without `--alias` and it does not
+list anything, it goes ahead and signs. `keytool` is the listing tool:
+
+```bash
+keytool -list -keystore NONE -storetype PKCS11 \
+  -addprovider SunPKCS11 -providerArg ~/certum-pkcs11.cfg
+```
+
+(On a JDK older than 9, `-providerClass sun.security.pkcs11.SunPKCS11 -providerArg <cfg>`
+instead of `-addprovider`. For the physical card, the same command with the card's own PKCS#11
+config.) The alias is the whole line before the comma, typically
+`Open Source Developer, <your name>`.
 
 The script downloads the MSI from the release, Authenticode-signs it with
 `jsign` (RFC-3161 timestamp `http://time.certum.pl/`), verifies with `osslsigncode`, and
-re-uploads it over the unsigned asset (`gh release upload --clobber`). Run `jsign` once with
-no `--alias` to list the key aliases on the card/token if you don't know yours.
+re-uploads it over the unsigned asset (`gh release upload --clobber`).
 
 It refuses to start while `release.yml` is still building for that tag, and says why. That run
 uploads the MSI it built with `--clobber`, so a signature applied in the meantime is replaced
