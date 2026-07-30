@@ -82,6 +82,17 @@ def repo(tmp_path: Path) -> Path:
     r = tmp_path / "repo"
     r.mkdir()
     _git(r, "init", "-q", "-b", "main")
+    # The two files carrying the version exist from the start, as they do in the real
+    # repo. Whether the release commit adds them or edits them changes what its diff
+    # looks like, and the release-commit rule reads that diff.
+    (r / "src" / "respmech").mkdir(parents=True)
+    (r / "src" / "respmech" / "__init__.py").write_text(
+        '__version__ = "1.0.0"\n', encoding="utf-8"
+    )
+    (r / "pyproject.toml").write_text(
+        '[tool.briefcase]\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    _git(r, "add", "src/respmech/__init__.py", "pyproject.toml")
     _commit(r, "src/respmech/core.py", "x = 1\n", "initial")
     _git(r, "tag", "v1.0.0")
 
@@ -242,3 +253,53 @@ def test_a_shallow_clone_is_refused_not_silently_useless(tmp_path: Path) -> None
     assert code == 2, out
     assert "overfladisk" in out or "shallow" in out
     assert "fetch-depth" in out
+
+
+def _bump(repo: Path, fra: str, til: str, ekstra: str = "") -> None:
+    """The release commit: raise the version in both places, nothing else."""
+    init = repo / "src" / "respmech" / "__init__.py"
+    init.parent.mkdir(parents=True, exist_ok=True)
+    init.write_text(f'__version__ = "{til}"\n{ekstra}', encoding="utf-8")
+    (repo / "pyproject.toml").write_text(
+        f'[tool.briefcase]\nversion = "{til}"\n', encoding="utf-8"
+    )
+    _git(repo, "add", "src/respmech/__init__.py", "pyproject.toml")
+    _git(repo, "commit", "-m", f"Release v{til}")
+
+
+def test_the_release_commit_itself_is_not_a_change_to_describe(repo: Path) -> None:
+    """The gate must not fail the very release it is gating.
+
+    Measured, not hypothetical: v2.3.3 was tagged, publish-pypi.yml ran this check on
+    the tag, the check reported the release commit as a user-visible change with no
+    trace in the entry, and PyPI got nothing. The version lives in src/ and in
+    pyproject.toml, so raising it looks exactly like an undocumented code change.
+    """
+    _changelog(
+        repo,
+        "- Added `ecg_auto_detect` so ECG detection can drive batch runs\n"
+        "- The Mechanics advanced dialog's detail fields now follow their checkbox\n",
+    )
+    _bump(repo, "1.0.0", "1.1.0")
+    code, out = _run(repo)
+    assert code == 0, out
+    assert "kun versionsnummeret" in out, "the reason must be visible, not implied"
+    assert "Release v1.1.0" in out
+
+
+def test_a_real_change_riding_along_with_the_version_still_counts(repo: Path) -> None:
+    """The narrowness is the point: the exemption is for version lines only.
+
+    Otherwise it would be a way to slip a change past the gate by committing it
+    together with the bump, which is exactly the moment a release is being rushed.
+    """
+    _changelog(
+        repo,
+        "- Added `ecg_auto_detect` so ECG detection can drive batch runs\n"
+        "- The Mechanics advanced dialog's detail fields now follow their checkbox\n",
+    )
+    _bump(repo, "1.0.0", "1.1.0", ekstra="DEFAULT_SMOOTHING_MS = 250\n")
+    code, out = _run(repo)
+    assert code == 1, out
+    assert "UDEN SPOR" in out
+    assert "Release v1.1.0" in out

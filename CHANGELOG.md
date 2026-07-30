@@ -68,6 +68,7 @@ and a set of interface fixes, since v2.3.2.
 - The control strips on Preview & QC now line their captions, tickboxes, fields and
   buttons up on a shared centre line, instead of hanging from a shared top edge
 - Added this CHANGELOG.md, covering the full v2.0.0–v2.3.2 release history
+  <!-- site: 0 docs "Added this CHANGELOG.md" respmech.dk's changelog page already IS this list -->
 
 ## v2.3.2 — 2026-07-24
 
