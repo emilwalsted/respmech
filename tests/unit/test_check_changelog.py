@@ -211,3 +211,34 @@ def test_an_empty_range_is_not_an_error(repo: Path) -> None:
     code, out = _run(repo)
     assert code == 0, out
     assert "Intet at kontrollere" in out
+
+
+def test_a_shallow_clone_is_refused_not_silently_useless(tmp_path: Path) -> None:
+    """A shallow checkout has no tags, so there is no range to measure.
+
+    Measured in a real ``git clone --depth 1`` of this repo before the guard existed:
+    without ``--version`` the tool reported "1 commits, 1 to review" and exited 0 — a
+    completely contentless green light — and *with* ``--version`` it failed with "not a
+    tag in this repo", which in the release gate would have stopped every single
+    release. Both are worse than refusing outright, so it refuses outright and names
+    the fix. The workflows set ``fetch-depth: 0`` for the same reason."""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-q", "-b", "main")
+    _commit(origin, "src/respmech/core.py", "x = 1\n", "initial")
+    _git(origin, "tag", "v1.0.0")
+    _commit(origin, "src/respmech/emg.py", "y = 2\n", "a user-visible change")
+
+    shallow = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", "file://" + str(origin), str(shallow)],
+        check=True,
+        capture_output=True,
+    )
+    (shallow / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## Unreleased\n\nA release.\n\n- something\n", encoding="utf-8"
+    )
+    code, out = _run(shallow)
+    assert code == 2, out
+    assert "overfladisk" in out or "shallow" in out
+    assert "fetch-depth" in out

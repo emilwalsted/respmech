@@ -41,6 +41,12 @@ jobs:
       PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Fuld historik OG tags: tools/check_changelog.py måler et
+          # commit-interval mellem to tags, og standard-dybden (1) giver hverken
+          # tags eller historik. Målt: uden dette melder kontrollen et
+          # indholdsløst grønt, og release-porten fejler på hver udgivelse.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -118,6 +124,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Fuld historik OG tags: tools/check_changelog.py måler et
+          # commit-interval mellem to tags, og standard-dybden (1) giver hverken
+          # tags eller historik. Målt: uden dette melder kontrollen et
+          # indholdsløst grønt, og release-porten fejler på hver udgivelse.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:

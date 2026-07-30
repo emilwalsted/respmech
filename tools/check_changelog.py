@@ -250,6 +250,24 @@ def main(argv) -> int:
     if kør(['git', 'rev-parse', '--git-dir']).returncode != 0:
         fejl('dette er ikke et git-arbejdstræ')
 
+    # En overfladisk klon har ingen tags og næsten ingen historik, og så måler denne
+    # kontrol ingenting. Målt i en `git clone --depth 1` af dette repo: uden
+    # --version meldte den "1 commits, 1 til gennemsyn" og var grøn, altså et
+    # fuldstændig indholdsløst grønt lys, og MED --version fejlede den med "er ikke
+    # et tag i dette repo" — hvilket i en release-port ville betyde, at hver eneste
+    # udgivelse blev stoppet af værktøjet selv. Derfor siges det højt her.
+    # `actions/checkout` henter som standard dybde 1; workflowene sætter
+    # fetch-depth: 0 af netop denne grund.
+    if kør(['git', 'rev-parse', '--is-shallow-repository']).stdout.strip() == 'true':
+        fejl('dette er en overfladisk (shallow) klon, så hverken tags eller historik er '
+             'fuldt tilgængelige, og kontrollen ville måle ingenting.\n'
+             '       Kør `git fetch --unshallow --tags`, eller sæt `fetch-depth: 0` på '
+             'actions/checkout i workflowet.')
+    if not tags():
+        fejl('der findes ingen v*-tags i denne klon, så der er intet interval at måle '
+             'imod.\n       Kør `git fetch --tags`, eller sæt `fetch-depth: 0` på '
+             'actions/checkout i workflowet.')
+
     navn, tekst = entry(a.version)
     fra, til, beskrivelse = spænd(a.version)
     fritaget = waivers()
