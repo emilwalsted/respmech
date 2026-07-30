@@ -49,17 +49,50 @@ environment (e.g. required reviewer, or restrict to tags) for a manual gate befo
    #   pyproject.toml           :  [tool.briefcase] version = "2.3.0"
    ```
 
-3. **Verify locally** (optional but recommended):
+3. **Check the entry actually covers the release:**
+
+   ```bash
+   python3 tools/check_changelog.py --version vX.Y.Z   # after tagging
+   python3 tools/check_changelog.py                    # before, against Unreleased
+   ```
+
+   It walks the commits in the range, sets aside the ones that only touch tests, docs,
+   CI or tooling, and reports every user-visible change together with the bullet that
+   best matches it, weakest match first. It **fails** on the one thing a word
+   comparison can be certain of: a change with no trace in the entry at all. Weaker
+   matches are a worksheet for you to read, not a verdict — the tool says so itself,
+   and the reasoning is in its docstring. A deliberate omission is recorded rather
+   than silenced, with `<!-- changelog-skip <sha7> <reason> -->` in CHANGELOG.md.
+
+   `publish-pypi.yml` runs the same check on the tag, so an incomplete entry stops the
+   PyPI publish instead of shipping quietly. `ci.yml` prints the worksheet on every
+   push, which is the cheap moment to keep the entry honest.
+
+4. **The website's changelog page updates itself.** Nothing to do here, but worth
+   knowing why it matters: respmech.dk's changelog page carries a hand-written
+   "Coming next" section, and on a release the website's workflow *promotes* that
+   section into `vX.Y.Z` (`tools/promote-changelog.py` over there), leaving a fresh
+   empty one behind. It promotes rather than generates because that page is the
+   reader-facing rewrite of these bullets, in the site's own voice, and no script
+   should try to reproduce that from Markdown. It takes only the lead sentence from
+   the entry you wrote in step 1.
+   The reason it is automated at all: the site's `api/notify.php` builds the
+   release-notification e-mail from that section, matched by `id="vX-Y-Z"`, and
+   answers 404 without it. So a missing section used to mean the mailing list
+   silently got nothing. Keep "Coming next" on respmech.dk up to date as you merge,
+   and the release announces itself.
+
+5. **Verify locally** (optional but recommended):
 
    ```bash
    python -m pytest tests/unit tests/golden/test_golden.py -q
    python -m build && python -m twine check dist/*
    ```
 
-4. **Commit and land on `master`** — the workflows must exist at the tagged commit, so the
+6. **Commit and land on `master`** — the workflows must exist at the tagged commit, so the
    tag has to point at `master` (as the signing pipeline already requires).
 
-5. **Tag and push:**
+7. **Tag and push:**
 
    ```bash
    git tag v2.3.0            # must equal __version__

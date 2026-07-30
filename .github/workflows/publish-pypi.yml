@@ -60,6 +60,18 @@ jobs:
       - name: Run tests
         run: python -m pytest tests/unit tests/golden/test_golden.py -q
 
+      # CHANGELOG.md's entry is what the release tells anyone: RELEASING.md folds it
+      # into the dated section, respmech.dk's changelog page is the reader-facing
+      # rewrite of the same list, and the mailing-list notification is built from
+      # that page. A change that never reached the entry is a change nobody is ever
+      # told about, so this gate refuses to publish when a user-visible commit in
+      # the tagged range has no trace in it. It fails only on that one thing it can
+      # be certain of; weaker matches are printed as a worksheet, not a verdict
+      # (tools/check_changelog.py explains why, at length).
+      - name: The changelog entry must cover the tagged range
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python3 tools/check_changelog.py --version "${GITHUB_REF_NAME}"
+
   # ── 2. Build + verify the distributions ──────────────────────────────────────────────
   build:
     name: Build sdist + wheel
