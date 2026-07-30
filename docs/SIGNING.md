@@ -102,6 +102,12 @@ The script downloads the MSI from the release, Authenticode-signs it with
 re-uploads it over the unsigned asset (`gh release upload --clobber`). Run `jsign` once with
 no `--alias` to list the key aliases on the card/token if you don't know yours.
 
+It refuses to start while `release.yml` is still building for that tag, and says why. That run
+uploads the MSI it built with `--clobber`, so a signature applied in the meantime is replaced
+by an unsigned asset minutes later, and nothing about the release looks wrong afterwards: same
+name, same version, no signature. A second argument `--force` signs anyway. The case that made
+this worth checking was v2.3.3, whose tag was moved onto a fix, which ran both workflows again.
+
 > **SmartScreen reputation.** A brand-new Certum OSS certificate has no Microsoft SmartScreen
 > reputation, so the first downloads may still show "unrecognised app" even though the
 > signature and publisher are valid — reputation accrues as the signed installer is used. This
