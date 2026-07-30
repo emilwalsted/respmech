@@ -237,11 +237,28 @@ jobs:
             echo
             echo "Bundles its own Python + the full scientific stack; no separate install needed."
           } > notes.md
-          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
-            --title "RespMech $GITHUB_REF_NAME" \
-            --latest \
-            --notes-file notes.md \
-            dist/*/*.msi dist/*/*.dmg
+          # `gh release create` fails outright if the release is already there, and
+          # a tag does get re-pushed: a release whose PyPI publish was stopped by
+          # the changelog gate is finished by moving the tag onto the fix, which
+          # runs this workflow a second time. Rebuilding the installers and then
+          # failing at the last line would leave the run red for no reason, so an
+          # existing release is updated in place instead. --clobber replaces the
+          # assets, which is the point: they were just rebuilt.
+          if gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; updating it in place."
+            gh release edit "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
+              --title "RespMech $GITHUB_REF_NAME" \
+              --latest \
+              --notes-file notes.md
+            gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
+              --clobber dist/*/*.msi dist/*/*.dmg
+          else
+            gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
+              --title "RespMech $GITHUB_REF_NAME" \
+              --latest \
+              --notes-file notes.md \
+              dist/*/*.msi dist/*/*.dmg
+          fi
 
       # Tell the website (emilwalsted/respmech-website) to re-publish so its
       # download button / version labels pick up this release immediately. A
