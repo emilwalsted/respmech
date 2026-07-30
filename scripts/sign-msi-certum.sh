@@ -69,6 +69,30 @@ for tool in jsign gh; do
   command -v "$tool" >/dev/null 2>&1 || { echo "error: '$tool' not found — brew install $tool" >&2; exit 1; }
 done
 
+# A build still in flight overwrites whatever we sign. release.yml uploads the MSI
+# it just built with --clobber, so signing during that run means the signature is
+# replaced by an unsigned asset minutes later, and nothing says so: the release
+# still lists an MSI of the right name and version. This became real when v2.3.3's
+# tag was moved onto a fix and both workflows ran a second time. Cheap to check, so
+# it is checked rather than remembered.
+if [ "${2:-}" != "--force" ]; then
+  echo "==> Checking that no build is still running for $TAG …"
+  RUNNING="$(gh run list -R "$REPO" --workflow release.yml --limit 20 \
+              --json headBranch,status,url \
+              --jq "[.[] | select(.headBranch == \"$TAG\")
+                         | select(.status != \"completed\")] | .[0].url" 2>/dev/null || true)"
+  if [ -n "$RUNNING" ] && [ "$RUNNING" != "null" ]; then
+    echo "error: release.yml is still running for $TAG:" >&2
+    echo "         $RUNNING" >&2
+    echo "       It uploads the MSI it builds with --clobber, so a signature applied" >&2
+    echo "       now would be replaced by an unsigned asset when that run finishes." >&2
+    echo "       Wait for it to go green, then run this again." >&2
+    echo "       (Add --force to sign anyway.)" >&2
+    exit 1
+  fi
+  echo "    nothing in progress."
+fi
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
