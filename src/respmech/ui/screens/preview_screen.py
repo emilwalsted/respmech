@@ -572,6 +572,7 @@ class PreviewScreen(QWidget):
         self._blanked_for_invalid = False   # see _schedule's settings gate
         self._loading_noise = False
         self._loading_ecg = False
+        self._ecg_auto_repaired = False   # see _load_ecg_params' repair of a stuck auto-detect
         self._ecg_capture_subplots = []   # per-channel PlotItems of the ECG-processed stack
         # breath-overlay interaction state (feature A)
         self._channel_plots = []
@@ -688,6 +689,11 @@ class PreviewScreen(QWidget):
         self._load_gated_params()
         self._ensure_noise_region()
         self._update_emg_tab_visibility()
+        # If loading repaired a stuck auto-detect, say so rather than quietly changing what
+        # the file asked for. Deferred to the event loop because the status label and the
+        # dirty marker both belong to a window that is still being constructed here.
+        if self._ecg_auto_repaired:
+            QTimer.singleShot(0, self._announce_ecg_auto_repair)
 
         self.file_combo.currentTextChanged.connect(self._on_file_selected)
         # the chip's themed height isn't known until the EMG sub-tab is first laid out;
@@ -1158,6 +1164,24 @@ class PreviewScreen(QWidget):
         self._loading_ecg = True
         try:
             e = self.state.settings.processing.emg
+            # An analysis file can carry ecg_auto_detect=True with remove_ecg=False.
+            # Settings.validate rejects that pair, and the interactive path clears it (see
+            # _on_ecg_param_changed) — but LOADING one did not. Measured on Emil's S07.toml,
+            # 30-07-2026: the checkbox came up ticked AND disabled, every preview was gated
+            # out with "Settings incomplete", and the mechanics test run died on
+            # `SettingsError: processing.emg.ecg_auto_detect requires
+            # processing.emg.remove_ecg to be enabled` behind a raw traceback. There was no
+            # way to untick the box without re-enabling Remove ECG first.
+            #
+            # So repair it here, in the one funnel every ECG load goes through. Repairing
+            # rather than refusing is the right way round for the GUI: remove_ecg is the
+            # switch the user sees, and auto-detect is a sub-option of it, exactly like the
+            # gated detail fields elsewhere on this strip. The CLI keeps raising, because a
+            # hand-written config with that pair IS a mistake worth reporting rather than
+            # silently altering.
+            if e.ecg_auto_detect and not e.remove_ecg:
+                e.ecg_auto_detect = False
+                self._ecg_auto_repaired = True
             self.remove_ecg.setChecked(bool(e.remove_ecg))
             self.ecg_auto_batch.setChecked(bool(e.ecg_auto_detect))
             self.ecg_min_height.setValue(float(e.ecg_min_height))
@@ -1169,6 +1193,22 @@ class PreviewScreen(QWidget):
                 self.ecg_capture_channel.setCurrentIndex(max(0, min(int(e.detect_channel), len(cols) - 1)))
         finally:
             self._loading_ecg = False
+
+    def _announce_ecg_auto_repair(self):
+        """Tell the user that an impossible ECG combination was corrected on load.
+
+        Not silent: the file said "auto-detect the whole batch", and the analysis now says
+        it does not. Marking it dirty is deliberate too, so saving keeps the corrected
+        pair instead of writing the invalid one back."""
+        if not self._ecg_auto_repaired:
+            return
+        self._ecg_auto_repaired = False
+        self.settings_edited.emit()
+        self._set_status(
+            "This analysis had ECG auto-detect switched on with Remove ECG switched off, "
+            "which cannot run. Auto-detect has been turned off. Tick Remove ECG first if "
+            "you want it back."
+        )
 
     def _on_ecg_param_changed(self, *_):
         if self._loading_ecg:
