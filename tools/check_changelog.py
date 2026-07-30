@@ -104,7 +104,15 @@ def spænd(version: str | None):
         return t[0], 'HEAD', f'{t[0]}..HEAD'
     v = 'v' + version.strip().lstrip('vV')
     if v not in t:
-        fejl(f'{v} er ikke et tag i dette repo. Kør uden --version for at tjekke Unreleased')
+        # Den vigtigste gang, man vil koere denne kontrol, er lige FOER man tagger: entrien
+        # er foldet til en dateret sektion, saa der er ingen "Unreleased" tilbage at maale,
+        # og tagget findes endnu ikke. At fejle dér gjorde vaerktoejet ubrugeligt i netop det
+        # oejeblik (opdaget under klargoeringen af v2.3.3). Maal derfor mod HEAD i stedet, og
+        # sig at det er det, der sker.
+        if not t:
+            fejl('der findes ingen v*-tags at maale imod')
+        print(f'note: {v} er ikke tagget endnu, saa intervallet maales til HEAD.\n')
+        return t[0], 'HEAD', f'{t[0]}..HEAD (endnu ikke tagget som {v})'
     i = t.index(v)
     forrige = t[i + 1] if i + 1 < len(t) else None
     if forrige is None:

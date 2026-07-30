@@ -18,10 +18,10 @@ comment (like this one) so it stays invisible until asked for again:
 (nothing pending — ask for an update to populate this section)
 -->
 
-## Unreleased
+## v2.3.3 — 2026-07-30
 
-Batch-mode ECG auto-detection, an advanced-dialog polish fix, and a window-sizing
-fix, since v2.3.2.
+Batch-mode ECG auto-detection, a volume-trend correction that scales to the recording,
+and a set of interface fixes, since v2.3.2.
 
 - Added `processing.emg.ecg_auto_detect` so ECG auto-detection (previously reachable
   only via the GUI's "Auto-suggest" button) can now drive CLI/batch runs: analysed
@@ -58,6 +58,15 @@ fix, since v2.3.2.
   never inside it, so the window demanded 1516 px where a 13" laptop offers 1280.
   The chips now wrap cluster by cluster, which brings the minimum to 1228 px on
   Windows and about 700 px on macOS
+- Fixed an analysis file that stored ECG auto-detect switched ON with Remove ECG
+  switched OFF becoming unusable: the tickbox came up ticked and greyed at once, every
+  preview was refused as "Settings incomplete", a test run stopped on a settings error,
+  and there was no way to untick it without turning Remove ECG back on first. Loading
+  such a file now corrects the pair and says so, and the correction is saved with the
+  analysis. The command-line tool still reports the combination as an error, because in
+  a hand-written file it is one
+- The control strips on Preview & QC now line their captions, tickboxes, fields and
+  buttons up on a shared centre line, instead of hanging from a shared top edge
 - Added this CHANGELOG.md, covering the full v2.0.0–v2.3.2 release history
 
 ## v2.3.2 — 2026-07-24
