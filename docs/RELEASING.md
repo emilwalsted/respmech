@@ -82,17 +82,46 @@ environment (e.g. required reviewer, or restrict to tags) for a manual gate befo
    silently got nothing. Keep "Coming next" on respmech.dk up to date as you merge,
    and the release announces itself.
 
-5. **Verify locally** (optional but recommended):
+5. **Check the page says all of it** — from the website clone, beside this one:
+
+   ```bash
+   cd ../respmech-website
+   python3 tools/check-coverage.py --version vX.Y.Z --changelog ../respmech/CHANGELOG.md
+   ```
+
+   Step 3 asks whether the entry covers the commits. This asks whether the *page*
+   covers the entry, which is a different question with the same failure mode: v2.3.3
+   went out with nine entries in CHANGELOG.md and six bullets on the page, because two
+   fixes were written here while the release was being cut and never over there. The
+   e-mail is built from the page, so those two were never announced.
+
+   Before the tag it reads "Coming next", which is the moment when fixing it costs
+   nothing. The verdict is a count, not a text comparison: matching the two by wording
+   was measured and does not work, because the page deliberately says the same thing
+   in different words. An entry that does not belong on the public page says so next
+   to itself, and the reason becomes part of the record:
+
+   ```markdown
+   - Removed an unnecessary import of the compute core just to open a window
+     <!-- site: 0 internal "Removed an unnecessary import" no visible difference -->
+   ```
+
+   The website's deploy workflow runs the same check after promoting. It cannot fail
+   the deploy, but on a shortfall it **holds the notification e-mail** and goes red
+   with the recipe, because `notify.php` sends once per version and a thin mail cannot
+   be taken back.
+
+6. **Verify locally** (optional but recommended):
 
    ```bash
    python -m pytest tests/unit tests/golden/test_golden.py -q
    python -m build && python -m twine check dist/*
    ```
 
-6. **Commit and land on `master`** — the workflows must exist at the tagged commit, so the
+7. **Commit and land on `master`** — the workflows must exist at the tagged commit, so the
    tag has to point at `master` (as the signing pipeline already requires).
 
-7. **Tag and push:**
+8. **Tag and push:**
 
    ```bash
    git tag v2.3.0            # must equal __version__
