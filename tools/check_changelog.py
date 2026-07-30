@@ -146,6 +146,34 @@ def brugersynlig(paths):
     return bool(rørte), rørte
 
 
+# De to steder versionsnummeret står. Begge hører til brugersynlig kode, og
+# release-commit'et rører netop dem og intet andet.
+VERSIONSFILER = {'pyproject.toml', 'src/respmech/__init__.py'}
+VERSIONSLINJE = re.compile(r'^[+-]\s*(?:__version__|version)\s*=\s*["\'][^"\']+["\']\s*$')
+
+
+def er_versionsbump(sha: str, rørte) -> bool:
+    """Er commit'et selve versionsopdateringen, og altså ikke en ændring at beskrive?
+
+    Release-commit'et hæver `__version__` og `[tool.briefcase] version`. Begge
+    ligger i filer, der ellers er brugersynlige, så uden denne regel melder
+    kontrollen release-commit'et som en ændring uden spor i entrien, og porten i
+    publish-pypi.yml stopper udgivelsen. Målt, ikke gættet: v2.3.3 blev tagget, og
+    PyPI fik ingenting, fordi kontrollen fældede sin egen release.
+
+    Reglen er snæver med vilje. Rører commit'et andet end de to filer, er den ude af
+    spil, og rører det KUN dem, skal hver enkelt ændret linje være en
+    versionstildeling. En rigtig ændring i `__init__.py` slipper altså ikke igennem,
+    blot fordi den ligger i samme commit som et versionsnummer."""
+    if set(rørte) - VERSIONSFILER:
+        return False
+    d = kør(['git', 'show', '--format=', '--unified=0', sha,
+             '--', *sorted(VERSIONSFILER)]).stdout
+    linjer = [linje for linje in d.splitlines()
+              if linje[:1] in '+-' and not linje.startswith(('+++', '---'))]
+    return bool(linjer) and all(VERSIONSLINJE.match(linje) for linje in linjer)
+
+
 def emne_ord(emne: str) -> set:
     """Ord fra commit-emnet. Forfatterens eget resumé er det mest pålidelige
     signal der findes; ord fra diffen er langt støjende (en variabel ved navn
@@ -302,6 +330,9 @@ def main(argv) -> int:
         synlig, rørte = brugersynlig(paths)
         if not synlig:
             sprunget.append((sha[:7], emne, ', '.join(paths[:3])))
+            continue
+        if er_versionsbump(sha, rørte):
+            sprunget.append((sha[:7], emne, 'kun versionsnummeret'))
             continue
         if sha[:7] in fritaget:
             waived.append((sha[:7], emne, fritaget[sha[:7]]))
