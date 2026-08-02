@@ -189,9 +189,9 @@ def test_preview_noise_params_expose_varpath_on_hover(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
     assert "processing.emg.noise.auto_prop" in pv.noise_auto.toolTip()
-    assert "processing.emg.noise.prop_decrease" in pv.noise_prop.toolTip()
-    assert "processing.emg.noise.fidelity_target" in pv.noise_target.toolTip()
-    assert "processing.emg.noise.n_std_thresh" in pv.noise_nstd.toolTip()
+    # prop_decrease / fidelity_target / n_std_thresh live only in the Advanced modal now,
+    # whose every row names its dotted path by construction — that is covered by
+    # test_every_row_names_its_settings_variable rather than duplicated here.
     # the ECG-removal params moved from Setup onto the ECG-reduction tab; varpaths follow
     assert "processing.emg.remove_ecg" in pv.remove_ecg.toolTip()
     assert "processing.emg.ecg_min_distance_s" in pv.ecg_min_distance.toolTip()

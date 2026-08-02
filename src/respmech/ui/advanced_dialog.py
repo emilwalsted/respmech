@@ -154,6 +154,8 @@ class AdvancedDialog(QDialog):
         self.setWindowTitle(title)
         sections = _as_sections(fields)
         self._fields = [f for _t, fs in sections for f in fs]
+        #: what the model held when this dialog opened — see edited_values()
+        self._opened_with = {}
         self._derived = derived
         self._widgets = {}
         self.cards = []
@@ -183,6 +185,7 @@ class AdvancedDialog(QDialog):
             for f in sect_fields:
                 w = f.build(values.get(f.key))
                 self._widgets[f.key] = w
+                self._opened_with[f.key] = f.read(w)   # as the widget rounded it, not raw
                 row = WrapLabel(f.label)
                 row.setToolTip(_tip(f.path, f.help))
                 card.add_row(row, w)
@@ -323,6 +326,20 @@ class AdvancedDialog(QDialog):
             self.derived.setText(self._derived(self.values()) or "")
         except Exception:                       # pragma: no cover — a hint is never fatal
             self.derived.setText("")
+
+    def edited_values(self):
+        """Only the settings the USER actually changed in this dialog.
+
+        ``values()`` returns everything the dialog holds, and committing all of it compares
+        each against the model as it is NOW — which silently reverts anything the app wrote
+        while the dialog was open. That is not hypothetical: with 'Auto' on, a finished noise
+        sweep writes its chosen ``prop_decrease`` back to the model, so pressing OK without
+        touching a thing put the stale opening value back, marked the analysis modified and
+        queued a five-panel recompute. Comparing against the values this dialog OPENED with
+        makes an untouched field a genuine no-op, whatever else happened meanwhile.
+        """
+        return {k: v for k, v in self.values().items()
+                if k not in self._opened_with or self._opened_with[k] != v}
 
     def values(self):
         """The staged values. A plain dict — the dialog never sees a Settings object."""

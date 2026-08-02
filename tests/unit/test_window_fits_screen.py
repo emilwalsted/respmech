@@ -163,7 +163,9 @@ def test_every_control_chip_can_be_squeezed_far_below_its_natural_width(qapp, tm
     """
     win = _window(qapp, tmp_path, remove_ecg=True, noise=True)
     pv = win.preview_screen
-    for name in ("ecg_opts", "noise_opts", "gate_opts"):
+    # noise_opts now holds a single toggle (its tuning fields moved into Advanced), so a
+    # wrapping guard on it would measure nothing; ecg_opts is still a multi-cluster chip.
+    for name in ("ecg_opts",):
         chip = getattr(pv, name)
         natural, floor = chip.sizeHint().width(), chip.minimumSizeHint().width()
         assert natural > 200, (
@@ -261,6 +263,7 @@ def test_the_preview_pages_scroll_instead_of_compressing_their_graphs(qapp, tmp_
     """
     from respmech.ui import theme
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+    from PySide6.QtWidgets import QCheckBox
     import pyqtgraph as pg
 
     win = _window(qapp, tmp_path, remove_ecg=True, noise=True)
@@ -299,12 +302,19 @@ def test_the_preview_pages_scroll_instead_of_compressing_their_graphs(qapp, tmp_
                     f"the page scrolling")
 
         # standalone graphs, INCLUDING the matplotlib canvases the first guard could not see
+        # Each graph against ITS OWN configured floor — the two small diagnostic figures
+        # carry PLOT_DIAG_MIN_HEIGHT, the working views PLOT_MIN_HEIGHT — plus a check that
+        # no floor was quietly set below the smallest one the app considers legible.
         singles = [g for g in page.findChildren(pg.PlotWidget) if g.isVisible()]
         singles += [c for c in page.findChildren(FigureCanvasQTAgg) if c.isVisible()]
         for g in singles:
-            assert g.height() >= theme.PLOT_MIN_HEIGHT * 0.9, (
-                f"{name!r}: {type(g).__name__} is {g.height()} px tall, under the "
-                f"{theme.PLOT_MIN_HEIGHT} px floor at which it stops showing a trace")
+            floor = g.minimumHeight()
+            assert floor >= theme.PLOT_DIAG_MIN_HEIGHT, (
+                f"{name!r}: {type(g).__name__} has a {floor} px floor, under the "
+                f"{theme.PLOT_DIAG_MIN_HEIGHT} px minimum for any readable figure")
+            assert g.height() >= floor * 0.9, (
+                f"{name!r}: {type(g).__name__} is {g.height()} px tall against its own "
+                f"{floor} px floor — the page compressed instead of scrolling")
 
         assert area.horizontalScrollBar().maximum() == 0, (
             f"{name!r} needs {area.horizontalScrollBar().maximum()} px of HORIZONTAL scroll — "
@@ -314,4 +324,106 @@ def test_the_preview_pages_scroll_instead_of_compressing_their_graphs(qapp, tmp_
     assert scrolled, (
         "no page scrolls at the shortest screen size, so this test is not measuring the case "
         "it exists for")
+    win.close()
+
+
+# ---------------------------------------------------------------------------
+# The Preview strip must earn its screen space (Emil, 02-08-2026)
+# ---------------------------------------------------------------------------
+def test_the_emg_strip_stays_one_line_on_a_laptop(qapp, tmp_path, windows_metrics):
+    """The controls strip may not wrap on a screen the app is supposed to fit.
+
+    It carried the noise chip AND a gated-peak chip AND a spectral-gate field that merely
+    duplicated the Advanced modal, and wrapped to two lines at 1280 px — spending on options
+    the vertical space the graphs needed. Measured on Windows metrics, which is where it
+    wrapped first.
+    """
+    win = _window(qapp, tmp_path, remove_ecg=True, noise=True)
+    win.tabs.setCurrentIndex(1)
+    pv = win.preview_screen
+    pv.refresh_files()
+    win.resize(_NARROWEST_SCREEN, 900)
+    pv.subtabs.setCurrentIndex(pv.subtabs.count() - 1)          # the noise page
+    for _ in range(10):
+        qapp.processEvents()
+
+    page = pv.subtabs.currentWidget().widget()
+    items = [w for w in (pv.noise_enabled, pv.btn_set_noise, pv.noise_ref_readout,
+                         pv.noise_opts, pv.btn_emg_advanced) if w.isVisible()]
+    assert items, "no strip controls are visible — the assertion below would be vacuous"
+    # A FlowLayout CENTRES items within their row, so tops differ inside one row; merge
+    # vertically-overlapping items into rows rather than counting distinct tops.
+    rows = []
+    for top, bottom in sorted((w.mapTo(page, w.rect().topLeft()).y(),
+                               w.mapTo(page, w.rect().bottomLeft()).y()) for w in items):
+        if rows and top < rows[-1][1]:
+            rows[-1] = (rows[-1][0], max(rows[-1][1], bottom))
+        else:
+            rows.append((top, bottom))
+    assert len(rows) == 1, (
+        f"the EMG strip wraps to {len(rows)} lines at {_NARROWEST_SCREEN} px — it is spending "
+        f"the graphs' vertical space on options that belong in Advanced")
+    win.close()
+
+
+def test_the_floating_panel_titles_never_sit_on_the_plotted_data(qapp, tmp_path):
+    """The Detail/Conditioned titles and their pickers float in the plot's top band, so the
+    band must actually be RESERVED. A fixed guess was tried first and put the channel combo
+    on top of the y axis' highest tick label — the very clipping this was fixing."""
+    from PySide6.QtWidgets import QCheckBox
+    win = _window(qapp, tmp_path, remove_ecg=True, noise=True)
+    win.tabs.setCurrentIndex(1)
+    pv = win.preview_screen
+    pv.refresh_files()
+    win.resize(1400, 950)
+    pv.subtabs.setCurrentIndex(pv.subtabs.count() - 1)
+    for _ in range(10):
+        qapp.processEvents()
+
+    overlays = getattr(pv, "_plot_title_overlays", [])
+    assert overlays, "no floating titles were built"
+    for ov in overlays:
+        data_top = ov._plot.getPlotItem().getViewBox().geometry().y()
+        assert ov._band > 0, f"{ov._label.text()!r} reserves no band at all"
+        assert ov._label.geometry().bottom() <= ov._band, (
+            f"{ov._label.text()!r} title overflows its reserved band")
+        if ov._corner is not None:
+            assert ov._corner.geometry().bottom() <= ov._band, (
+                f"{ov._label.text()!r} corner control overflows its reserved band")
+            # HORIZONTAL too. The first cut of this guard checked only vertical extents, and
+            # stayed green while a 12-channel picker was clipped off the right edge and
+            # printed straight over the title — the two defects it was written to catch.
+            corner_g, label_g = ov._corner.geometry(), ov._label.geometry()
+            assert corner_g.right() <= ov._plot.width(), (
+                f"{ov._label.text()!r}: the corner control reaches "
+                f"{corner_g.right()} px on a {ov._plot.width()} px plot — it is clipped")
+            assert corner_g.left() >= label_g.right(), (
+                f"{ov._label.text()!r}: the corner control starts at {corner_g.left()} px, "
+                f"over a title that ends at {label_g.right()} px")
+            for cb in ov._corner.findChildren(QCheckBox):
+                assert cb.mapTo(ov._plot, cb.rect().topRight()).x() <= ov._plot.width(), (
+                    f"{ov._label.text()!r}: channel toggle {cb.text()!r} is off the plot")
+        assert data_top >= ov._band - 2, (
+            f"{ov._label.text()!r}: the plot draws from y={data_top:.0f} into a "
+            f"{ov._band} px band the title and picker occupy")
+    win.close()
+
+
+def test_the_campbell_diagram_is_inset_from_its_panel(qapp, tmp_path):
+    """It is the one unframed surface on the screen, and it used to butt flush against the
+    panel edge and the table beside it."""
+    win = _window(qapp, tmp_path, remove_ecg=True, noise=True)
+    win.tabs.setCurrentIndex(1)
+    pv = win.preview_screen
+    pv.refresh_files()
+    win.resize(1400, 950)
+    for _ in range(10):
+        qapp.processEvents()
+    canvas, panel = pv.campbell, pv.campbell.parent()
+    g = canvas.geometry()
+    insets = {"left": g.x(), "top": g.y(),
+              "right": panel.width() - g.right() - 1,
+              "bottom": panel.height() - g.bottom() - 1}
+    assert all(v > 0 for v in insets.values()), (
+        f"the Campbell canvas touches its panel edge: {insets}")
     win.close()

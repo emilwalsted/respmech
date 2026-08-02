@@ -149,6 +149,13 @@ PLOT_MIN_HEIGHT = 130
 #: tick values — but still enough to see a breath in.
 PLOT_ROW_MIN_HEIGHT = 96
 
+#: Floor for a small DIAGNOSTIC figure — the noise-fidelity frontier and the detail PSD.
+#: They are read for a shape and a crossing point, not measured off, and they share the
+#: reference row at the bottom of the EMG tab. Giving them the full working-view floor made
+#: that row demand 159 px, which outvoted its 2:2:1 share and pushed it past half a working
+#: view's height on any window under ~1200 px tall.
+PLOT_DIAG_MIN_HEIGHT = 96
+
 
 def set_plot_floor(widget, height: int = PLOT_MIN_HEIGHT) -> None:
     """Stop a plot widget from being squeezed below the height at which it stops being
