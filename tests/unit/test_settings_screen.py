@@ -404,8 +404,8 @@ def test_preview_owned_settings_mark_the_analysis_dirty(qapp, tmp_path):
     pv._load_noise_params(); pv._load_ecg_params()
     assert not sc.is_dirty()
 
-    # a user noise-param edit dirties (the spinbox slot writes into state.settings)
-    pv.noise_prop.setValue(0.42); pv._on_noise_param_changed()
+    # a user noise-param edit dirties (the slot writes into state.settings)
+    pv.noise_auto.setChecked(not pv.noise_auto.isChecked()); pv._on_noise_param_changed()
     assert sc.is_dirty()
     assert win.windowTitle().rstrip().endswith("* (modified)")
 

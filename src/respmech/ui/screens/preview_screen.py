@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton,
                                QScrollArea, QSplitter, QTableWidget, QTableWidgetItem,
                                QTabWidget, QVBoxLayout, QWidget)
-from PySide6.QtCore import Qt, QEvent, QSize, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QEvent, QObject, QSize, QThread, QTimer, Signal
 from PySide6.QtGui import QFont
 
 import pyqtgraph as pg
@@ -410,6 +410,89 @@ class _FileRunError(RuntimeError):
     to the copyable error card."""
 
 
+class _PlotTitleOverlay(QObject):
+    """Float a panel's title — and its corner control — INSIDE the plot's top band.
+
+    The Detail and Conditioned panels used to spend a full layout row each on
+    "title … picker" above the graph; on a laptop that was the difference between the strips
+    wrapping and not (Emil, 02-08-2026: "kan flyttes ned så de ligger ovenpå grafen"). The
+    label and the control are separate small children of the plot widget — deliberately NOT
+    one full-width overlay row, whose body would eat the clicks meant for the plot between
+    them. ``BAND`` is also applied as the plot item's top content margin, which does two
+    jobs: the plotted data and the breath numbers stay clear of the floating controls, and
+    the y axis' top tick label stops being clipped at the widget edge (the other half of the
+    same report).
+    """
+
+    #: air above and below the floating row, inside the reserved band
+    PAD = 5
+
+    def __init__(self, plot, title, corner=None):
+        super().__init__(plot)
+        self._plot = plot
+        self._band = 0
+        self._label = QLabel(title, plot)
+        self._label.setProperty("status", "muted")
+        # the label is decoration: clicks through it belong to the plot underneath
+        self._label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._corner = corner
+        if corner is not None:
+            corner.setParent(plot)
+        plot.installEventFilter(self)
+        self._label.show()
+        if corner is not None:
+            corner.show()
+        self.fit()
+
+    def eventFilter(self, obj, ev):
+        if obj is self._plot and ev.type() in (QEvent.Resize, QEvent.Show):
+            self.fit()
+        return False
+
+    #: gap kept between the title and the corner control
+    TITLE_GAP = 16
+
+    def fit(self):
+        """Re-pin the pieces and reserve exactly the band they need.
+
+        The band is MEASURED, not a constant: the corner control is a combo box on one panel
+        and a row of channel checkboxes on the other, and a fixed 28 px guess let both sit on
+        top of the axis' top tick label and the multiplier caption. Reserving
+        max(label, corner) + padding as the plot item's top margin is what keeps the floating
+        row and the plotted content from ever sharing pixels.
+        """
+        self._label.adjustSize()
+        band = self._label.height()
+        if self._corner is not None:
+            self._corner.adjustSize()
+            # Bound it to the room actually left beside the title, and let a wrapping corner
+            # take the height it then needs. Without this the corner kept its natural width
+            # and was simply clipped off the right edge (12 EMG channels), and at 8+ it also
+            # printed straight over the title.
+            # measured against the title, not a constant: a fixed reserve was narrower than
+            # the title itself on Windows metrics, so the corner still printed over it
+            room = max(60, self._plot.width() - self._label.width()
+                       - 12 - 14 - self.TITLE_GAP)
+            if self._corner.width() > room:
+                need = (self._corner.heightForWidth(room)
+                        if self._corner.hasHeightForWidth() else self._corner.height())
+                self._corner.resize(room, max(need, self._corner.height()))
+            band = max(band, self._corner.height())
+        band += 2 * self.PAD
+        if band != self._band:
+            self._band = band
+            try:
+                self._plot.getPlotItem().setContentsMargins(0, band, 0, 0)
+            except Exception:                   # pragma: no cover - margin is cosmetic
+                pass
+        self._label.move(12, self.PAD + (band - 2 * self.PAD - self._label.height()) // 2)
+        self._label.raise_()
+        if self._corner is not None:
+            self._corner.move(max(0, self._plot.width() - self._corner.width() - 14),
+                              self.PAD + (band - 2 * self.PAD - self._corner.height()) // 2)
+            self._corner.raise_()
+
+
 class BusyOverlay(QWidget):
     """A translucent overlay that covers one panel — either a spinner while the
     panel's job runs, or an error card (short message + a round info button that
@@ -773,7 +856,11 @@ class PreviewScreen(QWidget):
             "campbell": BusyOverlay(self.campbell),
             "ecg_capture": BusyOverlay(self.ecg_capture_plot),
             "ecg_stack": BusyOverlay(self.ecg_processed_plots),
-            "raw": BusyOverlay(self.emg_raw_plots),
+            # the VIEWPORT, not the stack: the raw stack scrolls inside its panel and is
+            # taller than what is on screen, so an overlay covering the stack centred its
+            # spinner and its error card below the fold. The viewport is exactly the visible
+            # band, which is where a message about this panel has to appear.
+            "raw": BusyOverlay(self._emg_raw_scroll.viewport()),
             "result": BusyOverlay(self.emg_result_plots),
             "detail": BusyOverlay(self.emg_plots),
             "detail_psd": BusyOverlay(self.emg_psd_canvas),   # the detail job also renders the PSD
@@ -784,7 +871,6 @@ class PreviewScreen(QWidget):
         self._refresh_ecg_channels()
         self._load_noise_params()
         self._load_ecg_params()
-        self._load_gated_params()
         self._ensure_noise_region()
         self._update_emg_tab_visibility()
         # If loading repaired a stuck auto-detect, say so rather than quietly changing what
@@ -927,7 +1013,14 @@ class PreviewScreen(QWidget):
         # minimum, which for the panel a reader takes the recoil line and work fill off is a
         # box, not a diagram.
         _theme.set_plot_floor(self.campbell)
-        lower.addWidget(self.campbell)
+        # A whisker of air around the canvas: it used to butt flush against the table and
+        # the panel edge — the one unframed surface on the screen (Emil, 02-08-2026). Same
+        # margins as _titled, so the two lower panels share one visual inset.
+        _cbox = QWidget()
+        _clay = QVBoxLayout(_cbox)
+        _clay.setContentsMargins(8, 4, 8, 6)
+        _clay.addWidget(self.campbell)
+        lower.addWidget(_cbox)
         # the per-breath table takes ~3/4 of the width; the Campbell diagram ~1/4 (default)
         lower.setStretchFactor(0, 3); lower.setStretchFactor(1, 1)
         lower.setSizes([720, 240])
@@ -1046,9 +1139,11 @@ class PreviewScreen(QWidget):
         self.emg_channel.setToolTip("EMG channel shown in the single-channel Detail panel.")
         self.emg_channel.currentIndexChanged.connect(self._on_emg_channel_changed)
         self.result_checks_holder = QWidget()
-        self.result_checks_layout = QHBoxLayout(self.result_checks_holder)
-        self.result_checks_layout.setContentsMargins(0, 0, 0, 0)
-        self.result_checks_layout.setSpacing(24)      # generous gap between channels
+        # A WRAPPING row: this floats in the plot's top band, and a plain QHBoxLayout keeps
+        # its full natural width there — measured at 12 EMG channels it wanted 1400 px in a
+        # 1242 px plot, so the last channel's checkbox was clipped away entirely and could
+        # not be reached at all. Wrapping lets the band grow a line instead.
+        self.result_checks_layout = _install_flow(self.result_checks_holder, h=24, v=2)
 
         # -- one compact controls strip above the plots ----------------------
         # the 'Set noise profile' button + the noise-reduction params (in a subtle
@@ -1074,22 +1169,6 @@ class PreviewScreen(QWidget):
             "Automatically picks the strongest suppression that still keeps every channel at or "
             "above the fidelity target; on by default."))
         self.noise_auto.toggled.connect(self._on_noise_param_changed)
-        self.noise_prop = QDoubleSpinBox(); self.noise_prop.setRange(0.0, 1.0); self.noise_prop.setSingleStep(0.05); self.noise_prop.setDecimals(2)
-        self.noise_prop.setToolTip(_help_tip(
-            "processing.emg.noise.prop_decrease",
-            "How aggressively to remove noise when auto is off, from 0 (none) to 1 (maximum); default 0.6."))
-        self.noise_prop.valueChanged.connect(self._on_noise_param_changed)
-        self.noise_target = QDoubleSpinBox(); self.noise_target.setRange(0.50, 0.99); self.noise_target.setSingleStep(0.05); self.noise_target.setDecimals(2)
-        self.noise_target.setToolTip(_help_tip(
-            "processing.emg.noise.fidelity_target",
-            "Smallest fraction of inspiratory EMG power that must survive noise removal, from 0 to 1; default 0.8."))
-        self.noise_target.valueChanged.connect(self._on_noise_param_changed)
-        self.noise_nstd = QDoubleSpinBox(); self.noise_nstd.setRange(0.0, 10.0); self.noise_nstd.setSingleStep(0.1); self.noise_nstd.setDecimals(1)
-        self.noise_nstd.setToolTip(_help_tip(
-            "processing.emg.noise.n_std_thresh",
-            "Signal below the mean noise level plus this many standard deviations is treated as noise "
-            "and removed; default 1.0."))
-        self.noise_nstd.valueChanged.connect(self._on_noise_param_changed)
 
         def _cap(text, tip=""):        # a compact muted caption; full text lives in the tooltip
             la = QLabel(text); la.setProperty("status", "muted")
@@ -1110,56 +1189,16 @@ class PreviewScreen(QWidget):
         # it, never inside it (see flow_layout's module docstring).
         nrow = _install_flow(self.noise_opts, h=10, v=4, margins=(11, 3, 11, 3))
         nrow.addLayout(_cluster(_cap("Noise", self.noise_auto.toolTip()), self.noise_auto, gap=8))
-        nrow.addLayout(_cluster(_cap("Strength", self.noise_prop.toolTip()), self.noise_prop))
-        nrow.addLayout(_cluster(_cap("Keep ≥", self.noise_target.toolTip()), self.noise_target))
-        nrow.addLayout(_cluster(_cap("Gate", self.noise_nstd.toolTip()), self.noise_nstd))
-
-        # Cardiac-gated peak. It lives here, beside the EMG it changes, rather than on Setup:
-        # it is an EMG statistic, and its prerequisite (ECG removal) is one tab away rather
-        # than one screen away, so "needs Remove ECG" can be a real setEnabled with a tooltip
-        # instead of prose in three places and a caution that went stale.
-        self.emg_gated = QCheckBox("Gated peak")
-        self.emg_gated.setToolTip(_help_tip(
-            "processing.emg.robust_peak.enabled",
-            "The peak EMG of a breath is its single loudest moment — but on a recording where "
-            "the heartbeat bleeds into the EMG, that moment is often a leftover heartbeat, not "
-            "the diaphragm. Tick this to ALSO measure the peak from just the heartbeat-free "
-            "stretches of each breath. It has no effect on the live plots here: it adds extra "
-            "'gated' columns to the saved data, which you see after a run. The existing "
-            "numbers never change."))
-        self.emg_gate_width = QDoubleSpinBox()
-        self.emg_gate_width.setRange(0.02, 0.5); self.emg_gate_width.setSingleStep(0.01)
-        self.emg_gate_width.setDecimals(3); self.emg_gate_width.setSuffix(" s")
-        # "±" in the field: the stored value is a HALF-width, so a bare "0.120 s" reads as
-        # the whole blanked window and understates the discarded signal by a factor of two.
-        self.emg_gate_width.setPrefix("± ")
-        self.emg_gate_width.setToolTip(_help_tip(
-            "processing.emg.robust_peak.gate_half_width_s",
-            "Blanked either side of each detected heartbeat, so the default 0.120 discards a "
-            "0.240 s window in total. It must cover the heartbeat's footprint in the RMS "
-            "envelope, which is roughly the RMS window length plus the QRS duration."))
-        self.emg_gated.toggled.connect(self._on_gated_param_changed)
-        self.emg_gate_width.valueChanged.connect(self._on_gated_param_changed)
-
-        self.gate_opts = QFrame(); self.gate_opts.setObjectName("gateChip")
-        self.gate_opts.setStyleSheet(
-            "#gateChip { border: 1px solid rgba(128, 128, 128, 0.30); border-radius: 8px; }")
-        grow = _install_flow(self.gate_opts, h=10, v=4, margins=(11, 3, 11, 3))
-        grow.addWidget(self.emg_gated)
-        grow.addLayout(_cluster(_cap("Blank", self.emg_gate_width.toolTip()),
-                                self.emg_gate_width))
-        # say plainly that this is an output-only add-on: nothing on this tab changes when it
-        # is ticked, so without a word the empty response reads as "it did nothing"
-        _gcap = _cap("→ extra columns in the saved output",
-                     "The gated peak is not drawn here — it appears as extra columns in the "
-                     "data files after a run.")
-        _gcap.setProperty("status", "muted")
-        grow.addWidget(_gcap)      # a FlowLayout ignores spacers; its own h gap does the job
+        # No "Gate" cluster and no gated-peak chip: the spectral-gate threshold was a straight
+        # duplicate of the Advanced modal's "Spectral gate threshold", and the cardiac-gated
+        # peak is an output-only add-on nothing on this tab draws — both live in Advanced now.
+        # The strip carries only what the module docstring calls the knobs that matter, which
+        # is what stopped it wrapping to two lines on a laptop (Emil, 02-08-2026).
 
         self.btn_emg_advanced = QPushButton("Advanced…")
         self.btn_emg_advanced.setProperty("compact", True)
-        self.btn_emg_advanced.setToolTip("Spectral-gate internals, the gated-peak quality "
-                                         "guards and the diagnostic exports.")
+        self.btn_emg_advanced.setToolTip("The cardiac-gated peak, spectral-gate internals, "
+                                         "quality guards and the diagnostic exports.")
         self.btn_emg_advanced.clicked.connect(self._open_emg_advanced)
 
         # A WRAPPING row, not a QHBoxLayout: these chips together are ~1700 px wide, and a
@@ -1175,7 +1214,6 @@ class PreviewScreen(QWidget):
         strip.addWidget(self.btn_set_noise)
         strip.addWidget(self.noise_ref_readout)
         strip.addWidget(self.noise_opts)
-        strip.addWidget(self.gate_opts)
         strip.addWidget(self.btn_emg_advanced)
         v.addLayout(strip)
 
@@ -1199,30 +1237,52 @@ class PreviewScreen(QWidget):
         self._style_legend(self.emg_plots.addLegend())
         self.emg_plots.setBackground(_bg)
         self.emg_plots.setLabel("bottom", "Time (s)"); self.emg_plots.setLabel("left", "EMG (a.u.)")
+        # the DIAGNOSTIC floor, not the working-view one: these two share the compact
+        # reference row (a canvas reports a 10px minimum of its own, so a floor is needed)
         self.emg_psd_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 3)))
-        _theme.set_plot_floor(self.emg_psd_canvas)   # a canvas reports a 10px minimum of its own
+        _theme.set_plot_floor(self.emg_psd_canvas, _theme.PLOT_DIAG_MIN_HEIGHT)
 
         self.fidelity_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 3)))
-        _theme.set_plot_floor(self.fidelity_canvas)   # a canvas reports a 10px minimum of its own
+        _theme.set_plot_floor(self.fidelity_canvas, _theme.PLOT_DIAG_MIN_HEIGHT)
         split = QSplitter(Qt.Vertical)
         # Detail channel and Conditioned result are the two working views — the conditioning
         # stages and the finished EMG, each against time — so both span the full width, where
         # width is what makes them readable. Their legends sit along the bottom edge, clear of
         # the breath numbers pinned at the top (see _legend_one_row).
-        split.addWidget(self._titled("Detail channel",       # pipeline stages are in the plot legend
-                                     self.emg_plots, corner=self.emg_channel))
-        split.addWidget(self._titled("Conditioned result",   # the corner picker names the channels
-                                     self.emg_result_plots, corner=self.result_checks_holder))
+        # Title + picker float INSIDE each plot's top band rather than on a row above it —
+        # two full-width rows of vertical space given back to the graphs (see _PlotTitleOverlay).
+        split.addWidget(self._titled_overlay("Detail channel",       # stages are in the legend
+                                             self.emg_plots, corner=self.emg_channel))
+        split.addWidget(self._titled_overlay("Conditioned result",   # picker names the channels
+                                             self.emg_result_plots,
+                                             corner=self.result_checks_holder))
         # The bottom row holds three reference panels: the raw channels alongside the two
         # compact diagnostics (the fidelity frontier and the detail PSD). None needs the width,
         # and the raw stack is a reference the working views are read against.
         bottom = QSplitter(Qt.Horizontal)
-        bottom.addWidget(self._titled("Raw EMG channels", self.emg_raw_plots))
+        # The raw stack scrolls INSIDE its panel. Its per-channel floor is what keeps each
+        # trace readable, but as the panel's own minimum that floor became the bottom row's
+        # minimum too — 3 channels demanded ~300 px, 12 would demand over 1100, so the row
+        # could neither shrink to a sensible default nor be dragged (every panel already sat
+        # at its minimum, and a splitter can only redistribute slack). Scrolling here keeps
+        # the traces readable AND gives the outer splitter something to move.
+        self._emg_raw_scroll = QScrollArea()
+        self._emg_raw_scroll.setWidgetResizable(True)
+        self._emg_raw_scroll.setFrameShape(QFrame.NoFrame)
+        self._emg_raw_scroll.setWidget(self.emg_raw_plots)
+        self._emg_raw_wheel = _wheel.guard_scroll_area(
+            self._emg_raw_scroll, extra=[self.emg_raw_plots.viewport()])
+        bottom.addWidget(self._titled("Raw EMG channels", self._emg_raw_scroll))
         bottom.addWidget(self._titled("Noise fidelity frontier (1 = untouched)", self.fidelity_canvas))
         bottom.addWidget(self._titled("Detail PSD", self.emg_psd_canvas))
         self._emg_diag_row = bottom
         split.addWidget(bottom)
-        split.setStretchFactor(0, 3); split.setStretchFactor(1, 3); split.setStretchFactor(2, 2)
+        # 2 : 2 : 1 — the two working views share the room and the reference row defaults to
+        # HALF a working view's height (Emil, 02-08-2026: the three bottom panels took far
+        # too much of the screen). Stretch factors alone only divide SPARE space, so the
+        # sizes are seeded explicitly too; the user can still drag from here.
+        split.setStretchFactor(0, 2); split.setStretchFactor(1, 2); split.setStretchFactor(2, 1)
+        split.setSizes([400, 400, 200])
         v.addWidget(split, 1)
         # clicking a numbered breath in any EMG plot toggles its exclusion too
         self.emg_raw_plots.scene().sigMouseClicked.connect(self._on_emg_raw_clicked)
@@ -1455,27 +1515,6 @@ class PreviewScreen(QWidget):
         # ECG removal feeds the EMG/noise panels too, so recompute those alongside this tab.
         self._request_autorun({"ecg", "emg_all", "emg_detail", "noise"})
 
-    def _load_gated_params(self):
-        rp = self.state.settings.processing.emg.robust_peak
-        self._loading_gated = True
-        try:
-            self.emg_gated.setChecked(rp.enabled)
-            self.emg_gate_width.setValue(rp.gate_half_width_s)
-        finally:
-            self._loading_gated = False
-
-    def _on_gated_param_changed(self, *_):
-        if getattr(self, "_loading_gated", False):
-            return
-        rp = self.state.settings.processing.emg.robust_peak
-        rp.enabled = self.emg_gated.isChecked()
-        rp.gate_half_width_s = float(self.emg_gate_width.value())
-        self.settings_edited.emit()
-        self._update_actions(status=False)
-        # The gated columns are written by the batch, not drawn by any preview panel — see
-        # _kinds_for_settings_path, which maps robust_peak.* to no kinds at all. Scheduling
-        # anything here would re-run four panels for a setting none of them show.
-
     def _open_emg_advanced(self):
         """Spectral-gate internals, the gated-peak quality guards, and the two diagnostic
         exports that never had a control at all.
@@ -1490,7 +1529,24 @@ class PreviewScreen(QWidget):
         n, rp = e.noise, e.robust_peak
         fs = self.state.settings.input.format.sampling_frequency or 1000
 
-        noise_fields = [
+        supp_fields = [
+            # Suppression strength and the fidelity target moved here off the strip
+            # (Emil, 02-08-2026): with 'Auto' on — the default — the strength is chosen for
+            # you and the field is inert, so two permanently-visible spin boxes were paying
+            # strip width for a case most runs never enter. 'Auto' itself stays on the strip.
+            Field("prop_decrease", "Suppression strength (when Auto is off)", "float",
+                  "processing.emg.noise.prop_decrease",
+                  "How aggressively to remove noise when Auto is off, from 0 (none) to 1 "
+                  "(maximum); default 0.6. With Auto on, this is overwritten by the strength "
+                  "the run chooses.",
+                  lo=0.0, hi=1.0, step=0.05, decimals=2),
+            Field("fidelity_target", "Fidelity target (Keep ≥)", "float",
+                  "processing.emg.noise.fidelity_target",
+                  "Smallest fraction of inspiratory EMG power that must survive noise "
+                  "removal, from 0 to 1; default 0.8. This is what Auto optimises against.",
+                  lo=0.50, hi=0.99, step=0.05, decimals=2),
+        ]
+        stft_fields = [
             Field("n_std_thresh", "Spectral gate threshold", "float",
                   "processing.emg.noise.n_std_thresh",
                   "How many standard deviations above the noise profile a frequency bin must "
@@ -1568,36 +1624,100 @@ class PreviewScreen(QWidget):
                     f"hop {1000 * v['hop_length'] / fs:.0f} ms, "
                     f"n_fft {1000 * v['n_fft'] / fs:.0f} ms.")
 
+        # The cardiac-gated peak, moved here off the strip (Emil, 02-08-2026): an
+        # output-only add-on nothing on the tab draws did not earn strip space. Its ECG
+        # prerequisite is enforced below at open time.
+        ecg_on = bool(e.remove_ecg)
+        gp_fields = [
+            Field("enabled", "Add gated-peak columns", "bool",
+                  "processing.emg.robust_peak.enabled",
+                  "The peak EMG of a breath is its single loudest moment — but on a "
+                  "recording where the heartbeat bleeds into the EMG, that moment is often "
+                  "a leftover heartbeat, not the diaphragm. Tick this to ALSO measure the "
+                  "peak from just the heartbeat-free stretches of each breath. It changes "
+                  "nothing drawn here: it adds extra 'gated' columns to the saved data, and "
+                  "the existing numbers never change."),
+            Field("gate_half_width_s", "Blanked around each heartbeat", "float",
+                  "processing.emg.robust_peak.gate_half_width_s",
+                  "Blanked either side of each detected heartbeat, so the default 0.120 "
+                  "discards a 0.240 s window in total. It must cover the heartbeat's "
+                  "footprint in the RMS envelope, which is roughly the RMS window length "
+                  "plus the QRS duration.",
+                  # "±" in the field: the stored value is a HALF-width, and a bare
+                  # "0.120 s" would understate the discarded signal by a factor of two.
+                  lo=0.02, hi=0.5, step=0.01, decimals=3, prefix="± ", suffix=" s",
+                  depends_on="enabled"),
+        ]
+
         prefixed = ([("emg", f) for f in emg_fields]
-                    + [("noise", f) for f in noise_fields]
+                    + [("noise", f) for f in supp_fields]
+                    + [("noise", f) for f in stft_fields]
+                    + [("robust_peak", f) for f in gp_fields]
                     + [("robust_peak", f) for f in gate_fields]
                     + [("emg", f) for f in out_fields])
         owner = {"noise": n, "robust_peak": rp, "emg": e}
         values = {f.key: getattr(owner[grp], f.key) for grp, f in prefixed}
-        # The four groups already existed here as separate lists and were flattened away on
+        # The groups already existed here as separate lists and were flattened away on
         # the way into the dialog; the cards just stop throwing that structure out.
         dlg = AdvancedDialog(
             "EMG — advanced",
-            [("RMS & normalisation", emg_fields),
-             ("Spectral gate", noise_fields),
-             ("Heartbeat & island guards", gate_fields),
+            # Column balancing is CONTIGUOUS (section_flow keeps the author's reading order
+            # at every width), so this order is a layout decision, not just a taxonomy.
+            # Emil asked for Diagnostics under RMS to shorten the modal, and at THREE columns
+            # it does (730 vs 840 px). At TWO — which is what a 1280 px laptop gets — it made
+            # the body 156 px TALLER (808 vs 652), because it pushed the 443 px spectral-gate
+            # card into the first column. The fix is finer cards rather than a reorder: the
+            # one oversized card is split into the two things it actually was, which balances
+            # at both counts, and Diagnostics goes back to the end where it costs nothing.
+            # "and", not "&": a QGroupBox title treats & as a mnemonic marker, so
+            # "RMS & normalisation" rendered as "RMS _normalisation".
+            [("RMS and normalisation", emg_fields),
+             ("Noise suppression", supp_fields),
+             ("Spectral gate (STFT)", stft_fields),
+             ("Gated peak (saved output)", gp_fields),
+             ("Heartbeat and island guards", gate_fields),
              ("Diagnostics", out_fields)],
             values, parent=self,
-            intro="Suppression strength and the fidelity target are on the strip. These "
-                  "shape HOW the gate is computed, and are rarely the right thing to change.",
+            intro="The strip keeps the noise on/off toggle, the reference picker and "
+                  "Auto. Everything that tunes HOW the gate is computed lives here.",
             derived=_ms)
+        # 'Auto' owns the suppression strength: with it on the run overwrites whatever is
+        # here, so an edit would silently do nothing. The strip control used to grey out for
+        # exactly this reason; the field kept the behaviour when it moved.
+        if bool(n.auto_prop):
+            w = dlg.widget("prop_decrease")
+            w.setEnabled(False)
+            w.setToolTip("Auto is on, so the run picks the suppression strength — turn Auto "
+                         "off on the strip to set it by hand.")
+        if not ecg_on:
+            # Same prerequisite the strip control enforced, same words: the gate is built
+            # from the heartbeats the ECG stage detects, so without it the columns come
+            # back blank. depends_on greys the width field with its checkbox; this greys
+            # the checkbox itself.
+            for f in gp_fields:
+                w = dlg.widget(f.key)
+                w.setEnabled(False)
+                w.setToolTip(NEEDS_ECG_GATE_HINT)
         if dlg.exec() != QDialog.Accepted:
             return
-        staged = dlg.values()
-        changed = False
+        # edited_values(), not values(): an untouched OK must not write back a value the
+        # app changed while the modal was open (a finished noise sweep does exactly that).
+        staged = dlg.edited_values()
+        changed_owners = set()
         for grp, f in prefixed:
-            if apply_values(owner[grp], {f.key: staged[f.key]}):
-                changed = True
-        if not changed:
+            if f.key in staged and apply_values(owner[grp], {f.key: staged[f.key]}):
+                changed_owners.add(grp)
+        if not changed_owners:
             return                       # OK without an edit: no dirty flag, no recompute
         self._load_noise_params()
-        self._load_gated_params()
         self.settings_edited.emit()
+        if changed_owners == {"robust_peak"}:
+            # robust_peak.* is written by the batch and drawn by no preview panel
+            # (_kinds_for_settings_path maps it to no kinds at all) — the contract the old
+            # strip control kept, kept here: recomputing four panels for columns none of
+            # them show would be pure noise.
+            self._update_actions(status=False)
+            return
         # RMS window / normalisation feed the EMG panels; the outlier limit feeds the batch
         # (test run) table, so 'batch' is in the set now that the modal edits it.
         self._request_autorun({"ecg", "emg_all", "emg_detail", "noise", "batch"})
@@ -1798,15 +1918,18 @@ class PreviewScreen(QWidget):
                              derived=_trend_hint)
         if dlg.exec() != QDialog.Accepted:
             return
-        staged = dlg.values()
+        staged = dlg.edited_values()          # see AdvancedDialog.edited_values
         changed = False
         for grp, f in fields:
-            if apply_values(owner[grp], {f.key: staged[f.key]}):
+            if f.key in staged and apply_values(owner[grp], {f.key: staged[f.key]}):
                 changed = True
-        parsed = _parse_breath_counts(staged["breath_counts"], BreathCountEntry)
-        if parsed != s.processing.breath_counts:
-            s.processing.breath_counts = parsed
-            changed = True
+        # only when the user actually edited the box — ``staged`` carries edited keys only,
+        # so an untouched OK must not re-parse (and re-write) the existing entries
+        if "breath_counts" in staged:
+            parsed = _parse_breath_counts(staged["breath_counts"], BreathCountEntry)
+            if parsed != s.processing.breath_counts:
+                s.processing.breath_counts = parsed
+                changed = True
         if not changed:
             return                       # OK without an edit: no dirty flag, no recompute
         self.settings_edited.emit()
@@ -2018,6 +2141,26 @@ class PreviewScreen(QWidget):
         except Exception:                            # noqa: BLE001 — legend chrome is cosmetic
             pass
 
+    def _titled_overlay(self, title, plot, corner=None):
+        """Like :meth:`_titled`, but the title row floats INSIDE the plot's top band
+        instead of sitting above it (see _PlotTitleOverlay for why). Same outer margins
+        as _titled so the panels keep one shared inset."""
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(8, 4, 8, 6)
+        lay.setSpacing(0)
+        lay.addWidget(plot, 1)
+        if not hasattr(self, "_plot_title_overlays"):
+            self._plot_title_overlays = []
+        self._plot_title_overlays.append(_PlotTitleOverlay(plot, title, corner))
+        return box
+
+    def _fit_plot_overlays(self):
+        """Re-pin the floating titles/pickers — the result-channel picker regrows on every
+        channel-list change, and only the overlay knows where its pieces belong."""
+        for ov in getattr(self, "_plot_title_overlays", []):
+            ov.fit()
+
     @staticmethod
     def _titled(title, widget, corner=None):
         """A titled panel. ``corner`` is an optional widget pinned to the top-right of
@@ -2103,9 +2246,6 @@ class PreviewScreen(QWidget):
         try:
             self.noise_enabled.setChecked(n.enabled)
             self.noise_auto.setChecked(n.auto_prop)
-            self.noise_prop.setValue(n.prop_decrease)
-            self.noise_target.setValue(n.fidelity_target)
-            self.noise_nstd.setValue(n.n_std_thresh)
         finally:
             self._loading_noise = False
         self._refresh_noise_readout()
@@ -2117,13 +2257,18 @@ class PreviewScreen(QWidget):
         # Elided: a real recording's filename is far longer than the sample's, and a QLabel's
         # minimum width is its whole text — un-elided it would push the strip (and with it the
         # window's minimum width) arbitrarily wide. The full text stays in the tooltip.
+        # 220 px, not the 320 px default: this read-out shares one line with the toggle, the
+        # picker button, the Auto chip and Advanced, and at 320 px on Windows font metrics the
+        # five together came to 1292 px against a 1258 px page — the strip wrapped to two lines
+        # for a caption whose full text is one hover away.
+        cap = 220
         if not n.reference_file:
-            _elide(self.noise_ref_readout, "· no reference set")
+            _elide(self.noise_ref_readout, "· no reference set", cap)
         elif n.use_expiration or not n.reference_intervals:
-            _elide(self.noise_ref_readout, f"· {n.reference_file}, every expiration")
+            _elide(self.noise_ref_readout, f"· {n.reference_file}, every expiration", cap)
         else:
             spans = ", ".join(f"{a:.2f}–{b:.2f} s" for a, b in n.reference_intervals)
-            _elide(self.noise_ref_readout, f"· {n.reference_file}, {spans}")
+            _elide(self.noise_ref_readout, f"· {n.reference_file}, {spans}", cap)
 
     def _on_noise_enabled_changed(self, *_):
         if self._loading_noise:
@@ -2138,9 +2283,6 @@ class PreviewScreen(QWidget):
             return
         n = self.state.settings.processing.emg.noise
         n.auto_prop = self.noise_auto.isChecked()
-        n.prop_decrease = self.noise_prop.value()
-        n.fidelity_target = self.noise_target.value()
-        n.n_std_thresh = self.noise_nstd.value()
         self.settings_edited.emit()      # noise params land in the .toml -> mark dirty
         self._update_actions()
         self._request_autorun()          # re-condition with the new noise params
@@ -2196,7 +2338,6 @@ class PreviewScreen(QWidget):
         self._refresh_ecg_channels()
         self._load_noise_params()
         self._load_ecg_params()
-        self._load_gated_params()
         self._update_emg_tab_visibility()
         self._update_actions()
         # Dependency-scoped invalidation: diff the settings against the last-synced snapshot
@@ -2250,6 +2391,9 @@ class PreviewScreen(QWidget):
         emg = self.state.settings.processing.emg
         noise_on, ref = emg.noise.enabled, emg.noise.reference_file
         has_emg = bool(self.state.settings.input.channels.emg)
+        # The floating titles/pickers re-pin here because this runs after every channel-list
+        # change — the moment the result picker has regrown and needs repositioning.
+        self._fit_plot_overlays()
         # Noise reduction runs on whatever the ECG stage produced (core/pipeline _process_emg),
         # and its reference clip is ECG-cleaned too. It is not a hard requirement — the core
         # will happily denoise a raw signal — but the profile would then model the cardiac
@@ -2267,16 +2411,13 @@ class PreviewScreen(QWidget):
         self.noise_opts.setEnabled(bool(has_emg and ecg_on and noise_on and ref))
         for w in (self.noise_enabled, self.btn_set_noise, self.noise_opts):
             w.setToolTip("" if ecg_on else NEEDS_ECG_HINT)
-        # The gated peak reuses the heartbeats the ECG stage detects; with ECG removal off
-        # there are none and its columns come back blank. On Setup this could only ever be a
-        # caution, because the control it names lived on another screen. Here it is one strip
-        # away, so it can be a real gate.
-        self.gate_opts.setEnabled(has_emg and ecg_on)
-        self.gate_opts.setToolTip("" if ecg_on else NEEDS_ECG_GATE_HINT)
-        self.emg_gate_width.setEnabled(has_emg and ecg_on and self.emg_gated.isChecked())
+        # (The gated peak's ECG prerequisite is enforced in the Advanced modal now, where
+        # the control moved — its fields open disabled with NEEDS_ECG_GATE_HINT until
+        # 'Remove ECG' is on.)
         # "Auto (whole batch)" itself needs ECG removal on (same requirement Settings.validate
         # enforces); once checked, the fields it will overwrite at run time grey out — same
-        # pattern as noise_prop below, so a manual edit there can't look like it did nothing.
+        # pattern the noise strength field uses in Advanced, so a manual edit there can't
+        # look like it did nothing.
         # The fields themselves keep their existing, always-editable-when-EMG-present
         # enablement otherwise (pre-configuring before ticking Remove ECG is unaffected).
         self.ecg_auto_batch.setEnabled(has_emg and ecg_on)
@@ -2288,8 +2429,6 @@ class PreviewScreen(QWidget):
                   self.btn_ecg_advanced, self.btn_ecg_autosuggest):
             w.setEnabled(not auto_batch_on)
             w.setToolTip(AUTO_BATCH_HINT if auto_batch_on else self._ecg_auto_gated_base_tooltips[w])
-        if noise_on:
-            self.noise_prop.setEnabled(bool(ref) and ecg_on and not self.noise_auto.isChecked())
         if not status:
             return
         if has_emg and noise_on and not ecg_on:

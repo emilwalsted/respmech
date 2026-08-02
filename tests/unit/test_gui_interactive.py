@@ -245,11 +245,11 @@ def test_noise_options_gated_on_reference_file(qapp, tmp_path):
     pv._use_region_as_noise(); pv._update_actions()
     assert win.state.settings.processing.emg.noise.reference_file != ""
     assert pv.noise_opts.isEnabled() is True
-    # editing a noise-window widget writes straight back to settings
+    # editing the strip control writes straight back to settings (the suppression
+    # strength itself moved into the Advanced modal — see test_robust_peak_ui-style
+    # modal drives in test_gui_reactive)
     pv.noise_auto.setChecked(False)
-    pv.noise_prop.setValue(0.35)
     assert win.state.settings.processing.emg.noise.auto_prop is False
-    assert abs(win.state.settings.processing.emg.noise.prop_decrease - 0.35) < 1e-9
 
 
 # -- Result view: stage all channels, pick which to show --------------------

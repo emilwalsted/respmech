@@ -40,6 +40,10 @@ class FlowLayout(QLayout):
         super().__init__(parent)
         self._items: list = []          # keep Python refs: Qt does not own these
         self._h, self._v = h, v
+        # Report the horizontal gap through QLayout.spacing() too: this layout keeps its own
+        # gaps, so spacing() otherwise returned Qt's unrelated default and any caller (or
+        # test) reading it back got a number this layout never uses.
+        self.setSpacing(h)
         self.setContentsMargins(margin, margin, margin, margin)
 
     # -- QLayout plumbing ----------------------------------------------------

@@ -213,8 +213,10 @@ def test_autoprop_writes_chosen_prop_back_to_settings(qapp, tmp_path):
     result = run_batch(s, only_files=["synth_case_B.csv"])
     chosen = float(result.noise_report["prop_decrease"])
     pv._on_batch_result(result)                    # writes chosen prop, re-dispatches EMG jobs
+    # the model is the assertion now: the strength field moved into the Advanced modal,
+    # which reads its values straight off the model when it opens, so a separate
+    # "the widget mirrors it" check would be asserting getattr twice.
     assert abs(s.processing.emg.noise.prop_decrease - chosen) < 1e-9
-    assert abs(pv.noise_prop.value() - chosen) < 1e-9
     pv.shutdown()
 
 
@@ -274,7 +276,6 @@ def test_noise_job_draws_fidelity_and_adopts_prop(qapp, tmp_path):
     pv._on_noise_result(report)
     assert len(pv.fidelity_canvas.figure.axes) == 1    # frontier drawn (no test run needed)
     assert abs(s.processing.emg.noise.prop_decrease - chosen) < 1e-9
-    assert abs(pv.noise_prop.value() - chosen) < 1e-9
     pv.shutdown()
 
 

@@ -143,7 +143,14 @@ class SectionCard(QGroupBox):
     """
 
     def __init__(self, title: str, parent=None):
-        super().__init__(title, parent)
+        # "&&" on the DISPLAYED title, because a QGroupBox treats a single & as a MNEMONIC
+        # marker: it is swallowed and the next character underlined instead, so
+        # "RMS & normalisation" rendered as "RMS _normalisation" (Emil's 02-08-2026
+        # screenshot). The raw text is kept so title() still round-trips what the caller
+        # passed — tests and tooling read it back, and a doubled ampersand there would be a
+        # different lie in place of the first.
+        super().__init__((title or "").replace("&", "&&"), parent)
+        self._raw_title = title or ""
         self.form = QFormLayout(self)
         # WrapLongRows is load-bearing, not cosmetic: minimumSizeHint below reports
         # max(caption, field) per row, and that is only true because this policy stacks the
@@ -160,6 +167,10 @@ class SectionCard(QGroupBox):
         self.setSizePolicy(sp)
         self._captions: list = []
         self._fields: list = []
+
+    def title(self):                        # noqa: A003 - Qt API name
+        """The title as GIVEN, not as escaped for display (see __init__)."""
+        return self._raw_title
 
     def add_row(self, caption: QLabel, field: QWidget) -> None:
         self.form.addRow(caption, field)
