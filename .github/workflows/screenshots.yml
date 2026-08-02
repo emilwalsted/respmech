@@ -19,10 +19,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        # Windows renders on the NATIVE platform plugin: offscreen on the Windows runner
+        # finds no fonts at all (every glyph came back as a tofu box — measured on run
+        # 30752627212), while the runner session can create real windows just fine, which
+        # also buys genuine DirectWrite text. macOS keeps offscreen, which renders
+        # correctly there and needs no window server session.
+        include:
+          - os: windows-latest
+            qt_platform: windows
+          - os: macos-latest
+            qt_platform: offscreen
     runs-on: ${{ matrix.os }}
     env:
-      QT_QPA_PLATFORM: offscreen   # headless Qt — no display on the runner
+      QT_QPA_PLATFORM: ${{ matrix.qt_platform }}
       PYQTGRAPH_QT_LIB: PySide6    # never let pyqtgraph bind PyQt6
       PYTHONIOENCODING: utf-8      # the UI's ·, –, › survive the Windows console
     steps:
