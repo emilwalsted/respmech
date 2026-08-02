@@ -947,42 +947,93 @@ def test_breath_labels_stay_pinned_to_the_view_top_under_zoom(qapp, tmp_path):
     win.close()
 
 
-def test_emg_legends_are_a_single_row_at_the_bottom(qapp):
-    """The pipeline-stage / channel legends read as one line along the BOTTOM of the plot,
-    clear of the breath numbers pinned at the top. The column count must be re-applied on
-    EVERY render, not just at construction: clear() empties the legend and the entry count
-    varies (the detail plot gains 'noise-reduced' only when noise conditioning ran; the
-    result plot has one entry per ticked channel)."""
+def test_every_emg_trace_is_named_in_its_own_colour_on_every_render(qapp):
+    """Both EMG working views must always say which trace is which — and in the colour the
+    trace is actually drawn in.
+
+    This used to be an in-plot legend tucked along the bottom edge, and this test used to
+    check that row. The legends are gone (02-08-2026): the tab now defaults to roughly a
+    third of the window for these two views, where one 18 px legend row covered nearly half
+    of a 43 px data area — see tests/unit/test_compact_plots.py. What survives the move is
+    the contract the old test was really about, so it is checked here against the mechanism
+    that replaced it:
+
+      * the detail view names its pipeline stages in the floating title band, and the entry
+        count still varies — 4 with noise conditioning, 3 without;
+      * the conditioned view names its channels in the corner picker, which must survive a
+        channel being unticked and re-ticked.
+
+    Checking the COLOURS, not just the words, is the part a legend gave for free and a
+    separate widget does not: nothing else would notice the key drifting away from the pens.
+    """
+    import re
     import numpy as np
+    import pyqtgraph as pg
     from respmech.ui.main_window import MainWindow
     s = synth_settings("")
     win = MainWindow(AppState(s)); pv = win.preview_screen
     win.resize(1400, 900); win.show(); qapp.processEvents()
     t = np.linspace(0, 1, 500); raw = np.sin(2 * np.pi * 50 * t)
 
-    def one_row(plot):
-        p = plot.getPlotItem()
-        leg = p.legend
-        assert len(leg.items) >= 2                      # a 1-entry legend proves nothing
-        assert leg.columnCount == len(leg.items)
-        assert leg.layout.rowCount() == 1               # the real grid, not the bookkeeping attr
-        vb = p.getViewBox().sceneBoundingRect()
-        gap = vb.bottom() - leg.sceneBoundingRect().bottom()
-        assert 0 <= gap <= 12, gap                       # tucked along the bottom edge, above it
+    def pen_colours(plot):
+        """{trace name: '#rrggbb'} straight off the curves the plot actually drew."""
+        out = {}
+        for it in plot.getPlotItem().listDataItems():
+            name = it.name()
+            pen = it.opts.get("pen")
+            if name and pen is not None:
+                out[name] = pg.mkPen(pen).color().name()
+        return out
 
-    # detail plot, both entry counts (4 with noise reduction, 3 without)
+    def key_colours(label):
+        """{trace name: '#rrggbb'} parsed back out of the rich-text key."""
+        return {name.strip(): colour.lower() for colour, name in
+                re.findall(r'color:\s*(#[0-9a-fA-F]{6})[^>]*>&#9644;</span>'
+                           r'<span[^>]*>&nbsp;([^<]+)</span>', label.text())}
+
+    def named(expected):
+        drawn = pen_colours(pv.emg_plots)
+        key = key_colours(pv.emg_trace_key)
+        assert set(key) == expected, f"key names {sorted(key)}, expected {sorted(expected)}"
+        # every keyed name must BE a drawn trace: .get(name, colour) would otherwise fall
+        # back to the value under test and turn the colour check into colour == colour
+        assert set(key) <= set(drawn), (
+            f"keyed but not drawn: {sorted(set(key) - set(drawn))} — the colour check below "
+            f"would silently pass for them")
+        for name, colour in key.items():
+            assert drawn[name].lower() == colour, (
+                f"{name!r} is keyed {colour} but drawn {drawn[name]}")
+
+    # detail view, both entry counts
     pv.render_emg_time({"t": t, "raw": raw, "ecg": raw * .9, "noise": raw * .8, "noise_applied": True})
-    qapp.processEvents(); one_row(pv.emg_plots)
+    qapp.processEvents()
+    named({"raw", "ECG-removed", "noise-reduced", "RMS envelope"})
     pv.render_emg_time({"t": t, "raw": raw, "ecg": raw * .9, "noise_applied": False})
-    qapp.processEvents(); one_row(pv.emg_plots)
+    qapp.processEvents()
+    named({"raw", "ECG-removed", "RMS envelope"})       # no noise stage to name
 
-    # result plot, and it must survive a channel being unticked and re-ticked
+    # conditioned view: the picker is its key, so every ticked channel must be named there,
+    # in its own colour, before and after a channel is toggled off and back on
     cols = list(s.input.channels.emg)
     pv._emg_all = {"t": t, "cols": cols,
                    "conditioned": [raw * (1 - .1 * i) for i in range(len(cols))], "flow": None}
-    pv._render_emg_result(); qapp.processEvents(); one_row(pv.emg_result_plots)
-    pv.result_checks[0][1].setChecked(False); qapp.processEvents(); one_row(pv.emg_result_plots)
-    pv.result_checks[0][1].setChecked(True); qapp.processEvents(); one_row(pv.emg_result_plots)
+
+    def picker_matches_traces():
+        pv._render_emg_result(); qapp.processEvents()
+        drawn = pen_colours(pv.emg_result_plots)
+        assert drawn, "no conditioned traces were drawn — the check below would be vacuous"
+        ticked = {f"col {c}": cb for c, cb in pv.result_checks if cb.isChecked()}
+        assert set(drawn) == set(ticked), (
+            f"drawn {sorted(drawn)} but picker ticks {sorted(ticked)}")
+        for name, cb in ticked.items():
+            rgb = re.search(r"background:\s*rgb\((\d+),\s*(\d+),\s*(\d+)\)", cb.styleSheet())
+            assert rgb, f"{name}: the picker no longer carries the channel's colour"
+            swatch = pg.mkColor(tuple(int(g) for g in rgb.groups())).name()
+            assert swatch == drawn[name], f"{name} keyed {swatch} but drawn {drawn[name]}"
+
+    picker_matches_traces()
+    pv.result_checks[0][1].setChecked(False); picker_matches_traces()
+    pv.result_checks[0][1].setChecked(True); picker_matches_traces()
     win.close()
 
 
