@@ -1,0 +1,55 @@
+# On-demand REAL-platform screenshots of every screen and dialog, sample data loaded.
+#
+# Exists because the only honest way to see the app with Windows font metrics is to render
+# it on Windows: the local model (font-stretch 145, CLAUDE.md) predicts widths well, but a
+# screenshot deliverable should carry the platform's true pixels. Runs on demand only —
+# it is a documentation tool, not a gate.
+name: Screenshots
+
+on:
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  capture:
+    name: Capture · ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen   # headless Qt — no display on the runner
+      PYQTGRAPH_QT_LIB: PySide6    # never let pyqtgraph bind PyQt6
+      PYTHONIOENCODING: utf-8      # the UI's ·, –, › survive the Windows console
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install (gui + dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[gui,dev]"
+
+      # Neutral cwd: the repo root's legacy respmech.py would shadow the installed package.
+      - name: Capture light + dark
+        working-directory: ${{ runner.temp }}
+        run: |
+          RESPMECH_THEME=light RM_OUT="${RUNNER_TEMP}/shots/light" \
+            python "${GITHUB_WORKSPACE}/tools/capture_screens.py"
+          RESPMECH_THEME=dark RM_OUT="${RUNNER_TEMP}/shots/dark" \
+            python "${GITHUB_WORKSPACE}/tools/capture_screens.py"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-${{ matrix.os }}
+          path: ${{ runner.temp }}/shots/
+          if-no-files-found: error
