@@ -22,12 +22,13 @@ The selection state (``_set_selection`` / ``_clear_selection`` / ``_maybe_warn``
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtCore import Qt, QEvent
-from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QHBoxLayout, QLabel,
-                               QPushButton, QScrollBar, QVBoxLayout)
+from PySide6.QtCore import Qt, QEvent, QSize
+from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFrame, QHBoxLayout,
+                               QLabel, QPushButton, QScrollArea, QScrollBar, QVBoxLayout)
 
 import pyqtgraph as pg
 
+from respmech.ui.flow_layout import ElidingCheckBox
 from respmech.ui.plot_overlays import add_flow_background
 
 try:
@@ -41,6 +42,12 @@ EXPIRATION = "expiration"
 _WARN_SECONDS = 0.5
 _TIME_STEPS = 1000.0                   # scrollbar ticks per second: QScrollBar is integer-only
 _GLW_MARGIN = 10                       # GraphicsLayoutWidget's own margin around the plots
+#: Minimum height (px) for one channel row, so a rest span stays judgeable by eye however
+#: many EMG channels the rig has. Chosen against the measured collapse: at the old fixed
+#: pane a 12-channel recording gave each channel ZERO pixels of data area.
+#: (row height, not data height — the axis and label take ~36 px of it, so this leaves
+#: ~85 px of actual trace.)
+_ROW_MIN_H = 120
 _REGION_BRUSH = (255, 152, 0, 60)      # brand orange, semi-transparent
 _ACCENT = (255, 152, 0)
 
@@ -73,7 +80,7 @@ class NoiseProfileDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Set noise profile" + (f" — {file_name}" if file_name else ""))
         self.setModal(True)
-        self.resize(940, 580)
+        self._preferred = QSize(940, 580)   # opening size, clamped to the screen in showEvent
         self._t = np.asarray(t, dtype=float)
         self._fs = fs
         self._flow = np.asarray(flow, dtype=float) if flow is not None else None
@@ -100,7 +107,21 @@ class NoiseProfileDialog(QDialog):
         trace_pen = pal.get("noise_trace", (90, 150, 200))
         self.glw = pg.GraphicsLayoutWidget()
         self.glw.setBackground(pal["bg"])
-        v.addWidget(self.glw, 1)
+        # The plot stack goes in a scroll area and is given a per-channel minimum height
+        # below. Without both, every channel shares one fixed pane: measured at the old
+        # 940x580 opening size the data area per channel was 325 px at 1 channel, 41 px at
+        # 5, 14 px at 8 and ZERO at 12 — the dialog silently stopped showing the signal the
+        # user is being asked to pick a rest span from.
+        #
+        # Deliberately NOT wheel-guarded: this dialog's own hint tells the user to scroll to
+        # zoom the time axis, so forwarding the wheel to the scroll area would take away a
+        # documented interaction. pyqtgraph accepts the wheel over a plot, so zoom keeps
+        # working and vertical travel is via the scroll bar.
+        self._plot_area = QScrollArea()
+        self._plot_area.setWidgetResizable(True)
+        self._plot_area.setFrameShape(QFrame.NoFrame)
+        self._plot_area.setWidget(self.glw)
+        v.addWidget(self._plot_area, 1)
         self._plots, self._vlines, self._regions = [], [], []
         tmin = float(self._t[0]) if self._t.size else 0.0
         prev = None
@@ -165,7 +186,11 @@ class NoiseProfileDialog(QDialog):
 
         self.warn = QLabel(""); self.warn.setObjectName("noiseWarn")
         self.warn.setWordWrap(True); self.warn.setVisible(False)
-        self.warn.setStyleSheet("#noiseWarn { color: #E08A4F; font-weight: 600; }")
+        # the warning token, not a literal: #E08A4F is tuned for the dark ground and scored
+        # 2.65:1 against the light theme's surface, which is below the 3:1 floor.
+        _warn = (_theme.active_theme().get("st_warn_fg", "#8A5A12")
+                 if _theme is not None else "#8A5A12")
+        self.warn.setStyleSheet("#noiseWarn { color: %s; font-weight: 600; }" % _warn)
         v.addWidget(self.warn)
 
         # The two ways to define the reference, in ONE place. They are mutually exclusive in
@@ -173,7 +198,10 @@ class NoiseProfileDialog(QDialog):
         # they used to be split across two screens: a checkbox on Setup that this dialog
         # silently unticked whenever a span was marked, and which — re-ticked — silently made
         # the marked span inert. Neither screen showed what the other had done.
-        self.use_expiration = QCheckBox("Use the whole expiration of this recording")
+        # Eliding: this caption is one unbreakable item and was the dialog's ENTIRE minimum
+        # width (598 px of 620 on Windows metrics, 1217 px at 225% text scaling), which put
+        # the commit button off the right edge of a 1080p laptop at 175% display scaling.
+        self.use_expiration = ElidingCheckBox("Use the whole expiration of this recording")
         self.use_expiration.setToolTip(
             "Sample the noise profile from every expiratory phase, which is diaphragm-quiet "
             "and gives a more stable estimate than one hand-marked span. Untick to mark a "
@@ -187,8 +215,18 @@ class NoiseProfileDialog(QDialog):
         self.btn_cancel = QPushButton("Cancel"); self.btn_cancel.clicked.connect(self.reject)
         self.btn_ok = QPushButton("Set noise profile"); self.btn_ok.setEnabled(False)
         self.btn_ok.clicked.connect(self.accept)
+        # Enter commits, Esc cancels. Without this Qt promotes Cancel (added first) as the
+        # default and Enter throws away the marked region. The accepting button starts
+        # disabled — Qt simply ignores Enter until a region makes it live, which is right.
+        self.btn_cancel.setAutoDefault(False)
+        self.btn_ok.setDefault(True)
         row.addWidget(self.btn_cancel); row.addWidget(self.btn_ok)
         v.addLayout(row)
+
+        # Enough height per channel to judge a rest span by eye. The stack grows with the
+        # channel count and the scroll area absorbs the overflow, so the DIALOG's minimum
+        # stays small however many EMG channels the rig has.
+        self.glw.setMinimumHeight(max(1, n) * _ROW_MIN_H)
 
         vp = self.glw.viewport()
         vp.installEventFilter(self)
@@ -199,6 +237,14 @@ class NoiseProfileDialog(QDialog):
             _vb0 = self._plots[0].getViewBox()
             _vb0.sigXRangeChanged.connect(self._sync_scroll)
             self._sync_scroll(_vb0, _vb0.viewRange()[0])    # seed range/enabled state
+
+    def showEvent(self, ev):                # noqa: N802 - Qt API
+        """Open at the preferred size, but never larger than the screen."""
+        super().showEvent(ev)
+        if not getattr(self, "_clamped", False):
+            self._clamped = True
+            from respmech.ui import screen_fit  # noqa: PLC0415
+            screen_fit.clamp_to_screen(self, prefer=self._preferred)
 
     # -- coordinate mapping -------------------------------------------------
     def _scene_x(self, view_pos):

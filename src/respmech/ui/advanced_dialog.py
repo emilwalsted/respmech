@@ -14,11 +14,15 @@ would have to invent one.
 """
 from __future__ import annotations
 
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout,
-                               QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QSpinBox,
-                               QVBoxLayout, QWidget)
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFrame,
+                               QHBoxLayout, QPlainTextEdit, QPushButton,
+                               QScrollArea, QSpinBox, QVBoxLayout, QWidget)
 
+from respmech.ui import screen_fit as _screen_fit
+from respmech.ui import wheel as _wheel
 from respmech.ui.help_text import tooltip as _tip
+from respmech.ui.section_flow import SectionCard, WrapLabel, install_sections
 
 try:
     from respmech.ui import theme as _theme
@@ -61,6 +65,14 @@ class Field:
                 w.addItem(label, val)
             idx = w.findData(value)
             w.setCurrentIndex(idx if idx >= 0 else 0)
+            # A QComboBox derives its MINIMUM width from its widest ITEM, so one explanatory
+            # option label sets the minimum width of the whole dialog: "Per-file maximum
+            # (% of peak breath)" measured 538 px on Windows metrics and cost the EMG modal
+            # a whole column. An explicit minimumWidth genuinely lowers the floor (Qt's
+            # qSmartMinSize takes an explicit minimum over the hint) while sizeHint stays
+            # natural, so the combo still opens wide enough to read and only elides once the
+            # user squeezes the dialog. The full label is always in the popup.
+            w.setMinimumWidth(w.fontMetrics().averageCharWidth() * 12 + 36)
         elif self.kind == "text":
             w = QPlainTextEdit()
             w.setPlainText(value or "")
@@ -81,6 +93,13 @@ class Field:
             if self.prefix:
                 w.setPrefix(self.prefix)
             if self.auto_text:
+                # A caption, not a number: at its minimum the control shows this word
+                # instead of a value. Keep it SHORT enough for the theme's 150px spin-box
+                # cap — "Auto — use minimum breath depth" needed 473px on Windows metrics
+                # and was clipped mid-word at every window size. Lifting the cap per widget
+                # was tried and abandoned: a QSS max-width is re-applied at polish and beats
+                # setMaximumWidth, so the field ended up 416px wide beside 168px siblings.
+                # test_a_spin_box_never_clips_its_own_caption holds this line.
                 w.setSpecialValueText(self.auto_text)   # shown when value == self.lo
             w.setValue((int if self.kind == "int" else float)(
                 self.lo if (value is None and self.auto_text) else value))
@@ -99,64 +118,132 @@ class Field:
         return w.value()
 
 
+def _as_sections(fields):
+    """Normalise ``fields`` to ``[(title, [Field])]``.
+
+    A flat list becomes one untitled section, which is what keeps the two-field ECG modal —
+    and every existing caller and test that passes a plain list — working unchanged.
+    """
+    items = list(fields)
+    if items and isinstance(items[0], (tuple, list)) and len(items[0]) == 2 \
+            and isinstance(items[0][1], (tuple, list)):
+        return [(str(t), list(fs)) for t, fs in items]
+    return [("", items)]
+
+
 class AdvancedDialog(QDialog):
     """``fields`` are Field specs; ``values`` maps key -> current value.
+
+    ``fields`` is either a flat list of :class:`Field` (one untitled section) or a list of
+    ``(section title, [Field])`` pairs. Sections are laid out in width-responsive columns
+    inside a scroll area, which is what keeps a twenty-setting modal on a laptop screen —
+    see :mod:`respmech.ui.section_flow`.
 
     ``derived`` is an optional callable taking the staged values and returning a line of
     text, recomputed on every edit — for a coupling the numbers alone do not show, such as
     an STFT window whose meaning in milliseconds depends on the sampling rate.
+
+    The three things OUTSIDE the scroll area — the intro, the derived hint and the button
+    row — are outside it on purpose. Whatever the content does, those stay reachable.
     """
 
-    def __init__(self, title, fields, values, parent=None, intro=None, derived=None):
+    def __init__(self, title, fields, values, parent=None, intro=None, derived=None,
+                 max_columns=3):
         super().__init__(parent)
         self.setModal(True)
         self.setWindowTitle(title)
-        self._fields = list(fields)
+        sections = _as_sections(fields)
+        self._fields = [f for _t, fs in sections for f in fs]
         self._derived = derived
         self._widgets = {}
+        self.cards = []
+        # A grip is the affordance, not the mechanism: the dialog is resizable because its
+        # layout minimum is small (see section_flow), and the grip is how the user is told.
+        self.setSizeGripEnabled(True)
 
         v = QVBoxLayout(self)
         v.setContentsMargins(18, 14, 18, 12)
         v.setSpacing(8)
         if intro:
-            lab = QLabel(intro)
-            lab.setWordWrap(True)
+            # capped: prose outside the scroll area contributes its full wrapped height to
+            # the dialog's own minimum, so an uncapped paragraph can push the floor back
+            # through the screen — the defect being fixed, arriving by a different door.
+            lab = WrapLabel(intro, cap_lines=6)
             lab.setProperty("status", "muted")
             v.addWidget(lab)
 
-        form = QFormLayout()
-        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
-        for f in self._fields:
-            w = f.build(values.get(f.key))
-            self._widgets[f.key] = w
-            row = QLabel(f.label)
-            row.setToolTip(_tip(f.path, f.help))
-            form.addRow(row, w)
-            hint = None
-            if f.note:
-                hint = QLabel(f.note)
-                hint.setWordWrap(True)
-                hint.setProperty("status", "muted")
-                form.addRow("", hint)
-            if f.depends_on is not None:
-                # the depended-on checkbox must have been built already (earlier in
-                # ``fields``); a field naming a later or unknown key is a caller bug.
-                dep = self._widgets[f.depends_on]
-                # the label and note grey out with the control — a bright caption above a
-                # disabled spin box reads as an active setting.
-                for part in (w, row, hint):
-                    if part is not None:
-                        part.setEnabled(dep.isChecked())
-                        dep.toggled.connect(part.setEnabled)
-            sig = (getattr(w, "toggled", None) or getattr(w, "valueChanged", None)
-                   or getattr(w, "textChanged", None)
-                   or getattr(w, "currentIndexChanged", None))
-            if sig is not None:
-                sig.connect(self._refresh_derived)
-        v.addLayout(form)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        body = QWidget()
+        self.columns = install_sections(body, max_columns=max_columns)
 
-        self.derived = QLabel("")
-        self.derived.setWordWrap(True)
+        for sect_title, sect_fields in sections:
+            card = SectionCard(sect_title)
+            for f in sect_fields:
+                w = f.build(values.get(f.key))
+                self._widgets[f.key] = w
+                row = WrapLabel(f.label)
+                row.setToolTip(_tip(f.path, f.help))
+                card.add_row(row, w)
+                hint = None
+                if f.note:
+                    hint = WrapLabel(f.note)
+                    hint.setProperty("status", "muted")
+                    card.add_note(hint)
+                if f.depends_on is not None:
+                    # the depended-on checkbox must have been built already (earlier in
+                    # ``fields``); a field naming a later or unknown key is a caller bug.
+                    # Say so: with sections the order is now set by a table in the caller,
+                    # one step further from here, and the bare KeyError this used to raise
+                    # surfaced as the Advanced button simply doing nothing.
+                    dep = self._widgets.get(f.depends_on)
+                    if dep is None:
+                        raise ValueError(
+                            f"field {f.key!r} depends on {f.depends_on!r}, which must be "
+                            f"built before it — within the same section, or in an earlier "
+                            f"one")
+                    # the label and note grey out with the control — a bright caption above a
+                    # disabled spin box reads as an active setting.
+                    for part in (w, row, hint):
+                        if part is not None:
+                            part.setEnabled(dep.isChecked())
+                            dep.toggled.connect(part.setEnabled)
+                sig = (getattr(w, "toggled", None) or getattr(w, "valueChanged", None)
+                       or getattr(w, "textChanged", None)
+                       or getattr(w, "currentIndexChanged", None))
+                if sig is not None:
+                    sig.connect(self._refresh_derived)
+            self.cards.append(card)
+            self.columns.addWidget(card)
+
+        self.scroll.setWidget(body)
+        # A scroll area should never need a horizontal bar just to show one column, so give
+        # it room for the widest card plus the vertical bar it will have.
+        try:
+            bar = self.scroll.verticalScrollBar().sizeHint().width()
+            self.scroll.setMinimumWidth(self.columns.minimumSize().width() + bar + 4)
+        except Exception:                   # pragma: no cover - sizing is best-effort
+            pass
+        # A QSpinBox or QComboBox inside a scroll area eats the wheel and steps ITSELF, so
+        # scrolling past a control silently rewrites an analysis parameter. The guard must be
+        # kept as an attribute: an event filter that is garbage-collected stops filtering and
+        # restores the bug with every construction-time test still green (see wheel.py).
+        self._wheel_guard = _wheel.guard_scroll_area(self.scroll)
+        # A scrollable FIELD inside the scrollable form is a dead patch: the breath-count
+        # QPlainTextEdit consumes the wheel even with nothing left to scroll, so the form
+        # stops moving under the cursor and never resumes. guard_scroll_area does not cover
+        # it — it only finds spin boxes and combos. wheel.py has shipped NestedWheelChain
+        # for precisely this since the reactive work and this is its first caller.
+        self._wheel_chains = []
+        for w in self._widgets.values():
+            if isinstance(w, QPlainTextEdit):
+                chain = _wheel.NestedWheelChain(self.scroll, w, parent=self)
+                w.viewport().installEventFilter(chain)
+                self._wheel_chains.append(chain)
+        v.addWidget(self.scroll, 1)
+
+        self.derived = WrapLabel("", cap_lines=4)
         self.derived.setProperty("status", "muted")
         self.derived.setVisible(derived is not None)
         v.addWidget(self.derived)
@@ -167,6 +254,14 @@ class AdvancedDialog(QDialog):
         self.btn_cancel.clicked.connect(self.reject)
         self.btn_ok = QPushButton("OK")
         self.btn_ok.clicked.connect(self.accept)
+        # Enter must COMMIT. Both buttons default to autoDefault, and with no explicit default
+        # Qt promotes the first one in the focus chain — which is Cancel, since it is added
+        # first so it reads left of OK. Enter therefore threw away every staged edit, and on a
+        # dialog too tall to show its own footer that was the only action still reachable.
+        # A QPlainTextEdit field (the breath-count overrides) takes Enter for itself while it
+        # has focus, so this costs nothing there.
+        self.btn_cancel.setAutoDefault(False)
+        self.btn_ok.setDefault(True)
         try:
             if _theme is not None:
                 _theme.make_primary(self.btn_ok)
@@ -176,6 +271,50 @@ class AdvancedDialog(QDialog):
         foot.addWidget(self.btn_ok)
         v.addLayout(foot)
         self._refresh_derived()
+
+    def sizeHint(self):                     # noqa: N802 - Qt API
+        """The size that shows the columns, not the size QScrollArea would ask for.
+
+        ``QScrollArea.sizeHint`` is clamped to 36x24 em REGARDLESS of the widget inside it,
+        so a dialog that simply inherited it opened one column wide on a 27" display
+        (measured: 576 px). Ask the column layout what it actually wants instead, and let
+        :func:`screen_fit.clamp_to_screen` cut that down to the screen.
+        """
+        base = super().sizeHint()
+        try:
+            want_w = self.columns.sizeHint().width()
+            bar = self.scroll.verticalScrollBar().sizeHint().width()
+            m = self.layout().contentsMargins()
+            width = want_w + bar + m.left() + m.right() + 4
+            # the chrome (intro, derived line, footer) is whatever the dialog needs beyond
+            # the scroll area's own hint, so measure it rather than assuming a number
+            chrome = base.height() - self.scroll.sizeHint().height()
+            height = chrome + self.columns.heightForWidth(want_w)
+            return QSize(max(base.width(), width), max(base.height(), height))
+        except Exception:                   # pragma: no cover - fall back to Qt's own hint
+            return base
+
+    def showEvent(self, ev):                # noqa: N802 - Qt API
+        """Clamp to the screen the first time the dialog is shown.
+
+        Here rather than in ``__init__``: the layout has to exist before it can be measured,
+        and the dialog has to have a window handle before the RIGHT screen can be identified
+        (a modal opens on its parent's monitor, which need not be the primary one).
+        """
+        super().showEvent(ev)
+        if not getattr(self, "_clamped", False):
+            self._clamped = True
+            _screen_fit.clamp_to_screen(self)
+            # Land the caret on the first setting, as it did before the scroll area existed.
+            # A QScrollArea is a focusable widget in its own right and sits earlier in the
+            # tab order than anything inside it, so without this the dialog opened with the
+            # scroller focused: the first Tab went to a field instead of the second, and
+            # typing did nothing.
+            for f in self._fields:
+                w = self._widgets.get(f.key)
+                if w is not None and w.isEnabled() and w.focusPolicy() != Qt.NoFocus:
+                    w.setFocus(Qt.OtherFocusReason)
+                    break
 
     def _refresh_derived(self, *_):
         if self._derived is None:

@@ -34,9 +34,9 @@ from dataclasses import dataclass
 import numpy as np
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton,
-                               QSplitter, QTableWidget, QTableWidgetItem,
+                               QScrollArea, QSplitter, QTableWidget, QTableWidgetItem,
                                QTabWidget, QVBoxLayout, QWidget)
-from PySide6.QtCore import Qt, QEvent, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QEvent, QSize, QThread, QTimer, Signal
 from PySide6.QtGui import QFont
 
 import pyqtgraph as pg
@@ -326,24 +326,55 @@ def _plot_pal():
 _CHECK_ICON_PATH = None
 
 
-def _check_icon_url():
-    """A white checkmark PNG (generated once, cached in the temp dir) used as the
+def _check_icon_url(colour: str = "white"):
+    """A checkmark PNG (generated once per colour, cached in the temp dir) used as the
     ``:checked`` image of the colour-filled result-channel checkboxes, so the tick sits
-    inside the channel's coloured box. Qt QSS ``url()`` needs a real file, not a data URI."""
+    inside the channel's coloured box. Qt QSS ``url()`` needs a real file, not a data URI.
+    See :func:`_tick_colour` for why the colour is decided per channel, not per theme."""
     global _CHECK_ICON_PATH
     if _CHECK_ICON_PATH is None:
+        _CHECK_ICON_PATH = {}
+    if colour not in _CHECK_ICON_PATH:
         import tempfile
         from PySide6.QtGui import QImage, QPainter, QPen, QColor
         from PySide6.QtCore import QPointF
         img = QImage(24, 24, QImage.Format_ARGB32); img.fill(Qt.transparent)
         p = QPainter(img); p.setRenderHint(QPainter.Antialiasing)
-        pen = QPen(QColor("white")); pen.setWidth(3)
+        pen = QPen(QColor(colour)); pen.setWidth(3)
         pen.setCapStyle(Qt.RoundCap); pen.setJoinStyle(Qt.RoundJoin); p.setPen(pen)
         p.drawPolyline([QPointF(5, 12), QPointF(10, 18), QPointF(19, 6)]); p.end()
-        path = os.path.join(tempfile.gettempdir(), "respmech_check.png")
+        path = os.path.join(tempfile.gettempdir(),
+                            f"respmech_check_{colour.lstrip('#')}.png")
         img.save(path)
-        _CHECK_ICON_PATH = path.replace("\\", "/")
-    return _CHECK_ICON_PATH
+        _CHECK_ICON_PATH[colour] = path.replace("\\", "/")
+    return _CHECK_ICON_PATH[colour]
+
+
+def _tick_colour(rgb) -> str:
+    """Black or white — whichever actually contrasts better against the fill ``rgb``.
+
+    The tick is painted INSIDE the channel's own colour box, and the dark theme brightens
+    every channel colour (flow goes (44,110,155) -> (96,172,226)), so a fixed white tick that
+    reads cleanly in light mode turns into a smear on the dark theme's pale fills.
+
+    It picks by measuring WCAG contrast both ways rather than by thresholding brightness: a
+    threshold is a guess about where the crossover sits, and the first one tried here (0.6 of
+    perceived brightness) left the dark theme's salmon EMG colour at 2.90:1 — under the 3.0
+    floor for a graphical element. Measuring cannot be wrong by construction, and it keeps
+    choosing correctly if the palette is ever retuned."""
+    def _rel_lum(c):
+        out = []
+        for v in c[:3]:
+            s = float(v) / 255.0
+            out.append(s / 12.92 if s <= 0.04045 else ((s + 0.055) / 1.055) ** 2.4)
+        return 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2]
+
+    def _contrast(a, b):
+        la, lb = _rel_lum(a) + 0.05, _rel_lum(b) + 0.05
+        return max(la, lb) / min(la, lb)
+
+    dark, light = (12, 17, 22), (255, 255, 255)
+    return "#0C1116" if _contrast(dark, rgb) >= _contrast(light, rgb) else "white"
 
 
 @dataclass(eq=False)
@@ -391,6 +422,12 @@ class BusyOverlay(QWidget):
 
     def __init__(self, panel: QWidget):
         super().__init__(panel)
+        # Qt only auto-sets WA_StyledBackground when the widget's metaObject IS
+        # QWidget's — a Python SUBCLASS like this one is excluded, so the
+        # `#busyOverlay { background-color: rgba(...) }` rule below was parsed, matched and
+        # then never painted: the panel was not dimmed at all while a job ran, in either
+        # theme. Setting it explicitly is the documented way to opt a custom widget in.
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.busy = False
         self.error = None
         self.message = ""
@@ -456,14 +493,20 @@ class BusyOverlay(QWidget):
         acc = t.get("accent", "#2C6E9B")
         acc_fg = t.get("accent_fg", "white")
         acc_hover = t.get("accent_hover", "#3E8AC0")
+        # The error CARD is not on the scrim — it paints palette(window), so in light mode it
+        # is #EEF1F5 and the two dark-tuned literals that used to sit here (#E08A4F icon,
+        # rgba(147,164,183) hint) rendered at 2.3:1 against it. Both meanings already have a
+        # theme token, so use them and let each mode pick its own value.
+        warn_fg = t.get("st_warn_fg", "#8A5A12")
+        hint_fg = t.get("text_muted", "#5C6B7A")
         self.setStyleSheet(
-            "#busyOverlay { background-color: rgba(18, 22, 28, 0.42); }"
+            "#busyOverlay { background-color: " + t.get("scrim", "rgba(18,22,28,0.42)") + "; }"
             "#busyBox, #errorBox { background-color: palette(window);"
             " border: 1px solid rgba(128,128,128,0.35); border-radius: 10px; }"
             "#errorBox { border-color: rgba(180,50,42,0.55); }"
             "#busyLabel, #errLabel { color: palette(window-text); font-weight: 600; }"
-            "#errIcon { color: #E08A4F; font-size: 17px; font-weight: 700; }"
-            "#errHint { color: rgba(147,164,183,0.95); font-size: 11px; }"
+            "#errIcon { color: " + warn_fg + "; font-size: 17px; font-weight: 700; }"
+            "#errHint { color: " + hint_fg + "; font-size: 11px; }"
             # padding/min-* MUST be reset: the global QPushButton padding (7px 16px) is
             # wider than this 24x24 circle and would clip the 'i' away entirely.
             "#infoBtn { background-color: " + acc + "; color: " + acc_fg + "; border: none;"
@@ -473,6 +516,32 @@ class BusyOverlay(QWidget):
         panel.installEventFilter(self)
         self.setGeometry(panel.rect())
         self.hide()
+
+    def centre_on_visible(self):
+        """Keep the spinner/error card in the part of the panel the user can actually SEE.
+
+        The card is centred in the overlay, and the overlay covers the whole panel — which
+        was the same thing until the Preview pages started scrolling. A panel that is half
+        below the fold then centres its card below the fold too: measured 6 of 10 panels with
+        the card outside the viewport at 1097x547, so a failed job reported itself somewhere
+        the user had no reason to scroll to.
+
+        Padding the layout by exactly the clipped-away strips re-centres the card on the
+        visible band without moving or resizing the overlay itself.
+        """
+        try:
+            lay = self.layout()
+            if lay is None:
+                return
+            vis = self.visibleRegion().boundingRect()
+            if vis.isEmpty():
+                return
+            top = max(0, vis.top())
+            bottom = max(0, self.height() - vis.bottom() - 1)
+            if (lay.contentsMargins().top(), lay.contentsMargins().bottom()) != (top, bottom):
+                lay.setContentsMargins(0, top, 0, bottom)
+        except Exception:                      # pragma: no cover - positioning is never fatal
+            pass
 
     def eventFilter(self, obj, ev):
         if obj is self.parent() and ev.type() in (QEvent.Resize, QEvent.Move):
@@ -652,9 +721,15 @@ class PreviewScreen(QWidget):
         self.status.hide()
 
         self.subtabs = QTabWidget()
-        self._mech_tab = self._build_mech_tab()
-        self._ecg_tab = self._build_ecg_tab()      # inserted between Mechanics + noise when EMG cols exist
-        self._emg_tab = self._build_emg_tab()
+        # Each page is wrapped in a scroll area, and it is the WRAPPER that goes into the tab
+        # widget — so _update_emg_tab_visibility's indexOf/insertTab/removeTab keep working on
+        # the same objects. ``.widget()`` on any of these gives the page content back.
+        self._mech_page = self._build_mech_tab()
+        self._ecg_page = self._build_ecg_tab()     # inserted between Mechanics + noise when EMG cols exist
+        self._emg_page = self._build_emg_tab()
+        self._mech_tab = self._scrollable(self._mech_page)
+        self._ecg_tab = self._scrollable(self._ecg_page)
+        self._emg_tab = self._scrollable(self._emg_page)
         self.subtabs.addTab(self._mech_tab, _TAB_MECH)
         root.addWidget(self.subtabs, 1)
 
@@ -662,9 +737,32 @@ class PreviewScreen(QWidget):
         # zooming used to land on a spin box and step it — and every ECG/noise parameter here
         # writes straight into the analysis, marks it modified and schedules a recompute.
         # file_combo was worse still: one notch silently switched the previewed recording.
-        # Nothing on this screen scrolls, so the wheel should do nothing at all.
+        #
+        # The pages scroll now, so a wheel over a spin box FORWARDS to that page's scroll area
+        # rather than doing nothing — a control that swallows the wheel in a scrollable page is
+        # a dead patch the form stops moving under. The plots are deliberately left out: a
+        # wheel over a graph zooms its time axis (see _restrict_body_wheel_to_x), which is a
+        # documented interaction, so vertical travel over a graph is the scroll bar's job.
+        # file_combo and the tab bar sit OUTSIDE every scroll area and keep swallowing: one
+        # notch there still switches the recording or the tab.
+        # ``extra``: the matplotlib canvases and the results table are not spin boxes or
+        # combos, so guard_scroll_area's by-class discovery misses them — and unlike a
+        # pyqtgraph plot they do nothing with a wheel of their own. Without this they were
+        # dead patches: the page simply stopped moving under the cursor over the Campbell
+        # diagram, the fidelity figure and the breath table.
+        _passive = []
+        for _page in (self._mech_page, self._ecg_page, self._emg_page):
+            _passive.append([w for w in _page.findChildren(FigureCanvasQTAgg)]
+                            + [w for w in _page.findChildren(QTableWidget)])
+        self._page_wheel_guards = [
+            _wheel.guard_scroll_area(a, extra=ex)
+            for a, ex in zip((self._mech_tab, self._ecg_tab, self._emg_tab), _passive)]
+        # A panel scrolled half out of view must not report its spinner or its error card
+        # off-screen — see BusyOverlay.centre_on_visible.
+        for _a in (self._mech_tab, self._ecg_tab, self._emg_tab):
+            _a.verticalScrollBar().valueChanged.connect(self._recentre_overlays)
         self._wheel_guard = _wheel.swallow_wheel(
-            root=self, extra=[self.subtabs.tabBar()])
+            extra=[self.subtabs.tabBar(), self.file_combo], parent=self)
 
         # one spinner overlay per panel (each fed by exactly one job kind)
         self._overlays = {
@@ -701,6 +799,91 @@ class PreviewScreen(QWidget):
         self.subtabs.currentChanged.connect(lambda *_: QTimer.singleShot(0, self._align_noise_strip))
         self.refresh_files()
 
+    class _PageScroll(QScrollArea):
+        """A scroll area whose page is the VIEWPORT height when there is room for it, and its
+        own minimum height when there is not.
+
+        Qt's ``widgetResizable`` sizes the page from ``heightForWidth`` whenever the page's
+        layout reports one — and these pages' wrapping chip rows do. So the page came out at
+        its NATURAL height on every screen (measured 1659 px for the noise page) instead of
+        filling the viewport, and the bottom diagnostics row sat below the fold even on a
+        2560x1400 display, where the whole page had fitted before. Scrolling is meant to be
+        the answer to a SHORT screen, not a permanent tax on every screen.
+        """
+
+        def resizeEvent(self, ev):          # noqa: N802 - Qt API
+            super().resizeEvent(ev)
+            self._fit_page()
+
+        def showEvent(self, ev):            # noqa: N802 - Qt API
+            # A page that was not the current tab is laid out only when it is first shown,
+            # and that pass happens after the filter below has had its chance — so without
+            # this the tab the user switches TO keeps the natural height Qt gave it.
+            super().showEvent(ev)
+            self._fit_page()
+
+        def setWidget(self, page):          # noqa: N802 - Qt API
+            # widgetResizable is deliberately OFF (see the class docstring): with it on, Qt
+            # sizes the page from its layout's heightForWidth and that decision is final —
+            # overriding resizeEvent, filtering LayoutRequest and even calling resize()
+            # directly afterwards all left the page at its 1659 px natural height, measured.
+            # So the page's size is this class's own job, recomputed on the three events that
+            # can change it.
+            super().setWidget(page)
+            page.installEventFilter(self)
+            self._fit_page()
+
+        def eventFilter(self, obj, ev):     # noqa: N802 - Qt API
+            if obj is self.widget() and ev.type() == QEvent.LayoutRequest:
+                self._fit_page()
+            return super().eventFilter(obj, ev)
+
+        _fitting = False
+
+        def _fit_page(self):
+            # Re-entrancy guard AND a no-op check, both required: resizing the page emits the
+            # very LayoutRequest this is called from, and pyqtgraph re-lays its axes out on
+            # every resize, so without both this recursed until the stack blew.
+            if self._fitting:
+                return
+            page = self.widget()
+            if page is None:
+                return
+            vp = self.viewport().size()
+            want = QSize(vp.width(), max(vp.height(), page.minimumSizeHint().height()))
+            if page.size() == want:
+                return
+            self._fitting = True
+            try:
+                page.resize(want)
+            finally:
+                self._fitting = False
+
+    def _recentre_overlays(self, *_):
+        """Re-centre every visible busy/error card on the part of its panel still in view."""
+        for ov in getattr(self, "_overlays", {}).values():
+            if ov is not None and ov.isVisible():
+                ov.centre_on_visible()
+
+    def _scrollable(self, page):
+        """Put a subtab page in a vertical scroll area.
+
+        This is what lets the graphs keep a readable minimum height (theme.PLOT_MIN_HEIGHT)
+        without that minimum reaching the window: a page taller than the viewport scrolls
+        instead of compressing its panels into stacked axes. ``setWidgetResizable(True)``
+        means the page still EXPANDS to fill a tall window, so nothing changes on a large
+        screen — the scroll bar only appears when the room genuinely is not there.
+        """
+        area = self._PageScroll()
+        area.setWidgetResizable(False)      # _PageScroll sizes the page itself
+        area.setFrameShape(QFrame.NoFrame)
+        area.setWidget(page)
+        # The control strips already wrap (flow_layout), so width is handled by wrapping
+        # rather than by scrolling; AsNeeded rather than AlwaysOff so an extreme font still
+        # gets a bar instead of clipped controls.
+        area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        return area
+
     def _build_mech_tab(self):
         w = QWidget(); v = QVBoxLayout(w); v.setContentsMargins(0, 6, 0, 0)
         # Cursor read-out (time, value at the pointer) — above the graphs, right-aligned, and
@@ -724,6 +907,7 @@ class PreviewScreen(QWidget):
         v.addLayout(_xh)
         split = QSplitter(Qt.Vertical)
         self.plots = pg.GraphicsLayoutWidget()
+        _theme.set_plot_floor(self.plots)
         self.plots.setBackground(_plot_pal()["bg"])
         self.plots.scene().sigMouseClicked.connect(self._on_plot_clicked)
         # P17: a crosshair that tracks the cursor across the X-linked channel stack and
@@ -734,8 +918,15 @@ class PreviewScreen(QWidget):
         split.addWidget(self.plots)
         lower = QSplitter(Qt.Horizontal)
         self.table = QTableWidget(0, 0)
+        # a table squeezed to one visible row is as useless as a flattened graph
+        _theme.set_plot_floor(self.table)
         lower.addWidget(self.table)
         self.campbell = FigureCanvasQTAgg(Figure(figsize=(4, 4)))
+        # A matplotlib canvas reports a 10 px minimum, so it was the one Preview graph with
+        # no floor at all — measured 90 px on the target screen and 70 px at the window's own
+        # minimum, which for the panel a reader takes the recoil line and work fill off is a
+        # box, not a diagram.
+        _theme.set_plot_floor(self.campbell)
         lower.addWidget(self.campbell)
         # the per-breath table takes ~3/4 of the width; the Campbell diagram ~1/4 (default)
         lower.setStretchFactor(0, 3); lower.setStretchFactor(1, 1)
@@ -819,12 +1010,32 @@ class PreviewScreen(QWidget):
             "PNG image (*.png);;PDF document (*.pdf)")
         if not path:
             return
+        # Export LIGHT, whatever the app is wearing. The on-screen figure follows the theme,
+        # so in dark mode saving the live facecolor produced a near-black PNG/PDF — which is
+        # a figure destined for a report or a paper. The batch writers already pin their
+        # output light (core/plot_style) for the same reason; this is the interactive export
+        # catching up. Re-rendered rather than recoloured: the dark palette's brightened
+        # traces score barely 2:1 on white, so only a genuine light redraw is legible.
+        breaths = getattr(self, "_campbell_breaths", None)
+        redrawn = False
         try:
+            if breaths is not None and _theme is not None and _theme.is_dark():
+                # set BEFORE the call it guards: _draw_campbell begins by clearing the
+                # figure, so a failure part-way through still leaves the on-screen diagram
+                # destroyed and the finally-branch below is the only thing that puts it back
+                redrawn = True
+                self._draw_campbell(breaths, pal=_theme._PLOT_LIGHT)
             self.campbell.figure.savefig(path, dpi=150, bbox_inches="tight",
                                          facecolor=self.campbell.figure.get_facecolor())
             self._set_status(f"Saved Campbell diagram → {path}")
         except Exception as e:                          # noqa: BLE001
             self._set_status(f"Could not save figure: {short_error(str(e))}")
+        finally:
+            if redrawn:                                 # put the on-screen figure back
+                try:
+                    self._draw_campbell(breaths)
+                except Exception:                       # pragma: no cover - defensive
+                    pass
 
     def _build_emg_tab(self):
         w = QWidget(); v = QVBoxLayout(w); v.setContentsMargins(0, 6, 0, 0)
@@ -973,21 +1184,26 @@ class PreviewScreen(QWidget):
         # splitter assembly further down for why each panel sits where it does).
         _bg = _plot_pal()["bg"]
         self.emg_raw_plots = pg.GraphicsLayoutWidget()
+        _theme.set_plot_floor(self.emg_raw_plots)
         self.emg_raw_plots.setBackground(_bg)
         self.emg_result_plots = pg.PlotWidget()
+        _theme.set_plot_floor(self.emg_result_plots)
         plot_perf.tune_widget(self.emg_result_plots)
         self._style_legend(self.emg_result_plots.addLegend())
         self.emg_result_plots.setBackground(_bg)
         self.emg_result_plots.setLabel("bottom", "Time (s)")
         self.emg_result_plots.setLabel("left", "EMG (a.u.)")   # "Conditioned" is in the panel title
         self.emg_plots = pg.PlotWidget()
+        _theme.set_plot_floor(self.emg_plots)
         plot_perf.tune_widget(self.emg_plots)
         self._style_legend(self.emg_plots.addLegend())
         self.emg_plots.setBackground(_bg)
         self.emg_plots.setLabel("bottom", "Time (s)"); self.emg_plots.setLabel("left", "EMG (a.u.)")
         self.emg_psd_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 3)))
+        _theme.set_plot_floor(self.emg_psd_canvas)   # a canvas reports a 10px minimum of its own
 
         self.fidelity_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 3)))
+        _theme.set_plot_floor(self.fidelity_canvas)   # a canvas reports a 10px minimum of its own
         split = QSplitter(Qt.Vertical)
         # Detail channel and Conditioned result are the two working views — the conditioning
         # stages and the finished EMG, each against time — so both span the full width, where
@@ -1116,6 +1332,7 @@ class PreviewScreen(QWidget):
 
         _bg = _plot_pal()["bg"]
         self.ecg_capture_plot = pg.PlotWidget(); self.ecg_capture_plot.setBackground(_bg)
+        _theme.set_plot_floor(self.ecg_capture_plot)
         plot_perf.tune_widget(self.ecg_capture_plot)
         self.ecg_capture_plot.setLabel("bottom", "Time (s)")
         # Just the unit: this panel is the 1/4-height slot of the splitter below (stretch 1:3,
@@ -1123,6 +1340,7 @@ class PreviewScreen(QWidget):
         # its LENGTH runs along that height. The panel title names the channel.
         self.ecg_capture_plot.setLabel("left", "a.u.")
         self.ecg_processed_plots = pg.GraphicsLayoutWidget(); self.ecg_processed_plots.setBackground(_bg)
+        _theme.set_plot_floor(self.ecg_processed_plots)
         split = QSplitter(Qt.Vertical)
         split.addWidget(self._titled("Raw capture channel — detected R-peaks (▼)", self.ecg_capture_plot))
         split.addWidget(self._titled("ECG-processed EMG channels", self.ecg_processed_plots))
@@ -1356,8 +1574,15 @@ class PreviewScreen(QWidget):
                     + [("emg", f) for f in out_fields])
         owner = {"noise": n, "robust_peak": rp, "emg": e}
         values = {f.key: getattr(owner[grp], f.key) for grp, f in prefixed}
+        # The four groups already existed here as separate lists and were flattened away on
+        # the way into the dialog; the cards just stop throwing that structure out.
         dlg = AdvancedDialog(
-            "EMG — advanced", [f for _g, f in prefixed], values, parent=self,
+            "EMG — advanced",
+            [("RMS & normalisation", emg_fields),
+             ("Spectral gate", noise_fields),
+             ("Heartbeat & island guards", gate_fields),
+             ("Diagnostics", out_fields)],
+            values, parent=self,
             intro="Suppression strength and the fidelity target are on the strip. These "
                   "shape HOW the gate is computed, and are rarely the right thing to change.",
             derived=_ms)
@@ -1432,13 +1657,20 @@ class PreviewScreen(QWidget):
                           "Trend anchor — absolute threshold (legacy)", "float",
                           "processing.volume.trend_peak_min_height",
                           "Fixed depth below the recording's HIGHEST volume that a trough "
-                          "must reach. Overrides the breath-depth rule above.",
+                          "must reach. Overrides the breath-depth rule above. Set to Auto "
+                          "(the lowest value) to use 'Trend anchor — minimum breath depth' "
+                          "instead, which is the default.",
                           # the sentinel sits just BELOW zero because 0 is itself a legal
                           # legacy value ("no absolute gate"); sharing the minimum would
                           # silently rewrite such an analysis to Auto on the next OK. With
                           # decimals=3 the only reachable negative IS the sentinel.
                           lo=-0.001, hi=1_000_000.0, step=0.05, decimals=3,
-                          auto_text="Auto — use minimum breath depth",
+                          # Just "Auto": the old "Auto — use minimum breath depth" is a
+                          # sentence inside a numeric field and needed 473 px on Windows
+                          # font metrics against the ~340 px a column can give it, so it
+                          # was permanently clipped mid-word. What it said now lives in the
+                          # tooltip above, which has room for it.
+                          auto_text="Auto",
                           depends_on="correct_trend",
                           note="Only for reproducing an analysis made before v2.3.3. It is "
                                "measured against the whole recording, so a value larger than "
@@ -1490,7 +1722,46 @@ class PreviewScreen(QWidget):
                          "one 'filename = count' per line. Blank = each file's detected count.",
                          placeholder="one 'filename = count' per line")
         bc_text = "\n".join(f"{e.file} = {e.count}" for e in s.processing.breath_counts)
-        all_fields = [f for _g, f in fields] + [bc_field]
+        # Which card each setting is shown on, in display order. Grouping only: the flat
+        # ``fields`` list above still drives building, reading and committing, so a setting
+        # cannot change meaning by being moved between cards. A key that gates others
+        # (``correct_trend``, ``resample``) must come first WITHIN its own card, because
+        # ``depends_on`` resolves against widgets already built.
+        sections = [
+            ("Breath detection", ["method", "buffer", "height", "distance_s", "width_s"]),
+            ("Work of breathing", ["calc_from", "avg_resampling_obs"]),
+            ("Volume", ["integrate_from_flow", "correct_drift",
+                        "inverse_flow", "inverse_volume"]),
+            ("End-expiratory trend", ["correct_trend", "trend_method",
+                                      "trend_peak_min_prominence_frac",
+                                      "trend_peak_min_distance_s", "trend_peak_min_height"]),
+            ("Sampling", ["resample", "resample_to_frequency"]),
+            ("Pressure–time product", ["baseline_window_s"]),
+            # not "Breath-count overrides" — the one field on this card is already called
+            # that, and a card whose title repeats its only row reads like a mistake
+            ("Per-file overrides", ["breath_counts"]),
+        ]
+        by_key = {f.key: f for _g, f in fields}
+        by_key[bc_field.key] = bc_field
+        # Cards are filled by CONSUMING from a working copy, which makes the table's three
+        # failure modes harmless instead of silent:
+        #   * a key listed twice picks the field once — listing it again finds nothing, so
+        #     there is no second widget to shadow the first in ``_widgets`` and swallow its
+        #     edits (measured before this: 21 rows built against 20 widgets);
+        #   * a mistyped key matches nothing and its real field simply stays unplaced;
+        #   * anything left unplaced lands on "Other" rather than vanishing from the dialog
+        #     while still being committed on OK — the worst possible outcome for a
+        #     scientific parameter.
+        # An empty card is dropped, so a typo shows up as a setting in the wrong place
+        # rather than as a mysterious empty box.
+        remaining = dict(by_key)
+        all_fields = []
+        for title, keys in sections:
+            picked = [remaining.pop(k) for k in keys if k in remaining]
+            if picked:
+                all_fields.append((title, picked))
+        if remaining:
+            all_fields.append(("Other", list(remaining.values())))
         vals = dict(values); vals["breath_counts"] = bc_text
         def _trend_hint(v):
             """Count the anchors the trend correction would find in the previewed file,
@@ -1809,10 +2080,10 @@ class PreviewScreen(QWidget):
             if wdg is not None:
                 wdg.setParent(None)
         self.result_checks = []
-        check = _check_icon_url()
         cycle = _plot_pal()["emg_cycle"]
         for i, c in enumerate(cols):
             r, g, b = cycle[i % len(cycle)][:3]
+            check = _check_icon_url(_tick_colour((r, g, b)))
             cb = QCheckBox(f"col {c}")
             cb.setChecked(i < 3)
             cb.setStyleSheet(
@@ -2095,6 +2366,7 @@ class PreviewScreen(QWidget):
         self.plots.clear(); self._channel_plots = []
         self.table.setRowCount(0); self.table.setColumnCount(0)
         self.campbell.figure.clear(); self.campbell.draw()
+        self._forget_campbell()      # the export must not resurrect a cleared diagram
         self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []
         self.emg_raw_plots.clear()
         self.emg_plots.clear()
@@ -2125,6 +2397,7 @@ class PreviewScreen(QWidget):
         self.plots.clear(); self._channel_plots = []
         self.table.setRowCount(0); self.table.setColumnCount(0)
         self.campbell.figure.clear(); self.campbell.draw()
+        self._forget_campbell()      # the export must not resurrect a cleared diagram
         self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []
         self.emg_raw_plots.clear()
         self.emg_plots.clear()
@@ -2466,6 +2739,9 @@ class PreviewScreen(QWidget):
         self._channel_plots = []
         self._crosshair_lines = []                       # cleared with the plots; rebuilt below
         pal = _plot_pal()
+        # Per ROW, not for the stack as a whole — see theme.set_stack_floor. Five channels
+        # sharing a 130 px container is 10 px of trace each.
+        _theme.set_stack_floor(self.plots, len(_CHANNELS))
         for i, (key, label, colour) in enumerate(_CHANNELS):
             p = self.plots.addPlot(row=i, col=0, axisItems={"left": SciAxis(orientation="left")})
             p.showGrid(x=True, y=True, alpha=pal["grid_alpha"])
@@ -2541,6 +2817,7 @@ class PreviewScreen(QWidget):
         cols = list(self.state.settings.input.channels.emg)
         t = np.arange(emg.shape[0]) / fs
         cycle = _plot_pal()["emg_cycle"]
+        _theme.set_stack_floor(self.emg_raw_plots, emg.shape[1])   # per channel, not per stack
         for i in range(emg.shape[1]):
             p = self.emg_raw_plots.addPlot(row=i, col=0)
             p.showGrid(x=True, y=True, alpha=0.12)
@@ -3072,7 +3349,10 @@ class PreviewScreen(QWidget):
         # so the picked amplitude is visible over the raw trace it is taken from.
         fs = self.state.settings.input.format.sampling_frequency or (1.0 / (t[1] - t[0]) if len(t) > 1 else 1.0)
         env = _rms_envelope(final, (self.state.settings.processing.emg.rms_window_s or 0.05) * fs)
-        env_pen = pg.mkPen((180, 50, 42), width=2)
+        # the one pen in this plot that was a literal; every other trace here is themed, so
+        # in dark mode the envelope alone stayed a light-palette red. The light table's
+        # 'poes' IS (180, 50, 42), so light mode is unchanged.
+        env_pen = pg.mkPen(pal["channels"]["poes"], width=2)
         self.emg_plots.plot(t, env, pen=env_pen, name="RMS envelope")
         self.emg_plots.plot(t, -env, pen=env_pen)
         # discrete full-length flow silhouette behind the EMG, to read bursts against respiration
@@ -3174,6 +3454,7 @@ class PreviewScreen(QWidget):
                 # which would leave a blank table and Campbell explaining nothing.
                 self.table.setRowCount(0); self.table.setColumnCount(0)
                 self.campbell.figure.clear(); self.campbell.draw()
+                self._forget_campbell()   # the export must not resurrect a cleared diagram
                 for p in _PANELS["batch"]:
                     self._overlays[p].show_error(
                         f"Not processed — {short_error(str(err))}", str(err))
@@ -3212,8 +3493,22 @@ class PreviewScreen(QWidget):
             for c in range(len(df.columns)):
                 self.table.setItem(r, c, QTableWidgetItem(str(df.iloc[r, c])))
 
-    def _draw_campbell(self, breaths):
-        pal = _plot_pal()
+    def _forget_campbell(self):
+        """Drop the cached breaths and disable the export whenever the figure is cleared.
+
+        The export re-renders from this cache (to force a light figure in dark mode), so a
+        cache that outlives its diagram is not merely stale — it would write a figure for a
+        file the user is no longer looking at, under that file's name. Clearing the figure
+        and clearing what it was drawn from have to be the same act."""
+        self._campbell_breaths = None
+        try:
+            self.btn_export_fig.setEnabled(False)
+        except Exception:                       # pragma: no cover - button may not exist yet
+            pass
+
+    def _draw_campbell(self, breaths, pal=None):
+        self._campbell_breaths = breaths        # kept so the export can re-render it light
+        pal = _plot_pal() if pal is None else pal
         fig = self.campbell.figure
         fig.clear()
         fig.set_facecolor(pal["mpl_bg"])
@@ -3247,7 +3542,8 @@ class PreviewScreen(QWidget):
         try:
             import numpy as np
             if vavg is not None and pavg is not None and len(vavg):
-                ax.plot(pavg, vavg, color="#2C6E9B", lw=2.0, zorder=3, label="average breath")
+                ax.plot(pavg, vavg, color=pal["mpl_accent"], lw=2.0, zorder=3,
+                        label="average breath")
             if eelv is not None and eilv is not None:
                 # elastic recoil line: straight line between the two volume endpoints
                 ax.plot([eelv[1], eilv[1]], [eelv[0], eilv[0]], color=pal["mpl_target"],
@@ -3257,7 +3553,7 @@ class PreviewScreen(QWidget):
                     # Poes on the recoil line at each inspiratory volume
                     line_p = np.interp(iv, sorted([eelv[0], eilv[0]]),
                                        [eelv[1], eilv[1]] if eelv[0] <= eilv[0] else [eilv[1], eelv[1]])
-                    ax.fill_betweenx(iv, ip, line_p, color="#2C6E9B", alpha=0.18,
+                    ax.fill_betweenx(iv, ip, line_p, color=pal["mpl_accent"], alpha=0.18,
                                      zorder=2, label="inspiratory work")
             wob = dict(b.get("wob") or {})
             if "wobtotal" in wob:

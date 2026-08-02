@@ -168,6 +168,31 @@ def isolated_prefs(_prefs_never_touch_real_settings):
 
 
 @pytest.fixture
+def windows_metrics(qapp):
+    """Model the Windows runner's font metrics for the duration of a test, then restore.
+
+    macOS has the narrowest metrics we ship to, so a layout budget verified only here is
+    verified on the friendliest platform there is — which is exactly how a modal that fits
+    on the maintainer's Mac shipped 254 px too tall for a Windows laptop.
+
+    Widen the horizontal ADVANCE and leave the height alone: ``QFont.setStretch(145)`` lands
+    within a few percent of the runner (modelled 1506-1538 px against CI's measured 1516 px).
+    Scaling the point size instead is the wrong instrument — it inflates row heights too, so
+    it understates the width problem and invents height failures Windows does not have.
+    CLAUDE.md has prescribed this since the window-width fix; this is the first time it has
+    been executable rather than prose.
+    """
+    orig = qapp.font()
+    f = qapp.font()
+    f.setStretch(145)
+    qapp.setFont(f)
+    try:
+        yield qapp
+    finally:
+        qapp.setFont(orig)
+
+
+@pytest.fixture
 def dark_app(qapp):
     """Force the dark theme for the duration of a test, then restore the OS default so the
     global theme state never leaks into other tests. Yields ``(app, theme)``."""

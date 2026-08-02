@@ -118,6 +118,16 @@ class StartupDialog(QDialog):
     def _choose_recent(self, path):
         self.mode = "open"; self.path = path; self.accept()
 
+    def showEvent(self, ev):                # noqa: N802 - Qt API
+        """Never taller than the screen. Its natural height reached 766 px on Windows font
+        metrics against 650 px of usable height on a 1080p laptop at 150% scaling — and this
+        is the FIRST window of the session, so an unreachable button here blocks everything."""
+        super().showEvent(ev)
+        if not getattr(self, "_clamped", False):
+            self._clamped = True
+            from respmech.ui import screen_fit  # noqa: PLC0415
+            screen_fit.clamp_to_screen(self)
+
     def _choose_open(self):
         from respmech.ui import prefs  # noqa: PLC0415
         p, _ = QFileDialog.getOpenFileName(

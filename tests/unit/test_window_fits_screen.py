@@ -38,6 +38,14 @@ pytestmark = requires_synth()
 
 # The narrowest screen the app must fit on (a 13" MacBook is 1280 logical px).
 _NARROWEST_SCREEN = 1280
+# ...and the shortest. The tightest configuration the app is expected to fit is a 1080p
+# laptop at 175% display scaling — 1097x617 logical — which is an accessibility setting, not
+# an exotic one. Take off a title bar and a taskbar. The width had a ceiling from the start
+# and the height had none, which is how a modal 254 px taller than the screen got through,
+# and how the main window came to demand 583 px against the 547 px available here.
+_SHORTEST_SCREEN = 617
+_CHROME = 70
+_SHORTEST_USABLE_H = _SHORTEST_SCREEN - _CHROME
 
 # A wrapping chip's minimum is its widest single cluster, so it sits well below the chip's
 # natural one-line width; a chip that cannot wrap has minimum == natural, i.e. exactly 1.0.
@@ -62,16 +70,60 @@ def _window(qapp, tmp_path, **kw):
 
 
 @pytest.mark.parametrize("tab", [0, 1, 2])
-def test_window_minimum_width_fits_a_laptop_screen(qapp, tmp_path, tab):
-    """On every screen — Setup, Preview & QC, Run — the window must be able to be narrow."""
+def test_window_minimum_fits_a_laptop_screen(qapp, tmp_path, tab):
+    """On every screen — Setup, Preview & QC, Run — the window must be able to be small.
+
+    Both axes off ONE ``minimumSizeHint()`` call. The height half used to be discarded, and
+    it is the axis that actually ran out: a 1080p laptop at 150% scaling has 650 px to give.
+    """
     win = _window(qapp, tmp_path, remove_ecg=True, noise=True)
     win.tabs.setCurrentIndex(tab)
     for _ in range(6):
         qapp.processEvents()
-    got = win.minimumSizeHint().width()
-    assert got < _NARROWEST_SCREEN, (
-        f"tab {tab}: the window demands {got} px minimum width, which does not fit a "
+    got = win.minimumSizeHint()
+    assert got.width() < _NARROWEST_SCREEN, (
+        f"tab {tab}: the window demands {got.width()} px minimum width, which does not fit a "
         f"{_NARROWEST_SCREEN} px screen — a control strip has stopped wrapping")
+    assert got.height() <= _SHORTEST_USABLE_H, (
+        f"tab {tab}: the window demands {got.height()} px minimum height, more than the "
+        f"{_SHORTEST_USABLE_H} px usable on the shortest screen we ship to")
+    win.close()
+
+
+def test_each_screen_is_measured_separately_not_just_the_tab_widget(qapp, tmp_path):
+    """The per-tab parametrization above cannot localise a regression, and on its own it
+    would let one bloated screen hide behind the others.
+
+    ``QTabWidget.minimumSizeHint`` is the MAXIMUM over every page regardless of which tab is
+    current, so the three parametrised runs above measure the same number three times — they
+    say the window fits, never which screen is responsible. This measures each screen
+    directly, so a regression names itself.
+    """
+    win = _window(qapp, tmp_path, remove_ecg=True, noise=True)
+    win.preview_screen.refresh_files()
+    for _ in range(8):
+        qapp.processEvents()
+    for name in ("settings_screen", "preview_screen", "run_screen"):
+        got = getattr(win, name).minimumSizeHint()
+        assert got.width() < _NARROWEST_SCREEN, (
+            f"{name} alone demands {got.width()} px of minimum width")
+        assert got.height() <= _SHORTEST_USABLE_H, (
+            f"{name} alone demands {got.height()} px of minimum height")
+    win.close()
+
+
+def test_the_run_action_bar_wraps_rather_than_summing_its_buttons(qapp, tmp_path):
+    """The specific regression on the Run screen: five buttons in a plain QHBoxLayout summed
+    to 1184 px on Windows metrics and that row alone set the whole application's minimum
+    width — more than the Preview screen it was assumed to be. Same defect as the EMG chips,
+    same fix, so it gets the same ratio guard."""
+    win = _window(qapp, tmp_path, remove_ecg=True, noise=True)
+    bar = win.run_screen.action_bar
+    natural, floor = bar.sizeHint().width(), bar.minimumSizeHint().width()
+    assert natural > 200, f"the action bar reports a {natural} px natural width — not laid out"
+    assert floor < natural * _WRAPPED, (
+        f"the action bar demands {floor} px of its {natural} px natural width — it cannot "
+        f"wrap, so its whole width is forced on the window")
     win.close()
 
 
@@ -88,7 +140,10 @@ def test_the_emg_strips_wrap_rather_than_summing_their_chips(qapp, tmp_path):
     for _ in range(8):
         qapp.processEvents()
 
-    pages = {pv.subtabs.tabText(i): pv.subtabs.widget(i).minimumSizeHint().width()
+    # ``.widget()``: each subtab is a QScrollArea wrapper now, and a scroll area reports a
+    # small minimum whatever is inside it — measuring the wrapper would pass this test on a
+    # page whose chips had stopped wrapping entirely, which is the regression it exists for.
+    pages = {pv.subtabs.tabText(i): pv.subtabs.widget(i).widget().minimumSizeHint().width()
              for i in range(pv.subtabs.count())}
     assert pages, "no preview subtabs were built — the assertion would be vacuous"
     for name, width in pages.items():
@@ -152,7 +207,14 @@ def test_a_squeezed_chip_wraps_inside_itself_rather_than_off_the_edge(qapp, tmp_
         f"the window ({win.width()} px) is still wider than the ECG chip wants to be "
         f"({pv.ecg_opts.sizeHint().width()} px), so the chip is never asked to wrap and the "
         f"rest of this test proves nothing")
-    chip, page = pv.ecg_opts, pv.subtabs.widget(ecg)
+    area = pv.subtabs.widget(ecg)
+    chip, page = pv.ecg_opts, area.widget()      # the page, not its scroll area
+    # The page is sized to the viewport, so "the chip fits the page" alone is nearly
+    # tautological now — the load-bearing half is that the page needs NO horizontal scroll,
+    # i.e. the chip really wrapped instead of being pushed off the right edge.
+    assert area.horizontalScrollBar().maximum() == 0, (
+        f"the ECG page needs {area.horizontalScrollBar().maximum()} px of horizontal scroll — "
+        f"the chip was pushed off the right edge instead of wrapping")
     assert chip.x() + chip.width() <= page.width() + 1, (
         f"the ECG chip reaches {chip.x() + chip.width()} px on a {page.width()} px page — it is "
         f"drawn past the right edge instead of wrapping")
@@ -182,4 +244,74 @@ def test_the_noise_reference_readout_is_elided_not_unbounded(qapp, tmp_path):
         f"the read-out is {label.minimumSizeHint().width()} px wide for a long filename")
     assert long_name in label.toolTip(), "the full reference must stay available on hover"
     assert label.text(), "the read-out collapsed to nothing — it must stay visible"
+    win.close()
+
+
+def test_the_preview_pages_scroll_instead_of_compressing_their_graphs(qapp, tmp_path):
+    """On a short screen the Preview pages must SCROLL, not squash their graphs flat.
+
+    Letting the graphs shrink to fit was tried first: it made the window fit a 1080p screen
+    at 175% scaling, but on exactly that screen a maximised window IS the minimum, so the
+    stacked EMG panels rendered as axes with no visible trace — the panels' whole job is to
+    let a burst be judged by eye. Emil chose scrolling instead (02-08-2026).
+
+    Both halves are asserted, because either alone is satisfiable by the wrong design: the
+    graphs keep a readable height, AND the page provides scroll range rather than the window
+    demanding the content's full height.
+    """
+    from respmech.ui import theme
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+    import pyqtgraph as pg
+
+    win = _window(qapp, tmp_path, remove_ecg=True, noise=True)
+    win.tabs.setCurrentIndex(1)
+    pv = win.preview_screen
+    pv.refresh_files()
+    for _ in range(8):
+        qapp.processEvents()
+    # the tightest screen we ship to, as the window size
+    win.resize(1097, _SHORTEST_USABLE_H)
+    pv.subtabs.setCurrentIndex(pv.subtabs.count() - 1)      # the tallest page
+    for _ in range(10):
+        qapp.processEvents()
+
+    scrolled = 0
+    for i in range(pv.subtabs.count()):
+        pv.subtabs.setCurrentIndex(i)
+        for _ in range(8):
+            qapp.processEvents()
+        area, name = pv.subtabs.widget(i), pv.subtabs.tabText(i)
+        page = area.widget()
+        assert page is not None, f"subtab {name!r} is not wrapped in a scroll area"
+
+        # The ROWS inside a stacked graph, not the container. Flooring the container is what
+        # the first cut did, and five channels sharing a 130 px container is 10 px of trace
+        # each — a guard that measured the container stayed green straight through it.
+        for stack in page.findChildren(pg.GraphicsLayoutWidget):
+            if not stack.isVisible():
+                continue
+            rows = [it.getViewBox() for it in stack.ci.items if hasattr(it, "getViewBox")]
+            heights = [vb.geometry().height() for vb in rows if vb is not None]
+            for h in heights:
+                assert h >= theme.PLOT_ROW_MIN_HEIGHT * 0.55, (
+                    f"{name!r}: a stacked channel row is {h:.0f} px against a "
+                    f"{theme.PLOT_ROW_MIN_HEIGHT} px floor — the stack compressed instead of "
+                    f"the page scrolling")
+
+        # standalone graphs, INCLUDING the matplotlib canvases the first guard could not see
+        singles = [g for g in page.findChildren(pg.PlotWidget) if g.isVisible()]
+        singles += [c for c in page.findChildren(FigureCanvasQTAgg) if c.isVisible()]
+        for g in singles:
+            assert g.height() >= theme.PLOT_MIN_HEIGHT * 0.9, (
+                f"{name!r}: {type(g).__name__} is {g.height()} px tall, under the "
+                f"{theme.PLOT_MIN_HEIGHT} px floor at which it stops showing a trace")
+
+        assert area.horizontalScrollBar().maximum() == 0, (
+            f"{name!r} needs {area.horizontalScrollBar().maximum()} px of HORIZONTAL scroll — "
+            f"controls are off the right edge; the strips are supposed to wrap, not scroll")
+        scrolled += 1 if area.verticalScrollBar().maximum() > 0 else 0
+
+    assert scrolled, (
+        "no page scrolls at the shortest screen size, so this test is not measuring the case "
+        "it exists for")
     win.close()
