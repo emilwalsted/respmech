@@ -565,7 +565,11 @@ def test_result_picker_check_is_inside_the_coloured_box(qapp, tmp_path):
     for _c, cb in pv.result_checks:
         qss = cb.styleSheet()
         assert "::indicator" in qss and "background" in qss   # indicator IS the coloured box
-        assert "respmech_check.png" in qss and "image:" in qss.replace(" ", "")  # tick inside it
+        # the tick image, whatever colour it was generated in: the file name carries the
+        # colour ("respmech_check_white.png" / "..._0C1116.png") because the tick is drawn
+        # black or white depending on which contrasts with THAT channel's fill — pinning the
+        # whole name here would just be pinning that decision twice.
+        assert "respmech_check" in qss and "image:" in qss.replace(" ", "")  # tick inside it
     assert pv.result_checks_layout.spacing() >= 20            # more air between channels
     win.close()
 

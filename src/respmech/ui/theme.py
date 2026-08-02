@@ -131,6 +131,47 @@ def is_dark() -> bool:
 PLOT_AXIS_WIDTH = 68
 
 
+# Floor (px) below which a preview graph stops being a graph. A time axis and its labels eat
+# roughly 40 px, so this leaves ~90 px of actual trace — enough to judge a breath or a burst
+# by eye, which is the entire job of these panels.
+#
+# The alternative was tried and rejected: letting the graphs shrink to 40 px did make the
+# window fit a 1080p screen at 175% scaling, but on exactly that screen a maximised window
+# IS the minimum, so the panels rendered as stacked axes with no visible trace. Emil's call,
+# 02-08-2026: "hellere at man kan scrolle på små skærme og at graferne kan ses ordentligt."
+# So the graphs keep a readable floor and the Preview subtab pages scroll instead — which is
+# what decouples the window's minimum height from the content's, the same move the Advanced
+# modals make (see section_flow).
+PLOT_MIN_HEIGHT = 130
+
+#: Floor for ONE ROW of a stacked graph (the mechanics channels, the raw EMG channels). Lower
+#: than a standalone graph because the rows share one x axis, so only the bottom row carries
+#: tick values — but still enough to see a breath in.
+PLOT_ROW_MIN_HEIGHT = 96
+
+
+def set_plot_floor(widget, height: int = PLOT_MIN_HEIGHT) -> None:
+    """Stop a plot widget from being squeezed below the height at which it stops being
+    readable. Its page scrolls rather than compressing it. Never raises (cosmetic-only)."""
+    try:
+        widget.setMinimumHeight(int(height))
+    except Exception:                       # pragma: no cover - never break a build over this
+        pass
+
+
+def set_stack_floor(widget, rows: int, row_height: int = PLOT_ROW_MIN_HEIGHT) -> None:
+    """Floor a widget that STACKS ``rows`` graphs, per row rather than in total.
+
+    The distinction is the whole point and it was got wrong once: flooring the container at
+    130 px and stacking five channels inside it gives each channel 26 px, and measured on the
+    real screen this exists for it gave 10.6 px of trace with the y-axis labels gone — worse
+    than before the floor was introduced, on the tab the Preview screen opens on, while the
+    container happily satisfied its 130 px. A stack's floor is ``rows * row_height``; the page
+    scrolls when that does not fit, which is what was asked for.
+    """
+    set_plot_floor(widget, max(1, int(rows)) * int(row_height))
+
+
 def align_left_axis(plot, width: int = PLOT_AXIS_WIDTH) -> None:
     """Pin a plot's left-axis to a fixed width so vertically-stacked channel graphs share
     the same left margin and their x-axes align — regardless of y-tick-label width. Without
@@ -156,6 +197,11 @@ _LIGHT = {
     "st_ok_fg": "#1F6B48", "st_ok_bg": "#E6F3EC", "st_ok_bd": "#BFE0CD",
     "st_warn_fg": "#8A5A12", "st_warn_bg": "#FBF1DD", "st_warn_bd": "#EBD6A8",
     "st_error_fg": "#A02B22", "st_error_bg": "#FBE9E7", "st_error_bd": "#F0C4BF",
+    # Wash over a panel whose result is stale while its job runs. Per-theme because a fixed
+    # dark wash says nothing on a dark ground: this one drops a light panel by ~94 points of
+    # lightness, and the same value dropped a DARK panel by 7 — technically painted, visually
+    # absent. The dark variant is deepened until the relative dimming matches.
+    "scrim": "rgba(18, 22, 28, 0.42)",
 }
 
 _DARK = {
@@ -170,6 +216,7 @@ _DARK = {
     "st_ok_fg": "#7FCBA4", "st_ok_bg": "#172A20", "st_ok_bd": "#2A4636",
     "st_warn_fg": "#E0B357", "st_warn_bg": "#2C2413", "st_warn_bd": "#4A3D1D",
     "st_error_fg": "#E8897F", "st_error_bg": "#2E1B19", "st_error_bd": "#4C2A26",
+    "scrim": "rgba(0, 0, 0, 0.66)",
 }
 
 # Remembers the tokens of the most recently applied theme (for introspection).
@@ -184,12 +231,20 @@ def active_theme() -> dict:
 _CHECK_ICON_PATH = None
 
 
-def _check_icon_path() -> str:
-    """A white checkmark PNG (generated once, cached) for the ``:checked`` state of the
+def _check_icon_path(colour: str = "white") -> str:
+    """A checkmark PNG (generated once per colour, cached) for the ``:checked`` state of the
     checkbox indicator — Qt QSS ``url()`` needs a real file, not a data URI. Returns "" if
-    it cannot be generated (the indicator then just fills with the accent colour)."""
+    it cannot be generated (the indicator then just fills with the accent colour).
+
+    The glyph is painted over ``$accent``, so its colour must be ``$accent_fg`` rather than a
+    fixed white: the dark theme's accent is a BRIGHT blue (#4B9CD3) whose foreground token is
+    near-black (#0C1116) precisely because white on it reads as a smear. The cache is keyed by
+    colour and so is the file name — two RespMech processes in different themes would
+    otherwise fight over one path in the shared temp dir."""
     global _CHECK_ICON_PATH
     if _CHECK_ICON_PATH is None:
+        _CHECK_ICON_PATH = {}
+    if colour not in _CHECK_ICON_PATH:
         try:
             import os as _os
             import tempfile
@@ -199,19 +254,61 @@ def _check_icon_path() -> str:
             img.fill(_Qt.transparent)
             p = QPainter(img)
             p.setRenderHint(QPainter.Antialiasing)
-            pen = QPen(QColor("white"))
+            pen = QPen(QColor(colour))
             pen.setWidth(3)
             pen.setCapStyle(_Qt.RoundCap)
             pen.setJoinStyle(_Qt.RoundJoin)
             p.setPen(pen)
             p.drawPolyline([QPointF(6, 14), QPointF(12, 21), QPointF(22, 8)])
             p.end()
-            path = _os.path.join(tempfile.gettempdir(), "respmech_qss_check.png")
+            path = _os.path.join(tempfile.gettempdir(),
+                                 f"respmech_qss_check_{colour.lstrip('#')}.png")
             img.save(path)
-            _CHECK_ICON_PATH = path.replace("\\", "/")
+            _CHECK_ICON_PATH[colour] = path.replace("\\", "/")
         except Exception:                       # pragma: no cover - cosmetic
-            _CHECK_ICON_PATH = ""
-    return _CHECK_ICON_PATH
+            _CHECK_ICON_PATH[colour] = ""
+    return _CHECK_ICON_PATH[colour]
+
+
+_GRIP_ICON_PATHS: dict = {}
+
+
+def _grip_icon_path(colour: str) -> str:
+    """The diagonal hatch of a resize grip, generated once per colour and cached.
+
+    Same hazard as the spin-box arrows below, one widget over: the ``QWidget`` background rule
+    puts QSizeGrip under Qt's stylesheet style, which positions the widget but then never
+    draws ``PE_IndicatorSizeGrip`` — measured, the grip renders 100% empty under the app's
+    style sheet and 0% empty with no style sheet at all. Since the dialogs advertise that they
+    are resizable WITH that grip, an invisible one is a promise the UI does not keep.
+    Returns "" on failure, in which case the corner is simply blank as before.
+    """
+    if colour not in _GRIP_ICON_PATHS:
+        try:
+            import os as _os
+            import tempfile
+            from PySide6.QtGui import QImage, QPainter, QPen, QColor
+            from PySide6.QtCore import QPointF, Qt as _Qt
+            s = 26
+            img = QImage(s, s, QImage.Format_ARGB32)
+            img.fill(_Qt.transparent)
+            p = QPainter(img)
+            p.setRenderHint(QPainter.Antialiasing)
+            pen = QPen(QColor(colour))
+            pen.setWidth(2)
+            pen.setCapStyle(_Qt.RoundCap)
+            p.setPen(pen)
+            # three diagonals of increasing length, hugging the bottom-right corner
+            for off in (7, 13, 19):
+                p.drawLine(QPointF(s - 3, s - off - 3), QPointF(s - off - 3, s - 3))
+            p.end()
+            path = _os.path.join(tempfile.gettempdir(),
+                                 f"respmech_qss_grip_{colour.lstrip('#')}.png")
+            img.save(path)
+            _GRIP_ICON_PATHS[colour] = path.replace("\\", "/")
+        except Exception:                           # pragma: no cover - cosmetic
+            _GRIP_ICON_PATHS[colour] = ""
+    return _GRIP_ICON_PATHS[colour]
 
 
 _ARROW_ICON_PATHS: dict = {}
@@ -263,11 +360,21 @@ def _arrow_icon_path(direction: str, colour: str) -> str:
 # --------------------------------------------------------------------------- #
 _QSS = Template(r"""
 /* ---- canvas & generic containers ------------------------------------- */
-QMainWindow, QDialog { background-color: $window; }
 
 /* Plain containers are transparent so titled cards read cleanly on the
    canvas; every widget that must own its background re-asserts one below. */
 QWidget { background: transparent; color: $text; }
+
+/* MUST stay AFTER the QWidget rule above. Both are single type selectors, so they carry
+   EQUAL CSS specificity and the LATER one wins the tie-break — with this rule written first,
+   `background: transparent` was winning on every top-level window in the app. A top-level has
+   nothing behind it to show through, so the surface was simply never painted: measured 74% of
+   the "Mechanics — advanced" modal, 49% of the startup chooser and 26% of the main window
+   left unfilled. macOS hides it (the window server fills the surface with the system window
+   colour), which is why this survived so long; on Windows an unfilled backing store paints
+   BLACK, so a light-mode session showed black modals over a light app — Emil's 30-07-2026
+   screenshot. Reordering takes all six windows to 0% unpainted in both themes. */
+QMainWindow, QDialog { background-color: $window; }
 
 QToolTip {
     background-color: $surface;
@@ -592,12 +699,27 @@ QPushButton[nav="true"] {
    "compact" shares the spin boxes' column; "wide" is for fields whose longest
    content would elide there (the EMG-normalisation choices, a 'filename = count'
    line). Check a new field's sizeHint against the cap before picking. */
+/* Applies to a spin box showing a specialValueText CAPTION too, so keep such captions short
+   enough to fit — a per-widget escape hatch was tried and removed, because a QSS max-width is
+   re-applied at polish and beats setMaximumWidth, leaving the field far wider than its
+   siblings. tests/unit/test_dialog_fits_screen.py asserts no caption is clipped. */
 QAbstractSpinBox { max-width: 150px; }
 *[formField="compact"] { max-width: 150px; }   /* same column as the spin boxes */
 *[formField="wide"]    { max-width: 320px; }   /* content that will not fit the column */
 
 /* ---- inner (sub-)tab bars read a touch smaller ----------------------- */
 QTabBar::tab { min-width: 40px; }
+
+/* ---- resize grip ------------------------------------------------------
+   Drawn explicitly for the reason given in _grip_icon_path: under this style sheet Qt
+   never paints the native glyph, so the affordance the resizable dialogs advertise was
+   an empty corner. */
+QSizeGrip {
+    image: url("$grip_icon");
+    width: 13px;
+    height: 13px;
+    background: transparent;
+}
 """)
 
 
@@ -688,7 +810,11 @@ def apply_theme(app) -> str:
         try:
             app.setStyleSheet(_QSS.safe_substitute(dict(
                 tokens,
-                check_icon=_check_icon_path(),
+                check_icon=_check_icon_path(tokens["accent_fg"]),
+                # $text_muted, not $border_strong: measured against the dialog ground the
+                # border colour gives 1.27:1 (light) / 1.45:1 (dark), well under the 3:1
+                # floor for a control glyph — the grip drew, but nobody could see it.
+                grip_icon=_grip_icon_path(tokens["text_muted"]),
                 # $text, not $text_muted: rendered at 9px a muted triangle reads as almost
                 # absent, and the whole point of these is to be seen. This matches the weight
                 # of the arrows Qt drew natively before.

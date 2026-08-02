@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 
 import numpy as np
+from PySide6.QtCore import QSize
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel,
                                QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
@@ -48,7 +49,11 @@ class ChannelSetupDialog(QDialog):
     def __init__(self, files, fs, initial=None, loader=None, parent=None):
         super().__init__(parent)
         self.setModal(True)
-        self.resize(940, 660)
+        # Opening size, clamped to the screen in showEvent. The HEIGHT is content-derived
+        # there rather than fixed at 660: a real 21-channel rig produced 2521 px of stacked
+        # previews behind a 444 px viewport, i.e. under four of twenty-one rows visible, and
+        # the dialog never grew toward the screen it had room on.
+        self._preferred = QSize(940, 660)
         self._files = list(files)
         self._loader = loader or (lambda p: (np.empty((0, 0)), []))
         self._fs = fs or 1.0
@@ -144,9 +149,31 @@ class ChannelSetupDialog(QDialog):
             pass
         ok.clicked.connect(self.accept)
         self._ok_btn = ok
+        # Enter commits, Esc cancels. Without this Qt promotes Cancel (added first, so it
+        # reads left of OK) as the default button and Enter discards the whole mapping.
+        cancel.setAutoDefault(False)
+        ok.setDefault(True)
         foot.addWidget(cancel); foot.addWidget(ok)
         v.addLayout(foot)
         self._refresh_info()
+
+    def showEvent(self, ev):                # noqa: N802 - Qt API
+        """Open big enough to show the channels there is room for, never past the screen."""
+        super().showEvent(ev)
+        if not getattr(self, "_clamped", False):
+            self._clamped = True
+            from respmech.ui import screen_fit  # noqa: PLC0415
+            prefer = QSize(self._preferred)
+            try:
+                # ask for the whole stack plus the dialog's own chrome; clamp_to_screen cuts
+                # it back to the work area, so a 21-channel rig opens as tall as the display
+                # allows instead of at a fixed 660 px
+                content = self._stack.sizeHint().height()
+                chrome = self.sizeHint().height() - self._scroll.sizeHint().height()
+                prefer.setHeight(max(prefer.height(), content + chrome))
+            except Exception:               # pragma: no cover - sizing is best-effort
+                pass
+            screen_fit.clamp_to_screen(self, prefer=prefer)
 
     @property
     def _pal(self):

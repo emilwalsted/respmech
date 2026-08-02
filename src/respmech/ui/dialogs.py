@@ -2,7 +2,7 @@
 batch error log. Qt-only; no core dependency."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QSize
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (QApplication, QDialog, QHBoxLayout, QLabel,
                                QPlainTextEdit, QPushButton, QVBoxLayout)
@@ -57,6 +57,15 @@ class TextViewerDialog(QDialog):
         row.addWidget(self.copy_btn)
         row.addWidget(close_btn)
         lay.addLayout(row)
+
+    def showEvent(self, ev):                # noqa: N802 - Qt API
+        """Open at the requested size, never past the screen — this is the ERROR surface,
+        so it must stay usable exactly when things are already going wrong."""
+        super().showEvent(ev)
+        if not getattr(self, "_clamped", False):
+            self._clamped = True
+            from respmech.ui import screen_fit  # noqa: PLC0415
+            screen_fit.clamp_to_screen(self, prefer=QSize(780, 500))
 
     def _copy(self):
         cb = QApplication.clipboard()

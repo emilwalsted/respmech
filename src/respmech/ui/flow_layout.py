@@ -30,7 +30,7 @@ at 1.75x — which is about where Windows sits.
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
-from PySide6.QtWidgets import QHBoxLayout, QLayout, QSizePolicy
+from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QLayout, QSizePolicy
 
 
 class FlowLayout(QLayout):
@@ -188,6 +188,113 @@ def cluster(*widgets, gap: int = 4) -> QHBoxLayout:
     for w in widgets:
         lay.addWidget(w)
     return lay
+
+
+class ElidingLabel(QLabel):
+    """A label that shortens itself to whatever width it is given, instead of forcing its
+    full text on the window.
+
+    ``elide()`` below does the same thing ONCE, against a fixed cap — right for a read-out
+    whose text changes and whose column width does not. This is for the other case: fixed
+    text in a row that must survive being squeezed, such as the header subtitle. Measured on
+    Windows font metrics that one label reported a 683 px minimum, and since a plain
+    ``QHBoxLayout`` hands its minimum straight to the window, the header alone demanded
+    1196 px — more than the Preview screen's 997 px and inside 84 px of a 1280 px screen.
+
+    ``minimumSizeHint`` deliberately reports a small floor rather than the text width: that
+    is the whole point, and it is what lets the window be narrower than the sentence. The
+    full string always stays one hover away in the tooltip.
+    """
+
+    def __init__(self, text: str = "", parent=None, *, mode=Qt.ElideRight, floor: int = 24):
+        super().__init__(parent)
+        self._full = text or ""
+        self._mode = mode
+        self._floor = int(floor)
+        super().setToolTip(self._full)
+        self.setText(self._full)
+
+    def setFullText(self, text: str) -> None:            # noqa: N802 - Qt-style API
+        self._full = text or ""
+        super().setToolTip(self._full)
+        self._relayout()
+
+    def fullText(self) -> str:                           # noqa: N802 - Qt-style API
+        return self._full
+
+    def minimumSizeHint(self):                           # noqa: N802 - Qt API
+        s = super().minimumSizeHint()
+        s.setWidth(min(s.width(), self._floor))
+        return s
+
+    def resizeEvent(self, ev):                           # noqa: N802 - Qt API
+        super().resizeEvent(ev)
+        self._relayout()
+
+    def _relayout(self) -> None:
+        fm = self.fontMetrics()
+        width = max(0, self.width())
+        # setText, not super().setText: a subclass that overrode setText would still be
+        # honoured, and QLabel.setText on an unchanged string is a no-op anyway.
+        self.setText(fm.elidedText(self._full, self._mode, width) if width else self._full)
+
+
+class ElidingCheckBox(QCheckBox):
+    """A check box whose caption shortens itself instead of forcing its width on the window.
+
+    Same problem and same remedy as :class:`ElidingLabel`, but a check box cannot simply be
+    swapped for a wrapping label without losing click-to-toggle on the caption — so it elides
+    instead. The noise-profile dialog's "Use the whole expiration of this recording" measured
+    598 px on Windows font metrics and, being one unbreakable item, WAS that dialog's entire
+    minimum width (620 px); at 175% Windows accessibility text scaling it reached 921 px and
+    at 225% it reached 1217 px, which is wider than a 1080p laptop at 175% display scaling —
+    so the dialog's own commit button could not be brought on screen.
+
+    The indicator plus a few characters is the floor; the full caption stays in the tooltip.
+    """
+
+    def __init__(self, text: str = "", parent=None, *, floor_chars: int = 6):
+        super().__init__("", parent)
+        self._full = text or ""
+        self._floor_chars = int(floor_chars)
+        # Without this the small minimumSizeHint below is simply ignored: a QCheckBox
+        # defaults to QSizePolicy.Minimum, which carries no ShrinkFlag, and Qt's
+        # qSmartMinSize then takes max(sizeHint, minimumSizeHint) — i.e. the FULL caption.
+        # (ElidingLabel needs no equivalent: QLabel already defaults to Preferred, which
+        # does shrink.) Measured: the noise dialog's minimum stayed at 620 px until this.
+        sp = self.sizePolicy()
+        sp.setHorizontalPolicy(QSizePolicy.Preferred)
+        self.setSizePolicy(sp)
+        super().setToolTip(self._full)
+        super().setText(self._full)
+
+    def setText(self, text):                             # noqa: N802 - Qt API
+        self._full = text or ""
+        if not self.toolTip():
+            super().setToolTip(self._full)
+        self._relayout()
+
+    def fullText(self) -> str:                           # noqa: N802 - Qt-style API
+        return self._full
+
+    def _chrome(self) -> int:
+        """Indicator width plus its spacing — the part that is never text."""
+        return self.iconSize().width() + 22
+
+    def minimumSizeHint(self):                           # noqa: N802 - Qt API
+        s = super().minimumSizeHint()
+        fm = self.fontMetrics()
+        s.setWidth(min(s.width(), fm.averageCharWidth() * self._floor_chars + self._chrome()))
+        return s
+
+    def resizeEvent(self, ev):                           # noqa: N802 - Qt API
+        super().resizeEvent(ev)
+        self._relayout()
+
+    def _relayout(self) -> None:
+        room = max(0, self.width() - self._chrome())
+        super().setText(self.fontMetrics().elidedText(self._full, Qt.ElideRight, room)
+                        if room else self._full)
 
 
 def elide(label, text: str, max_px: int = 320) -> None:

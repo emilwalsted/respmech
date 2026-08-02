@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QHeaderView, QLabel, QMessageBox, QP
                                QPlainTextEdit, QVBoxLayout, QWidget)
 
 from respmech.ui.dialogs import TextViewerDialog, short_error
+from respmech.ui.flow_layout import install_flow as _install_flow
 from respmech.ui.validation import matching_files, path_problem
 from respmech.ui.workers import BatchWorker
 
@@ -65,7 +66,15 @@ class RunScreen(QWidget):
 
     def _build(self):
         root = QVBoxLayout(self); root.setContentsMargins(11, 11, 11, 11)   # deterministic, matches Setup
-        bar = QHBoxLayout()
+        # A WRAPPING row, not a QHBoxLayout. Measured on Windows font metrics these five
+        # buttons sum to 1184 px, and a plain row's minimum IS that sum — which Qt propagates
+        # to the window, so this bar alone set the whole application's 1234 px minimum width
+        # (more than Preview's 997 px). Wrapping makes the minimum the widest SINGLE button
+        # instead. Exactly the defect flow_layout.py was written for; see its docstring.
+        # The old trailing stretch is gone: a wrapping row has no meaningful stretch, so the
+        # buttons now read left-to-right in priority order rather than splitting left/right.
+        self.action_bar = QWidget()
+        bar = _install_flow(self.action_bar, h=8, v=6)
         self.btn_run = QPushButton("Run batch")
         self.btn_dry = QPushButton("Dry run (no files written)")
         self.btn_cancel = QPushButton("Cancel"); self.btn_cancel.setEnabled(False)
@@ -81,10 +90,9 @@ class RunScreen(QWidget):
         self.btn_cancel.clicked.connect(self._cancel)
         self.btn_rerun.clicked.connect(self._rerun_failed)
         self.btn_open.clicked.connect(self._open_output_folder)
-        bar.addWidget(self.btn_run); bar.addWidget(self.btn_dry)
-        bar.addWidget(self.btn_cancel); bar.addStretch(1)
-        bar.addWidget(self.btn_rerun); bar.addWidget(self.btn_open)
-        root.addLayout(bar)
+        for _b in (self.btn_run, self.btn_dry, self.btn_cancel, self.btn_rerun, self.btn_open):
+            bar.addWidget(_b)
+        root.addWidget(self.action_bar)
 
         self.progress = QProgressBar()
         # The bar's own centred % text is drawn in one colour over a two-tone track (dark

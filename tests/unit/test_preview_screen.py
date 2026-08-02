@@ -166,3 +166,33 @@ def test_toggle_breath_requests_recompute(qapp, tmp_path):
     assert pv._batch_recompute_pending is True            # the average is being recomputed…
     assert "recomputing" in pv.status.text().lower()      # …not deferred to a manual run
     win.close()
+
+
+# ---------------------------------------------------------------------------
+# The Campbell export must never write a diagram that is no longer on screen
+# ---------------------------------------------------------------------------
+def test_clearing_the_campbell_also_disarms_its_export(qapp, tmp_path):
+    """"Export Campbell…" re-renders from a cached copy of the breaths (so a dark-mode
+    export comes out light), which makes that cache and the drawn figure the same fact. If
+    only the figure is cleared, the button stays live over stale data and writes a diagram
+    for a file the user is no longer looking at — under that file's name.
+
+    So the invariant is: the export is enabled exactly when there is something to export.
+    """
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(tmp_path)))
+    pv = win.preview_screen
+
+    def armed():
+        return pv.btn_export_fig.isEnabled(), getattr(pv, "_campbell_breaths", None) is not None
+
+    assert armed() == (False, False), "the export starts armed with nothing drawn"
+    for clear in ("_clear_file_panels", "_clear_all_panels"):
+        # stand in for a completed render: both halves of "a diagram exists" are set
+        pv._campbell_breaths = {"stand-in": 1}
+        pv.btn_export_fig.setEnabled(True)
+        assert armed() == (True, True)
+        getattr(pv, clear)()
+        assert armed() == (False, False), (
+            f"{clear} left the export armed over a cleared figure")
+    win.close()

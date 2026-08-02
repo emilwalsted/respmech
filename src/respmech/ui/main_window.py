@@ -6,11 +6,11 @@ Qt dependencies. A status bar mirrors each screen's status line.
 """
 from __future__ import annotations
 
-from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
-                               QMainWindow, QMenu, QTabWidget, QToolButton,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu,
+                               QTabWidget, QToolButton, QVBoxLayout, QWidget)
 
 from respmech import __version__
+from respmech.ui.flow_layout import ElidingLabel
 from respmech.ui.state import AppState
 from respmech.ui.screens.settings_screen import SettingsScreen
 from respmech.ui.screens.preview_screen import PreviewScreen
@@ -48,8 +48,6 @@ class MainWindow(QMainWindow):
                 self.setWindowIcon(icon)
         except Exception:                       # pragma: no cover - icon is cosmetic
             pass
-        self._fit_to_screen()
-
         self.tabs = QTabWidget()
         self.settings_screen = SettingsScreen(self.state, on_settings_changed=self._on_settings_changed)
         self.preview_screen = PreviewScreen(self.state)
@@ -109,6 +107,11 @@ class MainWindow(QMainWindow):
         for scr in (sc, pv, rn):
             scr.status_changed.connect(lambda msg, b=bar: b.showMessage(msg))
         bar.showMessage("Ready.")
+
+        # LAST, not first. This used to run before the tabs and screens existed, when
+        # minimumSizeHint() still read 0x0 — so it sized against nothing and its clamp was a
+        # no-op that looked like it worked. It has to see the built layout to clamp it.
+        self._fit_to_screen()
 
     def begin_session(self, cli_path: str | None = None):
         """Run the startup flow once the window is on screen: if an analysis file was
@@ -188,7 +191,12 @@ class MainWindow(QMainWindow):
         h.setContentsMargins(18, 10, 18, 10)
         title = QLabel("RespMech")
         title.setObjectName("appTitle")
-        sub = QLabel("Respiratory mechanics · work of breathing · diaphragm EMG")
+        # Eliding, not a plain QLabel: a QLabel's minimum width is its whole sentence, and a
+        # QHBoxLayout hands its minimum to the window — this one line measured 683 px on
+        # Windows font metrics and pushed the window's minimum to 1196 px, past a 1080p
+        # @175% screen entirely. It is branding, so shortening it costs nothing; the full
+        # text stays in the tooltip.
+        sub = ElidingLabel("Respiratory mechanics · work of breathing · diaphragm EMG")
         sub.setObjectName("appSubtitle")
         h.addWidget(title)
         h.addSpacing(16)
@@ -273,20 +281,36 @@ class MainWindow(QMainWindow):
 
     def _fit_to_screen(self, desired_w: int = 1180, desired_h: int = 820,
                        fraction: float = 0.92) -> None:
-        """Size the window to a sensible fraction of the available screen and
-        centre it. Falls back to the desired size when no usable screen geometry
-        is reported (e.g. an unusual headless setup), so it never raises."""
-        screen = QApplication.primaryScreen()
-        avail = screen.availableGeometry() if screen is not None else None
-        if avail is None or avail.width() <= 0 or avail.height() <= 0:
+        """Size the window to a sensible fraction of the available screen and centre it.
+
+        Deliberately capped at ``desired_w``/``desired_h`` rather than sized from
+        ``sizeHint()``: this window's natural size is the whole content of three screens and
+        opening at it would fill any display. ``screen_fit.clamp_to_screen`` is the right
+        tool for a DIALOG, whose natural size is the size it should open at; here only the
+        upper bound and the centring are wanted.
+        """
+        from respmech.ui import screen_fit  # noqa: PLC0415
+
+        avail = screen_fit.available_for(self)
+        if avail is None:
             self.resize(desired_w, desired_h)
             return
         w = min(desired_w, int(avail.width() * fraction))
         h = min(desired_h, int(avail.height() * fraction))
+        # Never below the window's own minimum — resize() would ignore it anyway, and the
+        # centring below has to work from the size the window will actually have.
+        floor = self.minimumSizeHint()
+        w = max(w, min(floor.width(), avail.width()))
+        h = max(h, min(floor.height(), avail.height()))
         self.resize(w, h)
         frame = self.frameGeometry()          # centre within the work area
         frame.moveCenter(avail.center())
-        self.move(frame.topLeft())
+        top_left = frame.topLeft()
+        # Clamp into the work area: a window larger than the screen would otherwise be
+        # centred off BOTH edges, losing the title bar and the tab strip together.
+        top_left.setX(max(avail.left(), min(top_left.x(), avail.right() - frame.width() + 1)))
+        top_left.setY(max(avail.top(), min(top_left.y(), avail.bottom() - frame.height() + 1)))
+        self.move(top_left)
 
     def _on_tab_changed(self, index):
         self.settings_screen.to_state()             # belt-and-suspenders sync
