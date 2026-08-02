@@ -27,6 +27,7 @@ All computation reuses the core; nothing here writes to disk.
 from __future__ import annotations
 
 import copy
+import math
 import os
 import traceback
 from dataclasses import dataclass
@@ -37,7 +38,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QScrollArea, QSplitter, QTableWidget, QTableWidgetItem,
                                QTabWidget, QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt, QEvent, QObject, QSize, QThread, QTimer, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QFontMetrics
 
 import pyqtgraph as pg
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -410,6 +411,316 @@ class _FileRunError(RuntimeError):
     to the copyable error card."""
 
 
+def _pick_xlabel(canvas, ax, variants):
+    """Set the longest x-label wording that is drawn entirely inside the canvas.
+
+    matplotlib centres the x label on the AXES, not on the figure, and the axes are inset by
+    the y-axis furniture — so "does the text fit the canvas width?" is the wrong question and
+    answers yes while the label runs off the edge. Measured on the fidelity panel at its
+    default 345 px: the full wording is 342 px wide (so it "fits") but is drawn from x=26 to
+    x=368 and loses its last four characters. The extent is what gets measured here.
+
+    The room is measured with the SHORTEST wording in place, never with the current one.
+    tight_layout shrinks the axes to accommodate a label that overhangs them, so the room a
+    long label is judged against is a room that long label already shrank — which makes the
+    choice bistable. Measured: the same 400 px panel kept the full wording when it had been
+    wider and dropped two rungs when it had been narrower, and a 460 px panel chose LESS text
+    than a 400 px one. Judging every candidate against one layout that no candidate perturbed
+    makes the answer a function of the width alone.
+    """
+    if not variants:
+        return None
+    try:
+        ax.set_xlabel(variants[-1])
+        # Force the FIGURE to the widget's current size before measuring. The figure only
+        # learns its size in the canvas' own resizeEvent, which may not have run yet — and
+        # measuring a 400 px-wide figure for a 345 px-wide widget grants room that is not
+        # there, which is exactly how the full wording was chosen and then drawn 24 px past
+        # the panel edge. Both sides of the comparison must describe the same canvas.
+        dpi = canvas.figure.dpi or 100.0
+        canvas.figure.set_size_inches(max(canvas.width(), 1) / dpi,
+                                      max(canvas.height(), 1) / dpi, forward=False)
+        canvas.draw()                       # settle a layout the shortest label cannot skew
+        # renderer fetched AFTER the resize+draw: draw() builds a new one for the new size,
+        # and measuring against the old one reported extents in the previous figure's
+        # coordinates — which granted room that did not exist and chose a wording 24 px too
+        # wide for the panel it was drawn in.
+        r = canvas.get_renderer()
+        ref = ax.xaxis.label.get_window_extent(renderer=r)
+        centre = (ref.x0 + ref.x1) / 2.0    # == the axes centre; the label is centred on it
+        room = 2.0 * min(centre, canvas.width() - centre)
+        chosen = variants[-1]
+        for text in variants:
+            ax.set_xlabel(text)
+            # a Text artist's WIDTH is pure font metrics — unlike its position, it does not
+            # depend on the layout, so this comparison is stable
+            if ax.xaxis.label.get_window_extent(renderer=r).width <= room:
+                chosen = text
+                break
+    except Exception:                       # pragma: no cover - measurement is cosmetic
+        chosen = variants[-1]
+    ax.set_xlabel(chosen)
+    return chosen
+
+
+def _fit_compact_figure(canvas, ax, *, title=None, legend_kw=None, xlabel_variants=None):
+    """Shed figure furniture that does not fit the canvas it has been given.
+
+    These two diagnostics share the compact reference row, so their canvas can be ~100 px
+    tall. matplotlib does not drop anything to make room — it lays the title, the legend and
+    both axis labels out anyway, and on a real Windows runner they printed straight through
+    each other and through the data (Emil's 02-08-2026 screenshots). Ordered by what a reader
+    can most afford to lose: the title first (the panel header already names the figure), then
+    the legend, then the x label.
+
+    Every decision here is SYMMETRIC and is re-taken from the same stashed "full" furniture
+    on every call, so the fit follows the panel in both directions. It has to: the reference
+    row lives in a QSplitter, and matplotlib — unlike a pyqtgraph axis — never re-lays a
+    figure out on resize. A one-way version dropped the legend when the panel was drawn short
+    and could never bring it back once the panel was dragged tall again.
+    """
+    full = getattr(ax, "_rm_full", None)
+    if full is None:
+        full = ax._rm_full = {"title": title or "", "xlabel": ax.get_xlabel(),
+                              "legend_kw": legend_kw, "xlabel_variants": xlabel_variants}
+    h = canvas.height()
+    # Font sizes FIRST. The x-label wording is chosen by measuring the text, so it has to be
+    # measured in the size it will be drawn in — setting the size afterwards made the choice
+    # against the PREVIOUS fit's metrics, and a label measured at 8 pt (277 px) then drawn at
+    # 10 pt (344 px) ran 24 px off the panel, which is the truncation this whole ladder exists
+    # to prevent.
+    small = h < 170
+    for lab in (ax.xaxis.label, ax.yaxis.label):
+        lab.set_fontsize(8 if small else 10)
+    ax.tick_params(labelsize=7 if small else 9)
+    ax.set_title(full["title"] if h >= 150 else "")
+    if full["legend_kw"] is not None:
+        if h >= 190:
+            ax.legend(**full["legend_kw"])
+        else:
+            leg = ax.get_legend()
+            if leg is not None:
+                leg.remove()
+    if h < 120:
+        ax.set_xlabel("")
+    elif full["xlabel_variants"]:
+        # re-picked per fit, so the wording grows back when the panel is widened again
+        full["xlabel"] = _pick_xlabel(canvas, ax, full["xlabel_variants"])
+    else:
+        ax.set_xlabel(full["xlabel"])
+    try:
+        # The "tight" LAYOUT ENGINE, not a tight_layout() call. tight_layout() shrinks the
+        # axes to clear the furniture, measured against the margins currently in force, so
+        # repeating it compounds — and this now runs on every resize, which collapsed both
+        # diagnostics into a corner of their panel after a few splitter drags. The engine
+        # re-solves from the figure's original geometry at each draw instead, so it is
+        # idempotent however many times the panel is resized.
+        canvas.figure.set_layout_engine("tight")
+    except Exception:                       # pragma: no cover - layout is cosmetic
+        pass
+
+
+def refit_compact_figure(canvas):
+    """Re-take :func:`_fit_compact_figure`'s decisions for the canvas' CURRENT size.
+
+    Cheap to call repeatedly and safe to call often: every decision is re-derived from the
+    canvas' current size, and _pick_xlabel settles its own reference layout, so the outcome
+    does not depend on what the panel was before.
+    """
+    axes = [a for a in canvas.figure.get_axes() if getattr(a, "_rm_full", None) is not None]
+    if not axes:
+        return
+    for ax in axes:
+        _fit_compact_figure(canvas, ax)
+    canvas.draw_idle()
+
+
+class _CompactFigureFitter(QObject):
+    """Keep a compact matplotlib panel's furniture in step with its height.
+
+    The two diagnostics sit in a splitter, so their canvas is resized by every splitter drag
+    and every window resize — none of which redraws the figure. Without this, the furniture
+    stays as it was at the last render: a legend shed on a short panel never returns, and one
+    kept on a tall panel goes straight back to overprinting when the panel is dragged short.
+
+    The refit is deferred by one event-loop turn and coalesced, so a drag that emits a
+    hundred resize events does ONE fit — against the size that actually stuck — rather than a
+    hundred, each of which costs a full figure draw. Correctness does not rest on the
+    deferral: _pick_xlabel forces the figure to the widget's size before it measures anything,
+    which is what makes the result independent of when this runs. (An event filter does see
+    the event before its target, so the figure genuinely is a size behind here.)
+    """
+
+    def __init__(self, canvas):
+        super().__init__(canvas)
+        self._canvas = canvas
+        self._pending = False
+        canvas.installEventFilter(self)
+
+    def eventFilter(self, obj, ev):
+        if obj is self._canvas and ev.type() == QEvent.Resize and not self._pending:
+            self._pending = True
+            QTimer.singleShot(0, self._run)
+        return False
+
+    def _run(self):
+        self._pending = False
+        refit_compact_figure(self._canvas)
+
+
+class _FitAxis(pg.AxisItem):
+    """A value axis whose major ticks thin out when the plot gets short.
+
+    pyqtgraph picks tick spacing off a ladder of "nice" numbers and then draws the top
+    level UNCONDITIONALLY — ``generateDrawSpecs`` applies its crowding limits only from the
+    second level down (``if i > 0: ## always draw top level``). So a short plot prints its
+    major labels straight through one another. Measured on the Detail channel at 43 px of
+    data area: six 13 px labels drawn 8.6 px apart, i.e. every pair overlapping by 4.4 px.
+
+    The two obvious levers do not work. ``setTickDensity`` is inert here because the
+    interval count is floored at ``max(2.25, ...)``; and even 2.25 intervals is not what
+    comes out, because the ladder step below 0.5 is 0.2 — so a request for 2.25 intervals
+    is served with 5. ``textFillLimits`` never applies, being a second-level-and-down rule.
+
+    Overriding ``tickSpacing`` is pyqtgraph's own documented hook for this. Here it takes
+    the spacing pyqtgraph chose and walks it UP the same ladder until the labels it implies
+    have room to sit side by side. It is re-evaluated on every draw with the current
+    ``size``, so a panel dragged taller gets its finer ticks straight back.
+    """
+
+    #: extra pixels demanded between two labels, on top of the text height itself
+    AIR = 3
+
+    # class-level, not set in __init__: AxisItem's own constructor calls setRange, which
+    # reaches resizeEvent below long before an __init__ body would have run
+    _variants = ()
+    _picking = False
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        # No SI multiplier on these axes. pyqtgraph states the factor INSIDE the axis label
+        # ("EMG (a.u.) (x0.001)"), which is the single biggest reason the label would not fit
+        # a short panel — the "(x0.001)" alone measures ~55 px of the 63 px available. The
+        # multiplier buys nothing here either: this EMG range is -0.43..0.64, so unscaled
+        # ticks read -0.4 / 0.1 / 0.6, every bit as short as the scaled -400 / 100 / 600.
+        # Disabling it up front also keeps autoSIPrefixScale pinned at 1.0 for good, since
+        # setRange only recomputes the scale while the prefix is enabled.
+        self.enableAutoSIPrefix(False)
+
+    def set_label_variants(self, *variants):
+        """Offer several wordings of the axis label, longest first.
+
+        The axis label is drawn rotated inside the axis' own rect, so on a short plot it is
+        simply clipped — measured here at 81 px of "EMG (a.u.)" (the SI multiplier pyqtgraph
+        appends is part of it) trying to fit 63 px, which ate the leading E. Both EMG views
+        were clipped; only one showed it, because the other's overflow happened to fall into
+        a taller x-axis before reaching the widget edge. Rather than pick a shorter label
+        permanently and lose the unit on big screens, the longest wording that FITS is used,
+        re-chosen whenever the axis is resized.
+
+        A variant of ``None`` means "no label at all" — the last resort for a panel too short
+        for any rotated text at all. It is only safe because these axes carry no SI
+        multiplier (see __init__): the ×N factor lives IN the label, so hiding the label
+        while the ticks stayed scaled would have left them silently misstated — "500" for a
+        value of 0.5, with nothing on screen saying so.
+        """
+        self._variants = tuple(variants)
+        self._pick_label()
+
+    def resizeEvent(self, ev=None):
+        super().resizeEvent(ev)
+        self._pick_label()
+
+    def _pick_label(self):
+        if not self._variants or self._picking:
+            return                       # setLabel re-enters here via _updateLabel
+        avail = self.height() if self.orientation in ("left", "right") else self.width()
+        if avail <= 0:
+            return
+        self._picking = True
+        try:
+            chosen = self._variants[-1]
+            for text in self._variants:
+                if text is None:
+                    chosen = None
+                    break
+                self._apply_label(text)
+                if self.label.boundingRect().width() <= avail:
+                    chosen = text
+                    break
+            self._apply_label(chosen)
+            # pyqtgraph positions the rotated label in AxisItem.resizeEvent from the label's
+            # CURRENT bounding rect. The wording is swapped AFTER that has run, and changing
+            # it alters no geometry (the axis width derives from the label's HEIGHT, one line
+            # either way), so no second resizeEvent is ever queued and the label keeps the
+            # placement computed for the OLD, longer text -- measured 20 px below centre and
+            # running past the bottom of a 63 px axis. Re-derive it for what is now there.
+            pg.AxisItem.resizeEvent(self, None)
+        except Exception:                # pragma: no cover - the label is cosmetic
+            pass
+        finally:
+            self._picking = False
+
+    def _apply_label(self, text):
+        self.setLabel(text or None)
+        self.showLabel(text is not None)
+
+    def tickSpacing(self, minVal, maxVal, size):
+        levels = super().tickSpacing(minVal, maxVal, size)
+        span = abs(maxVal - minVal)
+        if not levels or self.orientation not in ("left", "right") or span <= 0 or size <= 0:
+            return levels
+        pitch = self._min_pitch()
+        if pitch <= 0:
+            return levels
+        need = pitch * span / size          # the label pitch expressed in view units
+        major = levels[0][0]
+        # Bounded, and it stops if the ladder cannot climb. _next_nice is exact only in the
+        # normal double range: below ~3.3e-311 its decade term underflows to 0.0, so it
+        # returns a value no larger than its input (and divides by zero at 5e-324). No real
+        # signal has a span that small — but an unbounded `while` on a function that can stop
+        # increasing is a hang, not a wrong tick, so it is bounded rather than reasoned about.
+        for _ in range(64):
+            if major >= need or major >= span:
+                break
+            nxt = _next_nice(major)
+            if not nxt > major:
+                break
+            major = nxt
+        if major == levels[0][0]:
+            return levels
+        # keep only the finer levels that are still finer than the new major
+        return [(major, levels[0][1])] + [lv for lv in levels[1:] if lv[0] < major]
+
+    def _min_pitch(self):
+        """Height one tick label needs, in pixels.
+
+        pyqtgraph measures its own strings with ``boundingRect(...)`` and then shrinks the
+        result by 0.8, so that same factor is applied here — otherwise this asks for more
+        room than the renderer will actually use and the axis thins one step too eagerly.
+        """
+        font = self.style.get("tickFont") or self.font()
+        try:
+            return QFontMetrics(font).height() * 0.8 + self.AIR
+        except Exception:                    # pragma: no cover - falls back to no thinning
+            return 0
+
+
+def _next_nice(v):
+    """The next value up pyqtgraph's 1 / 2 / 5 ladder (0.2 -> 0.5 -> 1 -> 2 -> 5 -> 10)."""
+    if v <= 0:
+        return v
+    dec = 10.0 ** math.floor(math.log10(v))
+    if dec <= 0:                 # subnormal input: the decade underflowed to 0.0
+        return v
+    m = v / dec
+    if m < 1.999:
+        return 2.0 * dec
+    if m < 4.999:
+        return 5.0 * dec
+    return 10.0 * dec
+
+
 class _PlotTitleOverlay(QObject):
     """Float a panel's title — and its corner control — INSIDE the plot's top band.
 
@@ -427,7 +738,7 @@ class _PlotTitleOverlay(QObject):
     #: air above and below the floating row, inside the reserved band
     PAD = 5
 
-    def __init__(self, plot, title, corner=None):
+    def __init__(self, plot, title, corner=None, extra=None):
         super().__init__(plot)
         self._plot = plot
         self._band = 0
@@ -436,12 +747,21 @@ class _PlotTitleOverlay(QObject):
         # the label is decoration: clicks through it belong to the plot underneath
         self._label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._corner = corner
+        # ``extra`` rides in the band between the title and the corner — it is where the
+        # trace key goes, so naming the traces costs no plot height at all (the band is
+        # already as tall as the corner control, and a one-line key is shorter than that).
+        self._extra = extra
         if corner is not None:
             corner.setParent(plot)
+        if extra is not None:
+            extra.setParent(plot)
+            extra.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         plot.installEventFilter(self)
         self._label.show()
         if corner is not None:
             corner.show()
+        if extra is not None:
+            extra.show()
         self.fit()
 
     def eventFilter(self, obj, ev):
@@ -451,6 +771,9 @@ class _PlotTitleOverlay(QObject):
 
     #: gap kept between the title and the corner control
     TITLE_GAP = 16
+
+    #: narrowest the wrapping ``extra`` may be squeezed to before it is hidden instead
+    EXTRA_MIN_WIDTH = 140
 
     def fit(self):
         """Re-pin the pieces and reserve exactly the band they need.
@@ -478,6 +801,34 @@ class _PlotTitleOverlay(QObject):
                         if self._corner.hasHeightForWidth() else self._corner.height())
                 self._corner.resize(room, max(need, self._corner.height()))
             band = max(band, self._corner.height())
+        # where the corner will sit; the extra gets what is left between title and corner
+        corner_left = self._plot.width()
+        if self._corner is not None:
+            corner_left = max(0, self._plot.width() - self._corner.width() - 14)
+        extra_left = 12 + self._label.width() + self.TITLE_GAP
+        extra_room = corner_left - self.TITLE_GAP - extra_left
+        if self._extra is not None:
+            # Wrap rather than vanish. A one-line key measured 816 px against 815 px of room
+            # at Windows font metrics in a 1280 px window — the narrowest screen this project
+            # targets — and hiding it left the detail traces with nothing naming them at all,
+            # the legend it replaced having been removed.
+            #
+            # Word wrap is turned on ONLY when it is needed, and off again when it is not: a
+            # QLabel that is permanently wrappable reports a sizeHint from its own aspect-
+            # ratio heuristic rather than its one-line width, which broke the key into four
+            # lines and pushed this band from 45 px to 78 px — spending more plot height than
+            # the whole re-proportioning had won back.
+            self._extra.setWordWrap(False)
+            self._extra.adjustSize()
+            if self._extra.width() > extra_room >= self.EXTRA_MIN_WIDTH:
+                self._extra.setWordWrap(True)
+                # heightForWidth ONLY. A wrapped QLabel's sizeHint is that same aspect-ratio
+                # heuristic, so folding it in with max() re-inflated the height the wrap was
+                # meant to bound — 102 px where two lines needed 34.
+                need = (self._extra.heightForWidth(extra_room)
+                        if self._extra.hasHeightForWidth() else self._extra.height())
+                self._extra.resize(extra_room, need)
+            band = max(band, self._extra.height())
         band += 2 * self.PAD
         if band != self._band:
             self._band = band
@@ -485,12 +836,22 @@ class _PlotTitleOverlay(QObject):
                 self._plot.getPlotItem().setContentsMargins(0, band, 0, 0)
             except Exception:                   # pragma: no cover - margin is cosmetic
                 pass
-        self._label.move(12, self.PAD + (band - 2 * self.PAD - self._label.height()) // 2)
+        inner = band - 2 * self.PAD
+        self._label.move(12, self.PAD + (inner - self._label.height()) // 2)
         self._label.raise_()
         if self._corner is not None:
-            self._corner.move(max(0, self._plot.width() - self._corner.width() - 14),
-                              self.PAD + (band - 2 * self.PAD - self._corner.height()) // 2)
+            self._corner.move(corner_left,
+                              self.PAD + (inner - self._corner.height()) // 2)
             self._corner.raise_()
+        if self._extra is not None:
+            # Hidden only when even a wrapped key has no usable room left — below that a
+            # half-drawn key naming two of four traces would be worse than none.
+            fits = extra_room >= min(self._extra.width(), self.EXTRA_MIN_WIDTH)
+            self._extra.setVisible(fits)
+            if fits:
+                self._extra.move(extra_left,
+                                 self.PAD + (inner - self._extra.height()) // 2)
+                self._extra.raise_()
 
 
 class BusyOverlay(QWidget):
@@ -1224,19 +1585,38 @@ class PreviewScreen(QWidget):
         self.emg_raw_plots = pg.GraphicsLayoutWidget()
         _theme.set_plot_floor(self.emg_raw_plots)
         self.emg_raw_plots.setBackground(_bg)
-        self.emg_result_plots = pg.PlotWidget()
+        # Both working views carry a height-aware left axis (see _FitAxis): at the compact
+        # heights this tab now defaults to, stock pyqtgraph printed the y labels through
+        # each other. Neither has an in-plot legend any more — at ~43 px of data area a
+        # legend row covered nearly half the trace it was labelling. The conditioned view
+        # needs no replacement, its corner picker IS the key (same emg_cycle colours); the
+        # detail view names its processing stages in the title band instead.
+        self.emg_result_plots = pg.PlotWidget(axisItems={"left": _FitAxis(orientation="left")})
         _theme.set_plot_floor(self.emg_result_plots)
         plot_perf.tune_widget(self.emg_result_plots)
-        self._style_legend(self.emg_result_plots.addLegend())
         self.emg_result_plots.setBackground(_bg)
         self.emg_result_plots.setLabel("bottom", "Time (s)")
-        self.emg_result_plots.setLabel("left", "EMG (a.u.)")   # "Conditioned" is in the panel title
-        self.emg_plots = pg.PlotWidget()
+        # "Conditioned" is in the panel title; the label shortens itself when the panel is
+        # too short to draw it whole (see _FitAxis.set_label_variants)
+        self.emg_result_plots.getPlotItem().getAxis("left").set_label_variants("EMG (a.u.)", "EMG", None)
+        self.emg_plots = pg.PlotWidget(axisItems={"left": _FitAxis(orientation="left")})
         _theme.set_plot_floor(self.emg_plots)
         plot_perf.tune_widget(self.emg_plots)
-        self._style_legend(self.emg_plots.addLegend())
         self.emg_plots.setBackground(_bg)
-        self.emg_plots.setLabel("bottom", "Time (s)"); self.emg_plots.setLabel("left", "EMG (a.u.)")
+        self.emg_plots.getPlotItem().getAxis("left").set_label_variants("EMG (a.u.)", "EMG", None)
+        # Pin both left axes to one width. They are stacked and read against a SHARED time
+        # axis (the detail view has no x caption of its own precisely because the conditioned
+        # view below carries it), but each picks its label wording from its OWN height — so
+        # after a splitter drag one said "EMG (a.u.)" and the other "EMG", and their data
+        # areas started 6.8 px apart, stepping the two time axes out of line.
+        for _pw in (self.emg_plots, self.emg_result_plots):
+            _theme.align_left_axis(_pw.getPlotItem())
+        # No "Time (s)" caption here: the conditioned view directly below carries it on an
+        # identical axis, and the caption cost 18 px out of a 43 px data area — a 40% gain
+        # in trace height for a word the panel underneath already says. The tick numbers
+        # stay, so this view is still readable on its own.
+        self.emg_trace_key = QLabel()
+        self.emg_trace_key.setTextFormat(Qt.RichText)
         # the DIAGNOSTIC floor, not the working-view one: these two share the compact
         # reference row (a canvas reports a 10px minimum of its own, so a floor is needed)
         self.emg_psd_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 3)))
@@ -1244,15 +1624,19 @@ class PreviewScreen(QWidget):
 
         self.fidelity_canvas = FigureCanvasQTAgg(Figure(figsize=(4, 3)))
         _theme.set_plot_floor(self.fidelity_canvas, _theme.PLOT_DIAG_MIN_HEIGHT)
+        # both diagnostics re-fit their furniture to the height a splitter drag leaves them
+        self._compact_fitters = [_CompactFigureFitter(self.emg_psd_canvas),
+                                 _CompactFigureFitter(self.fidelity_canvas)]
         split = QSplitter(Qt.Vertical)
         # Detail channel and Conditioned result are the two working views — the conditioning
         # stages and the finished EMG, each against time — so both span the full width, where
-        # width is what makes them readable. Their legends sit along the bottom edge, clear of
-        # the breath numbers pinned at the top (see _legend_one_row).
+        # width is what makes them readable. Neither carries an in-plot legend: at this
+        # panel height a legend row covered the trace it was labelling (see _set_trace_key).
         # Title + picker float INSIDE each plot's top band rather than on a row above it —
         # two full-width rows of vertical space given back to the graphs (see _PlotTitleOverlay).
-        split.addWidget(self._titled_overlay("Detail channel",       # stages are in the legend
-                                             self.emg_plots, corner=self.emg_channel))
+        split.addWidget(self._titled_overlay("Detail channel", self.emg_plots,
+                                             corner=self.emg_channel,
+                                             extra=self.emg_trace_key))  # stages named here
         split.addWidget(self._titled_overlay("Conditioned result",   # picker names the channels
                                              self.emg_result_plots,
                                              corner=self.result_checks_holder))
@@ -1274,15 +1658,17 @@ class PreviewScreen(QWidget):
             self._emg_raw_scroll, extra=[self.emg_raw_plots.viewport()])
         bottom.addWidget(self._titled("Raw EMG channels", self._emg_raw_scroll))
         bottom.addWidget(self._titled("Noise fidelity frontier (1 = untouched)", self.fidelity_canvas))
-        bottom.addWidget(self._titled("Detail PSD", self.emg_psd_canvas))
+        self._psd_panel = self._titled("Detail PSD", self.emg_psd_canvas)
+        bottom.addWidget(self._psd_panel)
         self._emg_diag_row = bottom
         split.addWidget(bottom)
-        # 2 : 2 : 1 — the two working views share the room and the reference row defaults to
-        # HALF a working view's height (Emil, 02-08-2026: the three bottom panels took far
-        # too much of the screen). Stretch factors alone only divide SPARE space, so the
-        # sizes are seeded explicitly too; the user can still drag from here.
-        split.setStretchFactor(0, 2); split.setStretchFactor(1, 2); split.setStretchFactor(2, 1)
-        split.setSizes([400, 400, 200])
+        # 1 : 1 : 2 — the two working views TOGETHER default to the same share as the
+        # reference row, which with the fixed chrome above lands the tab on roughly equal
+        # thirds: chrome+settings / the two working views / the three reference panels
+        # (Emil, 02-08-2026). Stretch factors alone only divide SPARE space, so the sizes
+        # are seeded explicitly too; the user can still drag from here.
+        split.setStretchFactor(0, 1); split.setStretchFactor(1, 1); split.setStretchFactor(2, 2)
+        split.setSizes([200, 200, 400])
         v.addWidget(split, 1)
         # clicking a numbered breath in any EMG plot toggles its exclusion too
         self.emg_raw_plots.scene().sigMouseClicked.connect(self._on_emg_raw_clicked)
@@ -2095,53 +2481,31 @@ class PreviewScreen(QWidget):
                 pad = (hi - lo) * 0.05 or 1.0
                 first.getViewBox().setYRange(lo - pad, hi + pad, padding=0)
 
-    @staticmethod
-    def _legend_one_row(plot, offset=(10, -4)):
-        """Lay a plot's legend out as a single horizontal row along the BOTTOM edge.
+    def _set_trace_key(self, stages):
+        """Name the detail plot's traces in its title band, as colour swatch + label.
 
-        The breath numbers are pinned to the top of the view, so a top-anchored legend sat on
-        top of them; the bottom edge is clear. (Anchoring bottom-left needs itemPos and
-        parentPos at (0, 1) with a negative y offset — see below.)
-
-        ``plot`` must be the PlotItem, never the PlotWidget: PlotWidget.__getattr__ only
-        forwards callables, so a widget yields legend=None and this silently does nothing.
-
-        The column count has to be re-applied on every render, not just at construction:
-        PlotItem.clear() removes each entry from the legend, the following plot(name=...)
-        calls re-add them, and the count varies (the detail plot gains 'noise-reduced' only
-        when noise conditioning ran; the result plot has one entry per ticked channel).
-        columnCount == entry count is what keeps it to one row.
+        Rich text in a QLabel rather than a pyqtgraph legend: a legend is an item inside the
+        ViewBox, so wherever it is anchored it covers signal — at the compact height this tab
+        defaults to, its single row hid close to half the data area. The band above the plot
+        is already reserved (the channel picker sets its height) and had the room going spare.
         """
-        leg = getattr(plot, "legend", None)
-        if leg is None:
-            return
-        try:
-            n = len(leg.items)
-            if not n:
-                return                       # setColumnCount(0) divides by zero
-            leg.setColumnCount(n)
-            leg.anchor(itemPos=(0, 1), parentPos=(0, 1), offset=offset)
-        except Exception:                    # noqa: BLE001 — legend chrome is cosmetic
-            pass
+        muted = _theme.active_theme().get("text_muted", "#666") if _theme is not None else "#666"
+        parts = []
+        for name, colour in stages:
+            hexcol = pg.mkColor(colour).name()
+            parts.append(f'<span style="color:{hexcol};">&#9644;</span>'
+                         f'<span style="color:{muted};">&nbsp;{name}</span>')
+        # Entries are separated by a REAL space, not more &nbsp;. The gap between a swatch and
+        # its own name must not break, but if the separators do not break either the label has
+        # no wrap opportunity at all: it then broke mid-entry into four lines where two were
+        # needed, and the band grew from 45 px to 78 px.
+        self.emg_trace_key.setText("&nbsp;&nbsp; ".join(parts))
+        self.emg_trace_key.adjustSize()
+        for ov in getattr(self, "_plot_title_overlays", []):
+            ov.fit()               # the key changed width; re-pin the band it sits in
 
-    @staticmethod
-    def _style_legend(leg):
-        """In DARK mode only, give a pyqtgraph legend a near-opaque dark backing and
-        light text so entries stay legible where they float over bright trace fills
-        (e.g. 'noise-reduced' over the green conditioned EMG). Light mode is left
-        untouched so its legends render exactly as before. Never raises."""
-        if leg is None or _theme is None or not _theme.is_dark():
-            return
-        pal = _plot_pal()
-        try:
-            leg.setBrush(pg.mkBrush(*pal["legend_bg"]))
-            leg.setLabelTextColor(pg.mkColor(*pal["fg"]) if isinstance(pal["fg"], tuple)
-                                  else pg.mkColor(pal["fg"]))
-            leg.setPen(pg.mkPen(*pal["separator"]))
-        except Exception:                            # noqa: BLE001 — legend chrome is cosmetic
-            pass
 
-    def _titled_overlay(self, title, plot, corner=None):
+    def _titled_overlay(self, title, plot, corner=None, extra=None):
         """Like :meth:`_titled`, but the title row floats INSIDE the plot's top band
         instead of sitting above it (see _PlotTitleOverlay for why). Same outer margins
         as _titled so the panels keep one shared inset."""
@@ -2152,7 +2516,7 @@ class PreviewScreen(QWidget):
         lay.addWidget(plot, 1)
         if not hasattr(self, "_plot_title_overlays"):
             self._plot_title_overlays = []
-        self._plot_title_overlays.append(_PlotTitleOverlay(plot, title, corner))
+        self._plot_title_overlays.append(_PlotTitleOverlay(plot, title, corner, extra))
         return box
 
     def _fit_plot_overlays(self):
@@ -2171,6 +2535,7 @@ class PreviewScreen(QWidget):
         box = QWidget(); lay = QVBoxLayout(box); lay.setContentsMargins(8, 4, 8, 6); lay.setSpacing(2)
         header = QHBoxLayout(); header.setContentsMargins(0, 0, 0, 0); header.setSpacing(8)
         lab = QLabel(title); lab.setProperty("status", "muted")
+        box._title_label = lab          # so a panel can keep its header current
         header.addWidget(lab); header.addStretch(1)
         if corner is not None:
             header.addWidget(corner, 0, Qt.AlignRight | Qt.AlignVCenter)
@@ -2509,6 +2874,7 @@ class PreviewScreen(QWidget):
         self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []
         self.emg_raw_plots.clear()
         self.emg_plots.clear()
+        self._set_trace_key([])       # the legend this replaced was emptied by plots.clear()
         self.emg_psd_canvas.figure.clear(); self.emg_psd_canvas.draw()
         if include_noise:
             self.fidelity_canvas.figure.clear(); self.fidelity_canvas.draw()
@@ -2540,6 +2906,7 @@ class PreviewScreen(QWidget):
         self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []
         self.emg_raw_plots.clear()
         self.emg_plots.clear()
+        self._set_trace_key([])       # the legend this replaced was emptied by plots.clear()
         self.emg_psd_canvas.figure.clear(); self.emg_psd_canvas.draw()
         self.fidelity_canvas.figure.clear(); self.fidelity_canvas.draw()
         self._noise_has_result = False
@@ -3496,8 +3863,15 @@ class PreviewScreen(QWidget):
         self.emg_plots.plot(t, -env, pen=env_pen)
         # discrete full-length flow silhouette behind the EMG, to read bursts against respiration
         add_flow_background(self.emg_plots.getPlotItem(), t, data.get("flow"), pal)
-        self.emg_plots.setLabel("bottom", "Time (s)"); self.emg_plots.setLabel("left", "EMG (a.u.)")
-        self._legend_one_row(self.emg_plots.getPlotItem())   # after every named plot() call
+        # y label / x caption are set once in _build_noise_tab; the axis re-picks the label
+        # wording itself on every resize, so re-setting it here would undo that choice.
+        # the key rides in the title band, not over the trace; rebuilt per render because
+        # 'noise-reduced' is only there when noise conditioning actually ran
+        stages = [("raw", pal["raw_trace"]), ("ECG-removed", ch["flow"])]
+        if data.get("noise_applied"):
+            stages.append(("noise-reduced", ch["volume"]))
+        stages.append(("RMS envelope", pal["channels"]["poes"]))
+        self._set_trace_key(stages)
         self._limit_x(self.emg_plots.getPlotItem(), t)
         self._ensure_noise_region()
         self._detail_label_y = self._safe_top(
@@ -3525,9 +3899,15 @@ class PreviewScreen(QWidget):
         ax.axvspan(band[0], band[1], color=pal["mpl_warn"], alpha=0.12, label="EMG band 20–250 Hz")
         ax.set_xlim(0, min(500.0, float(freqs[-1]) if len(freqs) else 500.0))
         ax.set_xlabel("Frequency (Hz)"); ax.set_ylabel("Power (dB)")
-        ax.set_title(f"EMG PSD — col {data.get('col', int(data.get('channel', 0)) + 1)}")
-        ax.legend(fontsize=7)
-        fig.tight_layout()
+        # The channel goes in the PANEL HEADER, not in the figure: a figure title has to fit
+        # the canvas, and whether it fits changes with every splitter drag — the header is a
+        # real label with room, and it never has to be re-decided on resize.
+        col = data.get("col", int(data.get("channel", 0)) + 1)
+        try:
+            self._psd_panel._title_label.setText(f"Detail PSD — col {col}")
+        except Exception:                   # pragma: no cover - header is cosmetic
+            pass
+        _fit_compact_figure(self.emg_psd_canvas, ax, legend_kw={"fontsize": 7})
         self.emg_psd_canvas.draw()
 
     # -- result view (all channels, pick which to show) --------------------
@@ -3568,8 +3948,9 @@ class PreviewScreen(QWidget):
                                        pen=_pen(cycle[i % len(cycle)]), name=f"col {c}")
         # discrete full-length flow silhouette behind the ticked EMG channels
         add_flow_background(self.emg_result_plots.getPlotItem(), t, data.get("flow"), _plot_pal())
-        # re-run per render: the entry count tracks the ticked channels
-        self._legend_one_row(self.emg_result_plots.getPlotItem())
+        # no legend call: this plot has none. Its corner picker names every channel against
+        # the very colour it is drawn in (same emg_cycle), so an in-plot legend duplicated
+        # the key AND covered the trace.
         self._limit_x(self.emg_result_plots.getPlotItem(), t)
         self._result_label_y = self._safe_top(*[np.asarray(c) for c in data.get("conditioned", [])])
         self._repaint_view_breaths("result")
@@ -3729,15 +4110,24 @@ class PreviewScreen(QWidget):
             ax.axhline(target, color=pal["mpl_target"], ls=":", lw=1)
             if chosen is not None:
                 ax.axvline(chosen, color=pal["mpl_error"], ls="--", lw=1.2, label=f"chosen = {chosen}")
-            ax.set_xlabel("Noise-suppression strength (prop_decrease, 0–1)")
+            # Longest wording that fits; the panel sits in a splitter, so the room changes.
+            # 'prop_decrease' survives every rung — it is what the Advanced modal calls this
+            # setting — while "Noise-" (the panel header already says it) and the 0–1 range
+            # (the ticks show it) are what go first.
+            xlabels = ("Noise-suppression strength (prop_decrease, 0–1)",
+                       "Suppression strength (prop_decrease)",
+                       "Suppression (prop_decrease)",
+                       "prop_decrease")
             # Rotated, the y-label's length runs along the axes HEIGHT (~206px in a 300px
             # panel), so a wordy one overflows. The panel header carries the title and the
             # "1 = untouched" scale hint horizontally, where there is room for them.
             ax.set_ylabel("Fidelity retained")
             ax.set_ylim(0, 1.02)
-            ax.legend(fontsize=7)
-        fig.tight_layout()
-        self.fidelity_canvas.draw()
+        _fit_compact_figure(self.fidelity_canvas, ax,
+                            legend_kw={"fontsize": 7} if frontier else None,
+                            xlabel_variants=xlabels if frontier else None)
+        # settle the wording against the layout this render produces, not the previous one
+        refit_compact_figure(self.fidelity_canvas)
 
     def render_noise_report(self, result):
         """Draw the fidelity frontier + status from a full batch result (with ECG

@@ -74,8 +74,8 @@ _PLOT_LIGHT = {
     "breath_incl_label": (90, 107, 122), "breath_excl_label": (180, 50, 42),
     "separator": (150, 165, 180), "noise_region": (44, 110, 155, 45),
     "raw_trace": (150, 165, 180), "noise_trace": (90, 150, 200),
-    # legend backing is only painted in dark mode (see _style_legend); the light
-    # value is transparent+unused so light-mode legends stay exactly as before.
+    # Legend backing, kept for any future pyqtgraph legend: the EMG working views that
+    # used to read it now name their traces in the panel band instead (_set_trace_key).
     "legend_bg": (255, 255, 255, 0),
     # matplotlib semantic line/figure colours (light values are the exact historical
     # ones so light-mode figures stay byte-identical: pure-white ground, grey lines)
