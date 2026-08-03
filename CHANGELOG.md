@@ -25,6 +25,7 @@ Windows, and the Preview screens give their space back to the graphs. Nothing in
 analysis changed — a settings file run before and after this release produces identical
 output.
 
+<!-- changelog-skip c08a2b6 regression introduced and fixed inside this same release: the fidelity panel briefly drew a small plot over the larger one; the v2.3.3 -> v2.3.4 diff never contains it, so there is nothing for a reader of this entry to be told -->
 <!-- changelog-skip 58adf8b maintainer tooling: scripts/sign-msi-certum.sh guards the release signing step, nothing an installed copy contains or an analysis can reach -->
 
 - Fixed "Advanced…" dialogs opening taller than the screen, with OK/Cancel out of reach
