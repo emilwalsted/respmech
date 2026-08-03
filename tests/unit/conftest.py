@@ -205,3 +205,43 @@ def dark_app(qapp):
     finally:
         theme._prefers_dark = orig
         theme.apply_theme(qapp)
+
+
+def pytest_collection_modifyitems(items):
+    """Run the theme-switching tests FIRST.
+
+    ``theme.apply_theme`` sets a stylesheet on the QApplication, and Qt re-polishes every
+    live widget when it does — so its cost grows with everything the session has built so
+    far. Nothing else in the suite calls it, which makes this purely a scheduling problem.
+
+    Measured on 03-08-2026, same 13 tests, same machine:
+
+        at their alphabetical position (late)   ~800 s
+        collected first                           12.6 s
+
+    A single call was up to 82 s late in the run against ~0.2 s early. That is 72% of the
+    whole suite's wall time, and it is what took CI from ~28 min to over three hours per job.
+
+    The alternative — deleting the accumulated windows in teardown so the population stays
+    small — was tried first and SEGFAULTS on py3.11: the existing reaper in
+    _close_top_level_windows documents why touching those half-destroyed wrappers is unsafe.
+    Reordering costs nothing and risks nothing: these tests are independent, ``dark_app``
+    restores the OS default in its own teardown, and pytest's order here is otherwise just
+    alphabetical accident (no ordering plugin is installed).
+    """
+    # Matching on fixturenames ALONE is not enough, and the first cut of this hook proved it
+    # by saving only 230 s of the ~800 s: test_theme_paints_both_modes.py pulls the fixture
+    # with request.getfixturevalue("dark_app") INSIDE the test body, so at collection time it
+    # is nowhere in fixturenames — and that file is the expensive one. Module names carry it.
+    THEME_MODULES = {"test_theme_paints_both_modes.py", "test_dialogs_dark_mode.py"}
+
+    def theme_switching(item):
+        if os.path.basename(str(getattr(item, "fspath", ""))) in THEME_MODULES:
+            return True
+        if "dark_app" in getattr(item, "fixturenames", ()):
+            return True
+        # the two in test_gui.py that drive apply_theme directly rather than via the fixture
+        return item.name in ("test_theme_applies_light_and_dark",
+                             "test_plot_palette_tracks_theme_and_has_a_complete_contract")
+
+    items.sort(key=lambda it: 0 if theme_switching(it) else 1)
