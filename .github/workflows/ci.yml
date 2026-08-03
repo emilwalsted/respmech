@@ -92,7 +92,12 @@ jobs:
           # not a test failure, so decide pass/fail from pytest's REPORTED results, not the
           # crash-prone process exit code. A genuine failure/error still fails the job.
           set +e
-          python -m pytest tests/unit -q 2>&1 | tee pytest-unit.log
+          # --durations prints the slowest tests INTO the log this job already keeps.
+          # Added 03-08-2026: the suite's cost turned out to be dominated by a single
+          # function whose price grew through the session, and that was invisible until
+          # someone profiled it. Making the profile a by-product of every run means the
+          # next regression of that shape shows up without anyone going looking.
+          python -m pytest tests/unit -q --durations=25 2>&1 | tee pytest-unit.log
           set -e
           if grep -qE "[0-9]+ (failed|error)" pytest-unit.log; then
             echo "::error::real test failures or errors"; exit 1
