@@ -246,8 +246,15 @@ jobs:
           # assets, which is the point: they were just rebuilt.
           if gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $GITHUB_REF_NAME already exists; updating it in place."
+            # --draft=false is load-bearing, not tidiness. Deleting a tag to move it (which
+            # is how a release is finished here) leaves GitHub holding a release with no tag,
+            # and GitHub turns that into a DRAFT. Re-pushing the tag does not undo it, and
+            # `--latest` on a draft is rejected outright: "Latest release cannot be draft or
+            # prerelease" — so the second run of this workflow failed at the last step with
+            # both installers already built, and the release stayed invisible.
             gh release edit "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
               --title "RespMech $GITHUB_REF_NAME" \
+              --draft=false \
               --latest \
               --notes-file notes.md
             gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" \
