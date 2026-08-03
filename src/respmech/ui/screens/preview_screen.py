@@ -411,7 +411,7 @@ class _FileRunError(RuntimeError):
     to the copyable error card."""
 
 
-def _pick_xlabel(canvas, ax, variants):
+def _pick_xlabel(canvas, ax, variants, renderer=None):
     """Set the longest x-label wording that is drawn entirely inside the canvas.
 
     matplotlib centres the x label on the AXES, not on the figure, and the axes are inset by
@@ -432,12 +432,13 @@ def _pick_xlabel(canvas, ax, variants):
         return None
     try:
         ax.set_xlabel(variants[-1])
-        canvas.draw()                       # settle a layout the shortest label cannot skew
+        if renderer is None:                # settle a layout the shortest label cannot skew
+            canvas.draw()
         # renderer fetched AFTER the resize+draw: draw() builds a new one for the new size,
         # and measuring against the old one reported extents in the previous figure's
         # coordinates — which granted room that did not exist and chose a wording 24 px too
         # wide for the panel it was drawn in.
-        r = canvas.get_renderer()
+        r = renderer or canvas.get_renderer()
         ref = ax.xaxis.label.get_window_extent(renderer=r)
         centre = (ref.x0 + ref.x1) / 2.0    # == the axes centre; the label is centred on it
         # Measured in the FIGURE's own pixels, never the widget's. An earlier version forced
@@ -463,7 +464,35 @@ def _pick_xlabel(canvas, ax, variants):
     return chosen
 
 
-def _fit_compact_figure(canvas, ax, *, title=None, legend_kw=None, xlabel_variants=None):
+def _pick_ylabel(canvas, ax, variants, renderer=None):
+    """Set the longest y-label wording that fits the axes height.
+
+    A y label is rotated, so its length runs along the axes HEIGHT and it clips exactly as
+    the x label clips against the width — measured on the Campbell panel at 130 px, where
+    "Lung volume above end-expiration (L)" came out as "olume above end-ex".
+    """
+    if not variants:
+        return None
+    try:
+        ax.set_ylabel(variants[-1])
+        if renderer is None:
+            canvas.draw()
+        r = renderer or canvas.get_renderer()
+        room = float(ax.get_window_extent(renderer=r).height)
+        chosen = variants[-1]
+        for text in variants:
+            ax.set_ylabel(text)
+            if ax.yaxis.label.get_window_extent(renderer=r).height <= room:
+                chosen = text
+                break
+    except Exception:                       # pragma: no cover - measurement is cosmetic
+        chosen = variants[-1]
+    ax.set_ylabel(chosen)
+    return chosen
+
+
+def _fit_compact_figure(canvas, ax, *, title=None, legend_kw=None, xlabel_variants=None,
+                        ylabel_variants=None):
     """Shed figure furniture that does not fit the canvas it has been given.
 
     These two diagnostics share the compact reference row, so their canvas can be ~100 px
@@ -482,7 +511,8 @@ def _fit_compact_figure(canvas, ax, *, title=None, legend_kw=None, xlabel_varian
     full = getattr(ax, "_rm_full", None)
     if full is None:
         full = ax._rm_full = {"title": title or "", "xlabel": ax.get_xlabel(),
-                              "legend_kw": legend_kw, "xlabel_variants": xlabel_variants}
+                              "legend_kw": legend_kw, "xlabel_variants": xlabel_variants,
+                              "ylabel": ax.get_ylabel(), "ylabel_variants": ylabel_variants}
     h = canvas.height()
     # Font sizes FIRST. The x-label wording is chosen by measuring the text, so it has to be
     # measured in the size it will be drawn in — setting the size afterwards made the choice
@@ -495,19 +525,42 @@ def _fit_compact_figure(canvas, ax, *, title=None, legend_kw=None, xlabel_varian
     ax.tick_params(labelsize=7 if small else 9)
     ax.set_title(full["title"] if h >= 150 else "")
     if full["legend_kw"] is not None:
-        if h >= 190:
+        # only when something is actually labelled: matplotlib warns and draws an EMPTY
+        # legend box otherwise, which is reachable here whenever a breath is missing the
+        # average/recoil fields that carry the labels
+        if h >= 190 and ax.get_legend_handles_labels()[1]:
             ax.legend(**full["legend_kw"])
         else:
             leg = ax.get_legend()
             if leg is not None:
                 leg.remove()
+    # ONE settling draw for both ladders. Each used to draw for itself, which put two full
+    # matplotlib renders into every fit — and a fit runs on every splitter drag, for three
+    # canvases. Measured on the unit suite: 21 min -> 33 min, and Windows CI is already
+    # hours. Both ladders shorten to their smallest wording first, so a single draw settles
+    # a layout neither of them can skew, and both then measure against that one renderer.
+    xvars = full["xlabel_variants"] if h >= 120 else None
+    yvars = full.get("ylabel_variants")
+    r = None
+    if xvars or yvars:
+        if xvars:
+            ax.set_xlabel(xvars[-1])
+        if yvars:
+            ax.set_ylabel(yvars[-1])
+        canvas.draw()
+        try:
+            r = canvas.get_renderer()
+        except Exception:                   # pragma: no cover - falls back to per-pick draws
+            r = None
     if h < 120:
         ax.set_xlabel("")
-    elif full["xlabel_variants"]:
+    elif xvars:
         # re-picked per fit, so the wording grows back when the panel is widened again
-        full["xlabel"] = _pick_xlabel(canvas, ax, full["xlabel_variants"])
+        full["xlabel"] = _pick_xlabel(canvas, ax, xvars, renderer=r)
     else:
         ax.set_xlabel(full["xlabel"])
+    if yvars:
+        full["ylabel"] = _pick_ylabel(canvas, ax, yvars, renderer=r)
     try:
         # The "tight" LAYOUT ENGINE, not a tight_layout() call. tight_layout() shrinks the
         # axes to clear the furniture, measured against the margins currently in force, so
@@ -1374,14 +1427,15 @@ class PreviewScreen(QWidget):
         # minimum, which for the panel a reader takes the recoil line and work fill off is a
         # box, not a diagram.
         _theme.set_plot_floor(self.campbell)
-        # A whisker of air around the canvas: it used to butt flush against the table and
-        # the panel edge — the one unframed surface on the screen (Emil, 02-08-2026). Same
-        # margins as _titled, so the two lower panels share one visual inset.
-        _cbox = QWidget()
-        _clay = QVBoxLayout(_cbox)
-        _clay.setContentsMargins(8, 4, 8, 6)
-        _clay.addWidget(self.campbell)
-        lower.addWidget(_cbox)
+        # A titled panel, not a bare canvas. It used to butt flush against the table and the
+        # panel edge (Emil, 02-08-2026), which a hand-rolled box with _titled's margins fixed
+        # — but the figure's own title was still the only thing naming the panel, and at the
+        # height this panel actually gets (130 px measured) matplotlib cannot fit a title:
+        # it was drawn with its top 10 px outside the figure, so it read as a half-cut
+        # "Campbell diagram". The header names it at any height and costs the same room the
+        # clipped title did; the figure keeps its title only for the export (_export_campbell).
+        self._campbell_fitter = _CompactFigureFitter(self.campbell)
+        lower.addWidget(self._titled("Campbell diagram", self.campbell))
         # the per-breath table takes ~3/4 of the width; the Campbell diagram ~1/4 (default)
         lower.setStretchFactor(0, 3); lower.setStretchFactor(1, 1)
         lower.setSizes([720, 240])
@@ -1479,8 +1533,21 @@ class PreviewScreen(QWidget):
                 # destroyed and the finally-branch below is the only thing that puts it back
                 redrawn = True
                 self._draw_campbell(breaths, pal=_theme._PLOT_LIGHT)
-            self.campbell.figure.savefig(path, dpi=150, bbox_inches="tight",
-                                         facecolor=self.campbell.figure.get_facecolor())
+            # The export is a stand-alone figure with no panel header around it, so it gets
+            # the title back that the on-screen panel leaves to its header — and then loses
+            # it again straight away. Leaving it set showed the title twice on screen, once
+            # in the header and once in the figure, on every light-mode export (dark mode
+            # hid the leak, because it redraws the figure in the finally-branch below).
+            fig = self.campbell.figure
+            try:
+                for _ax in fig.axes:
+                    _ax.set_title("Campbell diagram")
+                fig.savefig(path, dpi=150, bbox_inches="tight",
+                            facecolor=fig.get_facecolor())
+            finally:
+                for _ax in fig.axes:
+                    _ax.set_title("")
+                self.campbell.draw_idle()
             self._set_status(f"Saved Campbell diagram → {path}")
         except Exception as e:                          # noqa: BLE001
             self._set_status(f"Could not save figure: {short_error(str(e))}")
@@ -4043,8 +4110,15 @@ class PreviewScreen(QWidget):
         ax.axvline(0, color=pal["mpl_zeroline"], lw=0.8, zorder=0)
         ax.set_xlabel("Oesophageal pressure  Poes (cmH₂O)")
         ax.set_ylabel("Lung volume above end-expiration (L)")
-        ax.set_title("Campbell diagram")
-        fig.tight_layout()
+        # No figure title on screen — the panel header carries it. tight_layout() is replaced
+        # by _fit_compact_figure, which installs the live tight ENGINE (this figure carried a
+        # one-shot PlaceHolderLayoutEngine, so it never re-solved when the splitter moved) and
+        # shrinks the labels when the panel is short.
+        _fit_compact_figure(
+            self.campbell, ax,
+            legend_kw={"loc": "lower left", "frameon": False, "fontsize": 7},
+            ylabel_variants=("Lung volume above end-expiration (L)",
+                             "Volume above EELV (L)", "Volume (L)"))
         self.campbell.draw()
         self.btn_export_fig.setEnabled(True)         # a diagram now exists to export
 
@@ -4083,7 +4157,11 @@ class PreviewScreen(QWidget):
             # Bottom-left: with Poes on x and volume on y that corner is empty (the loop's
             # EELV end sits bottom-right). The output PDF transposes these axes, so its
             # legend must NOT follow — see core/plots._pv_average.
-            ax.legend(loc="lower left", frameon=False, fontsize=7)
+            # The legend is deliberately NOT placed here. At the height this panel gets, a
+            # three-entry key covers the loops it labels, so whether to draw it at all is a
+            # function of the height — which only the fit knows. _draw_campbell hands the
+            # placement to _fit_compact_figure as legend_kw, and that sheds it when short.
+            pass
         except Exception:                       # pragma: no cover - overlay is best-effort
             pass
 

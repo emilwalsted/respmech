@@ -65,6 +65,13 @@ output.
   two working views, and the three reference panels — instead of giving the two working
   views half the window and leaving the raw channels, the fidelity frontier and the
   detail PSD a sliver each
+- Fixed the Campbell diagram panel cutting off its own labels. At the height the panel gets
+  on a laptop the heading was drawn with its top outside the figure, so it read as a
+  half-cut "Campbell diagram", and the rotated axis caption came out as "olume above
+  end-ex". The heading now sits in the panel's own title bar, which cannot clip; the axis
+  caption shortens to fit and returns in full on a taller panel; and the key no longer
+  covers the loops it names when there is no room for it. Exporting the diagram is
+  unchanged — a figure saved for a report still carries its title
 - Fixed the graphs becoming unreadable at those compact sizes: y-axis tick labels printed
   through one another, axis captions were clipped to their last few characters, and the
   in-plot legends covered the very traces they named. Tick labels now thin out and return

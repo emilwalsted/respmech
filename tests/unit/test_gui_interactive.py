@@ -907,7 +907,13 @@ def test_campbell_legend_sits_bottom_left_in_the_preview_only(qapp):
     import inspect
     from respmech.ui.screens import preview_screen as ps
     from respmech.core import plots
-    assert 'loc="lower left"' in inspect.getsource(ps.PreviewScreen._overlay_campbell_work)
+    # The call moved out of _overlay_campbell_work and into _draw_campbell, which hands it
+    # to _fit_compact_figure: at the height this panel gets, a legend has to be SHED when
+    # there is no room for it, and only the fit knows the height. The contract is unchanged
+    # — it is still "lower left", and still only in the preview.
+    assert 'loc": "lower left"' in inspect.getsource(ps.PreviewScreen._draw_campbell)
+    assert 'ax.legend(' not in inspect.getsource(ps.PreviewScreen._overlay_campbell_work), (
+        "the overlay places its own legend again, so the fit can no longer shed it")
     # the PDF's Campbell keeps auto-placement — its axes are transposed
     assert 'loc="best"' in inspect.getsource(plots._pv_average)
     assert 'loc="lower left"' not in inspect.getsource(plots._pv_average)

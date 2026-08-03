@@ -41,6 +41,18 @@ _REAL_RANGE = (-0.42906, 0.63771)
 _DATA_OUT = {"saveaveragedata": True, "savebreathbybreathdata": True}
 
 
+# A breath complete enough that _overlay_campbell_work draws its labelled artists — an
+# unlabelled one would make any assertion about the legend pass for the wrong reason.
+_BREATH = {
+    "ignored": False,
+    "poes": [0, -5, -10, -5, 0], "volume": [0, 0.3, 0.8, 0.5, 0],
+    "poesavg": [0, -5, -10, -5, 0], "volumeavg": [0, 0.3, 0.8, 0.5, 0],
+    "eelvavg": [0.0, 0.0], "eilvavg": [0.8, -10.0],
+    "inspiration": {"volumeavg": [0, 0.3, 0.8], "poesavg": [0, -5, -10]},
+    "wob": {"wobtotal": 9.2},
+}
+
+
 def _noise_tab(qapp, tmp_path, height=800):
     from respmech.ui.main_window import MainWindow
     s = synth_settings(str(tmp_path), data_out=_DATA_OUT, remove_ecg=True, noise=True)
@@ -475,6 +487,74 @@ def test_fitting_never_resizes_the_figure_behind_qt(qapp, tmp_path):
             f"leaves the rest showing the previous frame")
         checked += 1
     assert checked == 2, f"only {checked} of the two diagnostic canvases were checked"
+    win.close()
+
+
+def test_the_campbell_panel_is_readable_at_the_height_it_gets(qapp, tmp_path):
+    """The Campbell diagram is the one Preview panel whose own figure title WAS its label.
+
+    At the height the panel actually gets on a laptop — 130 px measured — matplotlib cannot
+    fit that title: it was drawn with its top 10 px outside the figure, so it read as a
+    half-cut "Campbell diagram", and the rotated y label came out as "olume above end-ex".
+    Both were true of v2.3.3 as well; this is not a regression, it is a defect that a
+    screenshot for the website finally made visible.
+
+    The title now belongs to the panel header, which cannot clip, and the figure carries it
+    ONLY for the export — a stand-alone figure for a report has no header around it.
+    """
+    from PySide6.QtWidgets import QLabel
+    win, pv = _noise_tab(qapp, tmp_path, 800)
+    pv.subtabs.setCurrentIndex(0)                      # the Mechanics page
+    for _ in range(10):
+        qapp.processEvents()
+    pv._draw_campbell({1: _BREATH})
+    for _ in range(6):
+        qapp.processEvents()
+
+    ax = pv.campbell.figure.axes[0]
+    assert ax.get_title() == "", (
+        "the figure sets its own title on screen again — at this panel height matplotlib "
+        "draws it outside the figure and it is clipped")
+    # ...and the panel names it, so nothing was lost by taking the title off the figure
+    box = pv.campbell.parent()
+    headers = [w.text() for w in box.findChildren(QLabel)] if box is not None else []
+    assert any("Campbell" in h for h in headers), (
+        f"no panel header names the Campbell diagram; found {headers}")
+    win.close()
+
+
+def test_the_campbell_labels_shorten_and_come_back(qapp, tmp_path):
+    """The y label is rotated, so its length runs along the axes HEIGHT and it clips exactly
+    as an x label clips against the width. It must shorten to fit and lengthen when it can."""
+    win, pv = _noise_tab(qapp, tmp_path, 800)
+    pv.subtabs.setCurrentIndex(0)
+    for _ in range(10):
+        qapp.processEvents()
+    pv._draw_campbell({1: _BREATH})
+    for _ in range(6):
+        qapp.processEvents()
+
+    def state():
+        c = pv.campbell
+        c.draw()
+        r = c.get_renderer()
+        ax = c.figure.axes[0]
+        over = (ax.yaxis.label.get_window_extent(renderer=r).height
+                - ax.get_window_extent(renderer=r).height)
+        return ax.get_ylabel(), max(0.0, over), ax.get_legend() is not None
+
+    short_label, over, _ = state()
+    assert over <= 1.0, f"the y label {short_label!r} overruns the axes by {over:.0f} px"
+
+    win.resize(1500, 1400)
+    for _ in range(14):
+        qapp.processEvents()
+    tall_label, over_tall, legend_tall = state()
+    assert over_tall <= 1.0, f"the y label {tall_label!r} overruns by {over_tall:.0f} px"
+    assert len(tall_label) > len(short_label), (
+        f"the y label stayed {tall_label!r} on a tall panel after shortening to "
+        f"{short_label!r} — it is not re-chosen")
+    assert legend_tall, "the legend never comes back on a panel with room for it"
     win.close()
 
 
