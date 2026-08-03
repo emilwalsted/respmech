@@ -432,14 +432,6 @@ def _pick_xlabel(canvas, ax, variants):
         return None
     try:
         ax.set_xlabel(variants[-1])
-        # Force the FIGURE to the widget's current size before measuring. The figure only
-        # learns its size in the canvas' own resizeEvent, which may not have run yet — and
-        # measuring a 400 px-wide figure for a 345 px-wide widget grants room that is not
-        # there, which is exactly how the full wording was chosen and then drawn 24 px past
-        # the panel edge. Both sides of the comparison must describe the same canvas.
-        dpi = canvas.figure.dpi or 100.0
-        canvas.figure.set_size_inches(max(canvas.width(), 1) / dpi,
-                                      max(canvas.height(), 1) / dpi, forward=False)
         canvas.draw()                       # settle a layout the shortest label cannot skew
         # renderer fetched AFTER the resize+draw: draw() builds a new one for the new size,
         # and measuring against the old one reported extents in the previous figure's
@@ -448,7 +440,15 @@ def _pick_xlabel(canvas, ax, variants):
         r = canvas.get_renderer()
         ref = ax.xaxis.label.get_window_extent(renderer=r)
         centre = (ref.x0 + ref.x1) / 2.0    # == the axes centre; the label is centred on it
-        room = 2.0 * min(centre, canvas.width() - centre)
+        # Measured in the FIGURE's own pixels, never the widget's. An earlier version forced
+        # the figure to the widget size first, so that both agreed — and that shipped a
+        # visible defect: a figure smaller than its canvas is painted into the widget's
+        # top-left corner and the rest of the widget keeps whatever was there before, so the
+        # panel showed a small plot composited over the previous, larger one. The figure size
+        # belongs to Qt. If it is briefly behind the widget, the wording is re-picked when
+        # the resize arrives (see _CompactFigureFitter) rather than forced now.
+        width = float(canvas.figure.bbox.width)
+        room = 2.0 * min(centre, width - centre)
         chosen = variants[-1]
         for text in variants:
             ax.set_xlabel(text)

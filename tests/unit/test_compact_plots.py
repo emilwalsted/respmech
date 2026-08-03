@@ -422,6 +422,62 @@ def test_the_fidelity_x_label_never_runs_off_its_panel(qapp, tmp_path):
     win.close()
 
 
+def test_fitting_never_resizes_the_figure_behind_qt(qapp, tmp_path):
+    """A figure must never be a different size from the canvas widget that owns it.
+
+    This shipped in v2.3.4 and Emil caught it in the live app: the fidelity panel showed a
+    small plot composited on top of the previous, larger one, with the y label clipped to
+    "Fideli". The cause was measuring the x-label ladder against the WIDGET width and forcing
+    the figure to match with set_size_inches(forward=False). Qt paints the Agg buffer at its
+    own size into the top-left of the widget and leaves the rest of the widget alone, so a
+    figure even slightly smaller than its canvas leaves the previous frame showing around it.
+
+    The figure's size belongs to Qt. Anything that needs a size must read one, not set one.
+    """
+    from respmech.ui.screens.preview_screen import _fit_compact_figure, refit_compact_figure
+    win, pv = _noise_tab(qapp, tmp_path)
+    pv._draw_fidelity({"frontier": {0.2: [0.9, 0.9, 0.9], 0.6: [0.8, 0.8, 0.8],
+                                    1.0: [0.7, 0.7, 0.7]},
+                       "prop_decrease": 0.6, "fidelity_target": 0.8})
+    # the PSD panel is only drawn once a detail channel has been staged; give it the same
+    # kind of figure directly, so both diagnostics are covered rather than one
+    psd = pv.emg_psd_canvas
+    psd.figure.clear()
+    _ax = psd.figure.add_subplot(111)
+    _ax.plot([0, 1], [0, 1], label="raw")
+    _ax.set_xlabel("Frequency (Hz)"); _ax.set_ylabel("Power (dB)")
+    _fit_compact_figure(psd, _ax, legend_kw={"fontsize": 7})
+    for _ in range(8):
+        qapp.processEvents()
+
+    checked = 0
+    for name, c in (("fidelity", pv.fidelity_canvas), ("PSD", pv.emg_psd_canvas)):
+        if not c.figure.axes:
+            continue
+        # Put the figure DELIBERATELY out of step with its widget, which is the only state in
+        # which the defect is reachable — in the app it happens when the panel is drawn before
+        # the layout has settled. A fit taken here must READ that disagreement, never resolve
+        # it by moving the figure: resolving it is precisely what painted the small frame into
+        # the corner. (A plain c.resize() cannot set this up; matplotlib's canvas updates the
+        # figure synchronously, so the two are never out of step that way.)
+        dpi = c.figure.dpi or 100.0
+        c.figure.set_size_inches((c.width() - 160) / dpi, (c.height() - 90) / dpi,
+                                 forward=False)
+        before = (float(c.figure.bbox.width), float(c.figure.bbox.height))
+        assert abs(before[0] - c.width()) > 1, (
+            f"{name}: the figure and the widget agree — this test would not exercise the "
+            f"disagreement it exists for")
+        refit_compact_figure(c)
+        after = (float(c.figure.bbox.width), float(c.figure.bbox.height))
+        assert after == before, (
+            f"{name}: fitting resized the figure from {before} to {after} behind Qt's back. "
+            f"Qt paints the Agg buffer at its own size into the widget's top-left corner and "
+            f"leaves the rest showing the previous frame")
+        checked += 1
+    assert checked == 2, f"only {checked} of the two diagnostic canvases were checked"
+    win.close()
+
+
 def test_the_noise_tab_divides_into_thirds(qapp, tmp_path):
     """What Emil actually asked for: chrome+settings / the two working views / the three
     reference panels, each roughly a third of the window at the default size."""
