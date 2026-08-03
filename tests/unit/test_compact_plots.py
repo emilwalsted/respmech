@@ -274,7 +274,7 @@ def test_the_tick_ladder_always_terminates():
     increasing is a hang rather than a wrong tick, so the bound is asserted, not argued.
     """
     import math
-    import signal
+    import threading
     from respmech.ui.screens.preview_screen import _FitAxis, _next_nice
 
     for e in range(-320, 300):                       # every normal decade
@@ -290,19 +290,28 @@ def test_the_tick_ladder_always_terminates():
     ax = _FitAxis(orientation="left")
     ax.setHeight(63)
 
-    def _hung(*_a):
-        raise TimeoutError("tickSpacing did not terminate")
+    # A watchdog THREAD, not signal.alarm: SIGALRM does not exist on Windows, and Windows is
+    # one of the two platforms this project ships to.
+    spans = ((-4.94e-323, 4.94e-323), (0, 1e-320), (5, 5), (0, 1e12), (-0.429, 0.638))
+    done = threading.Event()
+    out = {}
 
-    signal.signal(signal.SIGALRM, _hung)
-    signal.alarm(10)
-    try:
-        for lo, hi in ((-4.94e-323, 4.94e-323), (0, 1e-320), (5, 5), (0, 1e12),
-                       (-0.429, 0.638)):
-            ax.tickSpacing(lo, hi, 63.0)             # must return, whatever it returns
-        # ...and the bound must not have changed the answer for a real signal
-        assert ax.tickSpacing(-0.429, 0.638, 63.0)[0][0] == 0.5
-    finally:
-        signal.alarm(0)
+    def _run():
+        try:
+            for lo, hi in spans:
+                ax.tickSpacing(lo, hi, 63.0)         # must return, whatever it returns
+            out["real"] = ax.tickSpacing(-0.429, 0.638, 63.0)
+        except Exception as exc:                     # pragma: no cover - reported below
+            out["error"] = exc
+        finally:
+            done.set()
+
+    t = threading.Thread(target=_run, daemon=True)   # daemon: a hung climb must not wedge the run
+    t.start()
+    assert done.wait(20), "tickSpacing did not terminate — the ladder climb is unbounded"
+    assert "error" not in out, f"tickSpacing raised: {out['error']!r}"
+    # ...and the bound must not have changed the answer for a real signal
+    assert out["real"][0][0] == 0.5
 
 
 def test_the_diagnostic_figures_follow_their_panel_in_both_directions(qapp, tmp_path):
@@ -333,15 +342,21 @@ def test_the_diagnostic_figures_follow_their_panel_in_both_directions(qapp, tmp_
     def box(c):
         c.draw()
         p = c.figure.axes[0].get_position()
-        return tuple(round(float(v), 3) for v in (p.x0, p.y0, p.width, p.height))
+        return tuple(float(v) for v in (p.x0, p.y0, p.width, p.height))
 
+    # A tolerance, not equality: the compounding this guards against moved the axes by ~0.07
+    # of the figure per few fits, while the layout solver lands on a rounding boundary and
+    # can wobble in the third decimal (measured 0.714 vs 0.713 on the Windows runner, where
+    # exact comparison went red for a difference 70x smaller than the defect).
     for c in canvases:
         before = box(c)
         for _ in range(20):
             refit_compact_figure(c)
-        assert box(c) == before, (
+        after = box(c)
+        drift = max(abs(a - b) for a, b in zip(before, after))
+        assert drift < 0.01, (
             f"the layout is not idempotent: 20 refits moved the axes from {before} to "
-            f"{box(c)} — repeated fits compound and collapse the figure")
+            f"{after} (drift {drift:.4f}) — repeated fits compound and collapse the figure")
 
     # ...and the furniture really does come back when the panel grows again
     from PySide6.QtCore import Qt
