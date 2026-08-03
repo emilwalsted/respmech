@@ -18,6 +18,59 @@ comment (like this one) so it stays invisible until asked for again:
 (nothing pending — ask for an update to populate this section)
 -->
 
+## v2.3.4 — 2026-08-03
+
+An interface release: every window now fits every screen, both themes paint correctly on
+Windows, and the Preview screens give their space back to the graphs. Nothing in the
+analysis changed — a settings file run before and after this release produces identical
+output.
+
+<!-- changelog-skip 58adf8b maintainer tooling: scripts/sign-msi-certum.sh guards the release signing step, nothing an installed copy contains or an analysis can reach -->
+
+- Fixed "Advanced…" dialogs opening taller than the screen, with OK/Cancel out of reach
+  and the window impossible to shrink. Reported on a 1080p Windows laptop at 150%
+  scaling, where the Mechanics dialog asked for 904 px against the 650 px available and
+  put its buttons in the missing 254 px. The settings are now grouped into titled cards
+  laid out in one to three columns depending on the width available, inside a scrollable
+  body, with the intro, the live hint and the buttons pinned outside it so they are
+  always reachable. Every window is also sized to the screen it opens on
+- Fixed windows and dialogs rendering **black** in a light-mode session on Windows. Two
+  style rules of equal weight set the window background in the wrong order, so top-level
+  windows painted no background at all; macOS happened to hide it and Windows showed the
+  black backing store
+- Fixed **Enter** discarding your edits on any dialog: Cancel was the default button, so
+  the one keyboard action anyone tries on a stuck modal threw the changes away. Enter now
+  commits and Esc cancels, everywhere
+- Preview & QC pages now scroll on a short screen instead of compressing the graphs into
+  unreadable slivers, and each stacked channel keeps a minimum height of its own — five
+  channels sharing one panel used to leave about 10 px of trace each. On a screen with
+  room to spare, nothing scrolls
+- Fixed several controls forcing the whole app to be wider than a laptop screen: the Run
+  screen's button row now wraps, the header subtitle shortens, the noise-profile window
+  scrolls per channel (with twelve channels each trace had no height at all), and the
+  channel setup window opens sized to its content
+- Fixed the colours that only worked in one theme: the Campbell diagram accent and the
+  EMG RMS envelope stayed light-mode red on the dark background, the tick inside a
+  checkbox could sit at barely visible contrast, the error card's icon and hint were dark
+  on a light card, the "busy" overlay dimmed a dark panel by almost nothing, and the
+  resize grip was invisible. A Campbell diagram **exported** from dark mode is now
+  rendered light, so a figure for print does not come out near-black
+- Preview & QC's EMG screens give the space back to the graphs: each panel's title and
+  its channel picker now float in the top edge of the graph instead of taking a row of
+  their own, the gated-peak settings moved into "Advanced…" (they change no panel — they
+  only add columns to the saved data), and the Campbell diagram keeps a margin instead of
+  running into the panel edge
+- The "EMG – noise reduction" tab now divides into roughly equal thirds — controls, the
+  two working views, and the three reference panels — instead of giving the two working
+  views half the window and leaving the raw channels, the fidelity frontier and the
+  detail PSD a sliver each
+- Fixed the graphs becoming unreadable at those compact sizes: y-axis tick labels printed
+  through one another, axis captions were clipped to their last few characters, and the
+  in-plot legends covered the very traces they named. Tick labels now thin out and return
+  as a panel grows, axis captions shorten to the longest wording that fits, the trace
+  names moved out of the plot into the panel's top edge, and the two small diagnostic
+  figures drop the furniture they have no room for and get it back when dragged larger
+
 ## v2.3.3 — 2026-07-30
 
 Batch-mode ECG auto-detection, a volume-trend correction that scales to the recording,
