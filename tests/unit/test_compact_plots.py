@@ -286,7 +286,6 @@ def test_the_tick_ladder_always_terminates():
     increasing is a hang rather than a wrong tick, so the bound is asserted, not argued.
     """
     import math
-    import threading
     from respmech.ui.screens.preview_screen import _FitAxis, _next_nice
 
     for e in range(-320, 300):                       # every normal decade
@@ -302,28 +301,16 @@ def test_the_tick_ladder_always_terminates():
     ax = _FitAxis(orientation="left")
     ax.setHeight(63)
 
-    # A watchdog THREAD, not signal.alarm: SIGALRM does not exist on Windows, and Windows is
-    # one of the two platforms this project ships to.
-    spans = ((-4.94e-323, 4.94e-323), (0, 1e-320), (5, 5), (0, 1e12), (-0.429, 0.638))
-    done = threading.Event()
-    out = {}
-
-    def _run():
-        try:
-            for lo, hi in spans:
-                ax.tickSpacing(lo, hi, 63.0)         # must return, whatever it returns
-            out["real"] = ax.tickSpacing(-0.429, 0.638, 63.0)
-        except Exception as exc:                     # pragma: no cover - reported below
-            out["error"] = exc
-        finally:
-            done.set()
-
-    t = threading.Thread(target=_run, daemon=True)   # daemon: a hung climb must not wedge the run
-    t.start()
-    assert done.wait(20), "tickSpacing did not terminate — the ladder climb is unbounded"
-    assert "error" not in out, f"tickSpacing raised: {out['error']!r}"
+    # Called straight on the MAIN thread, with no watchdog. An earlier version ran the
+    # climb in a worker thread to time it out, which was unsafe: tickSpacing reaches
+    # _min_pitch -> self.font(), a Qt call on a QGraphicsWidget, and Qt GUI objects may only
+    # be touched from the thread that owns them. A watchdog buys nothing here anyway — the
+    # climb is a bounded `for _ in range(64)`, so it cannot fail to terminate by construction,
+    # and if that bound is ever removed this call hangs and CI's own job timeout says so.
+    for lo, hi in ((-4.94e-323, 4.94e-323), (0, 1e-320), (5, 5), (0, 1e12), (-0.429, 0.638)):
+        ax.tickSpacing(lo, hi, 63.0)            # must return, whatever it returns
     # ...and the bound must not have changed the answer for a real signal
-    assert out["real"][0][0] == 0.5
+    assert ax.tickSpacing(-0.429, 0.638, 63.0)[0][0] == 0.5
 
 
 def test_the_diagnostic_figures_follow_their_panel_in_both_directions(qapp, tmp_path):
