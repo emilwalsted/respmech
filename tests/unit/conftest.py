@@ -79,7 +79,7 @@ def qapp():
 
 
 @pytest.fixture(autouse=True)
-def _close_top_level_windows():
+def _close_top_level_windows(request):
     """Systemic GUI-test isolation. After EVERY test, close any lingering top-level window
     so its ``closeEvent`` runs ``MainWindow`` → ``PreviewScreen.shutdown()``: that cancels +
     joins any worker QThread and disarms the 300 ms auto-run debounce timer.
@@ -98,6 +98,23 @@ def _close_top_level_windows():
     so the timers are stopped without ever letting a pending one dispatch. A no-op until a
     QApplication exists (pure-core tests are unaffected) and cheap when no windows are open."""
     yield
+    # A test that never asked for `qapp` never got the GUI machinery, so it has no windows
+    # to close — and this net is not free. Measured 03-08-2026: one gc.collect() plus one
+    # DeferredDelete dispatch costs ~0.34 s per test locally, and on the macOS CI runner the
+    # teardown of a PURE LOADER test (test_loader_returns_2d_for_a_single_column, which opens
+    # no window at all) was 17 s. 246 of the 715 tests are in that category.
+    #
+    # Skipping is not "never clean up": it is "clean up at the next GUI test's teardown",
+    # which is already what happens to a window dropped mid-test. If a non-qapp test ever
+    # did build a widget — a latent bug in that test — the next GUI test's pass still reaps
+    # it, so this cannot leak across a run.
+    #
+    # The 469 GUI tests keep the identical net, including the ordering the comment below
+    # depends on. Deliberately NOT touched: the gc/DeferredDelete/scan sequence itself. The
+    # segfault it guards against is py3.11-specific and cannot be reproduced on the
+    # maintainer's 3.13, so changing it could only be validated by shipping it.
+    if "qapp" not in getattr(request, "fixturenames", ()):
+        return
     try:
         from PySide6.QtWidgets import QApplication
     except Exception:                       # pragma: no cover - PySide6 always present in CI
