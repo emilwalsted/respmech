@@ -82,6 +82,16 @@ class SciAxis(pg.AxisItem):
         self._name, self._unit = name, unit
         self.labelUnits = unit          # keep pyqtgraph's own SI-scaling of the tick values
         self.label.setHtml(self.labelString())
+        # labelText is ufarlig at sætte her: labelString() (over) bygger sin HTML af
+        # _name/_unit og ignorerer labelText, så dette ændrer intet i selve aksen. Men
+        # pyqtgraph's egen setLabel() ville have sat den, og krydshårets aflæsning
+        # (_on_mech_mouse_moved) læser netop labelText for at navngive kanalen.
+        self.labelText = name
+        # pyqtgraph's AxisItem.__init__ efterlader label skjult; almindelig setLabel()
+        # kalder showLabel() internt, men den kalder vi bevidst ikke (den ville overskrive
+        # labelString()'ens to-linjers HTML og ·10⁻³-annotation). Et tomt navn skal
+        # stadig skjule etiketten.
+        self.showLabel(bool(name))
         self._adjustSize() if hasattr(self, "_adjustSize") else None
 
     def _scale_annotation(self):
@@ -1506,8 +1516,12 @@ class PreviewScreen(QWidget):
                 mp = p.getViewBox().mapSceneToView(pos)
                 for l in self._crosshair_lines:
                     l.setPos(mp.x()); l.show()
-                lab = p.getAxis("left").labelText or "value"
-                self.crosshair_label.setText(f"t = {mp.x():.3f} s     {lab} = {mp.y():.3g}")
+                axis = p.getAxis("left")
+                lab = axis.labelText or "value"
+                # only a named axis has a real unit to report; "value" is the no-name fallback
+                unit = getattr(axis, "_unit", "") if lab != "value" else ""
+                suffix = f" {unit}" if unit else ""
+                self.crosshair_label.setText(f"t = {mp.x():.3f} s     {lab} = {mp.y():.3g}{suffix}")
                 return
 
     def _export_campbell(self):
