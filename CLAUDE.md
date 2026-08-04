@@ -124,6 +124,22 @@ never hit this fallback path, so this is a sandbox-only artefact, not a product 
 Confirmed 29-07-2026 while baselining a documentation-only change (no Python touched):
 553 passed / 1 failed, before and after.
 
+### A `dtype=object` DataFrame column can still silently turn `None` into NaN
+
+Building a test fixture for a "missing value" cell — a real, plausible state in the
+result tables (e.g. an unreliable EMG detector writing NaN, or a genuinely absent
+field) — is not as simple as `pd.array([None, "a string"], dtype=object)` or
+`np.array([None, "a string"], dtype=object)` fed straight into `pd.DataFrame`: on
+this project's pinned pandas (3.0.5), mixing `None` with a string in either of
+those makes pandas infer its own `str` extension dtype for the column, and as
+part of that inference it normalises the `None` to a float NaN before any
+application code ever sees it — so a test meant to cover "a real `None` survived
+into the model" silently covers NaN instead, twice over, without an error.
+`pd.Series([None, "a string"], dtype=object)` does keep the `None`. If a test
+needs to distinguish `None` from NaN (they can render differently — see
+`ui/result_table.py`'s `_format_display`), build the column that way, not via
+`pd.array(...)`/`np.array(...)`.
+
 ## Releases (`.github/workflows/release.yml` = "Build installers")
 
 - Trigger: push a `v*` tag (or manual dispatch). Builds a Windows **MSI** and a
