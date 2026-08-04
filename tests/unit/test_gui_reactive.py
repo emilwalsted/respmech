@@ -88,7 +88,7 @@ def test_selecting_a_file_autoruns_all_panels(qapp, tmp_path):
     assert pv._emg_all is not None and len(pv._emg_all["conditioned"]) == 3
     assert len(pv.fidelity_canvas.figure.axes) == 1     # fidelity frontier drawn by the noise job
     # the mechanics test run is automatic now -> the table + Campbell fill on their own
-    assert pv.table.rowCount() > 0
+    assert pv.table.model().rowCount() > 0
     assert "failed" not in pv.status.text().lower()     # ended on a success message
     win.close()
 
@@ -162,7 +162,7 @@ def test_autorun_without_noise_skips_fidelity_but_runs_the_rest(qapp, tmp_path):
     assert pv.busy_panels() == set()
     assert len(pv._channel_plots) == 5
     assert pv._emg_all is not None            # EMG staged (ECG-removed, no noise)
-    assert pv.table.rowCount() > 0           # mechanics test run is automatic
+    assert pv.table.model().rowCount() > 0           # mechanics test run is automatic
     assert len(pv.fidelity_canvas.figure.axes) == 0   # no noise reference -> no fidelity job
     win.close()
 

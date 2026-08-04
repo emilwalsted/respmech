@@ -42,7 +42,7 @@ def test_preview_and_batch_render(qapp, tmp_path):
     assert "breaths" in pv.status.text()
     # the mechanics test run is automatic (async); its handler fills the table + Campbell
     pv._on_batch_result(run_batch(win.state.settings, only_files=["synth_case_A.csv"]))
-    assert pv.table.rowCount() > 0 and pv.table.columnCount() > 0
+    assert pv.table.model().rowCount() > 0 and pv.table.model().columnCount() > 0
 
 
 def test_worker_runs_and_writes(qapp, tmp_path):
