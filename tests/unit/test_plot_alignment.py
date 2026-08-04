@@ -82,6 +82,7 @@ def test_mechanics_crosshair_names_the_channel(qapp):
     win = MainWindow(AppState(s)); pv = win.preview_screen
     pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
     pv._render_preview(stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv")))
+    QApplication.processEvents(); QApplication.processEvents()   # let the scene layout settle
     p2 = pv._channel_plots[2]                                # Poes — third stacked curve
     pv._on_mech_mouse_moved([QPointF(p2.sceneBoundingRect().center())])
     text = pv.crosshair_label.text()
