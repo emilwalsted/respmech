@@ -8,6 +8,7 @@ import os
 
 import numpy as np
 import pytest
+from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QApplication
 
 from _helpers import INPUT  # noqa: F401  (qapp fixture comes from conftest)
@@ -44,6 +45,7 @@ def test_mechanics_channel_stack_is_x_aligned(qapp):
     from respmech.ui.workers import stage_mechanics_preview
     from respmech.ui.main_window import MainWindow
     from respmech.ui.state import AppState
+    from respmech.ui.screens.preview_screen import _CHANNELS
     from _helpers import synth_settings
     s = synth_settings("")
     win = MainWindow(AppState(s)); pv = win.preview_screen
@@ -54,6 +56,38 @@ def test_mechanics_channel_stack_is_x_aligned(qapp):
     widths = [p.getAxis("left").width() for p in pv._channel_plots]
     assert len(set(round(w) for w in widths)) == 1          # every panel one width → aligned
     assert max(lefts) - min(lefts) < 1.0                    # plotting areas start together
+    # each channel must name itself on its own axis — this is the screen whose job is to
+    # let the user confirm the channel assignment they just made (regression: 5b4e33b
+    # swapped in set_channel_label without the showLabel()/labelText that setLabel() used
+    # to do for free, so the axes carried the right HTML but never displayed it)
+    for p, (_key, expected_label, _colour) in zip(pv._channel_plots, _CHANNELS):
+        expected_name = expected_label.partition(" (")[0]
+        axis = p.getAxis("left")
+        assert axis.label.isVisible()
+        assert axis.labelText == expected_name
+    win.close()
+
+
+@pytest.mark.skipif(not os.path.exists(os.path.join(INPUT, "synth_case_A.csv")),
+                    reason="synthetic input absent")
+def test_mechanics_crosshair_names_the_channel(qapp):
+    """The crosshair readout is the tool that turns the picture into a number — it must say
+    which channel and unit that number belongs to, not the generic 'value' (regression:
+    _on_mech_mouse_moved reads getAxis("left").labelText, which set_channel_label never set)."""
+    from respmech.ui.workers import stage_mechanics_preview
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.state import AppState
+    from _helpers import synth_settings
+    s = synth_settings("")
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._render_preview(stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv")))
+    p2 = pv._channel_plots[2]                                # Poes — third stacked curve
+    pv._on_mech_mouse_moved([QPointF(p2.sceneBoundingRect().center())])
+    text = pv.crosshair_label.text()
+    assert "Poes = " in text
+    assert "cmH" in text                                     # names the unit too, not just the channel
+    assert "value" not in text
     win.close()
 
 
