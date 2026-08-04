@@ -108,6 +108,24 @@ def test_failed_job_shows_panel_error_with_copyable_detail(qapp, tmp_path):
     win.close()
 
 
+def test_error_card_summary_carries_the_diagnosis(qapp, tmp_path):
+    """The error card's own visible summary now carries the exception's diagnosis (A03
+    point 5), not only the generic '<job> failed' — previously the diagnosis was reachable
+    only via the transient status line or behind the round 'i' info button."""
+    from PySide6.QtCore import QThread
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.screens.preview_screen import _Job
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    job = _Job("mech", pv._tokens["mech"], QThread(), object())
+    job.error = "Traceback (most recent call last):\n  ...\nValueError: bad channel"
+    pv._jobs["mech"] = job
+    pv._on_job_done(job, None)
+    ov = pv._overlays["channels"]
+    assert "valueerror: bad channel" in ov._err_label.text().lower()
+    win.close()
+
+
 def test_synchronous_preview_clears_stale_error_card(qapp, tmp_path):
     """A successful synchronous re-render must dismiss a lingering error card."""
     from PySide6.QtCore import QThread

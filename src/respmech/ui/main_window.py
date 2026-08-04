@@ -81,8 +81,14 @@ class MainWindow(QMainWindow):
         # the window title names the active analysis and its unsaved-edits (dirty) state
         sc.analysis_state_changed.connect(self._update_window_title)
         self._update_window_title()
-        # a noise reference chosen on the Preview graph (feature B) mirrors into Settings
-        pv.noise_reference_changed.connect(sc.set_noise_reference)
+        # a noise reference chosen on the Preview graph (feature B) mirrors into Settings.
+        # Wrapped (not connected to sc.set_noise_reference directly): the user just acted on
+        # PREVIEW, but the confirmation message it produces is emitted by Setup, so under
+        # the per-tab bar-ownership rule it would be silently swallowed (Setup isn't the
+        # active tab) and only resurface, stale, on a later visit to Setup. Force it onto
+        # the bar immediately instead — this is an "X just happened" notification, not
+        # ongoing per-screen state, so it does not need to wait for a tab switch.
+        pv.noise_reference_changed.connect(self._on_noise_reference_changed)
         # Preview-owned settings (noise/ECG params, breath exclusions) land in the saved
         # .toml too, so a user edit there must dirty the analysis like any Setup edit —
         # the title, the close guard and Save-gating all read the same flag.
@@ -104,8 +110,17 @@ class MainWindow(QMainWindow):
         rn.run_started.connect(self._on_run_started)
         rn.run_finished.connect(self._on_run_finished)
         bar = self.statusBar()          # creates the status bar (offscreen-safe)
+        # Each screen already keeps its own last message live in its own (hidden, for
+        # Setup/Preview/Run alike) status QLabel — see each screen's _set_status. So the
+        # bar needs no separate {screen: message} store of its own: on every status_changed
+        # it just re-shows THAT screen's message, and only when the sender is the tab the
+        # user is actually looking at. A run's progress is the one legitimate exception —
+        # it is shown globally, prefixed "Run: ", for as long as a batch is in flight (see
+        # _on_run_started/_on_run_finished), so a run started on this tab stays visible
+        # while the user checks another one.
+        self._run_active = False
         for scr in (sc, pv, rn):
-            scr.status_changed.connect(lambda msg, b=bar: b.showMessage(msg))
+            scr.status_changed.connect(lambda msg, s=scr: self._on_screen_status(s, msg))
         bar.showMessage("Ready.")
 
         # LAST, not first. This used to run before the tabs and screens existed, when
@@ -163,6 +178,22 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(self._i_run)
         self.run_screen.run_single_file(filename)
 
+    def _on_noise_reference_changed(self, file, intervals, use_expiration):
+        """Forward a Preview-graph reference pick into Setup's model, then force its
+        confirmation onto the bar regardless of the active tab — see the wiring comment
+        in __init__ for why this can't just rely on the per-tab ownership rule."""
+        self.settings_screen.set_noise_reference(file, intervals, use_expiration)
+        self._show_settings_status()
+
+    def _show_settings_status(self):
+        """Force Setup's own current status onto the bar regardless of the active tab — used
+        right after a window-level Analysis-menu action or a Preview-triggered Setup update
+        (see the callers), both "X just happened" notifications a user expects to see from
+        wherever they are, not only on a later visit to Setup. Falls back to "Ready." rather
+        than a blank bar: some of these actions (New analysis) land in the guided flow, whose
+        own feedback lives on Setup's guidance label rather than the status line."""
+        self.statusBar().showMessage(self.settings_screen.status.text() or "Ready.")
+
     def _open_file_in_preview(self, filename: str):
         """P20: drill back from the Run results into Preview & QC for one file."""
         self.tabs.setCurrentIndex(self._i_preview)
@@ -178,10 +209,41 @@ class MainWindow(QMainWindow):
         # needs locking too — otherwise Open/New could swap the settings out from under
         # the running worker, which is exactly what disabling the screen prevents.
         self.analysis_btn.setEnabled(False)
+        self._run_active = True
 
     def _on_run_finished(self):
         self.settings_screen.setEnabled(True)
         self.analysis_btn.setEnabled(True)
+        self._run_active = False
+        # Hand the bar straight back to the active tab's own message — otherwise the last
+        # "Run: …" line would sit there indefinitely if the user never switches tabs again.
+        self._show_active_tab_status()
+
+    def _on_screen_status(self, screen, msg):
+        """Route one screen's status_changed to the shared bar, per the ownership rule
+        described where this is wired up in __init__: while a batch is in flight, the bar
+        belongs to Run's progress ALONE (every other screen's status is suppressed, not just
+        de-prioritised — otherwise _on_tab_changed's own refresh_files()/refresh_actions()
+        calls, which fire on the newly-current tab, would cover the "Run: " line up again);
+        otherwise a screen's message shows only while it is the active tab."""
+        bar = self.statusBar()
+        if self._run_active:
+            if screen is self.run_screen:
+                # Run's own outcome lines already start with "Run" ("Run failed — …", "Run
+                # cancelled — …") — don't stutter "Run: Run failed — …" on top of them.
+                prefix = "" if msg[:4].lower() == "run " else "Run: "
+                bar.showMessage(f"{prefix}{msg}")
+            return
+        if screen is self.tabs.currentWidget():
+            bar.showMessage(msg)
+
+    def _show_active_tab_status(self):
+        """Show the current tab's own last message on the bar (falling back to "Ready." for
+        a genuinely empty one, e.g. Setup's guided-flow mode — whose stage guidance lives on
+        its own label now, not the status line — so the bar never reads as simply blank)."""
+        status = getattr(self.tabs.currentWidget(), "status", None)
+        text = status.text() if status is not None else ""
+        self.statusBar().showMessage(text or "Ready.")
 
     def _make_header(self) -> QFrame:
         """A calm application header bar (brand · Analysis menu · subtitle) above the tabs."""
@@ -216,13 +278,19 @@ class MainWindow(QMainWindow):
         setting, and the user must be able to save from any tab. One menu (rather than the
         row of buttons Setup used to carry) also keeps the header calm as actions are added.
         """
-        sc = self.settings_screen
         menu = QMenu(self)
-        menu.addAction("New analysis", sc.new_analysis)
-        menu.addAction("Open analysis…", sc.open_analysis_dialog)
+        # Wrapped, not connected to the SettingsScreen methods directly: these are window-
+        # level actions reachable from every tab (that is the whole point of living in the
+        # header, not on Setup), but the confirmation each one ends with ("Saved …", "Opened
+        # …") is emitted BY Setup. Under the per-tab bar-ownership rule that message would be
+        # silently dropped when triggered from Preview or Run and only resurface, stale, on a
+        # later visit to Setup — wrong for an "X just happened" notification the user is
+        # looking straight at the header for. Force it onto the bar immediately instead.
+        menu.addAction("New analysis", self._new_analysis)
+        menu.addAction("Open analysis…", self._open_analysis_dialog)
         menu.addSeparator()
-        self._act_save = menu.addAction("Save", sc.save_analysis)
-        self._act_save_as = menu.addAction("Save as…", sc.save_analysis_as)
+        self._act_save = menu.addAction("Save", self._save_analysis)
+        self._act_save_as = menu.addAction("Save as…", self._save_analysis_as)
         # The recents and the Save enable-state both depend on live state, so they are
         # rebuilt each time the menu drops down. Reading prefs at show time cannot go stale;
         # listening to a screen signal would (analysis_state_changed is emitted BEFORE
@@ -238,6 +306,22 @@ class MainWindow(QMainWindow):
         self.analysis_btn.setMenu(menu)
         self.analysis_btn.setPopupMode(QToolButton.InstantPopup)   # a menu, not a button
         return self.analysis_btn
+
+    def _new_analysis(self):
+        self.settings_screen.new_analysis()
+        self._show_settings_status()
+
+    def _open_analysis_dialog(self):
+        self.settings_screen.open_analysis_dialog()
+        self._show_settings_status()
+
+    def _save_analysis(self):
+        self.settings_screen.save_analysis()
+        self._show_settings_status()
+
+    def _save_analysis_as(self):
+        self.settings_screen.save_analysis_as()
+        self._show_settings_status()
 
     def _refresh_analysis_menu(self):
         """Recompute the parts of the Analysis menu that depend on live state."""
@@ -278,6 +362,7 @@ class MainWindow(QMainWindow):
                 "Open analysis", question="Save them before opening another analysis?"):
             return
         self.settings_screen.open_analysis(path)
+        self._show_settings_status()
 
     def _fit_to_screen(self, desired_w: int = 1180, desired_h: int = 820,
                        fraction: float = 0.92) -> None:
@@ -320,6 +405,14 @@ class MainWindow(QMainWindow):
             self.preview_screen.refresh_files()
         elif w is self.run_screen:
             self.run_screen.refresh_actions()
+        # Re-show the INCOMING screen's own last message — refresh_files()/refresh_actions()
+        # above may already have done this via _on_screen_status (index has already moved, so
+        # currentWidget() is w), but this also covers a tab with nothing to refresh (Setup).
+        # Skipped while a batch is running: the bar belongs to the global "Run: " progress
+        # line then (see _on_screen_status), which a plain tab switch must not paint over —
+        # switching TO Run needs no help either, since that line is already the live one.
+        if not self._run_active:
+            self._show_active_tab_status()
 
     def _on_settings_changed(self):
         pass

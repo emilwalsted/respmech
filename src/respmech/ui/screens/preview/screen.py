@@ -56,7 +56,7 @@ from respmech.ui.help_text import tooltip as _help_tip
 from respmech.ui import plot_perf
 from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
 from respmech.ui import wheel as _wheel
-from respmech.ui.flow_layout import (FlowLayout, cluster as _cluster,
+from respmech.ui.flow_layout import (ElidingLabel, FlowLayout, cluster as _cluster,
                                      elide as _elide, install_flow as _install_flow)
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
@@ -478,7 +478,14 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # nothing butts against the neighbouring panel or the nav.
         box = QWidget(); lay = QVBoxLayout(box); lay.setContentsMargins(8, 4, 8, 6); lay.setSpacing(2)
         header = QHBoxLayout(); header.setContentsMargins(0, 0, 0, 0); header.setSpacing(8)
-        lab = QLabel(title); lab.setProperty("status", "muted")
+        # ElidingLabel, not a plain QLabel: several panels (ECG capture, fidelity) keep this
+        # header current with a live verdict via setFullText() — a fixed one-shot elide() cap
+        # can end up narrower than even the panel's own STATIC title once the panel sits in a
+        # splitter column, and never widens back out when the user gives it more room. This
+        # sizes to whatever width the splitter actually gives it and always keeps the full
+        # text one hover away — a caller that only ever sets the title ONCE (e.g. "Campbell
+        # diagram") gets the same behaviour a plain QLabel gave it, just safely bounded too.
+        lab = ElidingLabel(title); lab.setProperty("status", "muted")
         box._title_label = lab          # so a panel can keep its header current
         header.addWidget(lab); header.addStretch(1)
         if corner is not None:
@@ -497,7 +504,8 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # set may differ) — not on every entry into the Preview tab, which would defeat the
         # cross-revisit reuse. Per-file freshness tokens in the keys guard in-place edits.
         fm = ((s.input.folder or ""), (s.input.files or ""))
-        if fm != getattr(self, "_cache_fm", None):
+        fm_changed = fm != getattr(self, "_cache_fm", None)   # captured BEFORE the reassign
+        if fm_changed:
             from respmech.ui.screens import _preview_cache
             _preview_cache.clear_all()
             self._cache_fm = fm
@@ -520,13 +528,24 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             # overlays never linger clickable against the wrong (or no) file
             self._begin_file_switch()
         if not folder:
-            self._set_status("Set an input folder in Settings.")
+            self._set_status("Set an input folder in Setup.")
         elif not os.path.isdir(folder):
             self._set_status(f"Input folder not found: {folder}")
         elif not files:
             self._set_status(f"No files match '{s.input.files}' in that folder.")
+        elif not fm_changed and prev in files and self._previewed_file == prev:
+            # the same file is already selected and drawn, AND the folder/mask that produced
+            # `files` hasn't actually changed since last time — a plain tab revisit (every
+            # entry into Preview calls refresh_files, see main_window._on_tab_changed) must
+            # not reset the status line over what may be a persistent panel result already
+            # on screen for it. The fm_changed guard matters even though `prev` still matches:
+            # widening the mask from 1 to 3 files leaves the same filename selected, but "1
+            # file" would otherwise keep reading on screen against a combo that now holds 3.
+            pass
+        elif len(files) == 1:
+            self._set_status("1 file — everything runs automatically.")
         else:
-            self._set_status(f"{len(files)} file(s) — pick one; everything runs automatically.")
+            self._set_status(f"{len(files)} files — pick one; everything runs automatically.")
         self._update_actions()
 
     def _refresh_files(self):        # kept for existing wiring + tests
@@ -633,8 +652,8 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         if has_emg and noise_on and not ecg_on:
             self._set_status(NEEDS_ECG_HINT)
         elif noise_on and not ref:
-            self._set_status("Noise reduction is on — pick a reference file (Settings) or "
-                             "click 'Set noise profile' to mark a rest span in this file.")
+            self._set_status("Noise reduction is on — click 'Set noise profile' to mark a "
+                             "rest span in this file.")
         elif ecg_on and auto_batch_on:
             self._set_status("'Auto (whole batch)' is on — this preview still shows the last "
                              "manual/Auto-suggest settings; the real run auto-detects its own "
@@ -706,14 +725,16 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self.campbell.figure.clear(); self.campbell.draw()
         self._forget_campbell()      # the export must not resurrect a cleared diagram
         self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []
+        self._set_ecg_capture_title()   # drop the previous file's R-peak count/state
         self.emg_raw_plots.clear()
         self.emg_plots.clear()
         self._set_trace_key([])       # the legend this replaced was emptied by plots.clear()
         self.emg_psd_canvas.figure.clear(); self.emg_psd_canvas.draw()
         if include_noise:
             self.fidelity_canvas.figure.clear(); self.fidelity_canvas.draw()
+            self._set_fidelity_panel_title(None)   # test-wide result is being recomputed too
             self._noise_has_result = False
-        self._reset_breath_state()   # clears _bov/_breaths/_emg_all/result plot/_previewed_file
+        self._reset_breath_state()   # clears _bov/_breaths/_emg_all/result plot/_previewed_file/mech_caption
         self._ensure_noise_region()  # re-attach the rest-region selector to the cleared detail plot
         panels = [p for k in _FILE_KINDS for p in _PANELS[k]]
         if include_noise:
@@ -738,11 +759,13 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self.campbell.figure.clear(); self.campbell.draw()
         self._forget_campbell()      # the export must not resurrect a cleared diagram
         self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []
+        self._set_ecg_capture_title()   # drop the previous analysis' R-peak count/state
         self.emg_raw_plots.clear()
         self.emg_plots.clear()
         self._set_trace_key([])       # the legend this replaced was emptied by plots.clear()
         self.emg_psd_canvas.figure.clear(); self.emg_psd_canvas.draw()
         self.fidelity_canvas.figure.clear(); self.fidelity_canvas.draw()
+        self._set_fidelity_panel_title(None)
         self._noise_has_result = False
         self._reset_breath_state()   # clears _bov/_breaths/_emg_all/result plot/_previewed_file
         self._ensure_noise_region()  # re-attach the rest-region selector to the cleared detail plot
@@ -962,7 +985,10 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             detail = err or "The computation returned no data."
             self._set_status(f"{label} failed — {short_error(detail)}")
             for p in _PANELS[job.kind]:
-                self._overlays[p].show_error(f"{label} failed", detail)
+                # The diagnosis rides along in the card itself now, not only behind the "i"
+                # button — the status line carrying it is transient and, per the shared
+                # status-bar ownership rules, may not even be visible from this tab.
+                self._overlays[p].show_error(f"{label} failed — {short_error(detail)}", detail)
             self._update_actions(status=False)
             return
         try:
@@ -971,14 +997,15 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             detail = str(e)
             self._set_status(f"{label} failed — {short_error(detail)}")
             for p in _PANELS[job.kind]:
-                self._overlays[p].show_error(f"{label} failed", detail)
+                self._overlays[p].show_error(f"{label} failed — {short_error(detail)}", detail)
             self._update_actions(status=False)
             return
         except Exception:                              # noqa: BLE001 — a rendering bug
             detail = traceback.format_exc()
             self._set_status(f"{label} — display error: {short_error(detail)}")
             for p in _PANELS[job.kind]:
-                self._overlays[p].show_error(f"{label} — display error", detail)
+                self._overlays[p].show_error(
+                    f"{label} — display error: {short_error(detail)}", detail)
             self._update_actions(status=False)
             return
         for p in _PANELS[job.kind]:

@@ -168,6 +168,28 @@ def test_toggle_breath_requests_recompute(qapp, tmp_path):
     win.close()
 
 
+def test_mech_caption_survives_render_and_toggle(qapp, tmp_path):
+    """The Mechanics tab's persistent caption (A03) names the breath count, the exclusion
+    count and the click-to-exclude instruction after BOTH _render_preview and
+    _toggle_breath — unlike the status line it used to only live in, which an EMG job
+    landing a moment later would silently erase (see test_gui_reactive.py for that half)."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_mechanics_preview
+    s = synth_settings(tmp_path)
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._render_preview(stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv")))
+    cap = pv.mech_caption.fullText().lower()
+    assert "breath" in cap and "click a shaded breath to include/exclude" in cap
+    assert ", 0 excluded" not in cap                      # nothing excluded yet -> no count clause
+    a_breath = next(iter(pv._breath_spans))
+    pv._toggle_breath(a_breath)
+    cap = pv.mech_caption.fullText().lower()
+    assert ", 1 excluded" in cap
+    assert "click a shaded breath to include/exclude" in cap   # the instruction still there
+    win.close()
+
+
 # ---------------------------------------------------------------------------
 # The Campbell export must never write a diagram that is no longer on screen
 # ---------------------------------------------------------------------------
