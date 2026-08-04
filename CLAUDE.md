@@ -93,6 +93,24 @@ unbreakable item whose minimum is still the sum of its contents. Build chips wit
 sets `QSizePolicy.Preferred` + `setHeightForWidth(True)`: under `Maximum` Qt caps the widget
 at its one-line `sizeHint` height and paints the wrapped row outside it.
 
+### `_pump_until` in the reactive Preview tests needs two calls, not one
+
+`tests/unit/test_gui_reactive.py`'s `_pump_until(qapp, predicate, timeout)` returns
+immediately if `predicate()` is already true — including on the very first check, before the
+debounced `QTimer.singleShot` autorun has had a chance to fire. A single
+`_pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60)` right after selecting a
+file (or switching it back) is therefore not "wait for the jobs to finish", it is "wait for
+the jobs to finish IF they have already started" — and if nothing has started yet, `pv._jobs`
+is already empty, so it returns `True` on the spot with **no job having run at all**. The
+existing `test_selecting_a_file_autoruns_all_panels` gets this right with two calls back to
+back: first `_pump_until(qapp, lambda: bool(pv._jobs) or bool(pv.busy_panels()), 10)` to wait
+for something to actually start, then the "wait for it to finish" call. Skip the first call
+and the test can pass while asserting on a UI that never recomputed — three separate
+assertions did exactly this in the same PR (04-08-2026) before being caught, one of them
+because the field it checked happened to already contain a matching substring in its
+pre-recompute (blank/default) state, which made the false pass silent rather than an
+obvious `AssertionError` on an empty string.
+
 ### Known non-issue: a font-resolution test fails on a minimal Linux sandbox
 
 `tests/unit/test_gui.py::test_splash_resolves_fonts_to_installed_families` fails
