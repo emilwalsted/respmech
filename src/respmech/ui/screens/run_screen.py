@@ -101,9 +101,14 @@ class RunScreen(QWidget):
         # theme keeps readable in either mode.
         self.progress.setTextVisible(False)
         root.addWidget(self.progress)
+        # Status is shown ONLY in the main-window bottom status bar now (like Setup and
+        # Preview — see main_window._on_screen_status): this was the one screen that showed
+        # its status twice at once, here AND in the shared bar. The label stays as the state
+        # holder _set_status writes (and tests read pv/rn.status), just never placed on screen.
         self.status = QLabel("Idle.")
         self.status.setWordWrap(True)
         root.addWidget(self.status)
+        self.status.hide()
 
         self.log = QPlainTextEdit(); self.log.setReadOnly(True)
         root.addWidget(self.log, 2)
@@ -197,12 +202,14 @@ class RunScreen(QWidget):
         self._append(f"── {head} ──")
         subset = f" (subset: {len(files)} of {len(matching_files(s.input.folder, s.input.files))})" \
             if self._only_files else ""
-        self._append(f"Input:  {len(files)} file(s) matching '{s.input.files}' in {s.input.folder}{subset}")
+        self._append(f"Input:  {len(files)} file{'s' if len(files) != 1 else ''} matching "
+                     f"'{s.input.files}' in {s.input.folder}{subset}")
         for f in files:
             self._append(f"    • {os.path.basename(f)}")
         planned = self._planned_outputs(files)
         verb = "Would write" if not write else "Will write"
-        self._append(f"Output: {verb} {len(planned)} file(s) into {s.output.folder}")
+        self._append(f"Output: {verb} {len(planned)} file{'s' if len(planned) != 1 else ''} "
+                     f"into {s.output.folder}")
         for n in planned:
             self._append(f"    • {n}")
         self._append("")     # blank line before the live run log
@@ -233,7 +240,8 @@ class RunScreen(QWidget):
         out = self.state.settings.output.folder
         ans = QMessageBox.question(
             self, "Output folder already has results",
-            f"{out}\n\nalready contains {count} result file(s) from a run on {when}.\n\n"
+            f"{out}\n\nalready contains {count} result file{'s' if count != 1 else ''} "
+            f"from a run on {when}.\n\n"
             "Running now will overwrite them. Continue?",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         return ans == QMessageBox.Yes
@@ -405,7 +413,8 @@ class RunScreen(QWidget):
                 parts.append(self._fatal_msg)
         else:
             if failed:
-                parts.append(f"{len(failed)} file(s) failed during the run:\n")
+                parts.append(f"{len(failed)} file{'s' if len(failed) != 1 else ''} "
+                             f"failed during the run:\n")
                 for fname, fr in failed.items():
                     parts.append(f"── {fname} ──\n{getattr(fr, 'error', '') or '(no detail)'}\n")
                 # the message above says what is wrong; this says where to go and change it.
@@ -495,7 +504,8 @@ class RunScreen(QWidget):
         if not self._last_failed:
             self._set_status("No failed files to re-run.")
             return
-        self._append(f"\n── Re-running {len(self._last_failed)} failed file(s) ──")
+        n = len(self._last_failed)
+        self._append(f"\n── Re-running {n} failed file{'s' if n != 1 else ''} ──")
         self._start(write=self._last_write, only_files=list(self._last_failed))
 
     def run_single_file(self, filename: str):

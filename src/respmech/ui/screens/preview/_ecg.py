@@ -28,7 +28,7 @@ from respmech.ui import plot_perf
 from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
 from respmech.ui import wheel as _wheel
 from respmech.ui.flow_layout import (FlowLayout, cluster as _cluster,
-                                     elide as _elide, install_flow as _install_flow)
+                                     install_flow as _install_flow)
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
                                   stage_ecg_reduction, stage_mechanics_preview,
@@ -40,6 +40,12 @@ except Exception:  # pragma: no cover
     _theme = None
 
 from ._plot_helpers import _pen, _plot_pal
+
+#: the ECG capture panel's base title; _on_ecg_result appends the live R-peak count/removal
+#: state to this so the panel keeps naming what it draws AND carries a persistent verdict,
+#: rather than one that only ever lived a few seconds in the shared status bar.
+_ECG_CAPTURE_TITLE = "Raw capture channel — detected R-peaks (▼)"
+
 
 class _EcgMixin:
 
@@ -155,7 +161,10 @@ class _EcgMixin:
         self.ecg_processed_plots = pg.GraphicsLayoutWidget(); self.ecg_processed_plots.setBackground(_bg)
         _theme.set_plot_floor(self.ecg_processed_plots)
         split = QSplitter(Qt.Vertical)
-        split.addWidget(self._titled("Raw capture channel — detected R-peaks (▼)", self.ecg_capture_plot))
+        # kept as an attribute (not just added to the splitter) so _on_ecg_result can keep
+        # its title current with the detection result — see _ECG_CAPTURE_TITLE below.
+        self._ecg_capture_box = self._titled(_ECG_CAPTURE_TITLE, self.ecg_capture_plot)
+        split.addWidget(self._ecg_capture_box)
         split.addWidget(self._titled("ECG-processed EMG channels", self.ecg_processed_plots))
         split.setStretchFactor(0, 1); split.setStretchFactor(1, 3)
         v.addWidget(split, 1)
@@ -376,5 +385,19 @@ class _EcgMixin:
         state = "ECG removed" if data.get("ecg_applied") else "capture preview (removal is OFF for the run)"
         if data.get("ecg_error"):
             self._set_status(f"ECG reduction — capture on col {col}: {short_error(data['ecg_error'])}")
+            self._set_ecg_capture_title(f"{_ECG_CAPTURE_TITLE}  ·  detection failed — "
+                                        f"{short_error(data['ecg_error'])}")
         else:
             self._set_status(f"ECG reduction — capture on col {col}: {npk} R-peaks · {state}.")
+            self._set_ecg_capture_title(
+                f"{_ECG_CAPTURE_TITLE}  ·  {npk} R-peak{'s' if npk != 1 else ''} "
+                f"on col {col} · {state}")
+
+    def _set_ecg_capture_title(self, text=None):
+        """Keep the ECG capture panel's own header naming the live detection result — a
+        persistent verdict, unlike the status-bar message above, which is gone within a
+        second or so. ``text=None`` (or omitted) resets it to the bare base title, used when
+        the panel is blanked for a file switch (see screen.py's _clear_*_panels)."""
+        label = getattr(self._ecg_capture_box, "_title_label", None)
+        if label is not None:
+            label.setFullText(text if text is not None else _ECG_CAPTURE_TITLE)

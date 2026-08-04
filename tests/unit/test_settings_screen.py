@@ -113,6 +113,18 @@ def test_format_readout(qapp):
     win.close()
 
 
+def test_format_readout_singular_and_plural_wording(qapp):
+    """'N file(s) matched' reads as broken English at either count — A03 fixed it to a
+    real singular/plural, matched here at n=1 (one exact file) and n>1 (the *.csv mask)."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(INPUT); sc.in_files.setText("synth_case_A.csv"); sc._on_inputs_changed()
+    assert sc.format_readout.text().startswith("1 file matched")
+    sc.in_files.setText("synth_case_*.csv"); sc._on_inputs_changed()
+    assert sc.format_readout.text().startswith("2 files matched")
+    win.close()
+
+
 def test_advanced_panel_roundtrips_toml_only_knobs(qapp, tmp_path):
     """The Advanced panel surfaces knobs that were previously TOML-only (audit #16/17/22-27):
     they must reflect the model and write back through to_state."""

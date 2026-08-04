@@ -221,6 +221,18 @@ class SettingsScreen(QWidget):
         self._wheel_guard = _wheel.guard_scroll_area(scroll)
         outer.addWidget(scroll, 1)
 
+        # Guided-flow guidance ("what do I do next"), pinned above the QC strip. Owned
+        # exclusively by _update_disclosure while self._mode == "new" — it no longer shares
+        # the shared status bar with Setup's own technical messages (channel assignment,
+        # detected file settings), which used to overwrite it and vice versa (both come from
+        # this same screen, so per-tab bar ownership alone cannot separate them).
+        self.guidance = QLabel("")
+        self.guidance.setWordWrap(True)
+        self.guidance.setProperty("banner", True)
+        self.guidance.setProperty("status", "info")
+        self.guidance.hide()
+        outer.addWidget(self.guidance)
+
         # Live QC strip, pinned below the (scrolling) form: every current caution at a
         # glance, so a first-timer sees them the moment they appear.
         self.qc = QLabel("")
@@ -497,8 +509,9 @@ class SettingsScreen(QWidget):
                     delim, dname = None, "whitespace"
                 ncol = len(line.split(delim)) if line else 0
                 status = "info"
-                text = (f"{len(files)} file(s) matched · first: {os.path.basename(first)} — "
-                        f"{ncol} columns, {dname}-separated")
+                n = len(files)
+                text = (f"{n} file{'s' if n != 1 else ''} matched · "
+                        f"first: {os.path.basename(first)} — {ncol} columns, {dname}-separated")
         lab.setText(text)
         lab.setProperty("status", status)
         lab.style().unpolish(lab); lab.style().polish(lab)
@@ -570,6 +583,7 @@ class SettingsScreen(QWidget):
         self._apply_card_visibility()
         self._flow_ready = None
         self._set_flow_ready(True)
+        self.guidance.hide()        # leaving 'new' mode: the guided-flow sentence no longer applies
         self._show_validation_status()
 
     def open_analysis(self, path):
@@ -861,6 +875,7 @@ class SettingsScreen(QWidget):
         if self._mode != "new":
             self._apply_card_visibility()
             self._set_flow_ready(True)
+            self.guidance.hide()        # the guided-flow sentence only applies to 'new' mode
             self._set_status(self._validation_status())   # no Validate button: every edit re-checks
             return
         n_visible = 1
@@ -883,7 +898,12 @@ class SettingsScreen(QWidget):
         self._apply_card_visibility()
         ready = self._all_ok()
         self._set_flow_ready(ready)
-        self._set_status(self._new_mode_status(ready))       # friendly stage guidance
+        # Friendly stage guidance lands on its own label, not the shared status bar — see
+        # where self.guidance is built above. _set_status is deliberately NOT called here:
+        # this screen's own technical messages (channel assignment, format detection) use it
+        # and must not be clobbered by (or clobber) the guided-flow sentence.
+        self.guidance.setText(self._new_mode_status(ready))
+        self.guidance.show()
 
     def _apply_card_visibility(self):
         for i, cards in enumerate(self._stage_cards):

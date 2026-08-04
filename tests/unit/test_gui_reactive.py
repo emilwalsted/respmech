@@ -93,6 +93,65 @@ def test_selecting_a_file_autoruns_all_panels(qapp, tmp_path):
     win.close()
 
 
+def test_setup_bar_unaffected_by_preview_autorun_and_panels_get_persistent_titles(qapp, tmp_path):
+    """Integration regression for the ticket's central complaints (A03): selecting a file on
+    Preview and letting all six reactive jobs land must not leak Preview vocabulary into the
+    shared status bar while Setup is the active tab, and the ECG/fidelity panels + the
+    Mechanics caption must carry a PERSISTENT verdict — readable via toolTip()/fullText(),
+    never a pixel measurement — that outlives every job's own transient status message."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path), noise=True)))
+    sc, pv = win.settings_screen, win.preview_screen
+    assert win.tabs.currentWidget() is sc                 # Setup is the default active tab
+    pv._refresh_files()
+    pv.file_combo.setCurrentIndex(1)
+    assert _pump_until(qapp, lambda: bool(pv._jobs) or bool(pv.busy_panels()), 10), \
+        "no jobs auto-started on file selection"
+    assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60), \
+        "reactive jobs did not all finish"
+    # Preview's own vocabulary never reached the bar: Setup owns it while its tab is active
+    bar_text = win.statusBar().currentMessage().lower()
+    assert "tick channels" not in bar_text and "pick one" not in bar_text
+    assert "r-peak" not in bar_text and "fidelity" not in bar_text
+    # ECG + fidelity panels carry their own persistent verdict, independent of the bar
+    ecg_title = pv._ecg_capture_box._title_label
+    assert "r-peak" in ecg_title.toolTip().lower()
+    fidelity_title = pv._fidelity_panel._title_label
+    assert "prop" in fidelity_title.toolTip().lower()
+    assert "worst-channel fidelity" in fidelity_title.toolTip().lower()
+    # the Mechanics caption survived every subsequent EMG job landing after it was set
+    assert "breath" in pv.mech_caption.fullText().lower()
+    assert "click a shaded breath" in pv.mech_caption.fullText().lower()
+
+    # Switching file must not leave the FILE-SPECIFIC verdicts (ECG capture, the Mechanics
+    # caption) asserting the OLD file's numbers over freshly-blanked panels — a stale claim
+    # is worse than no claim at all (self-review regression: both independent reviewers
+    # found this). The fidelity panel is deliberately the odd one out: it is a test-WIDE
+    # result (one fidelity sweep covers the whole batch, not one file), so
+    # _clear_file_panels intentionally leaves it — and its title — alone on an ordinary file
+    # switch; see its docstring. Only its first-ever compute clears it.
+    fidelity_verdict_before = fidelity_title.fullText()
+    pv.file_combo.setCurrentIndex(0)
+    # "·" only ever appears once a live verdict is appended to the base title (see
+    # _set_ecg_capture_title) — its absence means "reset to bare base title". Checking for
+    # "r-peak" directly would false-positive: the STATIC base title itself already reads
+    # "…detected R-peaks (▼)".
+    assert "·" not in ecg_title.fullText()
+    assert fidelity_title.fullText() == fidelity_verdict_before   # test-wide result untouched
+    assert pv.mech_caption.fullText() == ""
+    # ...and the file-specific ones are populated again once the new file's own jobs land.
+    # Two-step pump, same as the very first selection above: the debounced autorun has not
+    # necessarily fired yet, so "no jobs left" can otherwise be trivially (and wrongly) true
+    # from the very first tick.
+    assert _pump_until(qapp, lambda: bool(pv._jobs) or bool(pv.busy_panels()), 10), \
+        "no jobs auto-started on switching back to the first file"
+    assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60), \
+        "reactive jobs did not all finish for the second file"
+    assert "·" in ecg_title.fullText()             # a live verdict is back, not just the base title
+    assert "breath" in pv.mech_caption.fullText().lower()
+    win.close()
+
+
 def test_autorun_without_noise_skips_fidelity_but_runs_the_rest(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path), noise=False)))

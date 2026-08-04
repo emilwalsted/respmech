@@ -163,7 +163,8 @@ def test_guided_status_points_at_mask_when_it_matches_nothing(qapp, tmp_path):
     sc.in_folder.setText(str(tmp_path))            # a real folder with NO .txt files
     sc.samp_freq.setValue(1000)
     sc._on_inputs_changed()
-    assert "no files match" in sc.status.text().lower()   # not the generic prompt
+    # guided-flow guidance now lives on its own label, not the shared status bar (A03)
+    assert "no files match" in sc.guidance.text().lower()   # not the generic prompt
     win.close()
 
 
@@ -181,7 +182,7 @@ def test_progressive_reveal_then_unlock_downstream(qapp, tmp_path):
 
     _fill_valid_output(sc, tmp_path)          # Output valid -> the channel modal gates the rest
     assert not _shown(rest)
-    assert "assign your data channels" in sc.status.text().lower()
+    assert "assign your data channels" in sc.guidance.text().lower()
     assert not win.tabs.isTabEnabled(win._i_preview)
 
     _pass_channel_step(sc)                    # modal OK -> channels applied -> rest + unlock
@@ -377,7 +378,7 @@ def test_completion_status_surfaces_a_science_note(qapp, tmp_path):
     _pass_channel_step(sc, {"flow": 5, "volume": 6, "poes": 7, "pgas": 8, "pdi": 9,
                             "emg": [5], "entropy": []})     # EMG column 5 == the flow column
     assert sc._all_ok()
-    assert "overlap" in sc.status.text().lower()            # surfaced without clicking Validate
+    assert "overlap" in sc.guidance.text().lower()            # surfaced without clicking Validate
     win.close()
 
 
@@ -441,7 +442,7 @@ def test_integrate_from_flow_unlocks_without_a_volume_column(qapp, tmp_path):
                             "pdi": 9, "emg": [2, 3, 4], "entropy": []})
     assert not sc._all_ok()                # volume missing + integrate off -> not valid
     assert not win.tabs.isTabEnabled(win._i_preview)
-    assert "volume" in sc.status.text().lower()
+    assert "volume" in sc.guidance.text().lower()
     # ...ticking 'Calculate volume from flow' makes the volume column optional -> unlock
     sc.state.settings.processing.volume.integrate_from_flow = True   # Preview-owned now
     sc._update_disclosure()
@@ -454,17 +455,49 @@ def test_integrate_from_flow_unlocks_without_a_volume_column(qapp, tmp_path):
 # Guided-flow status wording
 # --------------------------------------------------------------------------- #
 def test_guided_status_messages_per_stage(qapp, tmp_path):
+    """The guided-flow sentence lives on its own guidance label (A03), never on the shared
+    status bar — see test_guidance_label_survives_a_setup_channel_message below for why."""
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState())
     sc = win.settings_screen
     sc.enter_new_mode()
-    assert sc.status.text() == "New analysis — fill in the Input card to begin."
+    assert sc.guidance.text() == "New analysis — fill in the Input card to begin."
+    assert _shown(sc.guidance)
     _fill_valid_input(sc)
-    assert sc.status.text() == "Input set — now choose an Output folder."
+    assert sc.guidance.text() == "Input set — now choose an Output folder."
     _fill_valid_output(sc, tmp_path)
-    assert sc.status.text() == "Output set — assign your data channels to continue."
+    assert sc.guidance.text() == "Output set — assign your data channels to continue."
     _pass_channel_step(sc)
-    assert sc.status.text() == "Settings complete — Preview and Run are now available."
+    assert sc.guidance.text() == "Settings complete — Preview and Run are now available."
+    win.close()
+
+
+def test_guidance_label_hides_outside_new_mode(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    assert not _shown(sc.guidance)                 # plain construction: mode is 'full'
+    sc.enter_new_mode()
+    assert _shown(sc.guidance)
+    sc.enter_open_mode()
+    assert not _shown(sc.guidance)
+    win.close()
+
+
+def test_guidance_label_survives_a_setup_channel_message(qapp, tmp_path):
+    """Regression (the ticket's central bug): completing the channel step re-runs
+    _update_disclosure, which used to overwrite Setup's own 'Channels assigned…' status
+    with the guided-flow sentence (or vice versa) because both went through the same
+    _set_status/status-bar channel. Now they are on separate labels and neither clobbers
+    the other."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.enter_new_mode()
+    _fill_valid_input(sc); _fill_valid_output(sc, tmp_path)
+    _pass_channel_step(sc)
+    assert "channels assigned" in sc.status.text().lower()
+    assert sc.guidance.text() == "Settings complete — Preview and Run are now available."
     win.close()
 
 

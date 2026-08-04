@@ -28,7 +28,7 @@ from respmech.ui.help_text import tooltip as _help_tip
 from respmech.ui import plot_perf
 from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
 from respmech.ui import wheel as _wheel
-from respmech.ui.flow_layout import (FlowLayout, cluster as _cluster,
+from respmech.ui.flow_layout import (ElidingLabel, FlowLayout, cluster as _cluster,
                                      elide as _elide, install_flow as _install_flow)
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
@@ -94,9 +94,17 @@ class _MechanicsMixin:
             "Breath segmentation, work-of-breathing source, volume/drift corrections, "
             "resampling and per-file breath-count overrides.")
         self.btn_mech_advanced.clicked.connect(self._open_mech_advanced)
+        # A persistent one-line caption — breath count, exclusion count, the click-to-
+        # exclude instruction — kept current by _render_preview and _toggle_breath (see
+        # _set_mech_caption). It used to live only in the transient status bar, where an
+        # EMG job finishing a second later would silently erase it.
+        self.mech_caption = ElidingLabel("")
+        self.mech_caption.setProperty("status", "muted")
         _xh = QHBoxLayout(); _xh.setContentsMargins(6, 0, 6, 0)
         _xh.addWidget(self.btn_mech_advanced)
-        _xh.addStretch(1); _xh.addWidget(self.crosshair_label, 0, Qt.AlignRight)
+        _xh.addSpacing(10)
+        _xh.addWidget(self.mech_caption, 1)
+        _xh.addWidget(self.crosshair_label, 0, Qt.AlignRight)
         v.addLayout(_xh)
         split = QSplitter(Qt.Vertical)
         self.plots = pg.GraphicsLayoutWidget()
@@ -482,6 +490,14 @@ class _MechanicsMixin:
             for p in ("channels", "raw"):
                 self._overlays[p].show_error("Channel preview failed", detail)
 
+    def _set_mech_caption(self, total, excluded):
+        """Update the Mechanics tab's persistent caption (breath count, exclusion count,
+        the click-to-exclude instruction) — see self.mech_caption in _build_mech_tab."""
+        n = f"{total} breath{'s' if total != 1 else ''}"
+        excl = f", {excluded} excluded" if excluded else ""
+        self.mech_caption.setFullText(
+            f"{n}{excl} — click a shaded breath to include/exclude (red = excluded).")
+
     def _render_preview(self, data):
         """Draw the mechanics channel stack + breath overlays and the raw EMG
         stack from staged arrays. GUI-thread only; shared by the synchronous
@@ -544,12 +560,20 @@ class _MechanicsMixin:
         if data.get("trim_error"):
             self._set_status(f"{data['name']}: showing raw channels — could not detect "
                              f"breaths. {data['trim_error']}")
+            # no spans in this branch (see stage_mechanics_preview's TrimError fallback) ->
+            # nothing to click, so the persistent caption must not keep asserting the
+            # previous file's breath count over a panel with none.
+            self.mech_caption.setFullText("")
         elif data.get("trend_error"):
             # Deliberately showing something the batch will NOT produce, so say so.
             self._set_status(f"{data['name']}: {data['nbreaths']} breaths, showing the "
                              f"DRIFT-corrected volume — the end-expiratory trend correction "
                              f"was skipped here and will fail this file in a run. "
                              f"{data['trend_error']}")
+            # breaths ARE detected and clickable here (only the trend correction failed),
+            # so the caption still applies — same as the plain success branch below.
+            nign = sum(1 for _n, _a, _b, ig in spans if ig)
+            self._set_mech_caption(data['nbreaths'], nign)
         else:
             nign = sum(1 for _n, _a, _b, ig in spans if ig)
             self._set_status(
@@ -557,6 +581,7 @@ class _MechanicsMixin:
                 + (f" ({nign} excluded)" if nign else "")
                 + f", trimmed to {data['startix'] / fs:.2f}–{data['endix'] / fs:.2f} s. "
                 "Click a shaded breath to include/exclude (red = excluded).")
+            self._set_mech_caption(data['nbreaths'], nign)
 
     def _render_raw_stack(self, emg, fs, flow=None):
         """Draw the stacked raw EMG channels and keep the noise region alive. A discrete
@@ -809,6 +834,7 @@ class _MechanicsMixin:
         self._set_status(
             f"{name}: breath {breath_no} {'excluded' if now_excluded else 'included'} "
             f"({nexcl}/{len(self._breath_spans)} excluded). Recomputing the average…")
+        self._set_mech_caption(len(self._breath_spans), nexcl)
         return now_excluded
 
     def _request_batch_recompute(self):
@@ -915,6 +941,10 @@ class _MechanicsMixin:
         # here would make a flip back to the last-rendered file look like "no change"
         # and skip this very reset while the new file's jobs are still in flight
         self._previewed_file = None
+        # the persistent caption is a claim about breaths on screen — drop it here too, or
+        # it would keep asserting the PREVIOUS file's breath/exclusion count over an emptied
+        # Mechanics tab until (or unless) the new file's render lands.
+        self.mech_caption.setFullText("")
 
     def _trend_probe_settings(self):
         """The volume-conditioning settings behind the current trend probe, in the same

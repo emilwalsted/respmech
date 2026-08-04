@@ -56,6 +56,11 @@ NEEDS_ECG_GATE_HINT = ("Turn on 'Remove ECG' first: the gate is built from the h
                        "the ECG stage detects, so with it off there are none to blank and "
                        "the gated columns come back empty.")
 
+#: the fidelity panel's base title; _set_fidelity_panel_title appends the chosen suppression
+#: and the worst-channel fidelity so the panel carries a persistent verdict instead of one
+#: that only ever lived a few seconds in the shared status bar.
+_FIDELITY_TITLE = "Noise fidelity frontier (1 = untouched)"
+
 
 class _EmgNoiseMixin:
 
@@ -225,7 +230,8 @@ class _EmgNoiseMixin:
         self._emg_raw_wheel = _wheel.guard_scroll_area(
             self._emg_raw_scroll, extra=[self.emg_raw_plots.viewport()])
         bottom.addWidget(self._titled("Raw EMG channels", self._emg_raw_scroll))
-        bottom.addWidget(self._titled("Noise fidelity frontier (1 = untouched)", self.fidelity_canvas))
+        self._fidelity_panel = self._titled(_FIDELITY_TITLE, self.fidelity_canvas)
+        bottom.addWidget(self._fidelity_panel)
         self._psd_panel = self._titled("Detail PSD", self.emg_psd_canvas)
         bottom.addWidget(self._psd_panel)
         self._emg_diag_row = bottom
@@ -787,7 +793,9 @@ class _EmgNoiseMixin:
         # real label with room, and it never has to be re-decided on resize.
         col = data.get("col", int(data.get("channel", 0)) + 1)
         try:
-            self._psd_panel._title_label.setText(f"Detail PSD — col {col}")
+            # setFullText, not setText: the title label is an ElidingLabel now (A03) — a raw
+            # setText would be overwritten by the OLD full text on the next resizeEvent.
+            self._psd_panel._title_label.setFullText(f"Detail PSD — col {col}")
         except Exception:                   # pragma: no cover - header is cosmetic
             pass
         _fit_compact_figure(self.emg_psd_canvas, ax, legend_kw={"fontsize": 7})
@@ -880,6 +888,21 @@ class _EmgNoiseMixin:
         # settle the wording against the layout this render produces, not the previous one
         refit_compact_figure(self.fidelity_canvas)
 
+    def _set_fidelity_panel_title(self, chosen, worst=None, target=None):
+        """Keep the fidelity panel's own header naming the chosen suppression and the
+        worst-channel fidelity against target — a persistent verdict, unlike the status-bar
+        message the two callers below also set, which is gone within a second or so.
+        ``chosen=None`` resets it to the bare base title, used when the panel is blanked for
+        a file switch (see screen.py's _clear_*_panels)."""
+        label = getattr(self._fidelity_panel, "_title_label", None)
+        if label is None:
+            return
+        if chosen is None:
+            label.setFullText(_FIDELITY_TITLE)
+            return
+        label.setFullText(f"{_FIDELITY_TITLE}  ·  prop {chosen} · worst-channel fidelity "
+                          f"{worst:.2f} (target {target:.2f})")
+
     def render_noise_report(self, result):
         """Draw the fidelity frontier + status from a full batch result (with ECG
         suppression from its ok_files). Used by the manual test run."""
@@ -888,6 +911,7 @@ class _EmgNoiseMixin:
         chosen = nr.get("prop_decrease")
         target = nr.get("fidelity_target", 0.8)
         worst = min((r["fidelity"] for r in nr.get("channels", [])), default=float("nan"))
+        self._set_fidelity_panel_title(chosen, worst, target)
         msg = (f"Noise: prop_decrease {chosen} chosen "
                f"(worst-channel fidelity {worst:.2f} vs target {target:.2f})")
         for fr in result.ok_files.values():
@@ -925,6 +949,7 @@ class _EmgNoiseMixin:
         if nr.get("frontier"):
             target = nr.get("fidelity_target", 0.8)
             worst = min((r["fidelity"] for r in nr.get("channels", [])), default=float("nan"))
+            self._set_fidelity_panel_title(chosen, worst, target)
             self._set_status(f"Noise: prop_decrease {chosen} chosen "
                              f"(worst-channel fidelity {worst:.2f} vs target {target:.2f}).")
         if noise.enabled and noise.auto_prop and self.state.settings.input.channels.emg:
