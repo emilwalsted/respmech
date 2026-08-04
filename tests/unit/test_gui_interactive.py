@@ -727,7 +727,7 @@ def test_batch_precondition_error_is_soft_not_a_hard_failure(qapp, tmp_path, err
     result = BatchResult(files={"synth_case_A.csv": FileResult(
         file="synth_case_A.csv", error=error, error_kind=kind)})
     pv._on_batch_result(result)                      # returns normally (no _FileRunError)
-    assert pv.table.rowCount() == 0                  # table left blank
+    assert pv.table.model().rowCount() == 0           # table left blank
     for panel in ("campbell", "table"):
         assert pv.panel_error(panel) == error        # the reason is carried on the panel
     # a genuine analysis error still raises -> the hard 'Test run failed' path
@@ -835,9 +835,9 @@ def test_file_switch_clears_all_panels(qapp, tmp_path):
     pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
     pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
     pv._on_batch_result(run_batch(s, only_files=["synth_case_A.csv"]))   # fills table + Campbell
-    assert pv.table.rowCount() > 0 and pv._channel_plots
+    assert pv.table.model().rowCount() > 0 and pv._channel_plots
     pv.file_combo.setCurrentText("synth_case_B.csv")   # -> clears every panel as at start
-    assert pv.table.rowCount() == 0 and pv._channel_plots == []
+    assert pv.table.model().rowCount() == 0 and pv._channel_plots == []
     assert pv._bov == {} and pv._breaths == []
     win.close()
 

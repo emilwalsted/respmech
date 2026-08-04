@@ -19,7 +19,7 @@ pytestmark = requires_synth()
 # P10 / P21 — units
 # --------------------------------------------------------------------------- #
 def test_units_resolve_by_physical_quantity():
-    from respmech.core import units
+    from respmech.core import quantities as units
     assert units.unit_for("poes_mininsp") == "cmH₂O"
     assert units.unit_for("vt") == "L"
     assert units.unit_for("max_in_flow") == "L/s"       # 'flow' beats the volume rule
@@ -31,6 +31,15 @@ def test_units_resolve_by_physical_quantity():
     assert units.unit_for("int_oesinsp") == "cmH₂O·s"         # the un-scaled per-breath integral
     assert units.unit_for("sample_entropy_max") == "—"
     assert units.unit_for("file") == "" and units.unit_for("breath_no") == ""
+
+
+def test_display_for_falls_back_to_the_column_identifier():
+    """The registry has room for a human-readable name (ticket A04), but the name
+    table itself is deliberately not populated yet — see quantities.py's docstring.
+    Until it is, display_for() must return the column's own identifier."""
+    from respmech.core import quantities
+    assert quantities.display_for("ptp_oesinsp") == "ptp_oesinsp"
+    assert quantities.display_for("vt") == "vt"
 
 
 # --------------------------------------------------------------------------- #

@@ -721,7 +721,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         fidelity panel (and its last result) intact unless ``include_noise`` (a first
         compute is being scheduled)."""
         self.plots.clear(); self._channel_plots = []
-        self.table.setRowCount(0); self.table.setColumnCount(0)
+        self._table_model.set_dataframe(None)
         self.campbell.figure.clear(); self.campbell.draw()
         self._forget_campbell()      # the export must not resurrect a cleared diagram
         self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []
@@ -755,7 +755,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         conditioned result, the detail time + PSD, and the fidelity frontier.
         _reset_breath_state additionally drops breath overlays + staged EMG."""
         self.plots.clear(); self._channel_plots = []
-        self.table.setRowCount(0); self.table.setColumnCount(0)
+        self._table_model.set_dataframe(None)
         self.campbell.figure.clear(); self.campbell.draw()
         self._forget_campbell()      # the export must not resurrect a cleared diagram
         self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []

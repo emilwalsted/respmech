@@ -26,7 +26,7 @@ from datetime import datetime
 import pandas as pd
 
 from respmech import __version__
-from respmech.core import units as _units
+from respmech.core import quantities as _units
 from respmech.core.summary import build_cohort_summary, normalize_emg_table
 
 _CREATED = f"Created with RespMech v{__version__} (github.com/emilwalsted/respmech)"

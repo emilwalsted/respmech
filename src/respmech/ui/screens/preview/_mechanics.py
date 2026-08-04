@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import numpy as np
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton,
-                               QScrollArea, QSplitter, QTableWidget, QTableWidgetItem,
+                               QScrollArea, QSplitter, QTableView,
                                QTabWidget, QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt, QEvent, QObject, QSize, QThread, QTimer, Signal
 from PySide6.QtGui import QFont, QFontMetrics
@@ -30,6 +30,8 @@ from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_marke
 from respmech.ui import wheel as _wheel
 from respmech.ui.flow_layout import (ElidingLabel, FlowLayout, cluster as _cluster,
                                      elide as _elide, install_flow as _install_flow)
+from respmech.ui.result_table import (ResultTableModel, configure_result_table,
+                                      resize_result_table)
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
                                   stage_ecg_reduction, stage_mechanics_preview,
@@ -118,7 +120,15 @@ class _MechanicsMixin:
             self.plots.scene().sigMouseMoved, rateLimit=60, slot=self._on_mech_mouse_moved)
         split.addWidget(self.plots)
         lower = QSplitter(Qt.Horizontal)
-        self.table = QTableWidget(0, 0)
+        self.table = QTableView()
+        self._table_model = ResultTableModel()
+        self.table.setModel(self._table_model)
+        # breath_no is already a table COLUMN; the row header numbered rows 1..N
+        # regardless, which after an exclusion disagreed with breath_no's own
+        # numbering (1, 3, 4, 5 …) — hide the row header rather than carry two
+        # numbering schemes that can say different things about the same row.
+        self.table.verticalHeader().setVisible(False)
+        configure_result_table(self.table)
         # a table squeezed to one visible row is as useless as a flattened graph
         _theme.set_plot_floor(self.table)
         lower.addWidget(self.table)
@@ -970,7 +980,7 @@ class _MechanicsMixin:
                 # them. The reason still has to live on these two panels — the status line
                 # is a single shared label that the EMG/ECG jobs overwrite moments later,
                 # which would leave a blank table and Campbell explaining nothing.
-                self.table.setRowCount(0); self.table.setColumnCount(0)
+                self._table_model.set_dataframe(None)
                 self.campbell.figure.clear(); self.campbell.draw()
                 self._forget_campbell()   # the export must not resurrect a cleared diagram
                 for p in _PANELS["batch"]:
@@ -1004,12 +1014,8 @@ class _MechanicsMixin:
             self._set_status(f"Test run OK: {n} breaths (nothing written)")
 
     def _fill_table(self, df):
-        df = df.reset_index(drop=True)
-        self.table.setRowCount(len(df)); self.table.setColumnCount(len(df.columns))
-        self.table.setHorizontalHeaderLabels([str(c) for c in df.columns])
-        for r in range(len(df)):
-            for c in range(len(df.columns)):
-                self.table.setItem(r, c, QTableWidgetItem(str(df.iloc[r, c])))
+        self._table_model.set_dataframe(df)
+        resize_result_table(self.table)
 
     def _forget_campbell(self):
         """Drop the cached breaths and disable the export whenever the figure is cleared.

@@ -13,11 +13,12 @@ import os
 from PySide6.QtCore import Qt, Signal, QThread, QTimer, QUrl, QElapsedTimer
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QHBoxLayout, QHeaderView, QLabel, QMessageBox, QProgressBar,
-                               QPushButton, QTableWidget, QTableWidgetItem,
+                               QPushButton, QTableView, QTableWidget, QTableWidgetItem,
                                QPlainTextEdit, QVBoxLayout, QWidget)
 
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.flow_layout import install_flow as _install_flow
+from respmech.ui.result_table import ResultTableModel, configure_result_table, resize_result_table
 from respmech.ui.validation import matching_files, path_problem
 from respmech.ui.workers import BatchWorker
 
@@ -114,6 +115,9 @@ class RunScreen(QWidget):
         root.addWidget(self.log, 2)
 
         # P20: per-file results — status + breath count; double-click drills into Preview
+        files_caption = QLabel("Files processed — double-click a row to open it in Preview & QC")
+        files_caption.setProperty("role", "heading")
+        root.addWidget(files_caption)
         self.files_table = QTableWidget(0, 3)
         self.files_table.setHorizontalHeaderLabels(["File", "Status", "Breaths"])
         _hh = self.files_table.horizontalHeader()
@@ -126,7 +130,13 @@ class RunScreen(QWidget):
         self.files_table.cellDoubleClicked.connect(self._on_file_row_activated)
         root.addWidget(self.files_table, 1)
 
-        self.table = QTableWidget(0, 0)     # the averaged-metrics table (unchanged)
+        average_caption = QLabel("Average per file — the rows written to data/Average breathdata.xlsx")
+        average_caption.setProperty("role", "heading")
+        root.addWidget(average_caption)
+        self.table = QTableView()           # the averaged-metrics table
+        self._table_model = ResultTableModel()
+        self.table.setModel(self._table_model)
+        configure_result_table(self.table)
         root.addWidget(self.table, 1)
 
         # Heartbeat for the write phase. The busy progress bar animates on its own, but the
@@ -462,13 +472,8 @@ class RunScreen(QWidget):
     def _fill_table(self, result):
         if result.average_table is None:
             return
-        df = result.average_table.reset_index(drop=True)
-        self.table.setRowCount(len(df))
-        self.table.setColumnCount(len(df.columns))
-        self.table.setHorizontalHeaderLabels([str(c) for c in df.columns])
-        for r in range(len(df)):
-            for c, col in enumerate(df.columns):
-                self.table.setItem(r, c, QTableWidgetItem(str(df.iloc[r, c])))
+        self._table_model.set_dataframe(result.average_table)
+        resize_result_table(self.table)
 
     def _set_running(self, running):
         self.btn_run.setEnabled(not running)
