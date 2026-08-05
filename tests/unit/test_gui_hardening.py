@@ -40,6 +40,59 @@ def test_batchworker_write_failure_delivers_result_and_message(qapp, tmp_path, m
     assert "writing the output failed" in got["m"] and "No space left" in got["m"]
 
 
+# -- A05: BatchWorker decides cohort_outputs via is_subset_run, consistently --------
+def test_batchworker_sets_cohort_outputs_false_for_a_real_subset(qapp, tmp_path, monkeypatch):
+    from respmech.ui import workers
+    calls = {}
+    monkeypatch.setattr(workers, "write_batch",
+                        lambda *a, **k: calls.setdefault("cohort_outputs", k.get("cohort_outputs")))
+    w = workers.BatchWorker(_settings(str(tmp_path)), write=True, only_files=["synth_case_A.csv"])
+    w.run()
+    assert calls["cohort_outputs"] is False
+
+
+def test_batchworker_keeps_cohort_outputs_true_when_only_files_names_everything(qapp, tmp_path, monkeypatch):
+    """only_files happening to list EVERY matching file (a 'Re-run failed' where every file
+    failed) is not a real subset — must not skip the cohort outputs it fully covers."""
+    from respmech.ui import workers
+    calls = {}
+    monkeypatch.setattr(workers, "write_batch",
+                        lambda *a, **k: calls.setdefault("cohort_outputs", k.get("cohort_outputs")))
+    w = workers.BatchWorker(_settings(str(tmp_path)), write=True,
+                            only_files=["synth_case_A.csv", "synth_case_B.csv"])
+    w.run()
+    assert calls["cohort_outputs"] is True
+
+
+def test_batchworker_full_run_defaults_cohort_outputs_true(qapp, tmp_path, monkeypatch):
+    from respmech.ui import workers
+    calls = {}
+    monkeypatch.setattr(workers, "write_batch",
+                        lambda *a, **k: calls.setdefault("cohort_outputs", k.get("cohort_outputs")))
+    w = workers.BatchWorker(_settings(str(tmp_path)), write=True)   # only_files=None -> full run
+    w.run()
+    assert calls["cohort_outputs"] is True
+
+
+def test_batchworker_is_subset_run_failure_reports_write_failed_not_a_crash(qapp, tmp_path, monkeypatch):
+    """is_subset_run is called INSIDE the write try-block on purpose: a transiently
+    unreadable input folder must surface as an ordinary write failure (finished + failed
+    signals), not crash the worker thread with an unhandled exception that leaves the Run
+    screen with no signal at all — the same review fix already applied to the earlier
+    (data-losing) revision of this ticket."""
+    from respmech.ui import workers
+    from respmech.core import pipeline
+    monkeypatch.setattr(pipeline, "is_subset_run",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("permission denied")))
+    w = workers.BatchWorker(_settings(str(tmp_path)), write=True, only_files=["synth_case_A.csv"])
+    got = {}
+    w.finished.connect(lambda r: got.setdefault("r", r))
+    w.failed.connect(lambda m: got.setdefault("m", m))
+    w.run()
+    assert got.get("r") is not None
+    assert "writing the output failed" in got["m"] and "permission denied" in got["m"]
+
+
 # -- staging honours remove_ecg and reports the real column + error state ------
 def test_stage_emg_channel_respects_remove_ecg_and_reports_col(qapp, tmp_path):
     from respmech.ui.workers import stage_emg_channel

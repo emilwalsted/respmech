@@ -275,6 +275,139 @@ def test_write_batch_emits_reloadable_manifest(tmp_path):
     assert "2 processed, 0 failed" in open(report, encoding="utf-8").read()
 
 
+# ---------------------------------------------------------------------------
+# A05 — a subset/re-run write must never silently rebuild the study's
+# cohort-level outputs (or overwrite its provenance) from a fraction of it.
+# ---------------------------------------------------------------------------
+def test_full_run_default_cohort_outputs_writes_the_same_files_as_before(tmp_path):
+    """cohort_outputs defaults to True and must be byte-for-byte the pre-A05 behaviour:
+    the CLI (which never passes only_files/cohort_outputs at all) is unaffected."""
+    from respmech.core.pipeline import run_batch
+    from respmech.core.io.writers import write_batch
+    s = synth_settings(tmp_path)
+    result = run_batch(s)
+    out_default, out_explicit = tmp_path / "default", tmp_path / "explicit"
+    out_default.mkdir(); out_explicit.mkdir()
+    default_written = write_batch(result, s, str(out_default), when=datetime(2026, 7, 11))
+    explicit_written = write_batch(result, s, str(out_explicit), when=datetime(2026, 7, 11),
+                                   cohort_outputs=True)
+    rel = lambda base, paths: sorted(os.path.relpath(p, str(base)) for p in paths)
+    assert rel(out_default, default_written) == rel(out_explicit, explicit_written)
+    assert os.path.isfile(out_default / "data" / "Average breathdata.xlsx")
+    assert os.path.isfile(out_default / "data" / "Cohort summary.xlsx")
+    assert os.path.isfile(out_default / "run-report.txt")
+    assert os.path.isfile(out_default / "analysis-used.toml")
+
+
+def test_subset_write_leaves_cohort_spreadsheets_and_full_report_untouched(tmp_path):
+    from respmech.core.pipeline import run_batch
+    from respmech.core.io.writers import write_batch
+    s = synth_settings(tmp_path)
+    full_result = run_batch(s)
+    write_batch(full_result, s, str(tmp_path), when=datetime(2026, 7, 11, 14, 0, 0))
+
+    avg_path = os.path.join(tmp_path, "data", "Average breathdata.xlsx")
+    cohort_path = os.path.join(tmp_path, "data", "Cohort summary.xlsx")
+    report_path = os.path.join(tmp_path, "run-report.txt")
+    manifest_path = os.path.join(tmp_path, "analysis-used.toml")
+    avg_before = open(avg_path, "rb").read()
+    cohort_before = open(cohort_path, "rb").read()
+    report_before = open(report_path, encoding="utf-8").read()
+    manifest_before = open(manifest_path, encoding="utf-8").read()
+    avg_mtime_before = os.path.getmtime(avg_path)
+
+    subset_result = run_batch(s, only_files=["synth_case_A.csv"])
+    written = write_batch(subset_result, s, str(tmp_path), when=datetime(2026, 7, 11, 15, 0, 0),
+                          cohort_outputs=False)
+
+    # cohort-level workbooks: byte-identical, untouched
+    assert open(avg_path, "rb").read() == avg_before
+    assert open(cohort_path, "rb").read() == cohort_before
+    assert os.path.getmtime(avg_path) == avg_mtime_before
+    # neither cohort workbook is even in the subset's own written-list
+    assert not any(os.path.basename(p) in ("Average breathdata.xlsx", "Cohort summary.xlsx")
+                  for p in written)
+    # the full run's report and manifest survive verbatim (settings unchanged -> no partial manifest)
+    assert open(report_path, encoding="utf-8").read() == report_before
+    assert open(manifest_path, encoding="utf-8").read() == manifest_before
+    assert not any("analysis-used (partial" in p for p in written)
+    # a distinct, timestamped partial report was written instead of replacing run-report.txt
+    partial_reports = [p for p in written if "run-report (partial" in p]
+    assert len(partial_reports) == 1 and os.path.isfile(partial_reports[0])
+    partial_txt = open(partial_reports[0], encoding="utf-8").read()
+    assert "PARTIAL RUN" in partial_txt
+    assert "Settings snapshot: analysis-used.toml" in partial_txt   # unchanged -> points at the full file
+    # the file's own per-file artefacts ARE written, as normal
+    assert os.path.isfile(os.path.join(tmp_path, "data", "synth_case_A.csv.breathdata.xlsx"))
+
+
+def test_subset_write_creates_a_timestamped_manifest_when_settings_differ(tmp_path):
+    from respmech.core.pipeline import run_batch
+    from respmech.core.io.writers import write_batch
+    from respmech.settingsio.toml_io import load_toml
+    s = synth_settings(tmp_path)
+    full_result = run_batch(s)
+    write_batch(full_result, s, str(tmp_path), when=datetime(2026, 7, 11))
+    manifest_path = os.path.join(tmp_path, "analysis-used.toml")
+    manifest_before = open(manifest_path, encoding="utf-8").read()
+
+    s.output.group_regex = r"_(\d+)W"                 # any settings field that round-trips
+    subset_result = run_batch(s, only_files=["synth_case_A.csv"])
+    written = write_batch(subset_result, s, str(tmp_path), when=datetime(2026, 7, 11, 16, 0, 0),
+                          cohort_outputs=False)
+
+    assert open(manifest_path, encoding="utf-8").read() == manifest_before   # full manifest untouched
+    partial_manifests = [p for p in written if "analysis-used (partial" in p]
+    assert len(partial_manifests) == 1 and os.path.isfile(partial_manifests[0])
+    reloaded = load_toml(partial_manifests[0])
+    assert reloaded.output.group_regex == r"_(\d+)W"          # the SUBSET's settings, not the full run's
+    partial_report = next(p for p in written if "run-report (partial" in p)
+    report_txt = open(partial_report, encoding="utf-8").read()
+    assert f"Settings snapshot: {os.path.basename(partial_manifests[0])}" in report_txt
+
+
+def test_subset_manifest_protects_an_unreadable_existing_file_instead_of_overwriting_it(tmp_path):
+    """Regression: a read failure on an EXISTING analysis-used.toml (not valid UTF-8 —
+    corrupted by an interrupted write, or hand-edited with a different encoding) used to
+    read as 'existing is None' -> 'nothing to protect' -> the full run's manifest was
+    silently overwritten by the subset's settings, exactly the data loss A05 exists to
+    prevent. It must instead be treated the same as 'exists and differs': protected under
+    a timestamped name."""
+    from respmech.core.io.writers import _write_manifest
+    s = synth_settings(tmp_path)
+    manifest_path = os.path.join(tmp_path, "analysis-used.toml")
+    with open(manifest_path, "wb") as f:
+        f.write(b"\xff\xfe not valid utf-8 \x00\x01")     # undecodable as UTF-8
+    corrupt_before = open(manifest_path, "rb").read()
+
+    result_path = _write_manifest(s, str(tmp_path), cohort_outputs=False,
+                                  when=datetime(2026, 7, 11, 16, 0, 0))
+
+    assert open(manifest_path, "rb").read() == corrupt_before   # the unreadable file is untouched
+    assert result_path is not None and "analysis-used (partial" in result_path
+    assert os.path.isfile(result_path)
+    assert "sampling_frequency" in open(result_path, encoding="utf-8").read()   # a real settings dump
+
+
+def test_subset_write_skips_the_cohort_figure_even_with_two_or_more_files(tmp_path):
+    """The cohort Campbell figure's existing len(ok_files) > 1 guard is not enough on its
+    own — A05 explicitly measured this being redrawn from a 2-file 'Re-run failed'. The
+    cohort_outputs flag must gate it regardless of how many files are IN the subset."""
+    from respmech.core.pipeline import run_batch
+    from respmech.core import plots
+    s = synth_settings(tmp_path)
+    for flag in ("save_pv_average", "save_raw", "save_trimmed", "save_drift", "save_emg"):
+        setattr(s.output.diagnostics, flag, False)
+    s.output.diagnostics.save_pv_individual = True
+    result = run_batch(s)                              # both synth files -> len(ok_files) == 2
+    written_full, _ = plots.write_figures(result, s, str(tmp_path), cohort_outputs=True)
+    assert any("All files" in os.path.basename(p) for p in written_full)
+    for p in written_full:
+        os.remove(p)
+    written_subset, _ = plots.write_figures(result, s, str(tmp_path), cohort_outputs=False)
+    assert not any("All files" in os.path.basename(p) for p in written_subset)
+
+
 def test_sample_recording_is_analysable(tmp_path):
     from respmech.core.sample import write_sample_recording
     from respmech.core.pipeline import run_batch
@@ -317,8 +450,8 @@ def test_output_pdfs_are_always_light(monkeypatch):
     from respmech.core import plots
     seen = {}
     monkeypatch.setattr(plots, "_write_figures_impl",
-                        lambda r, s, o, progress=None: (seen.update(face=mpl.rcParams["axes.facecolor"]),
-                                                        ([], []))[1])
+                        lambda r, s, o, progress=None, cohort_outputs=True:
+                            (seen.update(face=mpl.rcParams["axes.facecolor"]), ([], []))[1])
     assert plots.write_figures(None, None, "") == ([], [])
     assert seen["face"] == "#FFFFFF"                              # light INSIDE the writer
     assert mpl.rcParams["axes.facecolor"] == dark_ground          # ...dark restored after

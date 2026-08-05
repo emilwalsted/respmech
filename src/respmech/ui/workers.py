@@ -101,8 +101,14 @@ class BatchWorker(QObject):
             from respmech.core.pipeline import ProgressEvent
             self._on_event(ProgressEvent("writing", message="writing output"))
             try:
+                # is_subset_run inside the try: it re-lists the input folder, and a folder
+                # that becomes transiently unreadable between analysis and writing must be
+                # reported as a write failure like any other, not crash the worker thread
+                # with an unhandled exception (no failed/finished signal at all).
+                from respmech.core.pipeline import is_subset_run
+                cohort_outputs = not is_subset_run(self._settings, self._only)
                 write_batch(result, self._settings, self._settings.output.folder,
-                            progress=self._on_event)
+                            progress=self._on_event, cohort_outputs=cohort_outputs)
             except Exception:
                 self.failed.emit(
                     "Analysis completed, but writing the output failed. Some files may be "

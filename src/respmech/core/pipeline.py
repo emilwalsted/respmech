@@ -422,6 +422,35 @@ def match_input_files(folder: str, pattern: str) -> list:
     return sorted(out)
 
 
+def is_subset_run(settings: Settings, only_files: Optional[list]) -> bool:
+    """True when ``only_files`` restricts a run to fewer than everything ``settings.input``
+    would otherwise match — never true for ``None``, and never true when ``only_files``
+    happens to name every matching file (a "subset" that is not actually one).
+
+    This is the single yes/no test the write layer (``core.io.writers.write_batch``) and the
+    GUI (``ui.workers.BatchWorker``, ``ui.screens.run_screen.RunScreen``) all use to decide
+    whether cohort-level outputs — the Average/Cohort-summary workbooks and the cohort Campbell
+    figure — may be written at all, since those are built across the WHOLE study and a partial
+    run silently rebuilding them from a handful of files was the data-loss bug this exists to
+    prevent (ticket A05). Matched against the exact same file list ``run_batch`` itself uses
+    (``match_input_files`` on ``settings.input.folder``/``settings.input.files``), so this
+    agrees with what a run actually processed rather than a UI-level approximation.
+
+    Compares the INTERSECTION of ``only_files`` with what currently matches, not
+    ``only_files`` directly: ``run_batch`` itself only ever processes
+    ``{f for f in allfiles if basename(f) in only_files}`` (see below), so a stale name in
+    ``only_files`` that no longer matches anything (e.g. a file deleted from the input
+    folder between a run and a later "Re-run failed") must not, by itself, make an
+    otherwise-complete run look like a subset — every file that would actually be
+    processed is still all of them."""
+    if not only_files:
+        return False
+    allfiles = match_input_files(settings.input.folder, settings.input.files)
+    allnames = {os.path.basename(f) for f in allfiles}
+    given = {os.path.basename(f) for f in only_files}
+    return bool(given) and (given & allnames) != allnames
+
+
 def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
               cancel_check: Optional[Callable[[], bool]] = None,
               only_files: Optional[list] = None) -> BatchResult:
