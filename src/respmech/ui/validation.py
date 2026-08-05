@@ -28,9 +28,18 @@ def matching_files(folder: str, mask: str) -> list:
     return sorted(out)
 
 
-def path_problem(settings) -> str | None:
+def path_problem(settings, probe_write: bool = False) -> str | None:
     """Return a human message for the first filesystem problem, or None if all paths
-    are usable for a run."""
+    are usable for a run.
+
+    ``probe_write`` (default False) additionally tries to actually create/write/clean up a
+    file in the output folder (``core.io.plan.probe_write_folder`` — a real write, never
+    ``os.access``, which is unreliable against Windows ACLs). Leave it False for Settings'
+    live, every-keystroke validation: this function is called from there on every field
+    edit (``ui/screens/settings_screen.py``'s ``_path_problem``), and a disk round-trip per
+    keystroke is worst on exactly the kind of network/removable drive this whole check
+    exists for. Only ``RunScreen._start`` (covers both Run and Dry run) and the output
+    folder picker pass ``probe_write=True`` — see their call sites."""
     s = settings
     folder = (s.input.folder or "").strip()
     if not folder or not os.path.isdir(folder):
@@ -51,4 +60,9 @@ def path_problem(settings) -> str | None:
             ref = os.path.join(folder, ref)
         if not os.path.isfile(ref):
             return f"noise reference file not found: {n.reference_file}"
+    if probe_write:
+        from respmech.core.io.plan import probe_write_folder
+        probe = probe_write_folder(out)
+        if not probe.ok:
+            return probe.message
     return None
