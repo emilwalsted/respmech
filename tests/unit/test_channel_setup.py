@@ -535,6 +535,13 @@ def test_probe_narrows_multi_mask_and_detects_decimal(qapp, tmp_path):
         (tmp_path / name).write_text("t\tf\tp\tg\td\n0\t1,0\t2,0\t3,0\t4,0\n0,1\t1,1\t2,1\t3,1\t4,1\n")
     win = MainWindow(AppState()); sc = win.settings_screen
     sc.enter_new_mode()                              # mask = *.csv; *.txt
+    # Not exercising the guided channel-modal auto-open here (that is
+    # test_startup_flow.py's job) — B04 hangs it on the input folder alone having
+    # matching files, so filling in_folder below would otherwise schedule a REAL
+    # (unstubbed) modal dialog via QTimer.singleShot(0, ...) that this test never pumps
+    # the event loop for; disarm it up front instead of leaving a pending exec() for some
+    # unrelated later test's processEvents() to stumble into.
+    sc._channel_modal_done = True
     sc.in_folder.setText(str(tmp_path)); sc.samp_freq.setValue(1000); sc._on_inputs_changed()
     assert sc.state.settings.input.files == "*.txt"          # multi-mask narrowed on input change
     note = sc._probe_and_apply_file_settings(sc._valid_input_files())
@@ -565,6 +572,7 @@ def test_normalize_mask_narrows_multi_pattern_to_the_extension_present(qapp, tmp
     (tmp_path / "b.csv").write_text("t,f\n0,1\n1,2\n")
     win = MainWindow(AppState()); sc = win.settings_screen
     sc.enter_new_mode()                              # *.csv; *.txt
+    sc._channel_modal_done = True   # disarm the guided auto-open modal (see the sibling test above)
     sc.in_folder.setText(str(tmp_path)); sc.samp_freq.setValue(1000); sc._on_inputs_changed()
     assert sc.state.settings.input.files == "*.csv"  # narrowed so the single-glob core runner works
     win.close()
@@ -606,6 +614,7 @@ def test_probe_leaves_csv_decimal_untouched(qapp, tmp_path):
     (tmp_path / "r.csv").write_text("t,f,p,g,d\n0,1,2,3,4\n1,1,2,3,4\n")
     win = MainWindow(AppState()); sc = win.settings_screen
     sc.enter_new_mode()
+    sc._channel_modal_done = True   # disarm the guided auto-open modal (see test_probe_narrows…)
     sc.in_folder.setText(str(tmp_path)); sc.samp_freq.setValue(1000); sc._on_inputs_changed()
     assert sc.state.settings.input.files == "*.csv"
     before = sc.state.settings.input.format.decimal

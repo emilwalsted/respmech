@@ -26,7 +26,7 @@ from respmech.ui.flow_layout import ElidingLabel, install_flow as _install_flow
 from respmech.ui.manifest import manifest_from_filenames
 from respmech.ui.panel import titled_panel
 from respmech.ui.result_table import ResultTableModel, configure_result_table, resize_result_table
-from respmech.ui.validation import matching_files, path_problem
+from respmech.ui.validation import channel_collision, matching_files, path_problem
 from respmech.ui.workers import BatchWorker, WriteWorker
 
 try:
@@ -113,6 +113,13 @@ class RunScreen(QWidget):
         self._figs_total = None         # None until the first per-file figure event arrives
         self._figs_done = 0
         self._figs_current_file = ""
+        # B04 (commitment sheet): the one glob this screen performs (input folder x mask),
+        # memoised on (folder, mask, folder mtime) so it costs nothing on every keystroke —
+        # see _cached_matching_files. Shared by the commitment sheet, the primary button's
+        # enablement/tooltip and the log's empty-state plan summary, so all three read the
+        # exact same file list and can never quietly disagree.
+        self._matched_files = []
+        self._matched_files_key = None
         self._build()
         # Called inline, NOT deferred via QTimer.singleShot(0, ...): that was tried first
         # (self-review finding: this resolves the real matched file list and calls
@@ -168,6 +175,18 @@ class RunScreen(QWidget):
         section.setContentsMargins(0, 8, 0, 0); section.setSpacing(6)
         self._results_section.setVisible(False)
         root.addWidget(self._results_section, 1)
+
+        # The commitment sheet (ticket B04): an always-visible summary of what the primary
+        # action below is about to commit to — file count/source, planned output count/
+        # destination, and every reason it can't start yet (or a plain "Ready to run.").
+        # This, plus the primary button's own tooltip (see refresh_actions), is the ONLY
+        # gating left after B04 — no tab, no card and no disclosure stage hides anything
+        # any more.
+        self._commitment = QLabel("")
+        self._commitment.setWordWrap(True)
+        self._commitment.setProperty("banner", True)
+        self._commitment.setProperty("status", "info")
+        section.addWidget(self._commitment)
 
         # A WRAPPING row, not a QHBoxLayout. Measured on Windows font metrics these five
         # buttons sum to 1184 px, and a plain row's minimum IS that sum — which Qt propagates
@@ -303,33 +322,116 @@ class RunScreen(QWidget):
         except Exception as e:              # noqa: BLE001
             return False, str(e)
 
-    def _quick_path_problem(self):
-        """Cheap path check for enablement (the full glob-based check runs at start)."""
+    def _cached_matching_files(self):
+        """``matching_files`` over the current input folder/mask, memoised on
+        (folder, mask, folder mtime) — the ONE glob this screen performs. The commitment
+        sheet, the primary button's enablement/tooltip and the log's empty-state plan
+        summary all read this instead of scanning the folder again (ticket B04): a real
+        directory scan is worst on exactly the kind of network drive this whole screen
+        already has to be careful about (see ``_update_io_info``'s own file-rail-not-glob
+        approach for the same reason). ``_start`` still runs the full, write-probing
+        ``validation.path_problem`` a moment later regardless, so a cache that is one
+        heartbeat stale can at worst delay this screen noticing an edit by one keystroke
+        — never let an actually-broken run start."""
         s = self.state.settings
-        if not (s.input.folder or "").strip() or not os.path.isdir(s.input.folder):
-            return "input folder is not set or does not exist"
-        if not (s.output.folder or "").strip():
-            return "output folder is not set"
-        return None
+        folder = (s.input.folder or "").strip()
+        mask = s.input.files or "*.*"
+        if not folder or not os.path.isdir(folder):
+            self._matched_files, self._matched_files_key = [], None
+            return []
+        try:
+            mtime = os.path.getmtime(folder)
+        except OSError:
+            mtime = None
+        key = (folder, mask, mtime)
+        if key != self._matched_files_key:
+            self._matched_files_key = key
+            try:
+                self._matched_files = matching_files(folder, mask)
+            except Exception:                      # noqa: BLE001 - display-only, never fatal
+                self._matched_files = []
+        return self._matched_files
+
+    def _quick_path_problem(self):
+        """Cheap-enough-for-every-keystroke path check, sharing ``validation.path_problem``
+        (never ``probe_write=True`` — that is a real disk write, reserved for ``_start``)
+        so this can never phrase a blocker differently from Setup's own live validation.
+        Ticket B04: this used to skip the file-matching glob entirely ("the full
+        glob-based check runs at start"), so the primary button — and this drawer's own
+        summary — both said the run was ready over a mask that matched nothing, right up
+        until the click, which then failed with exactly the message this now shows up
+        front. Passes the already-memoised match list (``_cached_matching_files``) so
+        this still costs nothing extra per keystroke."""
+        return path_problem(self.state.settings, matches=self._cached_matching_files())
+
+    def _blockers(self):
+        """Every reason the primary Run action cannot start yet, worst first, as full
+        sentences naming the control to fix (ticket B04) — the ONE list the commitment
+        sheet and the primary button's enablement/tooltip both read, so they can never
+        name a different blocker than each other. Same priority order as Setup's own
+        ``_first_blocker`` used to (collision, then core validation, then path), and the
+        same shared helpers, so the two screens can never disagree either."""
+        collision = channel_collision(self.state.settings)
+        if collision:
+            return [collision]
+        ok, why = self._settings_ok()
+        if not ok:
+            return [why]
+        why = self._quick_path_problem()
+        return [why] if why else []
 
     def refresh_actions(self):
-        ok, why = self._settings_ok()
-        if ok:
-            why = self._quick_path_problem() or ""
-            ok = not why
+        blockers = self._blockers()
+        ok = not blockers
         # A "write elsewhere" retry shares the log/status/result state with a fresh run —
         # letting a new run start while one is still writing would have both threads drive
         # the same widgets at once (found in self-review: not a crash, but a real race).
         busy = self._thread is not None or self._write_thread is not None
         self.btn_run.setEnabled(ok and not busy)
         self.btn_dry.setEnabled(ok and not busy)
+        tip = blockers[0] if blockers else ""
+        self.btn_run.setToolTip(tip)
+        self.btn_dry.setToolTip(tip)
         if not ok:
-            self._set_status(f"Settings incomplete: {why}")
+            self._set_status(f"Settings incomplete: {blockers[0]}")
             self._incomplete_shown = True
         elif self._incomplete_shown and not busy:
             self._set_status("Ready to run.")     # clear the stale warning once valid
             self._incomplete_shown = False
         self._update_io_info()
+        self._update_commitment(blockers)
+
+    def _update_commitment(self, blockers=None):
+        """The commitment sheet built in ``_build`` (ticket B04): what a run commits to —
+        file count/source, planned output count/destination — from the SAME planner
+        (``core.io.plan.plan_outputs``) ``write_batch`` itself is measured against, never a
+        second hand-rolled count; then every current blocker as a full sentence, or a
+        plain statement that the run can start."""
+        if blockers is None:
+            blockers = self._blockers()
+        s = self.state.settings
+        folder = (s.input.folder or "").strip()
+        out = (s.output.folder or "").strip()
+        files = self._cached_matching_files()
+        head = f"{len(files)} file{'s' if len(files) != 1 else ''} from {folder or '(input not set)'}"
+        if files:
+            try:
+                from respmech.core.io.plan import plan_outputs
+                plan = plan_outputs(s, files, cohort_outputs=True)
+                cap = "up to " if plan.is_cap else ""
+                head += (f" — will write {cap}{plan.total_count} "
+                        f"file{'s' if plan.total_count != 1 else ''} into "
+                        f"{out or '(output not set)'}")
+            except Exception:                      # noqa: BLE001 - display-only, never fatal
+                head += f" — into {out or '(output not set)'}"
+        else:
+            head += f" — into {out or '(output not set)'}"
+        tail = ("⚠ " + "  ·  ".join(blockers)) if blockers else "Ready to run."
+        self._commitment.setText(f"{head}\n{tail}")
+        self._commitment.setProperty("status", "warn" if blockers else "info")
+        st = self._commitment.style()
+        if st is not None:
+            st.unpolish(self._commitment); st.polish(self._commitment)
 
     def _update_io_info(self):
         """The two-line read/write summary (B03): folder and mask come straight out of
@@ -356,23 +458,18 @@ class RunScreen(QWidget):
 
     def _update_plan_summary(self):
         """The log's empty-state placeholder (B03): unlike ``_update_io_info`` above, this
-        DOES resolve the actual matched file list (``matching_files``, a real glob) so it can
-        name what a run would write — but only when the input folder/mask actually change
-        (wired to ``inputs_changed`` in MainWindow, not every-keystroke ``settings_changed``),
-        matching how expensive Preview's OWN rail rebuild (``refresh_files``) is allowed to
-        be. Deliberately NOT ``_append_plan``: that writes into the log itself and headlines
-        "DRY RUN — nothing will be written", which would be a lie before any run has actually
-        been asked for."""
+        DOES resolve the actual matched file list so it can name what a run would write —
+        via the shared, memoised ``_cached_matching_files`` (B04) rather than a second,
+        independent glob. Wired to ``inputs_changed`` in MainWindow (an actual folder/mask
+        edit), which is also when the cache itself needs refreshing — a plain
+        ``settings_changed`` tick reuses whatever the cache already holds. Deliberately NOT
+        ``_append_plan``: that writes into the log itself and headlines "DRY RUN — nothing
+        will be written", which would be a lie before any run has actually been asked for."""
         s = self.state.settings
         folder = (s.input.folder or "").strip()
         mask = s.input.files or "*.*"
         out = (s.output.folder or "").strip()
-        files = []
-        if folder and os.path.isdir(folder):
-            try:
-                files = matching_files(folder, mask)
-            except Exception:                      # noqa: BLE001 - display-only, never fatal
-                files = []
+        files = self._cached_matching_files()
         lines = [f"{len(files)} file{'s' if len(files) != 1 else ''} matching '{mask}' "
                 f"in {folder or '(not set)'}."]
         total_line = None
