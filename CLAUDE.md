@@ -178,6 +178,54 @@ loop tick. Applies to any future GUI code deciding "has the worker done X yet" �
 worker's own state directly when it is a plain value, don't infer it from a queued
 signal's side effects.
 
+### A widget populated for the first time must not fire the signal that starts background work
+
+`PreviewScreen`'s file selector used to be a `QComboBox` that auto-selected index 0 on
+its very first populate as a bare Qt side effect: the populate itself ran under
+`blockSignals(True)`, so that auto-select never fired `currentTextChanged`, and nothing
+downstream ever reacted to a freshly built screen's first file. Ticket B02
+(`ui/file_rail.py`'s `FileRail`) replaced the combo with a list-backed rail, and its
+first cut got this wrong: `FileRail.set_manifest()` explicitly called `select_filename()`
+on the first file, which — unlike the combo's silent auto-select — DOES emit
+`selectionChanged`, which routes into `_on_file_selected` → `_begin_file_switch()` →
+arms the 300 ms reactive debounce. The result: constructing a bare `PreviewScreen`
+(hundreds of times across the test suite) now started real background analysis work it
+never used to, given enough incidental event-loop turns for the timer to fire.
+
+This surfaced as a **reproducible, order-dependent failure in a completely unrelated
+layout test** (`test_window_fits_screen.py::test_the_preview_pages_scroll_instead_of_
+compressing_their_graphs`) — a real layout race between a late-arriving async render and
+the page-fit mechanism, only exposed because analysis now started when it never had
+before. It did NOT reproduce in isolation (not enough incidental event-loop turns for the
+newly-armed timer to fire within the test's fixed `processEvents()` budget), only inside
+a ~150-test run — which is what made a controlled before/after diff (same test sequence,
+old vs. new source) the only way to actually prove causation rather than guess "probably
+flaky." **A test that passes alone but fails in a big suite run is not automatically
+flaky — run the same sequence against the OLD code first before writing it off.**
+
+Fix: `FileRail.set_manifest()` now *quietly* adopts the first file as `current_filename()`
+when the rail has no identity at all yet (mirrors the old combo's silent auto-select
+exactly), and only a REAL subsequent switch (a caller explicitly calling
+`select_filename`/`select_index`/`step`, or the previous file vanishing from a rebuilt
+list) emits `selectionChanged`. Applies generally: a widget's initial-populate state
+must reproduce a REPLACED widget's exact side-effect profile, not just its visible value —
+"looks selected" and "IS selected enough to react to" are different guarantees, and only
+the second one starts work a test (or a user) may not be expecting yet.
+
+### Monkeypatching a staging function must target where it was IMPORTED TO, not FROM
+
+`preview/_mechanics.py` does `from respmech.ui.workers import (..., stage_mechanics_preview,
+...)` — a direct name binding. `monkeypatch.setattr(workers, "stage_mechanics_preview",
+fake)` (patching the SOURCE module `ui.workers`) has no effect on `_mechanics.py`'s own
+call to `stage_mechanics_preview(...)`, since that name was already bound into
+`_mechanics.py`'s namespace at import time and never looks the attribute up on `workers`
+again. Patch it where it is actually CALLED FROM: `monkeypatch.setattr(
+respmech.ui.screens.preview._mechanics, "stage_mechanics_preview", fake)` (or import the
+`_mechanics` module and patch the name on it directly). Same applies to the `_ecg`/
+`_emg_noise` mixins, which import their own staging functions the same way. Found while
+writing a B02 test that meant to simulate "a file that cannot be loaded" and silently
+patched nothing.
+
 ## Releases (`.github/workflows/release.yml` = "Build installers")
 
 - Trigger: push a `v*` tag (or manual dispatch). Builds a Windows **MSI** and a

@@ -185,7 +185,7 @@ def test_the_picker_writes_both_halves_together(qapp, tmp_path):
     win = MainWindow(AppState(s))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv.file_rail.select_filename("synth_case_A.csv")
 
     pv._apply_noise_expiration()
     n = s.processing.emg.noise

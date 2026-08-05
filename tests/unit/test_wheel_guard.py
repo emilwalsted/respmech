@@ -43,9 +43,17 @@ def _stealers(root):
     return root.findChildren(QAbstractSpinBox) + root.findChildren(QComboBox)
 
 
-def _assert_nothing_edits(qapp, root, label):
-    """No wheel-stealing widget anywhere under `root` may change on a wheel."""
+def _assert_nothing_edits(qapp, root, label, *, allow_empty=False):
+    """No wheel-stealing widget anywhere under `root` may change on a wheel.
+
+    ``allow_empty``: a caller walking several tabs in turn (only one of which is ever
+    the ACTIVE, visible one at a time) passes this so an empty tab doesn't fail on its
+    own — the caller does its own "found nothing on ANY tab" check across the whole
+    walk instead. Returns the widgets it checked, so that outer check can be built from
+    the concatenation across calls."""
     widgets = [w for w in _stealers(root) if w.isVisible()]
+    if not widgets and allow_empty:
+        return widgets
     assert widgets, f"{label}: found no widgets to check — the walk is broken"
     before = [(w, _value(w)) for w in widgets]
     for w, _ in before:
@@ -53,6 +61,7 @@ def _assert_nothing_edits(qapp, root, label):
     changed = [w.objectName() or w.__class__.__name__
                for w, v0 in before if _value(w) != v0]
     assert not changed, f"{label}: the wheel edited {len(changed)} widget(s): {changed}"
+    return widgets
 
 
 # -- Setup screen --------------------------------------------------------------
@@ -121,7 +130,15 @@ def test_the_file_picker_above_the_list_does_nothing_at_all(qapp):
 # -- Preview screen ------------------------------------------------------------
 def test_no_preview_widget_is_edited_by_the_wheel(qapp, tmp_path):
     """The strips sit right above wheel-zoomable plots, and every ECG/noise parameter
-    here writes into the analysis and schedules a recompute."""
+    here writes into the analysis and schedules a recompute.
+
+    Walks every Preview SUB-TAB in turn (B02 finding): the old ``file_combo`` sat
+    outside every tab page and was always visible, which made a single un-tabbed walk
+    incidentally 'exhaustive' — but the Mechanics tab itself (the only one active by
+    default) has no spin/combo box of its own, so the ECG/noise strips this test's own
+    docstring names as the point were never actually being reached. Removing
+    ``file_combo`` (replaced by the file rail) exposed that gap as "found no widgets to
+    check"; walking the sub-tabs is the real fix, and now genuinely covers them."""
     from respmech.ui.screens.preview_screen import PreviewScreen
     pv = PreviewScreen(AppState(synth_settings(str(tmp_path), data_out=_OUT)))
     pv.resize(1100, 800)
@@ -129,7 +146,13 @@ def test_no_preview_widget_is_edited_by_the_wheel(qapp, tmp_path):
     qapp.processEvents()
     edits = []
     pv.settings_edited.connect(lambda: edits.append(1))
-    _assert_nothing_edits(qapp, pv, "Preview")
+    checked = []
+    for i in range(pv.subtabs.count()):
+        pv.subtabs.setCurrentIndex(i)
+        qapp.processEvents()
+        checked += _assert_nothing_edits(qapp, pv, f"Preview[{pv.subtabs.tabText(i)}]",
+                                         allow_empty=True)
+    assert checked, "Preview: found no widgets to check on any sub-tab — the walk is broken"
     assert not edits, "scrolling emitted settings_edited"
     pv.shutdown()
 

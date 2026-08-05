@@ -175,9 +175,31 @@ class _MechanicsMixin:
         return w
 
     def _process_this_file(self):
-        name = self._previewed_file or self.file_combo.currentText()
+        name = self._previewed_file or self._selected_filename()
         if name:
             self.process_file_requested.emit(os.path.basename(name))
+
+    def _reset_qc_overview(self):
+        """Neutral QC chip + disabled 'Process & write' — the same nulstillingsdiscipline
+        ``_forget_campbell`` already applies to the export button, extended to this chip
+        and this button: clearing what a panel shows and clearing the widget that judges
+        it must be the same act. Called from ``_clear_file_panels`` (a file switch/blank);
+        the mechanics render (``_render_preview``) is what re-enables the button for a
+        file that actually loaded."""
+        self.qc_overview.setText("QC:  —")
+        self.qc_overview.setProperty("status", "muted")
+        self.qc_overview.style().unpolish(self.qc_overview)
+        self.qc_overview.style().polish(self.qc_overview)
+        self.btn_process_file.setEnabled(False)
+
+    def _qc_overview_not_assessed(self, detail):
+        """The chip's honest state while the test run itself failed or was skipped —
+        called from ``_on_batch_result``'s error branches and from ``_on_job_done``'s
+        'batch' failure branch. Purely presentational: no computed value changes."""
+        self.qc_overview.setText(f"QC:  not assessed — {short_error(str(detail))}")
+        self.qc_overview.setProperty("status", "warn")
+        self.qc_overview.style().unpolish(self.qc_overview)
+        self.qc_overview.style().polish(self.qc_overview)
 
     def _update_qc_overview(self, fr):
         """P16: a persistent, at-a-glance quality summary of the current test run —
@@ -799,7 +821,7 @@ class _MechanicsMixin:
                 return
 
     def _toggle_breath(self, breath_no):
-        name = self.file_combo.currentText()
+        name = self._selected_filename()
         if not name or breath_no not in self._breath_spans:
             return None
         excl = self.state.settings.processing.exclude_breaths
@@ -837,6 +859,11 @@ class _MechanicsMixin:
                 except Exception:                      # noqa: BLE001
                     pass
         nexcl = len({b for e in excl if e.file == name for b in e.breaths} & set(self._breath_spans))
+        # the rail's badge is the raw exclusion count (matches _sync_rail_exclusions, which
+        # reads it the same way for every file the settings name — not the nexcl above,
+        # which is scoped to spans of the file CURRENTLY previewed). entry.breaths is []
+        # once excl.remove(entry) above has run, so this is correct even then.
+        self.file_rail.set_excluded_count(name, len(entry.breaths))
         # excluding/including a breath must update the AVERAGED result in lockstep with the
         # overlay — otherwise the Campbell loop + per-breath table stay stale and the user
         # tunes blind. Recompute the (mechanics-only) test run, debounced.
@@ -864,7 +891,7 @@ class _MechanicsMixin:
     def _excluded_now(self):
         """Live set of excluded 1-based breath numbers for the current file — the
         single source of truth for overlay colour (matches what the core ignores)."""
-        name = self.file_combo.currentText()
+        name = self._selected_filename()
         entry = next((e for e in self.state.settings.processing.exclude_breaths if e.file == name), None)
         return set(entry.breaths) if entry else set()
 
@@ -967,13 +994,16 @@ class _MechanicsMixin:
         """Render the automatic mechanics test run: the per-breath table + Campbell (the
         batch is mechanics-only, so no EMG/fidelity here). The noise_report branch is
         retained for the direct-call path that still carries one."""
-        cur = self.file_combo.currentText()
+        cur = self._selected_filename()
         fr = None
         if getattr(result, "files", None):
             fr = result.files.get(cur) or next(iter(result.files.values()), None)
         if fr is None or getattr(fr, "error", None):
             err = getattr(fr, "error", None) or "The run produced no result for this file."
             kind = getattr(fr, "error_kind", None) or str(err).split(":", 1)[0]
+            if cur:
+                self.file_rail.mark_result(cur, ok=False, error=str(err))
+            self._qc_overview_not_assessed(err)
             if kind in _SOFT_FILE_ERRORS:
                 # A precondition failure of THIS recording, not a fault: the mech preview
                 # keeps drawing the channels, so don't raise a 'Test run failed' card over
@@ -989,6 +1019,8 @@ class _MechanicsMixin:
                 return
             # raise so _on_job_done paints a copyable "Test run failed" error card
             raise _FileRunError(err)
+        if cur:
+            self.file_rail.mark_result(cur, ok=True, breaths=len(fr.breaths_table))
         self._fill_table(fr.breaths_table)
         self._draw_campbell(fr.breaths)
         self._update_qc_overview(fr)                  # P16 batch QC overview

@@ -199,7 +199,7 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(self._i_preview)
         self.preview_screen.refresh_files()
         try:
-            self.preview_screen.file_combo.setCurrentText(filename)
+            self.preview_screen.file_rail.select_filename(filename)
         except Exception:                       # pragma: no cover - best-effort selection
             pass
 

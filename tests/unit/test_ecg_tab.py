@@ -150,7 +150,7 @@ def test_autosuggest_writes_settings_and_selects_channel(qapp, tmp_path, monkeyp
     from respmech.core import emg as emglib
     s = synth_settings(str(tmp_path), remove_ecg=False, data_out=_DATA_OUT)
     win = _win(s); pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentIndex(0)
+    pv._refresh_files(); pv.file_rail.select_index(0)
     monkeypatch.setattr(emglib, "suggest_ecg_settings", lambda m, fs: {
         "detect_channel": 2, "ecg_min_height": 0.02, "ecg_min_distance_s": 0.45,
         "ecg_min_width_s": 0.005, "ecg_window_s": 0.4,

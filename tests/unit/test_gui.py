@@ -36,8 +36,8 @@ def test_preview_and_batch_render(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
     pv._refresh_files()
-    assert pv.file_combo.count() == 2
-    pv.file_combo.setCurrentIndex(0)
+    assert pv.file_rail.count() == 2
+    pv.file_rail.select_index(0)
     pv._preview()
     assert "breaths" in pv.status.text()
     # the mechanics test run is automatic (async); its handler fills the table + Campbell
@@ -135,12 +135,12 @@ def test_reactive_file_list_and_noise_gating(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path))))
     sc, pv = win.settings_screen, win.preview_screen
-    assert pv.file_combo.count() == 2
+    assert pv.file_rail.count() == 2
     # changing the mask in Settings refreshes the Preview file list (reactive)
     sc.in_files.setText("synth_case_A.csv"); sc._on_inputs_changed()
-    assert pv.file_combo.count() == 1
+    assert pv.file_rail.count() == 1
     sc.in_files.setText("synth_case_*.csv"); sc._on_inputs_changed()
-    assert pv.file_combo.count() == 2
+    assert pv.file_rail.count() == 2
     # noise on but no reference -> the noise-window options are disabled + a hint pointing
     # at the one real way to set a reference: 'Set noise profile' on this file's own graph
     # (A03 dropped the old '(Settings)' alternative — there was never a picker there).
@@ -150,7 +150,7 @@ def test_reactive_file_list_and_noise_gating(qapp, tmp_path):
     pv.noise_enabled.setChecked(True)             # noise enable is on the Preview strip now
     pv.state.settings.processing.emg.noise.reference_file = None
     pv.state.settings.processing.emg.remove_ecg = True
-    pv.file_combo.setCurrentIndex(0); pv._update_actions()
+    pv.file_rail.select_index(0); pv._update_actions()
     assert pv.noise_opts.isEnabled() is False
     assert "set noise profile" in pv.status.text().lower()
     # ...and with ECG removal off, that prerequisite is what the user is told instead
@@ -184,7 +184,7 @@ def test_empty_input_folder_is_handled(qapp, tmp_path):
     s.input.folder = str(tmp_path / "does_not_exist")
     win = MainWindow(AppState(s))
     win.preview_screen.refresh_files()
-    assert win.preview_screen.file_combo.count() == 0
+    assert win.preview_screen.file_rail.count() == 0
     assert "not found" in win.preview_screen.status.text().lower()
 
 
@@ -296,7 +296,7 @@ def test_refresh_files_skips_the_pick_one_line_when_already_drawn(qapp, tmp_path
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv.file_rail.select_filename("synth_case_A.csv")
     pv._render_preview(stage_mechanics_preview(
         win.state.settings, os.path.join(INPUT, "synth_case_A.csv")))
     pv._set_status("A CUSTOM RESULT LINE")

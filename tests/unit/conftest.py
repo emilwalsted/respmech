@@ -87,7 +87,7 @@ def _close_top_level_windows(request):
     Why this is needed and not just per-test ``win.close()``:
       * A test whose assertion FAILS skips its own trailing ``win.close()``, leaking a screen
         (and, without cancellation, a running batch thread) into the next test.
-      * Several GUI tests arm the debounce (via a ``file_combo`` change) but never spin an
+      * Several GUI tests arm the debounce (via a file-rail selection change) but never spin an
         event loop, so the timer stays LOADED on a still-alive screen. When a later test
         spins the session's first real event loop, that expired timer fires and dispatches
         real, never-cancelled jobs on a dead screen — on the 2-core headless Windows runner

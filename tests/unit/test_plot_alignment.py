@@ -49,7 +49,7 @@ def test_mechanics_channel_stack_is_x_aligned(qapp):
     from _helpers import synth_settings
     s = synth_settings("")
     win = MainWindow(AppState(s)); pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     pv._render_preview(stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv")))
     pv.plots.setFixedSize(640, 540)
     lefts = _viewbox_lefts(pv._channel_plots)               # processes events → layout settles
@@ -80,7 +80,7 @@ def test_mechanics_crosshair_names_the_channel(qapp):
     from _helpers import synth_settings
     s = synth_settings("")
     win = MainWindow(AppState(s)); pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     pv._render_preview(stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv")))
     QApplication.processEvents(); QApplication.processEvents()   # let the scene layout settle
     p2 = pv._channel_plots[2]                                # Poes — third stacked curve

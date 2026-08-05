@@ -35,9 +35,9 @@ def test_breath_overlays_and_toggle(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentIndex(0)
+    pv.file_rail.select_index(0)
     pv._preview()
-    name = pv.file_combo.currentText()
+    name = pv.file_rail.current_filename()
     # overlays were drawn: one region per breath per channel plot + spans + labels
     assert pv._breath_spans, "no breath spans recorded"
     assert len(pv._channel_plots) == 5
@@ -64,8 +64,8 @@ def test_use_region_as_noise_writes_settings_and_mirrors(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv, sc = win.preview_screen, win.settings_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentIndex(0)
-    name = pv.file_combo.currentText()
+    pv.file_rail.select_index(0)
+    name = pv.file_rail.current_filename()
     pv._ensure_noise_region()
     pv._noise_region.setRegion((1.0, 5.0))
     out = pv._use_region_as_noise()
@@ -206,7 +206,7 @@ def test_emg_controls_disabled_without_emg_channels(qapp, tmp_path):
     win = MainWindow(AppState(s))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentIndex(0)
+    pv.file_rail.select_index(0)
     pv._update_actions()
     assert pv.emg_channel.isEnabled() is False        # EMG-gated controls are off
     assert pv.btn_set_noise.isEnabled() is False
@@ -237,7 +237,7 @@ def test_noise_options_gated_on_reference_file(qapp, tmp_path):
     s.processing.emg.noise.enabled = True
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentIndex(0); pv._update_actions()
+    pv._refresh_files(); pv.file_rail.select_index(0); pv._update_actions()
     # noise on but no reference -> options disabled
     assert pv.noise_opts.isEnabled() is False
     # choose a rest region on the graph -> sets the reference -> options enable
@@ -259,7 +259,7 @@ def test_emg_result_view_selectable_channels(qapp, tmp_path):
     s = _settings(str(tmp_path))
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentIndex(0)
+    pv._refresh_files(); pv.file_rail.select_index(0)
     path = os.path.join(INPUT, "synth_case_A.csv")
     data = stage_emg_all_channels(s, path)
     assert data["cols"] == [2, 3, 4]
@@ -282,7 +282,7 @@ def _stage_mech(pv, s, name="synth_case_A.csv"):
     """Refresh + select `name`, then stage its mechanics preview synchronously."""
     from respmech.ui.workers import stage_mechanics_preview
     pv._refresh_files()
-    pv.file_combo.setCurrentText(name)
+    pv.file_rail.select_filename(name)
     return stage_mechanics_preview(s, os.path.join(INPUT, name))
 
 
@@ -363,7 +363,7 @@ def test_file_change_resets_breath_overlays(qapp, tmp_path):
     pv = win.preview_screen
     pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
     assert pv._bov.get("raw", {}).get("regions")      # overlays present for A
-    pv.file_combo.setCurrentText("synth_case_B.csv")  # -> _on_file_selected -> reset
+    pv.file_rail.select_filename("synth_case_B.csv")  # -> _on_file_selected -> reset
     assert pv._bov == {} and pv._breaths == []
     win.close()
 
@@ -382,7 +382,7 @@ def test_file_change_clears_emg_all_cache(qapp, tmp_path):
     pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
     pv._on_emg_all_result(stage_emg_all_channels(s, path))
     assert pv._emg_all is not None                    # A's conditioned result cached
-    pv.file_combo.setCurrentText("synth_case_B.csv")  # -> reset drops the cache
+    pv.file_rail.select_filename("synth_case_B.csv")  # -> reset drops the cache
     assert pv._emg_all is None
     pv._render_emg_result()                           # a checkbox re-render now no-ops
     assert pv._result_label_y is None
@@ -399,7 +399,7 @@ def test_file_change_clears_previewed_file(qapp, tmp_path):
     pv = win.preview_screen
     pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
     assert pv._previewed_file == "synth_case_A.csv"
-    pv.file_combo.setCurrentText("synth_case_B.csv")
+    pv.file_rail.select_filename("synth_case_B.csv")
     assert pv._previewed_file is None
     win.close()
 
@@ -415,7 +415,7 @@ def test_file_switch_invalidates_inflight_tokens(qapp, tmp_path):
     pv = win.preview_screen
     pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
     before = dict(pv._tokens)
-    pv.file_combo.setCurrentText("synth_case_B.csv")  # -> _begin_file_switch
+    pv.file_rail.select_filename("synth_case_B.csv")  # -> _begin_file_switch
     assert all(pv._tokens[k] > before[k] for k in ("mech", "batch", "emg_all", "emg_detail"))
     assert pv._tokens["noise"] == before["noise"]     # file-independent -> preserved
     win.close()
@@ -433,7 +433,7 @@ def test_refresh_files_prev_vanished_resets_overlays(qapp, tmp_path):
     assert pv._bov.get("raw", {}).get("regions")
     s.input.files = "synth_case_B.csv"                # narrow the glob: A no longer matches
     pv.refresh_files()
-    assert pv.file_combo.currentText() == "synth_case_B.csv"
+    assert pv.file_rail.current_filename() == "synth_case_B.csv"
     assert pv._bov == {} and pv._breaths == [] and pv._previewed_file is None
     win.close()
 
@@ -605,7 +605,7 @@ def test_set_noise_profile_dialog_applies_selection(qapp, tmp_path, monkeypatch)
     s = _settings(str(tmp_path))
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
 
     class _FakeDialog:                                   # stub: accept with a chosen span
         def __init__(self, *a, **k):
@@ -630,7 +630,7 @@ def test_set_noise_profile_dialog_cancel_leaves_settings(qapp, tmp_path, monkeyp
     s = _settings(str(tmp_path))
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     before = s.processing.emg.noise.reference_file
 
     class _FakeDialog:
@@ -653,7 +653,7 @@ def test_noise_without_reference_hint_points_to_the_modal(qapp, tmp_path):
     s.processing.emg.noise.reference_file = ""
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     pv._update_actions()
     txt = pv.status.text()
     assert "Set noise profile" in txt                    # points at the new modal…
@@ -695,7 +695,7 @@ def test_render_preview_trim_error_shows_channels_not_error_card(qapp, tmp_path,
     s = _settings(str(tmp_path))
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     monkeypatch.setattr(compute, "trim",
                         lambda *a, **k: (_ for _ in ()).throw(compute.TrimError("flow never crosses zero")))
     pv._render_preview(workers.stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv")))
@@ -723,7 +723,7 @@ def test_batch_precondition_error_is_soft_not_a_hard_failure(qapp, tmp_path, err
     s = _settings(str(tmp_path))
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     result = BatchResult(files={"synth_case_A.csv": FileResult(
         file="synth_case_A.csv", error=error, error_kind=kind)})
     pv._on_batch_result(result)                      # returns normally (no _FileRunError)
@@ -807,7 +807,7 @@ def test_label_headroom_does_not_compound_across_repaints(qapp, tmp_path):
     s = _settings(str(tmp_path))
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     path = os.path.join(INPUT, "synth_case_A.csv")
     pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
     pv._on_emg_detail_result(stage_emg_channel(s, path, 0))
@@ -832,11 +832,11 @@ def test_file_switch_clears_all_panels(qapp, tmp_path):
     s = _settings(str(tmp_path))
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
     pv._on_batch_result(run_batch(s, only_files=["synth_case_A.csv"]))   # fills table + Campbell
     assert pv.table.model().rowCount() > 0 and pv._channel_plots
-    pv.file_combo.setCurrentText("synth_case_B.csv")   # -> clears every panel as at start
+    pv.file_rail.select_filename("synth_case_B.csv")   # -> clears every panel as at start
     assert pv.table.model().rowCount() == 0 and pv._channel_plots == []
     assert pv._bov == {} and pv._breaths == []
     win.close()
@@ -850,11 +850,11 @@ def test_stale_error_card_cleared_on_file_switch(qapp, tmp_path):
     s = _settings(str(tmp_path))
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
     pv._overlays["campbell"].show_error("Test run failed", "boom")
     assert pv.panel_error("campbell") is not None
-    pv.file_combo.setCurrentText("synth_case_B.csv")   # -> _clear_all_panels dismisses it
+    pv.file_rail.select_filename("synth_case_B.csv")   # -> _clear_all_panels dismisses it
     assert pv.panel_error("campbell") is None
     assert pv._overlays["campbell"].isHidden() is True
     win.close()
@@ -875,19 +875,20 @@ def test_detail_job_covers_both_time_and_psd_panels(qapp, tmp_path):
     win.close()
 
 
-def test_file_strip_sizes_to_content_not_window(qapp, tmp_path):
-    """The file selector sizes to the recording names instead of swallowing the row's
-    stretch; the ◀/▶ glyphs keep side air and can never clip (width tracks sizeHint —
-    the QSS min-width:0 makes any code-side fixed width a dead letter); Refresh sits
-    just right of ▶ at its natural size, with the slack parked in a trailing stretch."""
+def test_file_strip_and_rail_size_to_content_not_window(qapp, tmp_path):
+    """B02 replaced the old file_combo — whose 'wide' cap kept it off the top bar's
+    stretch — with a left-hand file rail panel; this guards the same failure mode in its
+    new shape. The rail must stay within its own min/max width bound rather than
+    swallowing the workspace, and the ◀/▶ + Refresh cluster still in the top bar (just
+    without the combo it used to bracket) keeps the same sizing discipline as before."""
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
     win.resize(1400, 900); win.show()
     win.tabs.setCurrentWidget(pv); pv._refresh_files(); qapp.processEvents()
-    assert pv.file_combo.count() > 0                     # the guard is meaningless when empty
-    assert pv.file_combo.width() < win.width() / 3       # was 1222px of 1400 before the fix
-    assert pv.file_combo.width() >= min(pv.file_combo.sizeHint().width(), 338)
+    assert pv.file_rail.count() > 0                     # the guard is meaningless when empty
+    assert pv.file_rail.minimumWidth() <= pv.file_rail.width() <= pv.file_rail.maximumWidth()
+    assert pv.file_rail.width() < win.width() / 3        # never eats the workspace
     for b in (pv.btn_prev_file, pv.btn_next_file):
         assert b.width() >= b.sizeHint().width()         # the historical clipped-glyph mode
         assert b.width() > 20                            # air exists (13px before the fix)
@@ -927,7 +928,7 @@ def test_breath_labels_stay_pinned_to_the_view_top_under_zoom(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
     win.resize(1400, 900); win.show(); qapp.processEvents()
-    pv._refresh_files(); pv.file_combo.setCurrentIndex(0)
+    pv._refresh_files(); pv.file_rail.select_index(0)
     pv._preview(); qapp.processEvents()
     vb = pv._channel_plots[0].getViewBox()
     texts = list(pv._breath_texts.values())
@@ -1082,7 +1083,7 @@ def test_mechanics_batch_snapshot_is_mechanics_only(qapp, tmp_path, monkeypatch)
     s.processing.emg.noise.enabled = True
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     captured = {}
     monkeypatch.setattr(pv, "_launch", lambda kind, token, worker: captured.setdefault("w", worker))
     pv._schedule("batch")
@@ -1124,7 +1125,7 @@ def test_breath_labels_fit_inside_the_short_channel_plots(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path))))
     win.resize(1360, 880); win.show(); qapp.processEvents()
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentIndex(0); pv._preview()
+    pv._refresh_files(); pv.file_rail.select_index(0); pv._preview()
     for _ in range(10):
         qapp.processEvents()
     assert pv._breath_texts, "no breath labels drawn"

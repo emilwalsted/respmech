@@ -12,12 +12,13 @@ import os
 
 from PySide6.QtCore import Qt, Signal, QThread, QTimer, QUrl, QElapsedTimer
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QHBoxLayout, QHeaderView, QLabel, QMessageBox, QProgressBar,
-                               QPushButton, QTableView, QTableWidget, QTableWidgetItem,
-                               QPlainTextEdit, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMessageBox, QProgressBar,
+                               QPushButton, QTableView, QPlainTextEdit, QVBoxLayout, QWidget)
 
 from respmech.ui.dialogs import TextViewerDialog, short_error
+from respmech.ui.file_rail import FileRail
 from respmech.ui.flow_layout import install_flow as _install_flow
+from respmech.ui.manifest import manifest_from_filenames
 from respmech.ui.result_table import ResultTableModel, configure_result_table, resize_result_table
 from respmech.ui.validation import matching_files, path_problem
 from respmech.ui.workers import BatchWorker, WriteWorker
@@ -163,21 +164,15 @@ class RunScreen(QWidget):
         self.log = QPlainTextEdit(); self.log.setReadOnly(True)
         root.addWidget(self.log, 2)
 
-        # P20: per-file results — status + breath count; double-click drills into Preview
+        # P20/B02: per-file results — one rail row per file (verdict + breath count),
+        # replacing the old files_table. Double-click drills into Preview & QC.
         files_caption = QLabel("Files processed — double-click a row to open it in Preview & QC")
         files_caption.setProperty("role", "heading")
         root.addWidget(files_caption)
-        self.files_table = QTableWidget(0, 3)
-        self.files_table.setHorizontalHeaderLabels(["File", "Status", "Breaths"])
-        _hh = self.files_table.horizontalHeader()
-        _hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)             # File fills the width
-        _hh.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        _hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.files_table.setToolTip("Double-click a file to open it in Preview & QC.")
-        self.files_table.verticalHeader().setVisible(False)
-        self.files_table.setEditTriggers(self.files_table.EditTrigger.NoEditTriggers)
-        self.files_table.cellDoubleClicked.connect(self._on_file_row_activated)
-        root.addWidget(self.files_table, 1)
+        self.file_rail = FileRail()
+        self.file_rail.setToolTip("Double-click a file to open it in Preview & QC.")
+        self.file_rail.fileActivated.connect(self._on_file_row_activated)
+        root.addWidget(self.file_rail, 1)
 
         average_caption = QLabel("Average per file — the rows written to data/Average breathdata.xlsx")
         average_caption.setProperty("role", "heading")
@@ -720,7 +715,7 @@ class RunScreen(QWidget):
         if result is not None:
             try:
                 self._fill_table(result)
-                self._fill_files_table(result)        # P20 per-file status
+                self._fill_file_rail(result)          # P20/B02 per-file status
                 self._append_summary(result)
                 self._last_failed = list(result.failed_files)   # P18 re-run set
             except Exception as e:                # noqa: BLE001
@@ -822,6 +817,10 @@ class RunScreen(QWidget):
         if nr:
             self._append(f"  noise: prop_decrease {nr.get('prop_decrease')} "
                          f"(fidelity target {nr.get('fidelity_target')})")
+        # B02: failures first — a summary that lists nine successes before the one
+        # failure buries the thing a reader actually needs to act on.
+        for fname, fr in result.failed_files.items():
+            self._append(f"  {fname}: FAILED — {getattr(fr, 'error', '') or '(no detail)'}")
         for fname, fr in result.ok_files.items():
             n = len(fr.breaths_table) if fr.breaths_table is not None else 0
             line = f"  {fname}: {n} breaths"
@@ -847,27 +846,44 @@ class RunScreen(QWidget):
             # Cancel would look disabled-by-explanation while it is actually live again.
             self.btn_cancel.setToolTip("")
 
-    # -- per-file results, subset re-run, single-file write (P18/P19/P20) ----
-    def _fill_files_table(self, result):
-        """One row per file: name, ok/failed status, breath count. Double-clicking a
-        row drills back into Preview & QC for that file."""
-        files = getattr(result, "files", {}) or {}
-        self.files_table.setRowCount(len(files))
-        for r, (fname, fr) in enumerate(files.items()):
-            err = getattr(fr, "error", None)
-            status = "Failed" if err else "OK"
-            bt = getattr(fr, "breaths_table", None)
-            nb = "" if err else str(len(bt) if bt is not None else 0)
-            name_item = QTableWidgetItem(fname)
-            name_item.setToolTip(str(err) if err else fname)   # full name recoverable if the column elides
-            self.files_table.setItem(r, 0, name_item)
-            self.files_table.setItem(r, 1, QTableWidgetItem(status))
-            self.files_table.setItem(r, 2, QTableWidgetItem(nb))
+    # -- per-file results, subset re-run, single-file write (P18/P19/P20/B02) -
+    def _fill_file_rail(self, result):
+        """One rail row per file this run touched, marked with its verdict + breath
+        count, then failures brought to the top — so reaching the one failed file in a
+        large batch takes a glance and a click instead of scrolling past every success.
 
-    def _on_file_row_activated(self, row, _col):
-        item = self.files_table.item(row, 0)
-        if item and item.text():
-            self.open_file_requested.emit(item.text())   # MainWindow -> Preview tab + select
+        A FULL run's file set (``self._only_files is None``) REPLACES the rail outright:
+        it is the complete truth about what the current input folder/mask contains, and a
+        stale row from a folder the user has since changed must never linger. A SUBSET
+        run (P18 "Re-run failed", P19 "Process & write this file") instead unions with
+        the rail's existing filenames — it must not shrink the rail down to just the
+        retried files, since the other rows' verdicts from the full run that preceded it
+        are still current information. This also keeps the method self-contained and
+        directly testable without going through ``_start()`` first, exactly like the
+        ``files_table`` it replaces was.
+
+        The failed-first sort is likewise judged from the RAIL'S OWN current state
+        (``FileRail.any_failed()``), not just this run's ``result.failed_files``: a
+        subset re-run that fixes file A must not silently un-sort file D, which this run
+        never touched and which is still failed."""
+        files = getattr(result, "files", {}) or {}
+        folder = (self._run_settings_snapshot or self.state.settings).input.folder
+        if self._only_files is None:
+            names = sorted(files.keys())
+        else:
+            names = sorted(set(self.file_rail.filenames()) | set(files.keys()))
+        self.file_rail.set_manifest(manifest_from_filenames(folder, names))
+        for fname, fr in files.items():
+            err = getattr(fr, "error", None)
+            bt = getattr(fr, "breaths_table", None)
+            self.file_rail.mark_result(fname, ok=err is None,
+                                       breaths=None if err else (len(bt) if bt is not None else 0),
+                                       error=str(err) if err else None)
+        self.file_rail.sort_failed_first(self.file_rail.any_failed())
+
+    def _on_file_row_activated(self, filename):
+        if filename:
+            self.open_file_requested.emit(filename)   # MainWindow -> Preview tab + select
 
     def _rerun_failed(self):
         """Re-run only the files that failed in the last run (P18)."""
