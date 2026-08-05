@@ -154,6 +154,30 @@ run_screen.py`'s `WriteWorker` wiring): the symptom was not a clean exception bu
 pytest run. Store the target as a bound method (`self._on_write_elsewhere_finished`, not
 `lambda r: self._on_write_elsewhere_finished(r)`) and connect that.
 
+### A GUI-thread flag driven by a `Qt.QueuedConnection` signal lags the worker thread's own state
+
+A worker-thread transition (e.g. `BatchWorker` entering its uninterruptible write phase)
+is real the instant the worker thread makes it — but anything the GUI derives from a
+*signal* announcing that transition (a heartbeat timer started in the signal's handler,
+a flag set there) only becomes true once Qt's event loop has actually delivered that
+queued signal, which is unavoidably asynchronous (a worker thread must never touch
+widgets directly, so `Qt.QueuedConnection` is correct and not the bug). Code that reacts
+to a user action in that gap — e.g. `RunScreen._cancel()` deciding which message to show
+based on `self._heartbeat.isActive()` — can act on stale information for however long
+that one event-loop tick takes. Found by three independent review agents on the same
+diff (ticket "Cancel and progress become honest during the write phase"): a Cancel click
+landing in that gap logged the pre-transition message even though the worker had already
+committed to the phase where cancelling does nothing.
+
+Fix: have the worker thread set a plain attribute on itself (`self._writing = True` in
+`ui/workers.py`, as literally its first action on entering the phase) and have the GUI
+read that attribute directly (`getattr(self._worker, "_writing", False)`) instead of
+inferring the transition from a Qt-delivered side effect. A simple attribute read/write
+is atomic under the GIL, so this closes the race to bytecode width instead of one event-
+loop tick. Applies to any future GUI code deciding "has the worker done X yet" — read the
+worker's own state directly when it is a plain value, don't infer it from a queued
+signal's side effects.
+
 ## Releases (`.github/workflows/release.yml` = "Build installers")
 
 - Trigger: push a `v*` tag (or manual dispatch). Builds a Windows **MSI** and a
