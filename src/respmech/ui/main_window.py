@@ -87,9 +87,15 @@ class MainWindow(QMainWindow):
         # list (a real glob), so — like Preview's own rail rebuild above — it is refreshed
         # only on an actual input folder/mask edit, never on every settings_changed tick.
         sc.inputs_changed.connect(rn._update_plan_summary)
-        # the guided "new analysis" flow LOCKS (does not hide) Preview/Run until every
-        # setting is valid, so the whole workflow is visible as a stepper (P24)
-        sc.flow_ready_changed.connect(self._set_downstream_enabled)
+        # B04: the guided "new analysis" flow used to LOCK (not hide) the Preview & QC tab
+        # until every setting was valid — a stepper that turned out to be invisible (a
+        # QTabBar stylesheet colour overrides Qt's disabled palette, so a locked tab looks
+        # identical to an unlocked one) and closed the wrong thing anyway (a first-time
+        # user could not even look ahead). Every surface is reachable now; the one action
+        # that stays gated is the Run drawer's primary button, via its own commitment
+        # sheet (run_screen.py). sc.flow_ready_changed is unused for now — kept defined in
+        # case a future screen wants a cheap "is the analysis fully valid" edge signal —
+        # rather than wired to a receiver invented only to have one.
         # the window title names the active analysis and its unsaved-edits (dirty) state
         sc.analysis_state_changed.connect(self._update_window_title)
         self._update_window_title()
@@ -166,17 +172,6 @@ class MainWindow(QMainWindow):
         # P25: "New from last rig" inherits the last channel mapping into the guided flow
         self.settings_screen.enter_new_mode(use_last_rig=(dlg.mode == "new_rig"))
 
-    def _set_downstream_enabled(self, ready: bool):
-        """Lock/unlock the Preview & QC tab (needs valid settings). It stays *visible* so
-        the user always sees the step exists; a tooltip on the locked tab says why it can't
-        be entered yet (P24). Run & results has no tab of its own to lock any more (B03: it
-        lives inside this same tab as a drawer) — locking this ONE tab already keeps it out
-        of reach exactly as before, since there is nowhere else left to get to it from."""
-        ready = bool(ready)
-        hint = "" if ready else "Complete the Setup to unlock this step."
-        self.tabs.setTabEnabled(self._i_preview, ready)
-        self.tabs.setTabToolTip(self._i_preview, hint)
-
     def _update_window_title(self):
         """Name the active analysis in the title bar and flag unsaved edits, so it is
         obvious which analysis is loaded and whether it has been saved. The unsaved
@@ -206,8 +201,7 @@ class MainWindow(QMainWindow):
         right after a window-level Analysis-menu action or a Preview-triggered Setup update
         (see the callers), both "X just happened" notifications a user expects to see from
         wherever they are, not only on a later visit to Setup. Falls back to "Ready." rather
-        than a blank bar: some of these actions (New analysis) land in the guided flow, whose
-        own feedback lives on Setup's guidance label rather than the status line."""
+        than a blank bar."""
         self.statusBar().showMessage(self.settings_screen.status.text() or "Ready.")
 
     def _on_run_started(self):
@@ -252,9 +246,8 @@ class MainWindow(QMainWindow):
             bar.showMessage(msg)
 
     def _show_active_tab_status(self):
-        """Show the current tab's own last message on the bar (falling back to "Ready." for
-        a genuinely empty one, e.g. Setup's guided-flow mode — whose stage guidance lives on
-        its own label now, not the status line — so the bar never reads as simply blank)."""
+        """Show the current tab's own last message on the bar, falling back to "Ready." for
+        a genuinely empty one so the bar never reads as simply blank."""
         status = getattr(self.tabs.currentWidget(), "status", None)
         text = status.text() if status is not None else ""
         self.statusBar().showMessage(text or "Ready.")

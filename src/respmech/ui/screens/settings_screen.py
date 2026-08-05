@@ -225,18 +225,6 @@ class SettingsScreen(QWidget):
         self._wheel_guard = _wheel.guard_scroll_area(scroll)
         outer.addWidget(scroll, 1)
 
-        # Guided-flow guidance ("what do I do next"), pinned above the QC strip. Owned
-        # exclusively by _update_disclosure while self._mode == "new" — it no longer shares
-        # the shared status bar with Setup's own technical messages (channel assignment,
-        # detected file settings), which used to overwrite it and vice versa (both come from
-        # this same screen, so per-tab bar ownership alone cannot separate them).
-        self.guidance = QLabel("")
-        self.guidance.setWordWrap(True)
-        self.guidance.setProperty("banner", True)
-        self.guidance.setProperty("status", "info")
-        self.guidance.hide()
-        outer.addWidget(self.guidance)
-
         # Live QC strip, pinned below the (scrolling) form: every current caution at a
         # glance, so a first-timer sees them the moment they appear.
         self.qc = QLabel("")
@@ -244,28 +232,15 @@ class SettingsScreen(QWidget):
         self.qc.setProperty("banner", True)   # the box comes from the QSS, not extra margins
         outer.addWidget(self.qc)
 
-        # --- progressive-disclosure stages (used only in guided "new analysis" mode) -
-        # Ordered reveal groups. Placement-agnostic: reordering or moving a card only
-        # changes this registry, not the reveal logic. Stage 0 shows immediately; each
-        # later stage's cards appear once the PRECEDING stage's semantic gate passes,
-        # and the Preview/Run tabs unlock once everything validates (_all_ok).
-        self._stage_cards = [
-            [gin],                                   # 0: Input (always shown)
-            [gout],                                  # 1: Output (after Input is valid)
-            [gch],  # 2: Channels (after Output is valid). Output stays stage 1
-                    # so the guided flow still gates the channel picker between them.
-        ]
-        # Cards whose relevance depends on the analysis itself. Deliberately NOT in
-        # _stage_cards: that loop forces every registered card visible outside "new" mode, so
-        # a predicate there would be overwritten on the next keystroke — and
-        # test_startup_flow's "open mode reveals everything" walk would fail on a default
-        # AppState. Kept separate, ANDed in its own pass.
+        # B04: progressive disclosure is retired — every card (Input/Channels/Output) is
+        # visible from the first frame in every mode. Only cards whose RELEVANCE depends on
+        # the analysis itself still hide/show (_cond_cards, ANDed in its own pass by
+        # _apply_card_visibility) — Sample entropy's two parameters are meaningless unless a
+        # column is actually assigned to entropy, in either mode.
         self._cond_cards = [
             (gent, lambda: bool(self.state.settings.input.channels.entropy)),
         ]
-        self._stage_gate = [self._input_stage_ok, self._output_stage_ok]
-        self._mode = "full"          # "full" = every card+tab visible (default/open); "new" = guided
-        self._revealed = len(self._stage_cards)
+        self._mode = "full"          # "full" = an opened/default analysis; "new" = guided
         self._flow_ready = True
         # the visual channel-assignment modal sits between Output and the rest of the
         # cards in the guided flow (see _update_disclosure); these track its one-shot
@@ -504,8 +479,7 @@ class SettingsScreen(QWidget):
         self.to_state()
         self._mark_dirty()
         self.settings_changed.emit()
-        self._update_disclosure()   # last, so guided-flow status wins over downstream
-                                    # screens' technical validation messages
+        self._update_disclosure()   # last, so this screen's own validation status wins
 
     def _on_sampling_frequency_changed(self, *_):
         """Rebuild the manifest so ``Manifest.settings_fs`` (and thus the frequency-
@@ -527,7 +501,7 @@ class SettingsScreen(QWidget):
         self._update_format_readout(raw_mask=raw_mask)
         self.inputs_changed.emit()
         self.settings_changed.emit()
-        self._update_disclosure()   # last, so guided-flow status wins (see above)
+        self._update_disclosure()   # last, so this screen's own validation status wins (see above)
 
     def _delimiter_label(self, manifest):
         """A deterministic delimiter label from the format actually being parsed — never
@@ -654,17 +628,18 @@ class SettingsScreen(QWidget):
     def is_dirty(self):
         return self._dirty
 
-    # -- guided flow / progressive disclosure -------------------------------
+    # -- guided ('new analysis') flow ----------------------------------------
     def enter_new_mode(self, use_last_rig: bool = False):
-        """Enter the guided 'new analysis' flow: collapse the reveal back to just the
-        Input card and keep the downstream (Preview/Run) tabs locked until every setting
-        validates. Cards then appear stage by stage as each is completed.
+        """Enter the guided 'new analysis' flow: blank the input/output folders and mask,
+        and re-arm the one-shot channel-assignment modal (B04: cards no longer hide/reveal
+        stage by stage — every card is already visible — but a fresh analysis still gets
+        one auto-offered trip through the channel picker once its input folder has
+        matching files, see _update_disclosure).
 
         ``use_last_rig`` (P25) pre-fills the channel mapping + sampling from the last
         analysis, so a returning user keeps their hardware layout and the channel-
         assignment modal doesn't force-open."""
         self._mode = "new"
-        self._revealed = 1
         self._flow_ready = None          # force the next _set_flow_ready() to emit
         self._channel_modal_done = bool(use_last_rig)   # rig inherited → don't force the modal
         self._channel_modal_pending = False
@@ -688,25 +663,26 @@ class SettingsScreen(QWidget):
                     self.from_state()                # reflect the rig in the widgets
         finally:
             self._loading = prev
-        # let the downstream screens react to the blanked settings FIRST, so the guided
+        # let the downstream screens react to the blanked settings FIRST, so the validation
         # status set by _update_disclosure below lands last and is not clobbered by their
-        # technical validation messages in the shared status bar
+        # own technical messages on the shared status bar
         self.inputs_changed.emit()
         self.settings_changed.emit()
-        self._update_disclosure()   # sets the stage-appropriate guidance status (last word)
+        self._update_disclosure()   # sets this screen's own validation status (last word)
 
     def enter_open_mode(self):
-        """Enter 'open' mode: reveal every card and every downstream tab, then validate
-        so any problem in the opened analysis is surfaced right away."""
+        """Enter 'open' mode: normalise the mask and validate, so any problem in the
+        opened analysis is surfaced right away. Every card is already visible in every
+        mode since B04 — the only thing this stops is treating the session as a guided
+        new-analysis flow, so the channel modal never force-opens over an
+        already-configured analysis."""
         self._mode = "full"
-        self._revealed = len(self._stage_cards)
         raw_mask = self.state.settings.input.files   # captured BEFORE narrowing, for the manifest
         self._normalize_mask()      # a saved analysis may carry a multi-pattern mask
         self._update_format_readout(raw_mask=raw_mask)   # reflect the (possibly just-narrowed) mask
         self._apply_card_visibility()
         self._flow_ready = None
         self._set_flow_ready(True)
-        self.guidance.hide()        # leaving 'new' mode: the guided-flow sentence no longer applies
         self._show_validation_status()
 
     def open_analysis(self, path):
@@ -806,15 +782,27 @@ class SettingsScreen(QWidget):
 
     # -- visual channel assignment ------------------------------------------
     def _open_channel_setup_for_flow(self):
-        """Deferred one-shot auto-open of the channel modal in the guided flow, once
-        Output is valid. Marks the step done first (so it never re-opens), then reveals
-        the remaining cards whether the user assigns channels or cancels."""
+        """Deferred one-shot auto-open of the channel modal in the guided flow, once the
+        input folder has matching files (B04 — no longer gated on the Output card, since
+        there is no longer a disclosure stage to gate). Marks the step done first (so it
+        never re-opens), whether the user assigns channels or cancels.
+
+        Only re-runs ``_update_disclosure`` itself on a CANCEL. On accept,
+        ``_open_channel_setup`` -> ``_apply_channel_mapping`` already ran it once (via
+        ``_on_inputs_changed``) before setting its own, more specific "Channels
+        assigned…" status — since B04 made ``_update_disclosure`` end by writing the
+        live validation status (there is no longer a separate guidance label for it to
+        land on instead), an unconditional second call here would immediately overwrite
+        that message with the generic "Settings valid ✓" the instant the modal closed.
+        Cancelling never reaches ``_apply_channel_mapping``, so nothing else refreshes
+        the QC strip/flow_ready/status for the still-unassigned channels without this."""
         self._channel_modal_pending = False
         if self._channel_modal_done:
             return
         self._channel_modal_done = True
-        self._open_channel_setup(initial={})     # fresh analysis -> no pre-selection
-        self._update_disclosure()                # reveal the rest (OK applied, or cancelled)
+        applied = self._open_channel_setup(initial={})     # fresh analysis -> no pre-selection
+        if not applied:
+            self._update_disclosure()
 
     def _open_channel_setup(self, initial=None):
         """Show the visual channel-assignment modal over the valid data files matching the
@@ -964,8 +952,9 @@ class SettingsScreen(QWidget):
 
     def _apply_channel_mapping(self, m, fmt_note=""):
         """Write a role->column mapping from the picker STRAIGHT INTO the model, then run the
-        normal reactive commit (which advances the guided disclosure). ``fmt_note`` is an
-        optional summary of any auto-detected file settings to mention in the status.
+        normal reactive commit (which re-validates and, in the guided flow, marks the
+        channel step done). ``fmt_note`` is an optional summary of any auto-detected file
+        settings to mention in the status.
 
         The model is written here rather than through widgets because there are none: this is
         the only writer of input.channels, and to_state deliberately leaves it alone."""
@@ -987,129 +976,40 @@ class SettingsScreen(QWidget):
         self._set_status(msg)
 
     def _update_disclosure(self):
-        """Recompute which cards are revealed and whether the downstream tabs are ready.
-        In 'new' mode the reveal is a monotonic high-water mark (a card never retracts
-        once shown, so editing one can't yank another away), while the downstream gate is
-        live (it re-locks if the settings become invalid). In any other mode everything
-        is visible and the downstream tabs are always available."""
+        """Recompute the live QC strip, the one-shot channel-modal auto-open (guided 'new
+        analysis' flow only), and the live validation status. B04 retired progressive
+        disclosure: every card is visible from the first frame in every mode (only
+        _apply_card_visibility's relevance-based _cond_cards still hide/show), so there is
+        no longer a separate 'full' vs 'new' path here except for the channel-modal
+        one-shot, which stays guided-flow-only — auto-opening it over an already-open
+        analysis would be a surprise, not a courtesy."""
         self._update_qc()               # keep the live caution strip current in every mode
-        if self._mode != "new":
-            self._apply_card_visibility()
-            self._set_flow_ready(True)
-            self.guidance.hide()        # the guided-flow sentence only applies to 'new' mode
-            self._set_status(self._validation_status())   # no Validate button: every edit re-checks
-            return
-        n_visible = 1
-        for gate in self._stage_gate:
-            if gate():
-                n_visible += 1
-            else:
-                break
-        # the visual channel-assignment modal sits between the Output stage and the Channels
-        # stage: once Output is valid, hold the Channels card until the modal has been dealt
-        # with, auto-opening it once. Derive the Channels stage index from the registry so
-        # this stays correct if a stage is added or reordered (rather than a bare literal 3).
-        _channels_stage = len(self._stage_cards)          # reveal count that first shows Channels
-        if n_visible >= _channels_stage and not self._channel_modal_done:
-            n_visible = _channels_stage - 1
-            if not self._channel_modal_pending:
-                self._channel_modal_pending = True
-                QTimer.singleShot(0, self._open_channel_setup_for_flow)
-        self._revealed = max(self._revealed, n_visible)      # monotonic
         self._apply_card_visibility()
+        if (self._mode == "new" and not self._channel_modal_done
+                and not self._channel_modal_pending and self._input_stage_ok()):
+            self._channel_modal_pending = True
+            QTimer.singleShot(0, self._open_channel_setup_for_flow)
         ready = self._all_ok()
         self._set_flow_ready(ready)
-        # Friendly stage guidance lands on its own label, not the shared status bar — see
-        # where self.guidance is built above. _set_status is deliberately NOT called here:
-        # this screen's own technical messages (channel assignment, format detection) use it
-        # and must not be clobbered by (or clobber) the guided-flow sentence.
-        self.guidance.setText(self._new_mode_status(ready))
-        self.guidance.show()
+        self._set_status(self._validation_status())   # no Validate button: every edit re-checks
 
     def _apply_card_visibility(self):
-        for i, cards in enumerate(self._stage_cards):
-            visible = (self._mode != "new") or (i < self._revealed)
-            for c in cards:
-                c.setVisible(visible)
-        # Conditional cards break this function's monotonicity promise ("a card never
-        # retracts once shown"), so they get the one exemption that keeps that promise
-        # honest where it matters: a card holding the widget the user is typing in is never
-        # yanked out from under them.
-        staged = (self._mode != "new") or (len(self._stage_cards) - 1 < self._revealed)
+        """Conditional cards only (B04 retired the staged reveal): Sample entropy stays
+        hidden unless a column is actually assigned to it, in every mode. The one exemption
+        that survives is the focus guard — a card holding the widget the user is typing in
+        is never yanked out from under them."""
         for card, relevant in self._cond_cards:
             if card.isVisible() and card.isAncestorOf(QApplication.focusWidget()):
                 continue
-            card.setVisible(staged and relevant())
-
-    def _new_mode_status(self, ready):
-        """The guided-flow status line for the stage the user is on. The Input/Output
-        stages stay card-friendly (their gate fields are the only thing that matters);
-        once both pass, every card is revealed, so it is safe — and far more helpful —
-        to name the actual remaining blocker rather than a vague 'almost done'."""
-        if ready:
-            base = "Settings complete — Preview and Run are now available."
-            note = self._science_note()
-            return f"{base} Note: {note}." if note else base
-        if not self._input_stage_ok():
-            # if the folder + frequency are fine, the only thing wrong is that the mask
-            # matches nothing (easy to hit given the *.txt default) — say so instead of the
-            # generic prompt, so the user knows to edit 'Files to analyse'
-            s = self.state.settings
-            folder = (s.input.folder or "").strip()
-            fq = s.input.format.sampling_frequency
-            if folder and os.path.isdir(folder) and isinstance(fq, int) and fq >= 1:
-                if not matching_files(folder, s.input.files):
-                    return (f"No files match '{s.input.files}' in this folder — "
-                            "edit 'Files to analyse'.")
-            return "New analysis — fill in the Input card to begin."
-        if not self._output_stage_ok():
-            return "Input set — now choose an Output folder."
-        if not self._channel_modal_done:
-            return "Output set — assign your data channels to continue."
-        blocker = self._first_blocker()
-        return f"Almost done — {blocker}." if blocker else \
-            "Almost done — complete the remaining settings to unlock Preview."
+            card.setVisible(relevant())
 
     def _channel_collision(self):
-        """A HARD channel-mapping error (message, else ''): a required channel
-        (flow/poes/pgas/pdi) not assigned at all, one pointing at column 1 — the time axis —
-        or two of them sharing a column.
-
-        Unassigned used to be impossible to express: the spin boxes had a minimum of 1, so a
-        skipped mapping read as column 1 and that was the sentinel this checked. With the
-        picker as the only writer the value is genuinely None, so both cases are named — and
-        they are named separately, because "you have not chosen yet" and "you chose the time
-        axis" call for different advice."""
-        ch = self.state.settings.input.channels
-        req = [("flow", ch.flow), ("poes", ch.poes), ("pgas", ch.pgas), ("pdi", ch.pdi)]
-        unset = [n for n, c in req if c is None]
-        if unset:
-            return (f"{', '.join(unset)} not assigned — "
-                    "click 'Assign channels from data…'")
-        on_time = [n for n, c in req if c == 1]
-        if on_time:
-            return (f"{', '.join(on_time)} point at column 1 (the time axis) — "
-                    "click 'Assign channels from data…'")
-        cols = [c for _n, c in req if c]
-        dup = sorted({c for c in cols if cols.count(c) > 1})
-        if dup:
-            names = [n for n, c in req if c in dup]
-            return f"{', '.join(names)} are mapped to the same column"
-        return ""
-
-    def _first_blocker(self):
-        """A short, human reason the analysis is not yet valid, for the final guided
-        stage (channel collision, else core validation message, else the first path problem)."""
-        collision = self._channel_collision()
-        if collision:
-            return collision
-        try:
-            self.state.settings.validate()
-        except SettingsError as e:
-            return str(e)
-        except Exception:                           # noqa: BLE001 — unexpected -> no hint
-            return None
-        return self._path_problem()
+        """A HARD channel-mapping error (message, else ''), delegating to the Qt-free
+        ``ui.validation.channel_collision`` (moved there in B04 so the Run screen's
+        commitment sheet can name exactly the same blocker this screen's QC strip does,
+        for the identical mapping)."""
+        from respmech.ui.validation import channel_collision
+        return channel_collision(self.state.settings) or ""
 
     def _set_flow_ready(self, ready):
         ready = bool(ready)
@@ -1117,10 +1017,11 @@ class SettingsScreen(QWidget):
             self._flow_ready = ready
             self.flow_ready_changed.emit(ready)
 
-    # -- stage validity (semantic, so it survives future card re-placement) --
     def _input_stage_ok(self):
         """Input card complete: a real recordings folder with matching files, and a
-        sampling frequency."""
+        sampling frequency. B04's sole remaining use: the guided flow's one-shot
+        channel-modal auto-open hangs on this (an input folder that has matching files),
+        not on a disclosure stage — the modal needs actual data to preview."""
         s = self.state.settings
         folder = (s.input.folder or "").strip()
         if not folder or not os.path.isdir(folder):
@@ -1130,17 +1031,12 @@ class SettingsScreen(QWidget):
         fq = s.input.format.sampling_frequency
         return isinstance(fq, int) and fq >= 1
 
-    def _output_stage_ok(self):
-        """Output card complete: an output folder whose location exists on disk."""
-        out = (self.state.settings.output.folder or "").strip()
-        if not out:
-            return False
-        parent = out if os.path.isdir(out) else os.path.dirname(os.path.abspath(out))
-        return os.path.isdir(parent)
-
     def _all_ok(self):
-        """Every setting is valid (core validation + filesystem paths) — the gate that
-        reveals the Preview/Run tabs."""
+        """Every setting is valid (core validation + filesystem paths) — drives
+        flow_ready_changed and this screen's own 'Settings valid ✓' status. The Run
+        drawer's own primary-action gate (B04) is computed independently, over the same
+        shared checks (``ui.validation.channel_collision``/``path_problem``), so the two
+        can never disagree about a setting without also disagreeing about a run."""
         try:
             self.state.settings.validate()
         except Exception:                           # noqa: BLE001 — any invalidity -> not ready

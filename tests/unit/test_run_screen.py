@@ -795,3 +795,76 @@ def test_drawer_summary_reads_sensibly_with_folder_and_output_unset(qapp, tmp_pa
     assert "(input not set)" in text and "(output not set)" in text
     assert "  " not in text                    # no accidental double space from empty bits
     win.close()
+
+
+# --------------------------------------------------------------------------- #
+# The commitment sheet + the primary button's own gate (ticket B04)
+# --------------------------------------------------------------------------- #
+def test_primary_run_action_disabled_with_tooltip_when_mask_matches_nothing(qapp, tmp_path):
+    """Ticket B04 acceptance, verbatim: with a mask that matches nothing, the primary Run
+    action is disabled, ITS TOOLTIP contains 'no files match' (asserted on toolTip(), never
+    on the shown text — the ticket's own note on test discipline), and the commitment
+    sheet states the same sentence. Before B04, _quick_path_problem skipped the glob
+    entirely, so the button — and the drawer's own summary — both claimed the run was
+    ready right up until a click that then failed with exactly this message."""
+    win = _win(tmp_path); rn = win.run_screen
+    rn.state.settings.input.files = "*.nomatch"
+    rn.refresh_actions()
+    assert not rn.btn_run.isEnabled()
+    assert not rn.btn_dry.isEnabled()
+    assert "no files match" in rn.btn_run.toolTip().lower()
+    assert "no files match" in rn._commitment.text().lower()
+    win.close()
+
+
+def test_commitment_sheet_names_file_and_output_counts_matching_plan_outputs(qapp, tmp_path):
+    """With valid settings the commitment sheet names the input file count and the
+    planned output count, and both match A06's own plan_outputs for the identical
+    settings and file list — never a second, hand-rolled count (run_screen.py:175 in the
+    ticket's own words)."""
+    from respmech.core.io.plan import plan_outputs
+    win = _win(tmp_path); rn = win.run_screen
+    rn.refresh_actions()
+    files = rn._cached_matching_files()
+    assert len(files) == 2                          # synth_case_A.csv + synth_case_B.csv
+    plan = plan_outputs(rn.state.settings, files, cohort_outputs=True)
+    text = rn._commitment.text()
+    assert f"{len(files)} file" in text
+    assert f"{plan.total_count} file" in text
+    assert "Ready to run." in text
+    assert rn.btn_run.toolTip() == ""                # no blocker -> no tooltip either
+    win.close()
+
+
+def test_commitment_sheet_names_a_channel_collision_before_a_path_problem(qapp, tmp_path):
+    """_blockers() priority mirrors Setup's own former _first_blocker order (collision,
+    then core validation, then path) via the SAME shared ui.validation helpers — so the
+    commitment sheet and Setup's QC strip can never name a different TOP blocker for the
+    identical settings."""
+    win = _win(tmp_path); rn = win.run_screen
+    rn.state.settings.input.channels.flow = None    # a hard collision (not assigned)
+    rn.refresh_actions()
+    assert not rn.btn_run.isEnabled()
+    assert "not assigned" in rn.btn_run.toolTip().lower()
+    assert "not assigned" in rn._commitment.text().lower()
+    win.close()
+
+
+def test_quick_path_problem_never_globs_twice_for_an_unchanged_broken_mask(qapp, tmp_path, monkeypatch):
+    """The NEW glob-based check inside _quick_path_problem (ticket B04) must stay as cheap
+    as the file-rail-based count already is: repeated refresh_actions() calls over an
+    UNCHANGED (still-broken) mask must reuse the memoised match list, not re-scan the
+    folder on every tick — the same discipline test_refresh_actions_never_globs_for_the_
+    file_count already enforces for the happy path, extended to the newly-added check."""
+    import respmech.ui.screens.run_screen as run_screen_mod
+    win = _win(tmp_path); rn = win.run_screen
+    rn.state.settings.input.files = "*.nomatch"
+    rn.refresh_actions()                            # warms the cache with the real matcher
+    calls = []
+    monkeypatch.setattr(run_screen_mod, "matching_files",
+                        lambda *a, **k: calls.append(a) or [])
+    for i in range(5):
+        rn.state.settings.output.folder = str(tmp_path / f"out{i}")
+        rn.refresh_actions()
+    assert calls == []
+    win.close()

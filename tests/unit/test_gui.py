@@ -292,10 +292,12 @@ def test_analysis_menu_actions_show_feedback_regardless_of_active_tab(qapp, tmp_
     win.tabs.setCurrentWidget(win.preview_screen)  # looking at Preview & QC (hosts the Run
                                                     # drawer since B03), not Setup
     win._new_analysis()
-    # New analysis's own feedback moved to the guidance label (guided flow), so this is a
-    # neutral fallback rather than a blank bar — the real regression check is that it is
-    # NOT still showing whatever Run's own status happened to be.
-    assert win.statusBar().currentMessage() == "Ready."
+    # B04 retired the separate guidance label — Setup's own validation status (its only
+    # status now) lands on the bar instead, and a freshly blanked analysis is honestly
+    # invalid (no input folder) until the user fills one in again. The real regression
+    # check is that this is Setup's OWN message, not still whatever Run's status happened
+    # to be while Preview & QC was the active tab.
+    assert "invalid" in win.statusBar().currentMessage().lower()
     win._on_noise_reference_changed("synth_case_A.csv", [[1.0, 2.0]], False)
     assert "noise reference set" in win.statusBar().currentMessage().lower()
     win.close()
