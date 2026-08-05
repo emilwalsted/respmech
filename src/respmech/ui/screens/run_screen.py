@@ -45,6 +45,26 @@ _FIX_HINTS = {
 }
 
 
+def _fmt_duration(seconds) -> str:
+    """Elapsed time, precise to the second: "45s" or "3m 12s"."""
+    seconds = max(0, int(seconds))
+    m, s = divmod(seconds, 60)
+    return f"{m}m {s:02d}s" if m else f"{s}s"
+
+
+def _fmt_eta(seconds) -> str:
+    """A REMAINING-time estimate, deliberately coarser than ``_fmt_duration`` and always
+    tilde-prefixed (A07: "an estimate must always read as an estimate") — rounded to the
+    minute once it rounds up to a full minute or more, since a rate extrapolated from a
+    handful of files does not deserve second-level precision. Rounds first, THEN buckets —
+    rounding 59.6s to "~60s" instead of "~1m" would say the same thing two different ways
+    depending on which side of a whole minute the raw estimate happened to land."""
+    secs = round(max(0.0, seconds))
+    if secs < 60:
+        return f"~{max(1, secs)}s"
+    return f"~{max(1, round(secs / 60))}m"
+
+
 class RunScreen(QWidget):
     status_changed = Signal(str)
     run_started = Signal()          # a batch run began (main window locks Settings)
@@ -73,6 +93,14 @@ class RunScreen(QWidget):
         self._write_worker = None       # this as busy exactly like self._thread
         self._write_target_folder = None   # last successful "write elsewhere" destination
         self._pending_write_folder = None  # folder a write-elsewhere in flight is targeting
+        self._run_files = []            # this run's file list, from _append_plan (A07: batch-wide bar)
+        self._file_index = 0            # 1-based index of the file currently being computed
+        self._ok_file_count = 0         # files that finished computing OK — the write phase's
+                                        # figure step draws exactly these, before result exists
+        self._cancel_requested = False  # a Cancel click happened this run, whatever phase it landed in
+        self._figs_total = None         # None until the first per-file figure event arrives
+        self._figs_done = 0
+        self._figs_current_file = ""
         self._build()
         self.refresh_actions()
 
@@ -223,7 +251,11 @@ class RunScreen(QWidget):
         Reads ``self._run_settings_snapshot`` when ``_start`` has already frozen one for
         this run, falling back to the live ``self.state.settings`` otherwise — a caller
         that wants a preview of the CURRENT settings without going through ``_start`` (a
-        test, or a future "preview the plan" affordance) still gets one."""
+        test, or a future "preview the plan" affordance) still gets one.
+
+        Returns the resolved file list (after the subset filter) — ``_start`` keeps it as
+        ``self._run_files``, the denominator the compute-phase progress bar (A07) needs and
+        cannot otherwise get without re-deriving it."""
         s = self._run_settings_snapshot or self.state.settings
         files = matching_files(s.input.folder, s.input.files)
         if self._only_files:                            # a subset / re-run (P18/P19)
@@ -263,6 +295,7 @@ class RunScreen(QWidget):
             for p in plan.all_paths():
                 self._append(f"    • {p}")
         self._append("")     # blank line before the live run log
+        return files
 
     def _show_full_plan(self):
         """The complete, ungrouped file list for the last pre-flight plan (ticket A06):
@@ -481,11 +514,21 @@ class RunScreen(QWidget):
         self._last_result = None
         self._write_target_folder = None      # a new run invalidates any earlier redirect
         self.btn_write_elsewhere.setEnabled(False)
+        # A07: fresh per-run progress/cancel state. _file_index counts file_start events
+        # (1-based, "file i of N"); _ok_file_count counts file_done events and becomes the
+        # figure step's denominator, since the write phase has no BatchResult yet to read
+        # len(result.ok_files) from — only the compute phase's own events can tell us.
+        self._file_index = 0
+        self._ok_file_count = 0
+        self._cancel_requested = False
+        self._figs_total = None
+        self._figs_done = 0
+        self._figs_current_file = ""
         # Snapshot the settings ONCE, used for both the pre-flight plan below and the
         # worker — so a "write elsewhere" retry later (Settings stays editable once a run
         # finishes) reuses exactly what produced the result, never a live edit made since.
         self._run_settings_snapshot = copy.deepcopy(self.state.settings)
-        self._append_plan(write)                        # pre-flight: what will be read/written
+        self._run_files = self._append_plan(write)      # pre-flight: what will be read/written
         self._set_running(True)
         self.run_started.emit()
 
@@ -537,39 +580,132 @@ class RunScreen(QWidget):
     def _cancel(self):
         if self._worker:
             self._worker.cancel()
-            self._append("cancelling…")
+            self._cancel_requested = True
+            # Read the worker's OWN flag, not self._heartbeat.isActive(): the heartbeat only
+            # starts once the "writing" ProgressEvent has made its way through Qt's
+            # QueuedConnection from the worker thread, which is unavoidably asynchronous
+            # (this thread must never touch widgets directly). A click landing in that gap —
+            # after the worker has already committed to the uninterruptible write, before the
+            # GUI has been told — would otherwise still get the plain "cancelling…" line this
+            # ticket exists to stop showing for a click that arrived too late to cancel
+            # anything. _worker._writing is a plain attribute the worker sets as literally its
+            # first action in that phase (see workers.py), so this is right the moment the
+            # worker commits, not whenever Qt gets around to delivering the signal for it.
+            if getattr(self._worker, "_writing", False):
+                # The heartbeat itself may not have started ticking yet in that same gap, so
+                # an elapsed time is only meaningful once it has; the wording still stands
+                # without one, and the very next heartbeat tick (at most ~1s later) will show
+                # it as soon as it exists.
+                if self._heartbeat.isActive():
+                    secs = self._write_clock.elapsed() // 1000
+                    self._set_status(
+                        "Cancel received; finishing the output write "
+                        f"(this cannot be interrupted)… {secs}s")
+                else:
+                    self._set_status(
+                        "Cancel received; finishing the output write (this cannot be interrupted)…")
+            else:
+                self._append("cancelling…")
 
     def _tick_write(self):
         """Once-a-second heartbeat during the write phase — see __init__."""
+        self._set_status(self._write_status_text())
+
+    def _write_status_text(self) -> str:
+        """The write-phase status line — shared by the heartbeat tick and the per-file
+        figure-progress event, so neither can show a line the other would immediately
+        overwrite. Determinate once the first "figures — <file>" stage event has arrived
+        AND the compute phase told us how many files there are to draw for
+        (``self._ok_file_count``, ``self._figs_total``'s source); otherwise the same
+        generic elapsed-time line as before this ticket (A07)."""
         secs = self._write_clock.elapsed() // 1000
+        if self._figs_total:
+            n, done = self._figs_total, self._figs_done
+            eta = ""
+            # A rate extrapolated from a SINGLE file is noise, not an estimate — one unusually
+            # slow or fast figure would swing it wildly. Two or more gives at least a rough
+            # average, matching A07's "only once there are enough files for it to mean anything".
+            if 1 < done < n:
+                rate = self._write_clock.elapsed() / 1000.0 / done
+                eta = f" · {_fmt_eta(rate * (n - done))} left"
+            return (f"Writing diagnostic figures — {done} of {n} files "
+                    f"({self._figs_current_file}) · {_fmt_duration(secs)} elapsed{eta}")
         stage = f" — {self._write_stage}" if self._write_stage else ""
-        self._set_status(f"Writing output… {secs}s{stage}")
+        return f"Writing output… {secs}s{stage}, cannot be interrupted"
 
     def _on_progress(self, ev):
         if ev.kind == "file_start":
+            self._file_index += 1
             self._append(f"\n{ev.file}: {ev.message}")
         elif ev.kind == "stage":
             self._append(f"  {ev.message}…")
             if self._heartbeat.isActive():        # keep the heartbeat's label current
                 self._write_stage = ev.message
+                if ev.message.startswith("figures — "):
+                    # One event per file (writers._emit / plots._write_figures_impl). On a
+                    # spawned child this now arrives via the Manager().Queue() relay in
+                    # _figure_process.py, not just on the in-process path — UNLESS building
+                    # that Manager itself failed, in which case the child still writes every
+                    # figure but this branch simply never fires for it (see write_figures'
+                    # docstring: a failing progress channel costs only the per-file names,
+                    # never the write). The bar then stays the plain busy state below.
+                    self._figs_current_file = ev.file or ev.message[len("figures — "):]
+                    if self._figs_total is None and self._ok_file_count:
+                        self._figs_total = self._ok_file_count
+                        self.progress.setRange(0, self._figs_total)
+                    # Clamped at the total, not just at the progress-bar value: a timed-out or
+                    # crashed isolated child falls back to _in_process (_figure_process.py),
+                    # which RE-ITERATES every ok_file and re-emits this same event for files
+                    # the child had already reported — without the clamp here too, the STATUS
+                    # TEXT (built from _figs_done directly) could read "5 of 3 files" even
+                    # though the bar itself was already capped.
+                    self._figs_done = (min(self._figs_done + 1, self._figs_total)
+                                       if self._figs_total else self._figs_done + 1)
+                    if self._figs_total:
+                        self.progress.setValue(self._figs_done)
                 self._tick_write()
         elif ev.kind == "breath":
-            pct = ""
-            if ev.total_breaths:
-                self.progress.setRange(0, ev.total_breaths)
-                self.progress.setValue(ev.breath)
-                pct = f" — {ev.breath / ev.total_breaths:.0%}"
-            self._set_status(f"{ev.file}: breath {ev.breath}/{ev.total_breaths}{pct}")
+            # Batch-wide, not per-file (A07): a bar that fills from 0 to 100% once per file
+            # reads as "done" N times over on a multi-file run — measured at 1.6s for 12
+            # fills on a 12-file batch. Held indeterminate until the FIRST file_start (the
+            # shared-noise-profile stage before it has no per-file information to show, and
+            # a determinate bar stuck at zero reads worse than the animated one).
+            if ev.total_breaths and self._run_files:
+                n = len(self._run_files)
+                frac = (self._file_index - 1 + ev.breath / ev.total_breaths) / n
+                self.progress.setRange(0, 1000)
+                self.progress.setValue(int(1000 * max(0.0, min(1.0, frac))))
+                self._set_status(f"File {self._file_index} of {n} — "
+                                 f"{ev.file}: breath {ev.breath}/{ev.total_breaths}")
+            else:                # no run-file list (e.g. a direct test of this handler) — old behaviour
+                pct = ""
+                if ev.total_breaths:
+                    self.progress.setRange(0, ev.total_breaths)
+                    self.progress.setValue(ev.breath)
+                    pct = f" — {ev.breath / ev.total_breaths:.0%}"
+                self._set_status(f"{ev.file}: breath {ev.breath}/{ev.total_breaths}{pct}")
         elif ev.kind == "file_done":
+            self._ok_file_count += 1
             self._append(f"  done ({ev.message})")
         elif ev.kind == "writing":
             # The compute phase left the bar at a static, determinate 100%; writing (figures
-            # especially) can take longer than the compute did, with no per-breath ticks to
-            # move it. Return to the animated busy state and start the elapsed-time heartbeat
-            # so the window visibly keeps working even during the long, quiet figure step.
+            # especially) can take longer than the compute did. Return to the animated busy
+            # state — it stays that way until the first per-file figure event turns it
+            # determinate (see the "stage" branch above) — and start the elapsed-time
+            # heartbeat so the window visibly keeps working even during the long, quiet
+            # figure step. Cancel cannot reach this phase (A07): write_batch takes no
+            # cancel control, and the slow part (figures) runs in a child process the
+            # parent can only wait on — so the control is disabled here, honestly, instead
+            # of staying lit for a click that will be silently ignored.
             self.progress.setRange(0, 0)
             self._append(f"\n{ev.message}…")
             self._write_stage = ""
+            self._figs_total = None
+            self._figs_done = 0
+            self._figs_current_file = ""
+            self.btn_cancel.setEnabled(False)
+            self.btn_cancel.setToolTip(
+                "Writing the output cannot be interrupted; the analysis itself is already complete.")
             self._write_clock.restart()
             self._heartbeat.start()
             self._tick_write()
@@ -617,6 +753,13 @@ class RunScreen(QWidget):
             self._set_status(f"Run failed — {short_error(self._fatal_msg)}")
         else:
             self.progress.setValue(1)
+            if self._cancel_requested:
+                # A07: the cancel click landed during the (uninterruptible) write phase, and
+                # the run went on to finish normally. Neither "Run cancelled — no output
+                # written." (false — the output IS complete) nor plain, silent success (the
+                # click is simply never acknowledged) is honest here.
+                self._set_status(
+                    "Finished writing; the cancel arrived after the analysis, so the output is complete.")
         # a clean real-write run leaves results on disk — offer to open them
         if self._last_write and result is not None and not fatal and not cancelled:
             self.btn_open.setEnabled(True)
@@ -699,6 +842,10 @@ class RunScreen(QWidget):
         self.btn_cancel.setEnabled(running)
         if running:
             self.btn_rerun.setEnabled(False)      # can't re-run while a run is in flight
+            # A fresh run starts in the (interruptible) compute phase — clear any
+            # "cannot be interrupted" tooltip a PREVIOUS run's write phase left behind, or
+            # Cancel would look disabled-by-explanation while it is actually live again.
+            self.btn_cancel.setToolTip("")
 
     # -- per-file results, subset re-run, single-file write (P18/P19/P20) ----
     def _fill_files_table(self, result):
