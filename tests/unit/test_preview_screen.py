@@ -18,7 +18,7 @@ pytestmark = requires_synth()
 
 def _render_mech(pv, s):
     from respmech.ui.workers import stage_mechanics_preview
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     pv._render_preview(stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv")))
 
 
@@ -90,6 +90,156 @@ def test_qc_overview_ok_and_warn(qapp):
 
 
 # --------------------------------------------------------------------------- #
+# B02 — the file rail's per-file state + the QC chip/'Process & write' reset discipline
+# --------------------------------------------------------------------------- #
+def test_switching_to_an_unloadable_file_leaves_qc_chip_and_process_button_reset(qapp, tmp_path, monkeypatch):
+    """A file switch (_begin_file_switch -> _clear_file_panels) resets the QC chip to
+    neutral and disables 'Process & write this file' BEFORE any job has had a chance to
+    say whether the new file even loads — only a successful mechanics render
+    (_render_preview) may re-enable it. A file that fails to load must therefore leave
+    both exactly where the switch left them: this is B02's nulstillingsdiscipline,
+    extended from _forget_campbell's existing export-button pattern."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.screens.preview import _mechanics
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    pv._refresh_files(); pv.file_rail.select_index(0)
+    pv._preview()
+    assert pv.btn_process_file.isEnabled() is True     # a valid render enabled it
+
+    monkeypatch.setattr(_mechanics, "stage_mechanics_preview",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("cannot read file")))
+    pv.file_rail.select_index(1)                        # -> _begin_file_switch -> _clear_file_panels
+    assert pv.qc_overview.text() == "QC:  —"
+    assert pv.qc_overview.property("status") == "muted"
+    assert pv.btn_process_file.isEnabled() is False
+    pv._preview()                                        # fails; never reaches _render_preview
+    assert pv.qc_overview.text() == "QC:  —"
+    assert pv.qc_overview.property("status") == "muted"
+    assert pv.btn_process_file.isEnabled() is False
+    win.close()
+
+
+def test_a_failed_test_run_marks_the_qc_chip_not_assessed_and_the_rail_row_failed(qapp, tmp_path):
+    """The 'batch' job's own failure (a worker-level exception, not a soft per-file
+    precondition) must present as 'QC:  not assessed — …' with status 'warn' — never
+    'ok' — and must mark the previewed file's rail row failed. Purely presentational: no
+    computed value is involved (ticket requirement)."""
+    from PySide6.QtCore import QThread
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.screens.preview_screen import _Job
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    pv._refresh_files(); pv.file_rail.select_index(0)
+    pv._preview()
+    name = pv._selected_filename()
+    job = _Job("batch", pv._tokens["batch"], QThread(), object())
+    job.error = "OSError: disk read error"
+    pv._jobs["batch"] = job
+    pv._on_job_done(job, None)
+    assert pv.qc_overview.property("status") == "warn"
+    assert "not assessed" in pv.qc_overview.text().lower()
+    entry = pv.file_rail.entry(name)
+    assert entry.verdict == "failed" and "disk read error" in entry.error
+    win.close()
+
+
+def test_qc_chip_resets_on_a_rendering_bug_in_the_batch_render(qapp, tmp_path, monkeypatch):
+    """Self-review finding: a genuine rendering bug inside _on_batch_result (NOT a
+    per-file analysis error, which _FileRunError already covers) must not leave the QC
+    chip showing a stale prior 'ok' verdict under a 'display error' card."""
+    from PySide6.QtCore import QThread
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.screens.preview_screen import _Job
+    from respmech.core.pipeline import run_batch
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    result = run_batch(s, only_files=["synth_case_A.csv"])
+    pv._on_batch_result(result)
+    assert pv.qc_overview.property("status") == "ok"    # a real prior verdict exists
+
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(pv, "_fill_table", _boom)
+    job = _Job("batch", pv._tokens["batch"], QThread(), object())
+    pv._jobs["batch"] = job
+    pv._on_job_done(job, result)
+    assert pv.qc_overview.property("status") == "warn"
+    assert "not assessed" in pv.qc_overview.text().lower()
+    win.close()
+
+
+def test_toggling_a_breath_updates_the_rails_exclusion_badge(qapp, tmp_path):
+    name = "synth_case_A.csv"
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    pv._toggle_breath(a_breath)
+    assert pv.file_rail.entry(name).excluded_count == 1
+    pv._toggle_breath(a_breath)                          # toggle back off
+    assert pv.file_rail.entry(name).excluded_count == 0
+    win.close()
+
+
+def test_exclusions_key_on_the_exact_basename_and_survive_a_save_reload_round_trip(qapp, tmp_path):
+    """B02 moved the previewed file's identity off file_combo.currentText() onto
+    FileRail.current_filename() (via PreviewScreen._selected_filename()) — the
+    exclude_breaths key must still be exactly the file's basename, unchanged, and a
+    saved analysis must reload with its exclusions intact and visible on the rail
+    without the file having to be re-selected first (ticket requirement)."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.settingsio.toml_io import load_toml, save_toml
+    name = "synth_case_A.csv"
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    pv._toggle_breath(a_breath)
+    entry = next(e for e in s.processing.exclude_breaths if e.file == name)
+    assert entry.breaths == [a_breath]
+
+    toml_path = tmp_path / "analysis.toml"
+    save_toml(s, toml_path)
+    reloaded = load_toml(toml_path)
+    entry2 = next(e for e in reloaded.processing.exclude_breaths if e.file == name)
+    assert entry2.breaths == [a_breath]
+
+    win2 = MainWindow(AppState(reloaded)); pv2 = win2.preview_screen
+    pv2.refresh_files()
+    assert pv2.file_rail.entry(name).excluded_count == 1     # visible WITHOUT selecting it first
+    win2.close()
+    win.close()
+
+
+def test_sync_rail_exclusions_clears_a_stale_badge_from_a_previous_analysis(qapp, tmp_path):
+    """Self-review finding: _sync_rail_exclusions only ever ADDED/updated a badge — it
+    never zeroed one for a file that persists in the rail (set_manifest preserves state
+    across a rebuild) but the CURRENT analysis names no exclusion for. Opening a second
+    analysis over the same folder/mask, with no exclusion where the first analysis had
+    one, must not leave the first analysis's stale count on screen."""
+    from respmech.ui.main_window import MainWindow
+    name = "synth_case_A.csv"
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    pv._toggle_breath(a_breath)
+    assert pv.file_rail.entry(name).excluded_count == 1
+
+    # a second analysis over the SAME folder/mask (so the rail's rows persist across the
+    # rebuild), with NO exclusions at all
+    s2 = synth_settings(str(tmp_path))
+    win.state.settings = s2
+    pv.sync_from_settings()
+    assert pv.file_rail.entry(name).excluded_count == 0, (
+        "the previous analysis's exclusion badge must not survive switching analyses")
+    win.close()
+
+
+# --------------------------------------------------------------------------- #
 # P17 — crosshair + export
 # --------------------------------------------------------------------------- #
 def test_crosshair_and_export(qapp, tmp_path):
@@ -134,13 +284,14 @@ def test_zero_baseline_on_every_channel(qapp):
 # ---------------------------------------------------------------------------
 def test_file_stepping(qapp):
     from respmech.ui.main_window import MainWindow
+    from respmech.ui.manifest import manifest_from_filenames
     win = MainWindow(AppState()); pv = win.preview_screen
-    pv.file_combo.clear(); pv.file_combo.addItems(["f1.csv", "f2.csv", "f3.csv"])
-    pv.file_combo.setCurrentIndex(0)
-    pv._step_file(+1); assert pv.file_combo.currentText() == "f2.csv"
+    pv.file_rail.set_manifest(manifest_from_filenames("", ["f1.csv", "f2.csv", "f3.csv"]))
+    pv.file_rail.select_index(0)
+    pv._step_file(+1); assert pv.file_rail.current_filename() == "f2.csv"
     pv._step_file(+1); pv._step_file(+1)                 # clamps at the end
-    assert pv.file_combo.currentIndex() == 2
-    pv._step_file(-1); assert pv.file_combo.currentText() == "f2.csv"
+    assert pv.file_rail.current_filename() == "f3.csv"
+    pv._step_file(-1); assert pv.file_rail.current_filename() == "f2.csv"
     win.close()
 
 
@@ -159,7 +310,7 @@ def test_toggle_breath_requests_recompute(qapp, tmp_path):
     from respmech.ui.workers import stage_mechanics_preview
     s = synth_settings(tmp_path)
     win = MainWindow(AppState(s)); pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     pv._render_preview(stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv")))
     a_breath = next(iter(pv._breath_spans))
     pv._toggle_breath(a_breath)
@@ -177,7 +328,7 @@ def test_mech_caption_survives_render_and_toggle(qapp, tmp_path):
     from respmech.ui.workers import stage_mechanics_preview
     s = synth_settings(tmp_path)
     win = MainWindow(AppState(s)); pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     pv._render_preview(stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv")))
     cap = pv.mech_caption.fullText().lower()
     assert "breath" in cap and "click a shaded breath to include/exclude" in cap

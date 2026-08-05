@@ -433,8 +433,9 @@ def test_preview_owned_settings_mark_the_analysis_dirty(qapp, tmp_path):
 
     # toggling a breath exclusion dirties (exclude_breaths is saved state)
     sc._mark_clean()
-    pv.file_combo.blockSignals(True); pv.file_combo.addItem("synth_case_A.csv")
-    pv.file_combo.setCurrentText("synth_case_A.csv"); pv.file_combo.blockSignals(False)
+    # select_filename sets the rail's identity directly — no row need exist for it
+    # (unlike the old file_combo, which needed a fake item added first).
+    pv.file_rail.select_filename("synth_case_A.csv")
     pv._breath_spans = {1: (0.0, 1.0)}
     pv._toggle_breath(1)
     assert sc.is_dirty()

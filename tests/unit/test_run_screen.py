@@ -28,26 +28,77 @@ def _result_with_failure():
 
 
 # --------------------------------------------------------------------------- #
-# P20 — per-file results + drill-back
+# P20/B02 — per-file results (file rail) + drill-back
 # --------------------------------------------------------------------------- #
-def test_per_file_results_table(qapp, tmp_path):
+def test_per_file_results_rail(qapp, tmp_path):
     win = _win(tmp_path); rn = win.run_screen
-    rn._fill_files_table(_result_with_failure())
-    assert rn.files_table.rowCount() == 2
-    rows = {rn.files_table.item(r, 0).text(): (rn.files_table.item(r, 1).text(),
-                                               rn.files_table.item(r, 2).text())
-            for r in range(2)}
-    assert rows["synth_case_A.csv"] == ("OK", "2")
-    assert rows["synth_case_B.csv"][0] == "Failed"
+    rn._fill_file_rail(_result_with_failure())
+    assert rn.file_rail.count() == 2
+    a, b = rn.file_rail.entry("synth_case_A.csv"), rn.file_rail.entry("synth_case_B.csv")
+    assert a.verdict == "ok" and a.breaths == 2
+    assert b.verdict == "failed"
+    win.close()
+
+
+def test_failed_files_sort_first_after_a_run_with_failures(qapp, tmp_path):
+    """B02: reaching the one failed file in a large batch must take a glance, not a
+    scroll past every success — the rail brings failures to the top once a run's result
+    names any."""
+    win = _win(tmp_path); rn = win.run_screen
+    rn._fill_file_rail(_result_with_failure())
+    assert rn.file_rail.visible_filenames()[0] == "synth_case_B.csv"
+    win.close()
+
+
+def test_a_full_run_replaces_stale_rows_from_a_changed_input_folder(qapp, tmp_path):
+    """A FULL run's file set is the complete truth — self-review finding: unioning it
+    with the rail's existing rows (right for a P18/P19 subset) is wrong for a plain
+    second full run, since it would leave a PREVIOUS folder's files (and their stale
+    verdicts) permanently mixed into the rail after the user changes the input folder."""
+    win = _win(tmp_path); rn = win.run_screen
+    ok = SimpleNamespace(error=None, breaths_table=pd.DataFrame({"vt": [0.5]}))
+    old_folder_result = SimpleNamespace(files={"old_case.csv": ok}, failed_files={},
+                                        ok_files={"old_case.csv": ok})
+    rn._fill_file_rail(old_folder_result)
+    assert rn.file_rail.filenames() == ["old_case.csv"]
+
+    rn._only_files = None                    # a plain full run, not a P18/P19 subset
+    new_folder_result = _result_with_failure()   # synth_case_A.csv / synth_case_B.csv
+    rn._fill_file_rail(new_folder_result)
+    assert rn.file_rail.filenames() == ["synth_case_A.csv", "synth_case_B.csv"], (
+        "old_case.csv from the previous folder must not survive a full run's rebuild")
+    win.close()
+
+
+def test_subset_rerun_keeps_an_untouched_failed_file_sorted_first(qapp, tmp_path):
+    """Self-review finding: sort_failed_first must be judged from the rail's OWN current
+    state, not just the just-finished run's result — a P18/P19 subset re-run that fixes
+    ONE file must not silently un-sort another, untouched file that is still failed."""
+    win = _win(tmp_path); rn = win.run_screen
+    ok = SimpleNamespace(error=None, breaths_table=pd.DataFrame({"vt": [0.5]}))
+    bad = SimpleNamespace(error="TrimError: too few breaths", breaths_table=None)
+    full = SimpleNamespace(files={"a.csv": ok, "b.csv": bad, "c.csv": bad},
+                           failed_files={"b.csv": bad, "c.csv": bad}, ok_files={"a.csv": ok})
+    rn._fill_file_rail(full)
+    assert rn.file_rail.visible_filenames()[0] in ("b.csv", "c.csv")
+
+    fixed = SimpleNamespace(error=None, breaths_table=pd.DataFrame({"vt": [0.6]}))
+    rn._only_files = ["b.csv"]              # re-run ONLY b, which now succeeds
+    subset = SimpleNamespace(files={"b.csv": fixed}, failed_files={}, ok_files={"b.csv": fixed})
+    rn._fill_file_rail(subset)
+    assert rn.file_rail.entry("b.csv").verdict == "ok"
+    # c.csv was never touched by the subset run and is STILL failed -> must stay first
+    assert rn.file_rail.visible_filenames()[0] == "c.csv"
     win.close()
 
 
 def test_double_click_drills_into_preview(qapp, tmp_path):
     win = _win(tmp_path); rn = win.run_screen
-    rn._fill_files_table(_result_with_failure())
+    rn._fill_file_rail(_result_with_failure())
     seen = []
     rn.open_file_requested.connect(seen.append)
-    rn._on_file_row_activated(0, 0)
+    idx = rn.file_rail._find_proxy_row("synth_case_A.csv")
+    rn.file_rail._on_double_clicked(rn.file_rail._proxy.index(idx, 0))
     assert seen == ["synth_case_A.csv"]
     win._open_file_in_preview("synth_case_A.csv")        # MainWindow routing
     assert win.tabs.currentIndex() == win._i_preview

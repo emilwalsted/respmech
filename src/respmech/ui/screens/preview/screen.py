@@ -39,7 +39,7 @@ import traceback
 from dataclasses import dataclass
 
 import numpy as np
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
+from PySide6.QtWidgets import (QCheckBox, QDialog, QDoubleSpinBox,
                                QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton,
                                QScrollArea, QSplitter, QTableWidget, QTableWidgetItem,
                                QTabWidget, QVBoxLayout, QWidget)
@@ -52,7 +52,9 @@ from matplotlib.figure import Figure
 
 from respmech.core.settings import ExcludeEntry
 from respmech.ui.dialogs import TextViewerDialog, short_error
+from respmech.ui.file_rail import FileRail
 from respmech.ui.help_text import tooltip as _help_tip
+from respmech.ui.manifest import build_manifest
 from respmech.ui import plot_perf
 from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
 from respmech.ui import wheel as _wheel
@@ -128,6 +130,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._trend_probe_file = ""
         self._trend_probe_shape = None
         self._blanked_for_invalid = False   # see _schedule's settings gate
+        self._manifest_cache = {}           # (path, mtime, size)-keyed probe memo for the file rail's manifest
         self._loading_noise = False
         self._loading_ecg = False
         self._ecg_auto_repaired = False   # see _load_ecg_params' repair of a stuck auto-detect
@@ -166,14 +169,8 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
     def _build(self):
         root = QVBoxLayout(self); root.setContentsMargins(11, 11, 11, 11)   # deterministic, matches Setup
         bar = QHBoxLayout()
-        self.file_combo = QComboBox()
-        # Size the selector to the recording names, not the window: names are short
-        # (~100px at 13pt), but a stretch-factor row hands an uncapped combo ALL the
-        # slack. "wide" caps the contents at 320px; a longer name elides in the closed
-        # field but shows in full in the popup.
-        self.file_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-        self.file_combo.setProperty("formField", "wide")
-        # P27: step through files without leaving the plots — buttons + PageUp/PageDown.
+        # P27: step through files without leaving the plots — buttons + PageUp/PageDown,
+        # now retargeted at the file rail's selection (see _build_workspace below).
         self.btn_prev_file = QPushButton("◀")
         self.btn_next_file = QPushButton("▶")
         for b, tip in ((self.btn_prev_file, "Previous file (PgUp)"),
@@ -183,24 +180,22 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             # glyph cannot clip. The max only stops layout slack ballooning the button.
             b.setProperty("nav", True)
             b.setMaximumWidth(34); b.setToolTip(tip)
-        self.btn_prev_file.clicked.connect(lambda: self._step_file(-1))
-        self.btn_next_file.clicked.connect(lambda: self._step_file(+1))
+        self.btn_prev_file.clicked.connect(lambda: self.file_rail.step(-1))
+        self.btn_next_file.clicked.connect(lambda: self.file_rail.step(+1))
         # 'Refresh' recomputes every auto panel (not the test run); the file list itself
         # refreshes automatically when file-related settings change.
         self.btn_refresh_all = QPushButton("Refresh")
         self.btn_refresh_all.setToolTip("Recompute all preview panels for the current file.")
         self.btn_refresh_all.clicked.connect(self._refresh_all)
         bar.addWidget(QLabel("File:")); bar.addWidget(self.btn_prev_file)
-        bar.addWidget(self.file_combo); bar.addWidget(self.btn_next_file)
-        bar.addSpacing(12)   # detach Refresh a little from the ◀ file ▶ cluster
+        bar.addWidget(self.btn_next_file)
+        bar.addSpacing(12)   # detach Refresh a little from the ◀ ▶ cluster
         bar.addWidget(self.btn_refresh_all)
-        # park the slack AFTER Refresh: QPushButton's Minimum h-policy would otherwise
-        # let the buttons balloon to fill the row once the combo stops stretching
         bar.addStretch(1)
         root.addLayout(bar)
         from PySide6.QtGui import QShortcut, QKeySequence  # noqa: PLC0415
-        QShortcut(QKeySequence(Qt.Key_PageUp), self, activated=lambda: self._step_file(-1))
-        QShortcut(QKeySequence(Qt.Key_PageDown), self, activated=lambda: self._step_file(+1))
+        QShortcut(QKeySequence(Qt.Key_PageUp), self, activated=lambda: self.file_rail.step(-1))
+        QShortcut(QKeySequence(Qt.Key_PageDown), self, activated=lambda: self.file_rail.step(+1))
         # Status is shown ONLY in the main-window bottom status bar (via status_changed).
         # Keep the label object (state holder + tests read pv.status) but never place it
         # under the file selector.
@@ -220,20 +215,36 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._ecg_tab = self._scrollable(self._ecg_page)
         self._emg_tab = self._scrollable(self._emg_page)
         self.subtabs.addTab(self._mech_tab, _TAB_MECH)
-        root.addWidget(self.subtabs, 1)
+
+        # B02: the file rail — one row per file, replacing the old file_combo. A left-hand
+        # panel rather than folded into the top bar, since a filterable, stateful row list
+        # needs real vertical room a toolbar cannot give it. Narrow but resizable: wide
+        # enough for a filename plus its state glyphs, never so wide it eats the plots.
+        self.file_rail = FileRail()
+        self.file_rail.setMinimumWidth(170)
+        self.file_rail.setMaximumWidth(280)
+        self._workspace_split = QSplitter(Qt.Horizontal)
+        self._workspace_split.addWidget(self.file_rail)
+        self._workspace_split.addWidget(self.subtabs)
+        self._workspace_split.setStretchFactor(0, 0)
+        self._workspace_split.setStretchFactor(1, 1)
+        self._workspace_split.setSizes([210, 900])
+        root.addWidget(self._workspace_split, 1)
 
         # The control strips sit directly above wheel-zoomable plots, so an overshoot while
         # zooming used to land on a spin box and step it — and every ECG/noise parameter here
         # writes straight into the analysis, marks it modified and schedules a recompute.
-        # file_combo was worse still: one notch silently switched the previewed recording.
         #
         # The pages scroll now, so a wheel over a spin box FORWARDS to that page's scroll area
         # rather than doing nothing — a control that swallows the wheel in a scrollable page is
         # a dead patch the form stops moving under. The plots are deliberately left out: a
         # wheel over a graph zooms its time axis (see _restrict_body_wheel_to_x), which is a
         # documented interaction, so vertical travel over a graph is the scroll bar's job.
-        # file_combo and the tab bar sit OUTSIDE every scroll area and keep swallowing: one
-        # notch there still switches the recording or the tab.
+        # The tab bar sits OUTSIDE every scroll area and keeps swallowing: one notch there
+        # still switches the tab. The file rail's QListView is deliberately NOT in this list
+        # (unlike the old file_combo): a QListView scrolling on a wheel is the ordinary,
+        # wanted behaviour, not the "one notch silently switches the recording" footgun a
+        # QComboBox had — there is no swallow to guard against.
         # ``extra``: the matplotlib canvases and the results table are not spin boxes or
         # combos, so guard_scroll_area's by-class discovery misses them — and unlike a
         # pyqtgraph plot they do nothing with a wheel of their own. Without this they were
@@ -251,7 +262,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         for _a in (self._mech_tab, self._ecg_tab, self._emg_tab):
             _a.verticalScrollBar().valueChanged.connect(self._recentre_overlays)
         self._wheel_guard = _wheel.swallow_wheel(
-            extra=[self.subtabs.tabBar(), self.file_combo], parent=self)
+            extra=[self.subtabs.tabBar()], parent=self)
 
         # one spinner overlay per panel (each fed by exactly one job kind)
         self._overlays = {
@@ -285,7 +296,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         if self._ecg_auto_repaired:
             QTimer.singleShot(0, self._announce_ecg_auto_repair)
 
-        self.file_combo.currentTextChanged.connect(self._on_file_selected)
+        self.file_rail.selectionChanged.connect(self._on_file_selected)
         # the chip's themed height isn't known until the EMG sub-tab is first laid out;
         # match the 'Set noise profile' button to it then, so the strip is one band.
         self.subtabs.currentChanged.connect(lambda *_: QTimer.singleShot(0, self._align_noise_strip))
@@ -509,23 +520,41 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             from respmech.ui.screens import _preview_cache
             _preview_cache.clear_all()
             self._cache_fm = fm
-        prev = self.file_combo.currentText()
+        prev = self.file_rail.current_filename()
         folder = (s.input.folder or "").strip()
-        self.file_combo.blockSignals(True)
-        self.file_combo.clear()
-        files = []
-        if folder and os.path.isdir(folder):
-            from respmech.ui.validation import matching_files
-            files = [os.path.basename(f) for f in matching_files(folder, s.input.files)]
-            self.file_combo.addItems(files)
-        self.file_combo.blockSignals(False)
+        # B02: the rail is fed the same Manifest Setup's own read-out/QC strip build from
+        # (ui/manifest.py, ticket B01) — so a column-count outlier or a sampling-frequency
+        # mismatch shows the same caveat here it does on Setup. A per-screen cache (never
+        # Setup's own) since this screen's manifest need not be built at the same moments.
+        manifest = (build_manifest(folder, s.input.files, s, cache=self._manifest_cache)
+                   if folder and os.path.isdir(folder) else None)
+        # set_manifest() quietly adopts files[0] as the identity when the rail had none at
+        # all yet (a freshly built screen's very first call) — see its docstring. That is
+        # the ONLY case this method must not itself drive a switch for: it mirrors the old
+        # file_combo, which auto-selected index 0 on first populate as a bare Qt side
+        # effect (its own populate ran under blockSignals) and never fired
+        # currentTextChanged for it, so nothing downstream ever reacted to that moment
+        # either. Losing this made every test that merely constructs a PreviewScreen kick
+        # off unsolicited background analysis work it never used to (found via a genuine,
+        # reproducible layout-race regression in test_window_fits_screen.py).
+        self.file_rail.set_manifest(manifest)
+        files = self.file_rail.filenames()
+        self._sync_rail_exclusions()
         if prev in files:
-            self.file_combo.setCurrentText(prev)
+            self.file_rail.select_filename(prev)   # re-assert the highlight; identity unchanged
+        elif files:
+            if prev:
+                # a REAL previous file vanished from the (rebuilt) list — switch to the
+                # first file instead, same cleanup an interactive switch would do (this
+                # DOES emit, since the identity actually changes: _on_file_selected ->
+                # _begin_file_switch follows from that signal)
+                self.file_rail.select_filename(files[0])
+            # else: prev was None (first-ever call) -> set_manifest already quietly
+            # adopted files[0] above; nothing more to do here.
         elif prev:
-            # the current file changed silently while signals were blocked (prev is
-            # gone from the list -> the combo auto-selected files[0], or emptied):
-            # take the same cleanup path an interactive switch would, so stale breath
-            # overlays never linger clickable against the wrong (or no) file
+            # the list emptied entirely: nothing for select_filename(None) to emit (there is
+            # no new identity), so the switch has to be driven explicitly
+            self.file_rail.select_filename(None)
             self._begin_file_switch()
         if not folder:
             self._set_status("Set an input folder in Setup.")
@@ -540,13 +569,27 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             # not reset the status line over what may be a persistent panel result already
             # on screen for it. The fm_changed guard matters even though `prev` still matches:
             # widening the mask from 1 to 3 files leaves the same filename selected, but "1
-            # file" would otherwise keep reading on screen against a combo that now holds 3.
+            # file" would otherwise keep reading on screen against a rail that now holds 3.
             pass
         elif len(files) == 1:
             self._set_status("1 file — everything runs automatically.")
         else:
             self._set_status(f"{len(files)} files — pick one; everything runs automatically.")
         self._update_actions()
+
+    def _sync_rail_exclusions(self):
+        """Reflect ``exclude_breaths`` as the rail's exclusion badge for EVERY file
+        currently in the rail — for every file it names, not only the one currently
+        previewed (ticket requirement: the badge must be visible without selecting the
+        file first), AND explicitly zeroed for a file the CURRENT analysis names no
+        exclusion for. The zeroing matters because ``set_manifest`` preserves a
+        persisting file's rail state across a rebuild: opening a second analysis over
+        the same folder/mask, with no exclusion for a file the FIRST analysis had
+        excluded breaths in, must not leave that first analysis's stale badge on
+        screen."""
+        counts = {e.file: len(e.breaths) for e in self.state.settings.processing.exclude_breaths}
+        for name in self.file_rail.filenames():
+            self.file_rail.set_excluded_count(name, counts.get(name, 0))
 
     def _refresh_files(self):        # kept for existing wiring + tests
         self.refresh_files()
@@ -557,6 +600,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._load_noise_params()
         self._load_ecg_params()
         self._update_emg_tab_visibility()
+        self._sync_rail_exclusions()   # a loaded analysis file can bring its own exclusions
         self._update_actions()
         # Dependency-scoped invalidation: diff the settings against the last-synced snapshot
         # and recompute ONLY the panels whose inputs actually changed. An EMG-only edit no
@@ -576,18 +620,23 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._cancel_inflight(kinds)  # abort only the now-stale panels' jobs
         self._request_autorun(kinds)
 
+    def _selected_filename(self) -> str:
+        """The single accessor for the previewed file's identity (basename) — every
+        other place that needs it (breath toggling, exclusion keying, the noise
+        reference picker, 'Process & write this file') reads it from here, never from
+        the rail's widgets directly (B02: the identity used to be ``file_combo``'s own
+        ``currentText()``, read from half a dozen call sites)."""
+        return self.file_rail.current_filename() or ""
+
     def _current_file(self):
-        name = self.file_combo.currentText()
+        name = self._selected_filename()
         return os.path.join(self.state.settings.input.folder, name) if name else None
 
     def _step_file(self, delta: int):
-        """P27: move the file selection by ``delta`` (keyboard/▲▼), clamped to the list."""
-        n = self.file_combo.count()
-        if n <= 1:
-            return
-        i = min(max(self.file_combo.currentIndex() + delta, 0), n - 1)
-        if i != self.file_combo.currentIndex():
-            self.file_combo.setCurrentIndex(i)
+        """P27: move the file selection by ``delta`` (keyboard/▲▼), clamped to the
+        visible list — kept as a thin wrapper (existing wiring + tests) over the rail's
+        own :meth:`FileRail.step`."""
+        self.file_rail.step(delta)
 
     # -- enablement / guidance ---------------------------------------------
     def _settings_ok(self):
@@ -604,7 +653,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         """Refresh button/widget enablement. ``status=False`` updates enablement
         only and never touches the status line — used after a job completes so a
         fresh result/error message is not clobbered by a guidance hint."""
-        has_file = bool(self.file_combo.currentText())
+        has_file = bool(self._selected_filename())
         ok, why = self._settings_ok()
         emg = self.state.settings.processing.emg
         noise_on, ref = emg.noise.enabled, emg.noise.reference_file
@@ -736,6 +785,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             self._noise_has_result = False
         self._reset_breath_state()   # clears _bov/_breaths/_emg_all/result plot/_previewed_file/mech_caption
         self._ensure_noise_region()  # re-attach the rest-region selector to the cleared detail plot
+        self._reset_qc_overview()    # neutral chip + disabled 'Process & write' (B02)
         panels = [p for k in _FILE_KINDS for p in _PANELS[k]]
         if include_noise:
             panels += _PANELS["noise"]
@@ -769,6 +819,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._noise_has_result = False
         self._reset_breath_state()   # clears _bov/_breaths/_emg_all/result plot/_previewed_file
         self._ensure_noise_region()  # re-attach the rest-region selector to the cleared detail plot
+        self._reset_qc_overview()    # neutral chip + disabled 'Process & write' (B02)
         self._clear_panel_overlays(*self._overlays)   # dismiss stale spinners / error cards
 
     def _on_file_selected(self, name):
@@ -989,6 +1040,14 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
                 # button — the status line carrying it is transient and, per the shared
                 # status-bar ownership rules, may not even be visible from this tab.
                 self._overlays[p].show_error(f"{label} failed — {short_error(detail)}", detail)
+            if job.kind == "batch":
+                # a worker-level failure (before any per-file FileResult existed) — the
+                # per-file branch inside _on_batch_result itself covers the more common
+                # case of a FileResult that carries an error
+                cur = self._selected_filename()
+                if cur:
+                    self.file_rail.mark_result(cur, ok=False, error=detail)
+                self._qc_overview_not_assessed(detail)
             self._update_actions(status=False)
             return
         try:
@@ -1006,6 +1065,11 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             for p in _PANELS[job.kind]:
                 self._overlays[p].show_error(
                     f"{label} — display error: {short_error(detail)}", detail)
+            if job.kind == "batch":
+                # a rendering bug in _on_batch_result itself (not a per-file analysis
+                # error, which _FileRunError above already covers) — the chip must not
+                # keep showing a stale prior verdict over a display-error card
+                self._qc_overview_not_assessed(detail)
             self._update_actions(status=False)
             return
         for p in _PANELS[job.kind]:

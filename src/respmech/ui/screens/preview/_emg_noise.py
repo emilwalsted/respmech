@@ -625,7 +625,7 @@ class _EmgNoiseMixin:
         alternative to a hand-marked span. Both halves are written here so the pair can never
         disagree: the core resolves them as `use_expiration or not reference_intervals`, so
         leaving stale intervals behind would make the choice ambiguous on re-open."""
-        name = self.file_combo.currentText()
+        name = self._selected_filename()
         if not name:
             return None
         n = self.state.settings.processing.emg.noise
@@ -644,7 +644,7 @@ class _EmgNoiseMixin:
         """Apply [t0, t1] s of the current file as the shared noise reference: write it
         into settings, mirror it (signal + the inline detail-plot indicator), and
         re-condition. Shared by the noise-profile modal and the legacy inline region."""
-        name = self.file_combo.currentText()
+        name = self._selected_filename()
         if not name:
             return None
         t0, t1 = float(min(t0, t1)), float(max(t0, t1))
@@ -675,7 +675,7 @@ class _EmgNoiseMixin:
 
     def _use_region_as_noise(self):
         reg = self._noise_region
-        if reg is None or not self.file_combo.currentText():
+        if reg is None or not self._selected_filename():
             self._set_status("Draw a rest region on the detail plot, then apply.")
             return None
         t0, t1 = reg.getRegion()
@@ -699,7 +699,7 @@ class _EmgNoiseMixin:
             return
         from respmech.ui.noise_profile_dialog import EXPIRATION
         dlg = NoiseProfileDialog(data["raw"], data["t"], data["fs"], data["cols"],
-                                 parent=self, file_name=self.file_combo.currentText(),
+                                 parent=self, file_name=self._selected_filename(),
                                  flow=data.get("flow"))
         n = self.state.settings.processing.emg.noise
         dlg.use_expiration.setChecked(bool(n.use_expiration or not n.reference_intervals))

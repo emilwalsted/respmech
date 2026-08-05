@@ -134,7 +134,7 @@ def test_synchronous_preview_clears_stale_error_card(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentIndex(0)
+    pv.file_rail.select_index(0)
     job = _Job("mech", pv._tokens["mech"], QThread(), object())
     job.error = "ValueError: transient read error"
     pv._jobs["mech"] = job

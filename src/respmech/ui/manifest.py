@@ -124,6 +124,20 @@ def narrow_mask(folder, mask):
     return narrowed, mask, dropped
 
 
+def manifest_from_filenames(folder, paths):
+    """A caveat-free :class:`Manifest` built directly from a resolved file list, instead
+    of scanning a folder/mask (:func:`build_manifest`'s job). For a caller that already
+    knows exactly which files it cares about — a batch run's own resolved input list — and
+    has no use for column/frequency probing (it is not deciding what belongs in the batch,
+    only presenting files it already committed to). Every entry is ``included`` with no
+    ``exclude_reason``; ``majority_columns``/``settings_fs`` stay unset, so
+    :attr:`Manifest.freq_mismatches` is always empty and :attr:`Manifest.outliers` too."""
+    entries = tuple(FileEntry(path=p, filename=os.path.basename(p),
+                              ext=os.path.splitext(p)[1].lower())
+                    for p in paths)
+    return Manifest(folder=folder, mask="", files=entries)
+
+
 def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=None, cache=None):
     """Build a :class:`Manifest` describing every file ``mask`` matches in ``folder``.
 

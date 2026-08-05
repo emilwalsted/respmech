@@ -278,7 +278,7 @@ def test_on_batch_result_raises_on_file_error(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv.file_rail.select_filename("synth_case_A.csv")
     result = BatchResult(files={
         "synth_case_A.csv": FileResult(file="synth_case_A.csv", error="ValueError: bad column 7")})
     with pytest.raises(RuntimeError):          # _on_job_done's except turns this into an error card
@@ -296,7 +296,7 @@ def test_batch_file_error_uses_failed_label_not_display_error(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv.file_rail.select_filename("synth_case_A.csv")
     result = BatchResult(files={
         "synth_case_A.csv": FileResult(file="synth_case_A.csv", error="ValueError: bad column 7")})
     job = _Job("batch", pv._tokens["batch"], QThread(), object())
