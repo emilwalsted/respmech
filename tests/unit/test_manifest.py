@@ -12,8 +12,12 @@ from _helpers import write_delim as _write_delim, write_xlsx as _write_xlsx
 
 
 def _settings(folder, mask, fs=1000, decimal="."):
+    # NB the legacy/migration field is "decimalcharacter", not "decimal" — migrate_dict
+    # silently ignores an unrecognised key and falls back to "." rather than raising, so a
+    # typo here would fail quietly (caught while writing the cache-key regression test
+    # below, which needs a real comma-decimal Settings to be meaningful).
     legacy = {"input": {"inputfolder": folder, "files": mask,
-                        "format": {"samplingfrequency": fs, "decimal": decimal}},
+                        "format": {"samplingfrequency": fs, "decimalcharacter": decimal}},
              "output": {"outputfolder": os.path.join(folder, "out")}}
     s, _ = migrate_dict(legacy)
     return s
@@ -97,6 +101,78 @@ def test_manifest_tie_break_prefers_the_widest_layout(tmp_path):
     m = build_manifest(str(tmp_path), "*.csv", s)
     assert m.majority_columns == 9
     assert {f.filename for f in m.outliers} == {"a.csv"}
+
+
+def test_manifest_degenerate_one_column_files_never_win_the_majority_vote(tmp_path):
+    """Self-review regression (05-08-2026): _valid_input_files filters `columns >= 2`
+    BEFORE voting on a majority (a 1-column file carries no signal beyond the time axis);
+    build_manifest originally did not, so a folder where degenerate files outnumbered the
+    real recordings could crown 1-column THE majority and mark the genuine data files as
+    outliers — the opposite of what _valid_input_files (and thus the channel-assignment
+    dialog's own file list) would say. The two must never disagree about which files are
+    'the batch'."""
+    for n in ("a", "b", "c", "d"):                  # 4 degenerate files outvote 3 real ones
+        _write_delim(tmp_path / f"junk{n}.csv", 1)
+    for n in ("x", "y", "z"):
+        _write_delim(tmp_path / f"rec{n}.csv", 9)
+    s = _settings(str(tmp_path), "*.csv")
+    m = build_manifest(str(tmp_path), "*.csv", s)
+    assert m.majority_columns == 9
+    included = {f.filename for f in m.included_files}
+    assert included == {"recx.csv", "recy.csv", "recz.csv"}
+    outliers = {f.filename for f in m.outliers}
+    assert outliers == {"junka.csv", "junkb.csv", "junkc.csv", "junkd.csv"}
+
+
+def test_manifest_all_files_degenerate_has_no_majority(tmp_path):
+    """Mirrors _valid_input_files's `if not probed: return []` for the all-degenerate case:
+    no file can win a majority no candidate is eligible for."""
+    for n in ("a", "b"):
+        _write_delim(tmp_path / f"{n}.csv", 1)
+    s = _settings(str(tmp_path), "*.csv")
+    m = build_manifest(str(tmp_path), "*.csv", s)
+    assert m.majority_columns is None
+    assert len(m.outliers) == 2
+
+
+def test_manifest_cache_key_separates_decimal_separators(tmp_path):
+    """Self-review regression (05-08-2026): the probe cache is keyed on file identity
+    (path, mtime, size) alone; a decimal-separator change (auto-detected mid-session, or
+    edited by hand) changes how peek_columns/probe_sampling_frequency PARSE the same
+    unchanged file, so the decimal separator must be part of the cache key too, or a
+    rebuild after such a change could silently serve back a value probed under the OLD
+    separator."""
+    p = tmp_path / "a.csv"
+    # a semicolon-delimited, comma-decimal file: 3 columns under decimal=',' (';'-split),
+    # but reads as 1 run-on column under decimal='.' (','-split treats the whole line as
+    # one field once the header has no commas of its own)
+    p.write_text("time;a;b\n0,000;1,5;2,5\n0,010;1,6;2,6\n0,020;1,7;2,7\n"
+                 * 10, encoding="utf-8")
+    cache = {}
+    s_comma = _settings(str(tmp_path), "*.csv", decimal=",")
+    m1 = build_manifest(str(tmp_path), "*.csv", s_comma, cache=cache)
+    assert m1.files[0].columns == 3
+    s_dot = _settings(str(tmp_path), "*.csv", decimal=".")
+    m2 = build_manifest(str(tmp_path), "*.csv", s_dot, cache=cache)     # SAME cache dict
+    assert m2.files[0].columns == 1                # not the stale, comma-decimal 3
+
+
+def test_manifest_never_probes_xlsx_sampling_frequency(tmp_path):
+    """Self-review regression (05-08-2026): probe_sampling_frequency's nrows=5000 cap does
+    NOT bound an .xlsx read's cost the way it does for the CSV/TXT C-engine (openpyxl
+    parses the whole sheet before pandas applies the cap) — measured up to ~300 ms/file,
+    scaling with true row count, which a hundred-file batch could turn into tens of seconds
+    of a frozen GUI on every input edit. Excel input therefore never gets a frequency
+    caution — column-count/outlier detection is unaffected, only the (secondary)
+    frequency-mismatch note is skipped for this format."""
+    pytest.importorskip("openpyxl")
+    from respmech.ui.workers import probe_sampling_frequency
+    _write_xlsx(tmp_path / "a.xlsx", 9, fs=1000.0)
+    s = _settings(str(tmp_path), "*.xlsx", fs=1000)
+    assert probe_sampling_frequency(s, str(tmp_path / "a.xlsx")) is None
+    m = build_manifest(str(tmp_path), "*.xlsx", s)
+    assert m.files[0].detected_fs is None
+    assert m.freq_mismatches == ()          # never flagged either way for this format
 
 
 def test_manifest_mixed_extensions_narrows_and_records_the_drop(tmp_path):

@@ -366,7 +366,9 @@ class SettingsScreen(QWidget):
             self._sync_widgets()
         finally:
             self._loading = prev
-        self._update_qc()
+        # _update_format_readout rebuilds self._manifest AND refreshes the QC strip from it
+        # (self-review finding, 05-08-2026) — a separate _update_qc() call here would read
+        # the manifest from BEFORE this rebuild (stale, or None on the very first call).
         self._update_format_readout()       # P28 detected-format read-out
 
     def to_state(self):
@@ -479,6 +481,15 @@ class SettingsScreen(QWidget):
             le.editingFinished.connect(self._on_field_changed)
         for sb in (self.samp_freq, self.ent_epochs):
             sb.valueChanged.connect(self._on_field_changed)
+        # B01 self-review fix (05-08-2026): the manifest's frequency-mismatch caution
+        # freezes settings_fs at scan time (Manifest.settings_fs) and _on_field_changed
+        # alone never rebuilds it, so correcting samp_freq to what the caution itself told
+        # you to set still quoted the OLD value back at you until the next folder/mask
+        # edit. Connected AFTER _on_field_changed (same signal, Qt fires in connection
+        # order) so state is already synced when this reads it. Cache-backed — every file
+        # here was already probed, so this costs nothing beyond the majority/outlier
+        # recompute.
+        self.samp_freq.valueChanged.connect(self._on_sampling_frequency_changed)
         self.ent_tol.valueChanged.connect(self._on_field_changed)
         self.matlab_variant.currentIndexChanged.connect(self._on_field_changed)
         for chk in (self.save_average, self.save_bbb, self.save_processed,
@@ -495,6 +506,16 @@ class SettingsScreen(QWidget):
         self.settings_changed.emit()
         self._update_disclosure()   # last, so guided-flow status wins over downstream
                                     # screens' technical validation messages
+
+    def _on_sampling_frequency_changed(self, *_):
+        """Rebuild the manifest so ``Manifest.settings_fs`` (and thus the frequency-
+        mismatch caution) reflects the value just set — see the wiring comment in
+        ``_wire_reactivity``. Runs AFTER ``_on_field_changed`` has already synced
+        ``to_state()``, so this reads the NEW value; the fields/folder/mask themselves are
+        unchanged, so the current mask is exactly what was already scanned."""
+        if self._loading:
+            return
+        self._update_format_readout()
 
     def _on_inputs_changed(self, *_):
         if self._loading:
@@ -525,6 +546,18 @@ class SettingsScreen(QWidget):
         return "unknown format"
 
     @staticmethod
+    def _narrowed_note(m):
+        """The mask-narrowing phrase, shared by the read-out and the QC strip so the two
+        can never drift apart (self-review fix, 05-08-2026: they used to duplicate this
+        computation, and each dropped extension needs ITS OWN leading dot — joining
+        stripped extensions with ', ' and prepending a single dot only decorates the
+        FIRST one, e.g. '.txt, xlsx' silently loses xlsx's dot for a 3+-pattern mask)."""
+        exts = ", ".join(f".{e.lstrip('.')}" for e in sorted(m.narrowed_out_exts))
+        return (f"only one file pattern can be analysed at a time — narrowed to "
+               f"'{m.mask}' ({m.narrowed_out_count} matching {exts} file"
+               f"{'s' if m.narrowed_out_count != 1 else ''} excluded)")
+
+    @staticmethod
     def _named_list(entries, limit=3):
         """'#.filename' for up to ``limit`` entries, then '+N more' — keeps a caution from
         growing unboundedly long over a batch of a hundred files."""
@@ -543,7 +576,19 @@ class SettingsScreen(QWidget):
         ``_normalize_mask`` narrows it (the caller captures it first) — build_manifest
         narrows it again itself, so the two computations can never disagree, and the
         narrowing note survives being told AFTER the settings model already collapsed to a
-        single pattern."""
+        single pattern.
+
+        Refreshes the QC strip itself at the end (self-review finding, 05-08-2026): this is
+        the ONLY place ``self._manifest`` is rebuilt, and ``_all_cautions``/``_update_qc``
+        now read it — a caller that rebuilt the manifest without also refreshing QC could
+        leave the strip showing a stale (or, on the very first call, entirely absent)
+        verdict. That happened concretely on the open-analysis path: from_state() called
+        _update_qc() BEFORE this method (so it read the OLD manifest), and
+        enter_open_mode()'s own call to this method afterward never re-ran QC at all —
+        together, opening a saved analysis whose folder had a genuine caveat still showed
+        'No warnings' until the user made an edit or switched tabs. Centralising the refresh
+        here means no future call site can reintroduce that gap by forgetting the follow-up
+        call."""
         lab = getattr(self, "format_readout", None)
         if lab is None:
             return
@@ -560,28 +605,37 @@ class SettingsScreen(QWidget):
                 n = len(m.files)
                 parts = [f"{n} file{'s' if n != 1 else ''} matched"]
                 if m.majority_columns is None:
-                    parts.append("none of these files could be read")
+                    # unreadable AND "read fine but under 2 columns" (no signal beyond a
+                    # time axis) both land here — neither can win a majority, see
+                    # build_manifest's own >=2 floor — so the message covers both rather
+                    # than naming only the first and misdescribing the second
+                    parts.append("none of these files have enough columns to analyse "
+                                 "(unreadable, or too few columns)")
                 elif m.outliers:
                     delim = self._delimiter_label(m)
                     n_maj = len(m.included_files)
                     parts.append(f"{n_maj} with {m.majority_columns} columns, {delim}")
-                    parts.append(f"{len(m.outliers)} file{'s' if len(m.outliers) != 1 else ''} "
-                                 f"differ: {self._named_list(m.outliers)}")
+                    n_out = len(m.outliers)
+                    parts.append(f"{n_out} file{'s' if n_out != 1 else ''} "
+                                 f"{'differs' if n_out == 1 else 'differ'}: "
+                                 f"{self._named_list(m.outliers)}")
                 else:
                     delim = self._delimiter_label(m)
                     parts.append(f"{m.majority_columns} columns, {delim}")
                 if m.mask_narrowed_from:
-                    exts = ", ".join(e.lstrip(".") for e in sorted(m.narrowed_out_exts))
-                    parts.append(
-                        f"only one file pattern can be analysed at a time, narrowed to "
-                        f"'{m.mask}' ({m.narrowed_out_count} matching .{exts} file"
-                        f"{'s' if m.narrowed_out_count != 1 else ''} excluded)")
-                status = "warn" if (m.outliers or m.mask_narrowed_from
-                                    or m.majority_columns is None) else "info"
+                    parts.append(self._narrowed_note(m))
+                # B01 self-review fix (05-08-2026): status now follows Manifest.is_clean
+                # exactly, so it can never disagree with the QC strip's own gate on the
+                # same manifest — the original condition listed outliers/narrowing/no-
+                # majority explicitly but forgot freq_mismatches, so a frequency-only
+                # mismatch (same column count, wrong rate) showed this label as "info"
+                # while the QC strip correctly said "warn" for the identical scan.
+                status = "info" if m.is_clean else "warn"
                 text = " · ".join(parts)
         lab.setText(text)
         lab.setProperty("status", status)
         lab.style().unpolish(lab); lab.style().polish(lab)
+        self._update_qc()   # self._manifest just (re)built — the QC strip must never lag it
 
     def _set_status(self, text):
         self.status.setText(text)
@@ -1152,13 +1206,13 @@ class SettingsScreen(QWidget):
             return []
         out = []
         if m.mask_narrowed_from:
-            exts = ", ".join(e.lstrip(".") for e in sorted(m.narrowed_out_exts))
-            out.append(f"only one file pattern can be analysed at a time — narrowed to "
-                       f"'{m.mask}' ({m.narrowed_out_count} matching .{exts} file"
-                       f"{'s' if m.narrowed_out_count != 1 else ''} excluded)")
+            out.append(self._narrowed_note(m))
         if m.outliers:
-            out.append(f"{len(m.outliers)} file{'s' if len(m.outliers) != 1 else ''} "
-                       f"differ in column count and are not included in channel assignment: "
+            n_out = len(m.outliers)
+            verb = "differs" if n_out == 1 else "differ"
+            be = "is" if n_out == 1 else "are"
+            out.append(f"{n_out} file{'s' if n_out != 1 else ''} {verb} in column count "
+                       f"and {be} not included in channel assignment: "
                        f"{self._named_list(m.outliers)}")
         return out
 

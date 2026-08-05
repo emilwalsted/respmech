@@ -105,6 +105,11 @@ def test_output_checklist_binds_and_previews(qapp):
 def test_format_readout(qapp):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState()); sc = win.settings_screen
+    # B01: the synth fixtures are genuinely 1000 Hz — match it, or the manifest correctly
+    # (and separately, see test_frequency_only_mismatch_marks_the_readout_as_warn_too)
+    # flags the spinbox's arbitrary 2000 Hz default as a real mismatch and this becomes a
+    # test of THAT caution rather than of the column/delimiter text this test is about.
+    sc.samp_freq.setValue(1000)
     sc.in_folder.setText(INPUT); sc.in_files.setText("synth_case_*.csv"); sc._on_inputs_changed()
     assert "columns" in sc.format_readout.text() and "comma" in sc.format_readout.text()
     assert sc.format_readout.property("status") == "info"
@@ -545,5 +550,138 @@ def test_manifest_cache_survives_across_edits_and_is_reused(qapp, tmp_path):
     cache_before = dict(sc._manifest_cache)
     sc._on_inputs_changed()                                # same folder/mask again
     assert sc._manifest_cache == cache_before               # nothing new probed
+    win.close()
+
+
+def test_opening_a_saved_analysis_shows_a_fresh_qc_verdict_immediately(qapp, tmp_path):
+    """Self-review regression (05-08-2026): _update_qc used to run BEFORE the manifest it
+    now depends on was (re)built on the open-analysis path (from_state), and
+    enter_open_mode's own manifest rebuild was never followed by a QC refresh at all — so
+    opening a saved analysis whose folder had a real caveat could still show 'No warnings'
+    until the user made an edit or switched tabs. The whole point of this ticket was to
+    never show a stale all-clear; this is the open-a-file path, not just the live-edit one."""
+    from respmech.ui.main_window import MainWindow
+    for n in ("a", "b", "c"):
+        write_delim(tmp_path / f"{n}.csv", 9)
+    write_delim(tmp_path / "d.csv", 8)             # the caveat that must survive Open
+    src = MainWindow(AppState()); src_sc = src.settings_screen
+    src_sc.in_folder.setText(str(tmp_path)); src_sc.in_files.setText("*.csv")
+    src_sc.samp_freq.setValue(1000)
+    src_sc._on_inputs_changed()
+    _assign(src_sc, flow=5, volume=9, poes=6, pgas=7, pdi=8)   # a savable mapping over the 9-col files
+    assert src_sc.can_save()                # sanity: a column-count outlier is a caution, not a save-blocker
+    p = tmp_path / "analysis.toml"
+    src_sc.state.save_toml(str(p))
+    src.close()
+
+    # a brand-new screen, as if the app had just started — _manifest is None until Open
+    win = MainWindow(AppState()); sc = win.settings_screen
+    assert sc._manifest is None
+    assert sc.open_analysis(str(p)) is True
+    # the caveat must be visible WITHOUT any further edit or tab switch
+    assert sc._manifest is not None and sc._manifest.outliers
+    assert sc.qc.property("status") == "warn"
+    assert "d.csv" in sc.qc.text()
+    win.close()
+
+
+def test_correcting_the_sampling_frequency_clears_the_stale_caution(qapp, tmp_path):
+    """Self-review regression (05-08-2026): the frequency-mismatch caution names the
+    Settings value it compared against (Manifest.settings_fs, frozen at scan time). Fixing
+    samp_freq to match the caution's own advice used to leave the OLD value quoted back at
+    the user — 'not the 1000 Hz set here' — even after the field genuinely read 2000 Hz,
+    because nothing rebuilt the manifest on a samp_freq-only edit."""
+    from respmech.ui.main_window import MainWindow
+    write_delim(tmp_path / "at1000.csv", 9, fs=1000.0)
+    write_delim(tmp_path / "at2000.csv", 9, fs=2000.0)
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
+    sc.samp_freq.setValue(1000)
+    sc._on_inputs_changed()
+    assert "not the 1000 Hz" in sc.qc.text()
+    sc.samp_freq.setValue(2000)                    # the user does exactly what the caution said
+    assert sc._manifest.settings_fs == 2000
+    assert "not the 1000 Hz" not in sc.qc.text()
+    # the OTHER file (at1000.csv) is now the mismatch instead
+    assert "not the 2000 Hz" in sc.qc.text() and "at1000.csv" in sc.qc.text()
+    win.close()
+
+
+def test_frequency_only_mismatch_marks_the_readout_as_warn_too(qapp, tmp_path):
+    """Self-review regression (05-08-2026): format_readout's status used to check
+    outliers/narrowing/no-majority explicitly but never freq_mismatches, so a folder with
+    consistent COLUMNS but a frequency disagreement showed 'info' on the read-out while the
+    QC strip correctly said 'warn' for the exact same scan. Both must agree — that
+    reconciliation is the entire point of this ticket."""
+    from respmech.ui.main_window import MainWindow
+    write_delim(tmp_path / "at1000.csv", 9, fs=1000.0)
+    write_delim(tmp_path / "at2000.csv", 9, fs=2000.0)
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
+    sc.samp_freq.setValue(1000)
+    sc._on_inputs_changed()
+    assert sc._manifest.outliers == ()              # columns agree — only frequency disagrees
+    assert sc.format_readout.property("status") == "warn"
+    assert sc.qc.property("status") == "warn"
+    win.close()
+
+
+def test_more_than_three_outliers_are_truncated_in_the_readout(qapp, tmp_path):
+    """_named_list caps a caution at 3 names + '+N more' — asserted here at a scale (5
+    outliers) no other test in this suite reaches, so a regression to an unbounded list
+    over a large batch would actually be caught."""
+    from respmech.ui.main_window import MainWindow
+    for n in range(6):                              # majority: must outnumber the 5 outliers
+        write_delim(tmp_path / f"rec{n}.csv", 9)
+    for n in range(5):
+        write_delim(tmp_path / f"odd{n}.csv", 8)
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
+    sc._on_inputs_changed()
+    assert sc._manifest.majority_columns == 9       # sanity: the 6 recN.csv files won the vote
+    text = sc.format_readout.text()
+    assert "5 files differ" in text
+    assert "+2 more" in text
+    assert text.count("odd") == 3                  # only the first 3 are named
+    win.close()
+
+
+def test_all_files_too_few_columns_gives_an_accurate_message(qapp, tmp_path):
+    """Self-review regression (05-08-2026): a folder where every matched file has fewer
+    than 2 columns (readable, just no signal beyond a time axis) used to say 'none of
+    these files could be read' — true for an unreadable file, but wrong for one that reads
+    fine and simply lacks columns. Both cases land in majority_columns is None (neither can
+    win the >=2 majority floor), so the message must cover both rather than naming only
+    one of the two possible reasons."""
+    from respmech.ui.main_window import MainWindow
+    for n in ("a", "b"):
+        write_delim(tmp_path / f"{n}.csv", 1)
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
+    sc._on_inputs_changed()
+    assert sc._manifest.majority_columns is None    # sanity: no file could win the >=2 floor
+    text = sc.format_readout.text()
+    assert "enough columns" in text and "unreadable" in text
+    assert sc.format_readout.property("status") == "warn"
+    win.close()
+
+
+def test_narrowing_three_or_more_extensions_keeps_every_dot(qapp, tmp_path):
+    """Self-review regression (05-08-2026): joining stripped extensions with ', ' and
+    prepending a single leading dot only decorated the FIRST one ('.txt, xlsx' — xlsx
+    silently lost its dot). Needs >=2 DROPPED extensions to exercise the join at all (a
+    single dropped extension never goes through ', '.join in a way that could lose a dot)."""
+    from respmech.ui.main_window import MainWindow
+    for n in ("a", "b", "c"):
+        write_delim(tmp_path / f"{n}.csv", 9)
+    write_delim(tmp_path / "d.txt", 9, sep="\t")
+    write_xlsx(tmp_path / "e.xlsx", 9)
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv; *.txt; *.xlsx")
+    sc._on_inputs_changed()
+    text = sc.format_readout.text()
+    assert ".txt" in text and ".xlsx" in text
+    import re
+    assert not re.search(r"(?<!\.)\bxlsx\b", text)   # "xlsx" never appears without its dot
     win.close()
 
