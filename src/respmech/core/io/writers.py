@@ -192,6 +192,28 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
     return written
 
 
+def write_planned(result, settings, plan, outputfolder: str | None = None,
+                  when: datetime | None = None, progress=None) -> list[str]:
+    """Write an ALREADY-COMPUTED ``result`` again, using ``write_batch``'s own, unchanged,
+    golden-safe write logic — never recomputing the analysis (ticket A06 point 7: the Run
+    screen's "Write results to another folder..." button, offered when the analysis
+    succeeded but writing the first time failed, e.g. a folder that turned out to be
+    read-only).
+
+    ``plan`` supplies ``cohort_outputs`` (via ``plan.cohort_outputs``) rather than a
+    separate parameter here, so a write can never disagree with the plan the user was shown
+    for it — passing the flag independently was tried first and is exactly how a subset
+    write's cohort-level outputs could get silently rebuilt from a plan that was never built
+    for that case. ``outputfolder`` defaults to ``plan.outputfolder``; pass an explicit,
+    DIFFERENT folder for "write elsewhere" so the plan that was computed against the
+    original folder can still be reused (the write logic itself does not read the plan's
+    ``outputfolder`` for anything but this default — every actual path is still built fresh
+    from the ``outputfolder`` this call receives)."""
+    target = outputfolder if outputfolder is not None else plan.outputfolder
+    return write_batch(result, settings, target, when=when, progress=progress,
+                       cohort_outputs=plan.cohort_outputs)
+
+
 # --------------------------------------------------------------------------- #
 # cohort summary (P8/P15)
 # --------------------------------------------------------------------------- #

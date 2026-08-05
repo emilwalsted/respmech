@@ -46,6 +46,12 @@ def write_batch(*args, **kwargs):
     return _fn(*args, **kwargs)
 
 
+def write_planned(*args, **kwargs):
+    """Lazy shim for :func:`respmech.core.io.writers.write_planned` — see the note above."""
+    from respmech.core.io.writers import write_planned as _fn
+    return _fn(*args, **kwargs)
+
+
 class BatchWorker(QObject):
     progress = Signal(object)          # ProgressEvent
     file_done = Signal(str, object)    # filename, average-row DataFrame
@@ -118,6 +124,35 @@ class BatchWorker(QObject):
                 return
         # Final result carries every file's table for the results view.
         self.finished.emit(None if cancelled else result)
+
+
+class WriteWorker(QObject):
+    """Write an ALREADY-COMPUTED ``BatchResult`` to a folder, off the GUI thread (ticket
+    A06's "Write results to another folder…" — offered when the analysis succeeded but the
+    original write failed). Never re-runs the analysis: ``write_planned`` only replays
+    ``write_batch``'s own write logic against the frozen ``result``/``settings`` this worker
+    was constructed with. On a worker thread for the same reason ``BatchWorker``'s write
+    phase is: the figure step alone can take many seconds, and this app's one rule for
+    anything that slow is that it must never block the window."""
+    finished = Signal(object)      # list of written paths
+    failed = Signal(str)           # error message (traceback)
+
+    def __init__(self, result, settings, plan, outputfolder: str):
+        super().__init__()
+        self._result = result
+        self._settings = settings
+        self._plan = plan
+        self._outputfolder = outputfolder
+
+    @Slot()
+    def run(self):
+        try:
+            written = write_planned(self._result, self._settings, self._plan,
+                                    outputfolder=self._outputfolder)
+        except Exception:
+            self.failed.emit(traceback.format_exc())
+            return
+        self.finished.emit(written)
 
 
 # --------------------------------------------------------------------------- #

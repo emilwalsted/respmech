@@ -46,6 +46,7 @@ class SettingsScreen(QWidget):
         self._dirty = False           # unsaved edits since the last save/open/new
         self._err_dialog = None       # copyable error dialog (replace, don't accumulate)
         self._report_dialog = None    # migration report dialog
+        self._save_preview_warm = False   # see _update_save_preview
         self._build()
         self.from_state()
         self._wire_reactivity()
@@ -316,6 +317,15 @@ class SettingsScreen(QWidget):
         if d:
             prefs.set_last_folder("browse", d)
             line.setText(d)
+            if line is self.out_folder:
+                # A real write probe here (ticket A06 point 6), not just at Run time — the
+                # picker is exactly the moment a user is choosing where results go, so a
+                # folder that turns out to be read-only should say so immediately rather
+                # than surface deep inside write_batch after a whole batch has computed.
+                from respmech.core.io.plan import probe_write_folder  # noqa: PLC0415
+                probe = probe_write_folder(d)
+                if not probe.ok:
+                    self._set_status(f"Warning: {probe.message}")
             if self._loading:
                 return
             (self._on_inputs_changed if line is self.in_folder else self._on_field_changed)()
@@ -409,26 +419,54 @@ class SettingsScreen(QWidget):
 
     def _update_save_preview(self):
         """The 'You will get' line under the output checklist — the deliverables the current
-        ticks will actually write, so the output is explicit before Run."""
+        ticks will actually write, so the output is explicit before Run. Shares its wording
+        and its diagnostic-figure count with the Run screen's pre-flight plan (ticket A06),
+        so the two screens can never again tell a different story about the same settings —
+        measured before: a single 'save_drift' tick was counted here as 1 deliverable while
+        actually producing 3 distinct figures (volume correction, trend, volume endpoints)."""
         if getattr(self, "save_preview", None) is None:
             return
+        if not self._save_preview_warm:
+            # The real count needs core.plots (numpy) — cheap once imported, but a fresh
+            # import here cost ~180ms measured on this exact change, and this is the FIRST
+            # call, made synchronously from __init__ (from_state -> _sync_widgets), still
+            # inside MainWindow's own construction and therefore on ui/app.py's synchronous
+            # startup path — well before showMaximized() reveals the window (a self-review
+            # finding: an earlier version of this comment claimed "once shown", which is
+            # not accurate — ui/app.py pumps one app.processEvents() right after
+            # MainWindow(...) returns, still behind the splash, and that is what actually
+            # resolves this deferred call). ui/validation.py and ui/workers.py already keep
+            # the heavier compute-core imports off this exact path for the same reason
+            # (tests/unit/test_startup_imports.py); do the same here — show a light
+            # placeholder now and let the real text resolve whenever the event loop next
+            # turns, off the synchronous construction call stack. Every later call (a real
+            # edit) runs synchronously.
+            self.save_preview.setText("…")
+            self._save_preview_warm = True
+            QTimer.singleShot(0, self._update_save_preview)
+            return
+        from respmech.core.plots import diagnostic_figure_type_count
         got = []
         if self.save_average.isChecked():
-            got.append("average workbook")
+            got.append("Average breath-data workbook")
             got.append("cohort summary (mean ± SD, CV%, by group)")   # always paired with the average
         if self.save_bbb.isChecked():
-            got.append("breath-by-breath workbook")
+            got.append("Breath-by-breath workbook, one per recording")
             emg = self.state.settings.processing.emg
             if emg.normalization != "none" and self.state.settings.input.channels.emg:
                 got.append("normalised-EMG sheet")     # only when EMG channels are configured
         if self.save_processed.isChecked():
-            got.append("processed CSV")
-        figs = sum(cb.isChecked() for cb in (self.save_pv_avg, self.save_pv_ind,
-                   self.save_raw_fig, self.save_trimmed_fig, self.save_drift_fig, self.save_emg_fig))
+            got.append("Processed-signal CSV, one per recording")
+        figs = diagnostic_figure_type_count(self.state.settings)
         if figs:
-            got.append(f"{figs} diagnostic-figure set{'s' if figs != 1 else ''}")
-        got.append("run report + settings snapshot")                  # P7, always written
-        self.save_preview.setText(", ".join(got) if got else "run report + settings snapshot only.")
+            got.append(f"{figs} diagnostic-figure type{'s' if figs != 1 else ''} per recording")
+        emg = self.state.settings.processing.emg
+        if emg.save_sound:
+            got.append("EMG audio export (WAV), one per channel per conditioning stage")
+        if emg.robust_peak.enabled:
+            got.append("cardiac-gated peak EMG columns")
+        got.append("run report + analysis snapshot")                  # P7, always written
+        self.save_preview.setText(", ".join(got) if got else "run report + analysis snapshot only.")
 
     # -- reactivity ---------------------------------------------------------
     def _wire_reactivity(self):

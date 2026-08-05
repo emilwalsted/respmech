@@ -140,6 +140,20 @@ needs to distinguish `None` from NaN (they can render differently — see
 `ui/result_table.py`'s `_format_display`), build the column that way, not via
 `pd.array(...)`/`np.array(...)`.
 
+### A worker signal connected to a lambda across a `Qt.QueuedConnection` can segfault
+
+A second-thread `Signal` (`BatchWorker`/`WriteWorker` in `ui/workers.py`) must be
+connected to a **bound method**, never a bare `lambda`, whenever the connection is
+explicit `Qt.QueuedConnection` (the pattern this app always uses for a worker-thread
+signal — see the comment at every such `.connect(...)` call in `ui/screens/run_screen.py`).
+A lambda has no `QObject` identity of its own, so PySide6 cannot resolve which thread's
+event loop the queued call should be delivered on. Found independently twice while
+building ticket A06's "Write results to another folder…" feature (`ui/screens/
+run_screen.py`'s `WriteWorker` wiring): the symptom was not a clean exception but
+`QThread::wait: Thread tried to wait on itself` and a reproducible segfault inside a
+pytest run. Store the target as a bound method (`self._on_write_elsewhere_finished`, not
+`lambda r: self._on_write_elsewhere_finished(r)`) and connect that.
+
 ## Releases (`.github/workflows/release.yml` = "Build installers")
 
 - Trigger: push a `v*` tag (or manual dispatch). Builds a Windows **MSI** and a

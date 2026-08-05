@@ -98,7 +98,7 @@ def test_output_checklist_binds_and_previews(qapp):
     dg = sc.state.settings.output.diagnostics
     assert d.save_processed is True and dg.save_raw is True
     txt = sc.save_preview.text().lower()
-    assert "processed csv" in txt          # the read-out reflects the ticked boxes
+    assert "processed-signal csv" in txt   # the read-out reflects the ticked boxes
     win.close()
 
 

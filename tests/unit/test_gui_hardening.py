@@ -93,6 +93,44 @@ def test_batchworker_is_subset_run_failure_reports_write_failed_not_a_crash(qapp
     assert "writing the output failed" in got["m"] and "permission denied" in got["m"]
 
 
+# -- ticket A06: WriteWorker — "write elsewhere", no re-analysis ---------------
+def test_writeworker_writes_to_the_given_folder(qapp, tmp_path):
+    from respmech.ui import workers
+    from respmech.core.io.plan import plan_outputs
+    from respmech.core.pipeline import run_batch
+    s = _settings(str(tmp_path / "original"), remove_ecg=False)
+    result = run_batch(s)
+    files = [os.path.join(INPUT, "synth_case_A.csv"), os.path.join(INPUT, "synth_case_B.csv")]
+    plan = plan_outputs(s, files)
+    elsewhere = tmp_path / "elsewhere"
+    w = workers.WriteWorker(result, s, plan, str(elsewhere))
+    got = {}
+    w.finished.connect(lambda paths: got.setdefault("paths", paths))
+    w.failed.connect(lambda m: got.setdefault("m", m))
+    w.run()
+    assert "m" not in got
+    assert got["paths"] and all(p.startswith(str(elsewhere)) for p in got["paths"])
+    assert not (tmp_path / "original").exists()
+
+
+def test_writeworker_reports_failure_without_crashing(qapp, tmp_path, monkeypatch):
+    from respmech.ui import workers
+    from respmech.core.io.plan import plan_outputs
+    from respmech.core.pipeline import run_batch
+    s = _settings(str(tmp_path), remove_ecg=False)
+    result = run_batch(s)
+    plan = plan_outputs(s, [os.path.join(INPUT, "synth_case_A.csv")])
+    monkeypatch.setattr(workers, "write_planned",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    w = workers.WriteWorker(result, s, plan, str(tmp_path / "elsewhere"))
+    got = {}
+    w.finished.connect(lambda paths: got.setdefault("paths", paths))
+    w.failed.connect(lambda m: got.setdefault("m", m))
+    w.run()
+    assert "paths" not in got
+    assert "disk full" in got["m"]
+
+
 # -- staging honours remove_ecg and reports the real column + error state ------
 def test_stage_emg_channel_respects_remove_ecg_and_reports_col(qapp, tmp_path):
     from respmech.ui.workers import stage_emg_channel
@@ -131,6 +169,86 @@ def test_path_problem_shared_helper(qapp, tmp_path):
     assert path_problem(s) is None
     s.input.folder = str(tmp_path / "missing")
     assert "input folder" in (path_problem(s) or "")
+
+
+# -- ticket A06: a real write probe, not os.access ------------------------
+def test_path_problem_probe_write_is_off_by_default(qapp, tmp_path, monkeypatch):
+    """Settings' live, every-keystroke validation must never touch disk beyond the
+    existing os.path.isdir checks — probe_write_folder is only called when explicitly
+    asked for (probe_write=True)."""
+    from respmech.ui import validation
+    s = _settings(str(tmp_path))
+    called = []
+    import respmech.core.io.plan as plan_mod
+    monkeypatch.setattr(plan_mod, "probe_write_folder",
+                        lambda folder: called.append(folder) or plan_mod.WriteProbe(True))
+    assert validation.path_problem(s) is None
+    assert called == []
+    assert validation.path_problem(s, probe_write=True) is None
+    assert called == [str(tmp_path)]
+
+
+def test_path_problem_probe_write_reports_an_unwritable_folder(qapp, tmp_path):
+    from respmech.ui.validation import path_problem
+    out = tmp_path / "readonly-out"
+    out.mkdir()
+    out.chmod(0o500)                       # read + execute, no write
+    try:
+        if os.access(str(out), os.W_OK):   # root (some CI runners) ignores the mode bit
+            pytest.skip("running as a user that can still write a 0500 directory")
+        s = _settings(str(out))
+        problem = path_problem(s, probe_write=True)
+        assert problem is not None and "write" in problem.lower()
+    finally:
+        out.chmod(0o700)                   # restore so pytest's tmp_path cleanup can remove it
+
+
+def test_probe_write_folder_creates_and_cleans_up_missing_parents(tmp_path):
+    """A dry run's probe (and the output-folder picker) must never leave an empty folder
+    behind — ticket A06 point 6. Every directory the probe itself created is removed
+    again, deepest first, even though the probe SUCCEEDED."""
+    from respmech.core.io.plan import probe_write_folder
+    target = tmp_path / "a" / "b" / "c"
+    probe = probe_write_folder(str(target))
+    assert probe.ok
+    assert not target.exists()
+    assert not (tmp_path / "a").exists()   # the whole chain it created is gone
+    assert tmp_path.exists()               # but tmp_path itself (pre-existing) is untouched
+
+
+def test_probe_write_folder_leaves_a_pre_existing_folder_alone(tmp_path):
+    from respmech.core.io.plan import probe_write_folder
+    existing = tmp_path / "already-here"
+    existing.mkdir()
+    probe = probe_write_folder(str(existing))
+    assert probe.ok
+    assert existing.is_dir()               # never removed — it was not this call's to remove
+
+
+def test_probe_write_folder_cleans_up_created_parents_even_when_the_probe_fails(tmp_path, monkeypatch):
+    """Self-review fix: os.makedirs() creates parent directories one at a time, so a
+    failure could previously happen AFTER some ancestors were already created but before
+    the function's own cleanup ran — reproduced here by failing the write step itself
+    (tempfile.mkstemp), which happens strictly after makedirs succeeds."""
+    from respmech.core.io import plan as plan_mod
+    monkeypatch.setattr(plan_mod.tempfile, "mkstemp",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("no space left")))
+    target = tmp_path / "x" / "y" / "z"
+    probe = plan_mod.probe_write_folder(str(target))
+    assert not probe.ok and "write" in probe.message.lower()
+    assert not target.exists()
+    assert not (tmp_path / "x").exists()   # the whole chain this call created is still gone
+
+
+def test_probe_write_folder_succeeds_even_if_deleting_the_probe_file_fails(tmp_path, monkeypatch):
+    """Self-review fix: a failure to delete the temp probe file happens AFTER the write
+    that actually matters already succeeded, so it must never be reported as a write
+    failure (the original version put both steps in one try/except and did exactly that)."""
+    from respmech.core.io import plan as plan_mod
+    monkeypatch.setattr(plan_mod.os, "remove",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("permission denied")))
+    probe = plan_mod.probe_write_folder(str(tmp_path))
+    assert probe.ok and probe.message == ""
 
 
 # -- settings: copyable error surface -----------------------------------------

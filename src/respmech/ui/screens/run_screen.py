@@ -20,7 +20,7 @@ from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.flow_layout import install_flow as _install_flow
 from respmech.ui.result_table import ResultTableModel, configure_result_table, resize_result_table
 from respmech.ui.validation import matching_files, path_problem
-from respmech.ui.workers import BatchWorker
+from respmech.ui.workers import BatchWorker, WriteWorker
 
 try:
     from respmech.ui import theme as _theme
@@ -62,6 +62,17 @@ class RunScreen(QWidget):
         self._last_write = False        # did the most recent completed run write files?
         self._last_failed = []          # basenames that failed in the last run (P18 re-run)
         self._only_files = None         # subset the current run is restricted to (P18/P19)
+        self._last_plan = None          # the plan the last _append_plan() built (A06)
+        self._last_result = None        # the last computed BatchResult, for "write elsewhere"
+        # The settings this run actually used, frozen at _start() time — Settings stays
+        # editable once a run finishes, so a "write elsewhere" retry (possibly long after,
+        # once the analysis has already succeeded but writing failed) must reuse exactly
+        # what produced the result, never whatever the user has since typed into Setup.
+        self._run_settings_snapshot = None
+        self._write_thread = None       # "write elsewhere" thread (A06) — a run must treat
+        self._write_worker = None       # this as busy exactly like self._thread
+        self._write_target_folder = None   # last successful "write elsewhere" destination
+        self._pending_write_folder = None  # folder a write-elsewhere in flight is targeting
         self._build()
         self.refresh_actions()
 
@@ -84,6 +95,13 @@ class RunScreen(QWidget):
         self.btn_rerun.setToolTip("Re-run only the files that failed in the last run.")
         self.btn_open = QPushButton("Open output folder")
         self.btn_open.setEnabled(False)     # enabled once a run has written results
+        self.btn_show_plan = QPushButton("Show full output plan…")
+        self.btn_show_plan.setEnabled(False)     # enabled once a pre-flight plan exists
+        self.btn_write_elsewhere = QPushButton("Write results to another folder…")
+        self.btn_write_elsewhere.setEnabled(False)  # enabled only when writing just failed
+        self.btn_write_elsewhere.setToolTip(
+            "Available when the analysis finished but writing its results failed. Writes "
+            "the SAME, already-computed results to a folder you choose — no re-analysis.")
         if _theme is not None:
             _theme.make_primary(self.btn_run)
         self.btn_run.clicked.connect(lambda: self._start(write=True))
@@ -91,7 +109,10 @@ class RunScreen(QWidget):
         self.btn_cancel.clicked.connect(self._cancel)
         self.btn_rerun.clicked.connect(self._rerun_failed)
         self.btn_open.clicked.connect(self._open_output_folder)
-        for _b in (self.btn_run, self.btn_dry, self.btn_cancel, self.btn_rerun, self.btn_open):
+        self.btn_show_plan.clicked.connect(self._show_full_plan)
+        self.btn_write_elsewhere.clicked.connect(self._write_elsewhere)
+        for _b in (self.btn_run, self.btn_dry, self.btn_cancel, self.btn_rerun, self.btn_open,
+                  self.btn_show_plan, self.btn_write_elsewhere):
             bar.addWidget(_b)
         root.addWidget(self.action_bar)
 
@@ -172,7 +193,10 @@ class RunScreen(QWidget):
         if ok:
             why = self._quick_path_problem() or ""
             ok = not why
-        busy = self._thread is not None
+        # A "write elsewhere" retry shares the log/status/result state with a fresh run —
+        # letting a new run start while one is still writing would have both threads drive
+        # the same widgets at once (found in self-review: not a crash, but a real race).
+        busy = self._thread is not None or self._write_thread is not None
         self.btn_run.setEnabled(ok and not busy)
         self.btn_dry.setEnabled(ok and not busy)
         if not ok:
@@ -186,24 +210,21 @@ class RunScreen(QWidget):
         self.status.setText(text)
         self.status_changed.emit(text)
 
-    # -- pre-flight & output (P5/P7) ---------------------------------------
-    def _planned_outputs(self, files):
-        """The output files a real run WOULD write, given the current save flags."""
-        d = self.state.settings.output.data
-        names = []
-        if d.save_breath_by_breath:
-            names += [f"data/{os.path.basename(f)}.breathdata.xlsx" for f in files]
-        if d.save_processed:
-            names += [f"data/{os.path.basename(f)} – Processed data.csv" for f in files]
-        if d.save_average:
-            names.append("data/Average breathdata.xlsx")
-        names += ["analysis-used.toml", "run-report.txt"]      # always emitted
-        return names
-
+    # -- pre-flight & output (P5/P7, plan-driven since A06) ------------------
     def _append_plan(self, write: bool):
         """Log a pre-flight plan so a run is never a black box: what is read, and
-        (for a real run) exactly what will be written — or, for a dry run, would be."""
-        s = self.state.settings
+        (for a real run) exactly what will be written — or, for a dry run, would be.
+
+        Built from ``core.io.plan.plan_outputs`` — the SAME function ``write_batch``'s own
+        figure job list is drawn from — so this can never again drift from what a real run
+        actually writes the way the old, hand-maintained list did (measured: it named 4
+        files where a real run wrote 14, and never mentioned ``diagnostics/`` at all).
+
+        Reads ``self._run_settings_snapshot`` when ``_start`` has already frozen one for
+        this run, falling back to the live ``self.state.settings`` otherwise — a caller
+        that wants a preview of the CURRENT settings without going through ``_start`` (a
+        test, or a future "preview the plan" affordance) still gets one."""
+        s = self._run_settings_snapshot or self.state.settings
         files = matching_files(s.input.folder, s.input.files)
         if self._only_files:                            # a subset / re-run (P18/P19)
             keep = set(self._only_files)
@@ -216,16 +237,66 @@ class RunScreen(QWidget):
                      f"'{s.input.files}' in {s.input.folder}{subset}")
         for f in files:
             self._append(f"    • {os.path.basename(f)}")
-        planned = self._planned_outputs(files)
+
+        from respmech.core.io.plan import plan_outputs
+        cohort_outputs = not self._safe_is_subset_run(self._only_files)
+        plan = plan_outputs(s, files, cohort_outputs=cohort_outputs)
+        self._last_plan = plan
+        self.btn_show_plan.setEnabled(True)
+
         verb = "Would write" if not write else "Will write"
-        self._append(f"Output: {verb} {len(planned)} file{'s' if len(planned) != 1 else ''} "
-                     f"into {s.output.folder}")
-        for n in planned:
-            self._append(f"    • {n}")
+        cap = "up to " if plan.is_cap else ""
+        total = plan.total_count
+        self._append(f"Output: {verb} {cap}{total} file{'s' if total != 1 else ''} "
+                     f"into {s.output.folder}:")
+        # Over ~10 files the old per-file listing ran to dozens of near-identical lines
+        # (measured: 57 lines at 25 files) — summarise by category instead, with the full
+        # list one click away via "Show full output plan…".
+        if len(files) > 10:
+            for g in plan.groups:
+                if g.count == 0:
+                    continue
+                prefix = "up to " if g.is_cap else ""
+                self._append(f"    • {prefix}{g.count} {g.category}")
+            self._append("    (see 'Show full output plan…' for the complete file list)")
+        else:
+            for p in plan.all_paths():
+                self._append(f"    • {p}")
         self._append("")     # blank line before the live run log
 
+    def _show_full_plan(self):
+        """The complete, ungrouped file list for the last pre-flight plan (ticket A06):
+        the compact summary above is enough to read at a glance, but every path must still
+        be one click away."""
+        plan = self._last_plan
+        if plan is None:
+            return
+        lines = []
+        for g in plan.groups:
+            if g.count == 0:
+                continue
+            prefix = "up to " if g.is_cap else ""
+            lines.append(f"{prefix}{g.count} × {g.category}" + (f"  ({g.target})" if g.target else ""))
+            lines.extend(f"    {p}" for p in g.paths)
+            lines.append("")
+        intro = f"Everything the current settings would write into {plan.outputfolder}."
+        # A "write elsewhere" redirect (A06 point 7) means the results this plan describes
+        # were, in the end, actually written somewhere else — say so, or the dialog would
+        # silently point at a folder that never received them (self-review finding).
+        if self._write_target_folder and self._write_target_folder != plan.outputfolder:
+            intro += (f" (This run's results were instead actually written to "
+                     f"{self._write_target_folder}.)")
+        dlg = TextViewerDialog("Full output plan", "\n".join(lines).strip(), self, intro=intro)
+        dlg.show()
+        dlg.raise_()
+
     def _existing_output(self):
-        """(newest_mtime, count) of results already in the output folder, or None."""
+        """(newest_mtime, count) of results already in the output folder, or None.
+
+        Scans ``diagnostics/`` as well as ``data/`` and the root provenance files (A06
+        point 4): a folder that holds ONLY previously-written figures — because the
+        provenance files or ``data/`` were moved or deleted — used to return None here,
+        so a run into it overwrote roughly 35 MB of figures with no warning at all."""
         out = (self.state.settings.output.folder or "").strip()
         if not out or not os.path.isdir(out):
             return None
@@ -234,14 +305,36 @@ class RunScreen(QWidget):
                   os.path.join(out, "run-report.txt")):
             if os.path.isfile(p):
                 hits.append(p)
-        datadir = os.path.join(out, "data")
-        if os.path.isdir(datadir):
-            hits += [os.path.join(datadir, n) for n in os.listdir(datadir)
-                     if os.path.isfile(os.path.join(datadir, n))]
+        for sub in ("data", "diagnostics"):
+            d = os.path.join(out, sub)
+            if os.path.isdir(d):
+                hits += [os.path.join(d, n) for n in os.listdir(d)
+                        if os.path.isfile(os.path.join(d, n))]
         if not hits:
             return None
         newest = max(os.path.getmtime(p) for p in hits)
         return newest, len(hits)
+
+    def _existing_output_categories(self):
+        """Per-folder counts of what is already in the output folder — the overwrite
+        dialog names these instead of a bare number, so the user sees WHAT is at stake,
+        matching the categories the plan itself uses (ticket A06 point 4)."""
+        out = (self.state.settings.output.folder or "").strip()
+        cats = []
+        if not out or not os.path.isdir(out):
+            return cats
+        root_hits = [n for n in ("analysis-used.toml", "run-report.txt")
+                    if os.path.isfile(os.path.join(out, n))]
+        if root_hits:
+            cats.append(f"{len(root_hits)} provenance file{'s' if len(root_hits) != 1 else ''}")
+        for sub, label in (("data", "data workbook/CSV file"),
+                           ("diagnostics", "diagnostic figure/audio file")):
+            d = os.path.join(out, sub)
+            if os.path.isdir(d):
+                n = len([x for x in os.listdir(d) if os.path.isfile(os.path.join(d, x))])
+                if n:
+                    cats.append(f"{n} {label}{'s' if n != 1 else ''}")
+        return cats
 
     def _safe_is_subset_run(self, only_files) -> bool:
         """``core.pipeline.is_subset_run``, guarded: it re-lists the input folder
@@ -265,10 +358,11 @@ class RunScreen(QWidget):
         newest, count = existing
         when = datetime.fromtimestamp(newest).strftime("%Y-%m-%d %H:%M")
         out = self.state.settings.output.folder
+        cats = self._existing_output_categories()
+        detail = "; ".join(cats) if cats else f"{count} result file{'s' if count != 1 else ''}"
         ans = QMessageBox.question(
             self, "Output folder already has results",
-            f"{out}\n\nalready contains {count} result file{'s' if count != 1 else ''} "
-            f"from a run on {when}.\n\n"
+            f"{out}\n\nalready contains {detail}, from a run on {when}.\n\n"
             "Running now will overwrite them. Continue?",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         return ans == QMessageBox.Yes
@@ -343,7 +437,9 @@ class RunScreen(QWidget):
                 f"{note} Run the full batch to create them.")
 
     def _open_output_folder(self):
-        out = (self.state.settings.output.folder or "").strip()
+        # a successful "write elsewhere" (A06) points here at its NEW destination until the
+        # next run starts fresh — see _start(), which clears this back to None.
+        out = (self._write_target_folder or self.state.settings.output.folder or "").strip()
         if out and os.path.isdir(out):
             QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.abspath(out)))
         else:
@@ -351,13 +447,18 @@ class RunScreen(QWidget):
 
     # -- run lifecycle ------------------------------------------------------
     def _start(self, write: bool, only_files=None):
-        if self._thread is not None:
+        if self._thread is not None or self._write_thread is not None:
             return
         ok, why = self._settings_ok()
         if not ok:
             self._set_status(f"Cannot run: {why}")
             return
-        problem = path_problem(self.state.settings)     # full filesystem check
+        # Real filesystem check, INCLUDING an actual write probe (create+write+delete a
+        # temp file) for both Run and Dry run — ticket A06 point 6: a folder that looked
+        # fine to path_problem's earlier checks could still not be writable (a read-only
+        # network share), which used to surface only after the whole batch had finished
+        # computing, deep inside write_batch's os.makedirs.
+        problem = path_problem(self.state.settings, probe_write=True)
         if problem:
             self._set_status(f"Cannot run: {problem}")
             return
@@ -377,13 +478,19 @@ class RunScreen(QWidget):
         self.log.clear(); self.progress.setRange(0, 0)  # busy until first file
         self._fatal_msg = None
         self._last_write = write
+        self._last_result = None
+        self._write_target_folder = None      # a new run invalidates any earlier redirect
+        self.btn_write_elsewhere.setEnabled(False)
+        # Snapshot the settings ONCE, used for both the pre-flight plan below and the
+        # worker — so a "write elsewhere" retry later (Settings stays editable once a run
+        # finishes) reuses exactly what produced the result, never a live edit made since.
+        self._run_settings_snapshot = copy.deepcopy(self.state.settings)
         self._append_plan(write)                        # pre-flight: what will be read/written
         self._set_running(True)
         self.run_started.emit()
 
         self._thread = QThread()
-        # snapshot the settings so edits mid-run can't change what the worker reads
-        self._worker = BatchWorker(copy.deepcopy(self.state.settings), write=write,
+        self._worker = BatchWorker(self._run_settings_snapshot, write=write,
                                    only_files=self._only_files)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
@@ -418,6 +525,14 @@ class RunScreen(QWidget):
                 _ORPHANED_THREADS.append((self._thread, self._worker))
         self._thread = None
         self._worker = None
+        # "Write elsewhere" (A06) has no cancel() — like write_batch's own write phase, it
+        # is not cancellable mid-figure — but it must still be joined, not abandoned.
+        if self._write_thread is not None:
+            self._write_thread.quit()
+            if not self._write_thread.wait(wait_ms):
+                _ORPHANED_THREADS.append((self._write_thread, self._write_worker))
+        self._write_thread = None
+        self._write_worker = None
 
     def _cancel(self):
         if self._worker:
@@ -482,6 +597,12 @@ class RunScreen(QWidget):
         # a fatal message with a result present means the ANALYSIS succeeded but the
         # WRITE failed — a distinct outcome from a run that never completed
         write_failed = fatal and result is not None
+        if write_failed and self._last_write:
+            # the computed result is the only thing "write elsewhere" needs — keep it, and
+            # the exact settings that produced it (self._run_settings_snapshot, set in
+            # _start), so a retry never re-runs the analysis.
+            self._last_result = result
+        self.btn_write_elsewhere.setEnabled(bool(write_failed and self._last_write))
         # enablement first (never lets a stale hint win over the outcome status)
         self.refresh_actions()
         self.progress.setRange(0, 1)
@@ -615,6 +736,84 @@ class RunScreen(QWidget):
         Reuses the full run machinery (overwrite guard, provenance) restricted to one
         file. The shared noise profile is still built from the whole test."""
         self._start(write=True, only_files=[filename])
+
+    # -- write elsewhere, no re-analysis (ticket A06 point 7) ----------------
+    def _write_elsewhere(self):
+        """The analysis succeeded but writing it failed (e.g. the output folder turned out
+        to be read-only). Re-uses the already-computed ``self._last_result`` and the exact
+        settings snapshot that produced it — never re-runs the analysis — and writes to a
+        NEW folder the user picks. Always on a worker thread: the figure step alone can
+        take many seconds, and running it inline here would freeze the window exactly the
+        way ``_heartbeat``/the "writing" progress event exist to prevent for a normal run."""
+        if self._last_result is None or self._run_settings_snapshot is None or self._last_plan is None:
+            return
+        if self._thread is not None or self._write_thread is not None:
+            return
+        from PySide6.QtWidgets import QFileDialog
+        from respmech.ui import prefs
+        start = prefs.last_folder("browse", ".")
+        folder = QFileDialog.getExistingDirectory(self, "Write results to folder", start)
+        if not folder:
+            return
+        prefs.set_last_folder("browse", folder)
+        self._append(f"\n── Writing results to {folder} (no re-analysis) ──")
+        self._set_status(f"Writing to {folder}…")
+        self.btn_write_elsewhere.setEnabled(False)
+        self._pending_write_folder = folder      # committed to _write_target_folder on success
+
+        self._write_thread = QThread()
+        self._write_worker = WriteWorker(self._last_result, self._run_settings_snapshot,
+                                         self._last_plan, folder)
+        self._write_worker.moveToThread(self._write_thread)
+        self._write_thread.started.connect(self._write_worker.run)
+        # Bound methods, not lambdas: a lambda has no QObject identity of its own, so
+        # PySide6 cannot resolve which thread a QueuedConnection should deliver it on —
+        # found in self-review as a reproducible 'QThread::wait: Thread tried to wait on
+        # itself' / segfault when this was first wired to a lambda.
+        self._write_worker.finished.connect(self._on_write_elsewhere_finished, Qt.QueuedConnection)
+        self._write_worker.failed.connect(self._on_write_elsewhere_failed, Qt.QueuedConnection)
+        # refresh_actions() AFTER self._write_thread is assigned, not before — found in
+        # self-review: calling it while self._write_thread was still None left Run/Dry-run
+        # enabled for the whole write, and a click landed silently on _start's busy guard.
+        self.refresh_actions()
+        # MainWindow locks Settings/the Analysis menu on run_started/run_finished for a
+        # normal run (see main_window._on_run_started); a write-elsewhere never emitted
+        # them (self-review finding), so Settings stayed editable and the window's status
+        # bar stayed silent about a write that was still genuinely in progress in the
+        # background. It shares self._run_settings_snapshot (frozen), never live settings,
+        # so this lock is about the WINDOW's honesty, not about protecting the write itself.
+        self.run_started.emit()
+        self._write_thread.start()
+
+    def _cleanup_write_thread(self):
+        if self._write_thread is not None:
+            self._write_thread.quit()
+            if not self._write_thread.wait(5000):
+                _ORPHANED_THREADS.append((self._write_thread, self._write_worker))
+        self._write_thread = None
+        self._write_worker = None
+
+    def _on_write_elsewhere_finished(self, written):
+        target = self._pending_write_folder
+        self._cleanup_write_thread()
+        self._write_target_folder = target
+        n = len(written)
+        self._append(f"Wrote {n} file{'s' if n != 1 else ''} to {target}.")
+        self._set_status(f"Wrote {n} file{'s' if n != 1 else ''} to the new folder.")
+        self.btn_open.setEnabled(True)
+        # The same result can still be written to a THIRD folder if this one turns out to
+        # be wrong too — self._last_result/_run_settings_snapshot/_last_plan are untouched.
+        self.btn_write_elsewhere.setEnabled(True)
+        self.refresh_actions()
+        self.run_finished.emit()
+
+    def _on_write_elsewhere_failed(self, msg):
+        self._cleanup_write_thread()
+        self._append(f"ERROR writing to the new folder: {short_error(msg)}")
+        self._set_status(f"Writing to the new folder failed — {short_error(msg)}")
+        self.btn_write_elsewhere.setEnabled(True)      # still available — try another folder
+        self.refresh_actions()
+        self.run_finished.emit()
 
     def _append(self, text):
         self.log.appendPlainText(text)

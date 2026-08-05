@@ -9,7 +9,7 @@ import pytest
 
 from respmech.ui.state import AppState
 
-from _helpers import requires_synth, synth_settings
+from _helpers import INPUT, requires_synth, synth_settings
 
 pytestmark = requires_synth()
 
@@ -114,15 +114,19 @@ def test_dry_run_plan_lists_inputs_and_planned_outputs(qapp, tmp_path):
 
 
 def test_planned_outputs_follow_save_flags(qapp, tmp_path):
+    """The plan (ticket A06: core.io.plan.plan_outputs, rendered by _append_plan) follows
+    the save flags exactly like the old hand-built list used to — just built from the one
+    shared source of truth now, instead of its own copy of the same logic."""
     from respmech.ui.main_window import MainWindow
-    from respmech.ui.validation import matching_files
     s = synth_settings(tmp_path)
     win = MainWindow(AppState(s)); rn = win.run_screen
-    files = matching_files(s.input.folder, s.input.files)
     s.output.data.save_processed = False
-    assert not any("Processed data" in n for n in rn._planned_outputs(files))
+    rn._append_plan(write=False)
+    assert not any("Processed data" in ln for ln in rn.log.toPlainText().splitlines())
+    rn.log.clear()
     s.output.data.save_processed = True
-    assert any("Processed data" in n for n in rn._planned_outputs(files))
+    rn._append_plan(write=False)
+    assert any("Processed data" in ln for ln in rn.log.toPlainText().splitlines())
     win.close()
 
 
@@ -143,6 +147,119 @@ def test_open_output_button_starts_disabled(qapp, tmp_path):
     win = MainWindow(AppState(synth_settings(tmp_path))); rn = win.run_screen
     assert not rn.btn_open.isEnabled()                        # enabled only after a real write
     win.close()
+
+
+# ---------------------------------------------------------------------------
+# A06 — "Write results to another folder…" (write_planned, no re-analysis)
+# ---------------------------------------------------------------------------
+def test_show_plan_button_enabled_only_after_a_plan_exists(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(tmp_path))); rn = win.run_screen
+    assert not rn.btn_show_plan.isEnabled()
+    rn._append_plan(write=False)
+    assert rn.btn_show_plan.isEnabled()
+    win.close()
+
+
+def test_write_elsewhere_button_enabled_only_when_writing_just_failed(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(tmp_path))); rn = win.run_screen
+    assert not rn.btn_write_elsewhere.isEnabled()
+
+    rn._last_write = True
+    rn._run_settings_snapshot = rn.state.settings
+    rn._fatal_msg = "writing failed: disk full"
+    rn._on_finished(_result_with_failure())              # analysis succeeded, "write" failed
+    assert rn.btn_write_elsewhere.isEnabled()
+    win.close()
+
+
+def test_write_elsewhere_button_stays_disabled_after_an_ordinary_successful_run(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(tmp_path))); rn = win.run_screen
+    rn._last_write = True
+    rn._run_settings_snapshot = rn.state.settings
+    rn._fatal_msg = None
+    rn._on_finished(_result_with_failure())
+    assert not rn.btn_write_elsewhere.isEnabled()
+    win.close()
+
+
+def test_write_elsewhere_button_stays_disabled_after_a_fatal_run_with_no_result(qapp, tmp_path):
+    """A fatal message with NO result means the analysis itself never completed — 'write
+    elsewhere' has nothing to write, so it must not be offered (distinct from write_failed,
+    which needs BOTH a fatal message AND a delivered result)."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(tmp_path))); rn = win.run_screen
+    rn._last_write = True
+    rn._run_settings_snapshot = rn.state.settings
+    rn._fatal_msg = "no input files found"
+    rn._on_finished(None)
+    assert not rn.btn_write_elsewhere.isEnabled()
+    win.close()
+
+
+def test_a_new_run_is_refused_while_write_elsewhere_is_in_flight(qapp, tmp_path):
+    """refresh_actions()/_start() must treat self._write_thread exactly like self._thread —
+    a review finding: without this, a 'write elsewhere' retry and a fresh run could drive
+    the same log/status/result state from two threads at once."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(tmp_path))); rn = win.run_screen
+    rn._write_thread = object()          # any non-None sentinel — _start only checks identity
+    rn.refresh_actions()
+    assert not rn.btn_run.isEnabled()
+    assert not rn.btn_dry.isEnabled()
+    calls = []
+    rn._settings_ok = lambda: (True, "")
+    rn._append_plan = lambda write: calls.append(write)
+    rn._start(write=True)
+    assert calls == []                    # refused before it ever gets to building a plan
+    rn._write_thread = None
+    win.close()
+
+
+def test_write_elsewhere_does_nothing_without_a_prior_failed_write(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(tmp_path))); rn = win.run_screen
+    rn._write_elsewhere()                 # no _last_result/_last_plan yet — must be a no-op
+    assert rn._write_thread is None
+    win.close()
+
+
+def test_write_elsewhere_locks_run_buttons_immediately_and_emits_run_started(qapp, tmp_path, monkeypatch):
+    """Two self-review findings in one test: (1) refresh_actions() ran with
+    self._write_thread still None, so it briefly re-enabled Run/Dry-run for the whole
+    write, not just a moment; (2) run_started/run_finished were never emitted for a
+    write-elsewhere at all, so MainWindow never locked Settings/the Analysis menu the way
+    it does for a normal run's write phase. Both must hold the instant _write_elsewhere()
+    returns — a plain synchronous call, since QThread.start() itself returns immediately."""
+    import os
+    from PySide6.QtWidgets import QFileDialog
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.io.plan import plan_outputs
+    from respmech.core.pipeline import run_batch
+    s = synth_settings(tmp_path / "original")
+    win = MainWindow(AppState(s)); rn = win.run_screen
+
+    files = [os.path.join(INPUT, "synth_case_A.csv"), os.path.join(INPUT, "synth_case_B.csv")]
+    rn._last_result = run_batch(s)
+    rn._run_settings_snapshot = s
+    rn._last_plan = plan_outputs(s, files)
+    rn._last_write = True
+
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory",
+                        lambda *a, **k: str(tmp_path / "elsewhere"))
+    started = []
+    rn.run_started.connect(lambda: started.append(True))
+
+    rn._write_elsewhere()
+    assert started == [True]
+    assert rn._write_thread is not None
+    assert not rn.btn_run.isEnabled()          # busy — refresh_actions saw the thread
+    assert not rn.btn_dry.isEnabled()
+    assert not rn.btn_write_elsewhere.isEnabled()   # can't start a second one mid-write
+
+    win.close()                                # shutdown() joins the write thread safely
 
 
 # ---------------------------------------------------------------------------
