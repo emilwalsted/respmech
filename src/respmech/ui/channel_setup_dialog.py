@@ -117,14 +117,15 @@ class ChannelSetupDialog(QDialog):
         banner_text = (f"This mapping is applied to all {nfiles} file"
                       f"{'s' if nfiles != 1 else ''} in the batch.")
         if self._excluded:
-            names = ", ".join(f"{name} ({cols} col{'s' if cols != 1 else ''})"
-                              for name, cols in self._excluded[:3])
+            def _fmt_excluded(name, cols):
+                detail = "unreadable" if cols is None else f"{cols} col{'s' if cols != 1 else ''}"
+                return f"{name} ({detail})"
+            names = ", ".join(_fmt_excluded(name, cols) for name, cols in self._excluded[:3])
             if len(self._excluded) > 3:
                 names += f", +{len(self._excluded) - 3} more"
             n_ex = len(self._excluded)
-            banner_text += (f" {n_ex} file{'s' if n_ex != 1 else ''} with a different "
-                            f"column count {'is' if n_ex == 1 else 'are'} not shown here: "
-                            f"{names}.")
+            banner_text += (f" {n_ex} more file{'s' if n_ex != 1 else ''} matched but "
+                            f"{'is' if n_ex == 1 else 'are'} not shown here: {names}.")
         banner = QLabel(banner_text)
         banner.setProperty("banner", True)
         banner.setProperty("status", "warn" if self._excluded else "info")

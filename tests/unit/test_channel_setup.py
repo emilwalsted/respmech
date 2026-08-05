@@ -706,6 +706,20 @@ def test_banner_names_excluded_files_when_given(qapp):
     dlg.close()
 
 
+def test_banner_names_an_unreadable_excluded_file_without_literal_none(qapp):
+    """Self-review regression (05-08-2026): an excluded file the manifest could not read at
+    all carries columns=None (manifest.py's FileEntry), and the banner used to format that
+    as the literal string 'brokenfile.csv (None cols)' — a bare f-string over None."""
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+    dlg = ChannelSetupDialog(_files(), 1000, loader=_loader(),
+                             excluded=[("brokenfile.csv", None), ("odd_one.csv", 8)])
+    text = next(w.text() for w in dlg.findChildren(type(dlg.info)) if "applied to all" in w.text())
+    assert "None" not in text
+    assert "brokenfile.csv (unreadable)" in text
+    assert "odd_one.csv (8 cols)" in text
+    dlg.close()
+
+
 def test_banner_says_nothing_extra_without_excluded_files(qapp):
     from respmech.ui.channel_setup_dialog import ChannelSetupDialog
     dlg = ChannelSetupDialog(_files(), 1000, loader=_loader())

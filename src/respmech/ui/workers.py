@@ -663,7 +663,15 @@ def peek_columns(settings: Settings, file_path: str):
     bytes previously misreported it as "1 columns, whitespace-separated"). Honours the same
     delimiter selection as ``probe_data_columns``/``load_raw_matrix`` (';' for a
     comma-decimal CSV; tab for .txt), so the two can never disagree on the same file.
-    Returns the column count, or ``None`` if the file could not be read."""
+    Returns the column count, or ``None`` if the file could not be read.
+
+    KNOWN LIMITATION: only the FIRST line is inspected. A file whose header parses fine but
+    whose data rows are ragged (a short row further down, or a quoted field containing the
+    delimiter that a naive ``str.split`` miscounts) is not distinguishable from a well-formed
+    file here — it still surfaces as a run-time ``DataValidationError`` when the batch
+    actually runs, exactly as before this scanner existed. Accepted for the same reason the
+    scan is a byte-peek at all: a row-by-row validation would cost close to what
+    ``probe_data_columns`` already costs, defeating the point."""
     import os
 
     ext = os.path.splitext(file_path)[1].lower()
@@ -697,16 +705,25 @@ def probe_sampling_frequency(settings: Settings, file_path: str):
     """Cheap per-file sampling-frequency probe for the manifest scanner: read only column 0
     (the time axis), capped at 5000 rows — measured at 4.3 ms and a correct 2000 Hz on a
     60,000-row file. NEVER uses ``load_raw_matrix``, which reads every column of the whole
-    file (21.7 ms/file for a single column alone). Returns ``None`` for .mat (no comparable
-    cheap column-0 read) or when the column does not look like regular time-in-seconds —
-    see :func:`detect_sampling_frequency`, which this delegates the actual inference to."""
+    file (21.7 ms/file for a single column alone).
+
+    Returns ``None`` for .mat (no comparable cheap column-0 read) or .xlsx/.xls, or when the
+    column does not look like regular time-in-seconds — see :func:`detect_sampling_frequency`,
+    which this delegates the actual inference to. The 5000-row cap only bounds the COST for a
+    delimited-text engine (pandas' C CSV parser stops reading once ``nrows`` is satisfied);
+    openpyxl parses an Excel sheet before pandas applies that cap, so ``nrows=5000`` does
+    nothing to bound an .xlsx read's cost — measured at 37-306 ms/file depending on the
+    sheet's true row count (NOT capped at 5000, up to 30s+ for a hundred-file batch), against
+    this function's ONE synchronous call per input edit. Ruled out rather than shipped with
+    that cost: this only skips the (secondary) frequency-mismatch caution for Excel input,
+    never the (primary) column-count/outlier detection, which stays cheap via
+    ``probe_data_columns``'s single-row read."""
     import os
 
-    import pandas as pd  # noqa: PLC0415
-
     ext = os.path.splitext(file_path)[1].lower()
-    if ext == ".mat":
+    if ext in (".mat", ".xls", ".xlsx"):
         return None
+    import pandas as pd  # noqa: PLC0415
     from respmech.core.io.loaders import _read_table  # noqa: PLC0415
     fmt = settings.input.format
     dec = getattr(fmt, "decimal", ".") or "."
@@ -716,8 +733,6 @@ def probe_sampling_frequency(settings: Settings, file_path: str):
                              usecols=[0], nrows=5000)
         elif ext == ".txt":
             df = _read_table(file_path, sep="\t", decimal=dec, usecols=[0], nrows=5000)
-        elif ext in (".xls", ".xlsx"):
-            df = pd.read_excel(file_path, usecols=[0], nrows=5000)
         else:
             return None
     except Exception:                       # noqa: BLE001 — best-effort, never blocks the scan

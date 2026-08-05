@@ -157,6 +157,12 @@ def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=N
         cache = {}
 
     settings_fs = getattr(settings.input.format, "sampling_frequency", None)
+    # the decimal separator changes how peek_columns/probe_sampling_frequency PARSE a .csv
+    # (and how probe_sampling_frequency parses numbers for .txt too) — folded into the cache
+    # key so a decimal-separator edit (auto-detected by _probe_and_apply_file_settings, or
+    # set by hand) can never serve a value probed under the OLD separator back out of a
+    # cache that is otherwise keyed purely on file identity.
+    decimal = getattr(settings.input.format, "decimal", ".") or "."
 
     effective_mask, narrowed_from, dropped = narrow_mask(folder, mask)
     narrowed_out_count = sum(dropped.values())
@@ -169,14 +175,21 @@ def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=N
         filename = os.path.basename(path)
         ext = os.path.splitext(filename)[1].lower()
         token = _file_token(path)
-        key = ("cols", token) if token is not None else None
+        key = ("cols", token, decimal) if token is not None else None
         if key is not None and key in cache:
             columns = cache[key]
         else:
             columns = columns_prober(settings, path)
             if key is not None:
                 cache[key] = columns
-        if columns is not None:
+        # A file with fewer than 2 columns (no signal beyond the time axis, or a stray
+        # non-data file the mask happened to match) can never WIN the majority vote —
+        # mirrors _valid_input_files's own `n >= 2` filter exactly, so the two votes can
+        # never disagree about which layout is "the batch" (a folder dominated by
+        # degenerate 1-column files used to let build_manifest crown THEM the majority
+        # and mark the real recordings as outliers, while _valid_input_files — which
+        # excludes them before voting — still correctly picked the real recordings).
+        if columns is not None and columns >= 2:
             counts[columns] += 1
         probed.append((path, filename, ext, columns, token))
 
@@ -195,7 +208,7 @@ def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=N
         included = columns == majority
         detected_fs = None
         if included:
-            fkey = ("fs", token) if token is not None else None
+            fkey = ("fs", token, decimal) if token is not None else None
             if fkey is not None and fkey in cache:
                 detected_fs = cache[fkey]
             else:
