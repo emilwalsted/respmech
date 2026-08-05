@@ -41,9 +41,9 @@ from dataclasses import dataclass
 import numpy as np
 from PySide6.QtWidgets import (QCheckBox, QDialog, QDoubleSpinBox,
                                QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton,
-                               QScrollArea, QSplitter, QTableWidget, QTableWidgetItem,
+                               QSplitter, QTableWidget, QTableWidgetItem,
                                QTabWidget, QVBoxLayout, QWidget)
-from PySide6.QtCore import Qt, QEvent, QObject, QSize, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QObject, QThread, QTimer, Signal
 from PySide6.QtGui import QFont, QFontMetrics
 
 import pyqtgraph as pg
@@ -302,66 +302,6 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self.subtabs.currentChanged.connect(lambda *_: QTimer.singleShot(0, self._align_noise_strip))
         self.refresh_files()
 
-    class _PageScroll(QScrollArea):
-        """A scroll area whose page is the VIEWPORT height when there is room for it, and its
-        own minimum height when there is not.
-
-        Qt's ``widgetResizable`` sizes the page from ``heightForWidth`` whenever the page's
-        layout reports one — and these pages' wrapping chip rows do. So the page came out at
-        its NATURAL height on every screen (measured 1659 px for the noise page) instead of
-        filling the viewport, and the bottom diagnostics row sat below the fold even on a
-        2560x1400 display, where the whole page had fitted before. Scrolling is meant to be
-        the answer to a SHORT screen, not a permanent tax on every screen.
-        """
-
-        def resizeEvent(self, ev):          # noqa: N802 - Qt API
-            super().resizeEvent(ev)
-            self._fit_page()
-
-        def showEvent(self, ev):            # noqa: N802 - Qt API
-            # A page that was not the current tab is laid out only when it is first shown,
-            # and that pass happens after the filter below has had its chance — so without
-            # this the tab the user switches TO keeps the natural height Qt gave it.
-            super().showEvent(ev)
-            self._fit_page()
-
-        def setWidget(self, page):          # noqa: N802 - Qt API
-            # widgetResizable is deliberately OFF (see the class docstring): with it on, Qt
-            # sizes the page from its layout's heightForWidth and that decision is final —
-            # overriding resizeEvent, filtering LayoutRequest and even calling resize()
-            # directly afterwards all left the page at its 1659 px natural height, measured.
-            # So the page's size is this class's own job, recomputed on the three events that
-            # can change it.
-            super().setWidget(page)
-            page.installEventFilter(self)
-            self._fit_page()
-
-        def eventFilter(self, obj, ev):     # noqa: N802 - Qt API
-            if obj is self.widget() and ev.type() == QEvent.LayoutRequest:
-                self._fit_page()
-            return super().eventFilter(obj, ev)
-
-        _fitting = False
-
-        def _fit_page(self):
-            # Re-entrancy guard AND a no-op check, both required: resizing the page emits the
-            # very LayoutRequest this is called from, and pyqtgraph re-lays its axes out on
-            # every resize, so without both this recursed until the stack blew.
-            if self._fitting:
-                return
-            page = self.widget()
-            if page is None:
-                return
-            vp = self.viewport().size()
-            want = QSize(vp.width(), max(vp.height(), page.minimumSizeHint().height()))
-            if page.size() == want:
-                return
-            self._fitting = True
-            try:
-                page.resize(want)
-            finally:
-                self._fitting = False
-
     def _recentre_overlays(self, *_):
         """Re-centre every visible busy/error card on the part of its panel still in view."""
         for ov in getattr(self, "_overlays", {}).values():
@@ -376,16 +316,16 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         instead of compressing its panels into stacked axes. ``setWidgetResizable(True)``
         means the page still EXPANDS to fill a tall window, so nothing changes on a large
         screen — the scroll bar only appears when the room genuinely is not there.
+
+        Lifted out to :mod:`respmech.ui.panel` (ticket B03) so the Run drawer can reuse
+        the exact same short-screen scrolling instead of a second copy of it; this stays
+        as a thin wrapper so the existing ``self._scrollable(...)`` call sites here are
+        unaffected. The control strips already wrap (flow_layout), so width is handled by
+        wrapping rather than by scrolling — AsNeeded rather than AlwaysOff so an extreme
+        font still gets a bar instead of clipped controls.
         """
-        area = self._PageScroll()
-        area.setWidgetResizable(False)      # _PageScroll sizes the page itself
-        area.setFrameShape(QFrame.NoFrame)
-        area.setWidget(page)
-        # The control strips already wrap (flow_layout), so width is handled by wrapping
-        # rather than by scrolling; AsNeeded rather than AlwaysOff so an extreme font still
-        # gets a bar instead of clipped controls.
-        area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        return area
+        from respmech.ui.panel import scrollable
+        return scrollable(page, horizontal_policy=Qt.ScrollBarAsNeeded)
 
     @staticmethod
     def _style_channel_stack(glw, plots, *, link_y=False, time_label="Time (s)"):
@@ -483,30 +423,41 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
     @staticmethod
     def _titled(title, widget, corner=None):
         """A titled panel. ``corner`` is an optional widget pinned to the top-right of
-        the title row (e.g. the detail-channel dropdown or the result-channel picker)."""
-        # The panel's own margin is the single source of air: it keeps the title, the plot
-        # and the right-pinned corner widget (channel selectors) all off the panel edge, so
-        # nothing butts against the neighbouring panel or the nav.
-        box = QWidget(); lay = QVBoxLayout(box); lay.setContentsMargins(8, 4, 8, 6); lay.setSpacing(2)
-        header = QHBoxLayout(); header.setContentsMargins(0, 0, 0, 0); header.setSpacing(8)
-        # ElidingLabel, not a plain QLabel: several panels (ECG capture, fidelity) keep this
-        # header current with a live verdict via setFullText() — a fixed one-shot elide() cap
-        # can end up narrower than even the panel's own STATIC title once the panel sits in a
-        # splitter column, and never widens back out when the user gives it more room. This
-        # sizes to whatever width the splitter actually gives it and always keeps the full
-        # text one hover away — a caller that only ever sets the title ONCE (e.g. "Campbell
-        # diagram") gets the same behaviour a plain QLabel gave it, just safely bounded too.
-        lab = ElidingLabel(title); lab.setProperty("status", "muted")
-        box._title_label = lab          # so a panel can keep its header current
-        header.addWidget(lab); header.addStretch(1)
-        if corner is not None:
-            header.addWidget(corner, 0, Qt.AlignRight | Qt.AlignVCenter)
-        lay.addLayout(header); lay.addWidget(widget, 1)
-        return box
+        the title row (e.g. the detail-channel dropdown or the result-channel picker).
+
+        Lifted out to :mod:`respmech.ui.panel` (ticket B03) so the Run drawer's "Run log"
+        panel can reuse the exact same header treatment instead of a second hand-rolled
+        one; this stays as a thin wrapper so every existing ``self._titled(...)`` call
+        site here (mechanics/ECG/EMG mixins) is unaffected."""
+        from respmech.ui.panel import titled_panel
+        return titled_panel(title, widget, corner)
 
     def _set_status(self, text):
         self.status.setText(text)
         self.status_changed.emit(text)
+
+    # -- Run drawer (ticket B03) ---------------------------------------------
+    def install_run_drawer(self, run_screen_widget):
+        """Embed Run & results (ticket B03) below the file rail / subtabs workspace,
+        replacing its old life as a separate third tab. ``MainWindow`` still builds the
+        ``RunScreen`` (it owns the cross-screen wiring, run_started/run_finished included)
+        and hands the finished widget in here once, right after construction — this screen
+        just gives it a home, so the user can dry-run, run and read the run report without
+        ever leaving the file they are looking at.
+
+        Embedded BARE — no extra title chrome, and deliberately NOT through
+        :func:`respmech.ui.panel.scrollable`. ``RunScreen`` already carries its own compact
+        "Run & results ▸" toggle row as the ONLY thing visible while collapsed (see its
+        ``_build``); a second titled-panel header on top of that was pure redundant chrome,
+        and ``FitScrollArea`` fights a page whose OWN content collapses/expands (it forces
+        a reflow to at least the viewport height on every fit pass, right for Preview &
+        QC's static subtab pages, wrong here) — measured, that combination left the drawer
+        at 362 px even fully collapsed, an early fit pass against a since-shrunk page
+        having stuck in the scroll area's own reported size and fed back into this layout.
+        ``RunScreen``'s own collapsed minimum is already small; nothing here needs a
+        second, conflicting sizing mechanism on top of it."""
+        self._run_drawer = run_screen_widget
+        self.layout().addWidget(self._run_drawer)
 
     # -- file list (reactive) ----------------------------------------------
     def refresh_files(self):

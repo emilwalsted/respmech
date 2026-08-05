@@ -325,7 +325,15 @@ def test_the_diagnostic_figures_follow_their_panel_in_both_directions(qapp, tmp_
     corner of their own panel, which is what a screenshot caught.
     """
     from respmech.ui.screens.preview_screen import refit_compact_figure
-    win, pv = _noise_tab(qapp, tmp_path)
+    # B03 (UI-overhaul) folded Run & results into this same tab as a collapsed drawer —
+    # even minimised to a single toggle row, it costs Preview & QC's workspace ~60-90 px
+    # of the window it used to have entirely to itself. At the default 800 px height that
+    # left the "tall" [140, 140, 520] request below delivering only 200 px to the third
+    # region (vs. 262 px before B03), under the threshold the legend needs to render at
+    # all — not a defect in the idempotent-refit logic under test here, just less headroom
+    # than this specific "tall" scenario needs. 900 px restores it comfortably (measured:
+    # 300 px delivered, vs. the same 262 px baseline needed).
+    win, pv = _noise_tab(qapp, tmp_path, height=900)
     canvases = [pv.fidelity_canvas, pv.emg_psd_canvas]
 
     # give each figure something to lay out, exactly as a render does

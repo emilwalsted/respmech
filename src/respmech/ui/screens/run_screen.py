@@ -1,4 +1,9 @@
-"""Screen 3 — run the batch with live output and status.
+"""Run & results — run the batch with live output and status.
+
+Since ticket B03 this is no longer its own tab: ``PreviewScreen.install_run_drawer``
+embeds this widget below Preview & QC's own file rail + subtabs, collapsed by default
+behind a "Run & results ▸" toggle (see ``_build``'s header row and ``_results_section``).
+The class and its worker-thread wiring are unchanged by that move.
 
 Computation runs off the GUI thread (``BatchWorker`` on a ``QThread``); the worker
 forwards the core's progress events as signals, so the log and progress bar update
@@ -17,8 +22,9 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMessageBox, QProgressBar,
 
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.file_rail import FileRail
-from respmech.ui.flow_layout import install_flow as _install_flow
+from respmech.ui.flow_layout import ElidingLabel, install_flow as _install_flow
 from respmech.ui.manifest import manifest_from_filenames
+from respmech.ui.panel import titled_panel
 from respmech.ui.result_table import ResultTableModel, configure_result_table, resize_result_table
 from respmech.ui.validation import matching_files, path_problem
 from respmech.ui.workers import BatchWorker, WriteWorker
@@ -70,11 +76,15 @@ class RunScreen(QWidget):
     status_changed = Signal(str)
     run_started = Signal()          # a batch run began (main window locks Settings)
     run_finished = Signal()         # the batch run ended
-    open_file_requested = Signal(str)   # drill back into Preview for one file (P20)
 
-    def __init__(self, state):
+    def __init__(self, state, file_rail: FileRail | None = None):
         super().__init__()
         self.state = state
+        # B03: the ONE shared file rail (Preview & QC's — see MainWindow), so per-file rows
+        # are never shown twice. A caller that does not pass one (a standalone construction,
+        # as several tests do) gets its own private rail — it simply is not placed anywhere
+        # in this screen's own layout (see _build), which is fine for those call sites.
+        self.file_rail = file_rail if file_rail is not None else FileRail()
         self._thread = None
         self._worker = None
         self._fatal_msg = None
@@ -94,6 +104,7 @@ class RunScreen(QWidget):
         self._write_worker = None       # this as busy exactly like self._thread
         self._write_target_folder = None   # last successful "write elsewhere" destination
         self._pending_write_folder = None  # folder a write-elsewhere in flight is targeting
+        self._last_report_path = None      # B03: resolved once, at enable time — see _run_report_path
         self._run_files = []            # this run's file list, from _append_plan (A07: batch-wide bar)
         self._file_index = 0            # 1-based index of the file currently being computed
         self._ok_file_count = 0         # files that finished computing OK — the write phase's
@@ -103,10 +114,61 @@ class RunScreen(QWidget):
         self._figs_done = 0
         self._figs_current_file = ""
         self._build()
+        # Called inline, NOT deferred via QTimer.singleShot(0, ...): that was tried first
+        # (self-review finding: this resolves the real matched file list and calls
+        # core.io.plan.plan_outputs, which lazy-imports pandas/scipy the first time it
+        # runs, so doing it synchronously here pulls those imports into every MainWindow
+        # construction). It was reverted: a construction-time singleShot(0) is a QTimer
+        # that outlives the widget whenever the event loop never spins before the widget
+        # is destroyed (true of nearly every unit test that builds a RunScreen/MainWindow
+        # and closes it without pumping events) — hundreds of them accumulate across a
+        # full test run and ALL fire in a burst the first time something ELSE finally
+        # calls processEvents(), each invoking a bound method on an already-destroyed
+        # widget. Measured: a reproducible segfault in a completely unrelated test
+        # (test_section_flow.py), present in 3 consecutive full-suite runs, gone the
+        # instant this went back to a plain call. `_start()`'s own `_append_plan` already
+        # pays this same import cost on every Run/Dry-run click; this just pays it once,
+        # at construction, like the rest of this screen's setup.
+        self._update_plan_summary()
         self.refresh_actions()
 
     def _build(self):
         root = QVBoxLayout(self); root.setContentsMargins(11, 11, 11, 11)   # deterministic, matches Setup
+
+        # B03: a single compact row is ALL that shows outside the collapsible section below
+        # — everything else (action bar, io-info, progress, log, averages table) lives
+        # inside ``_results_section``, collapsed by default. Embedding Run & results
+        # permanently under Preview & QC's own file rail + subtabs shrinks the window's
+        # OTHER carefully-tuned proportions for every pixel this screen keeps always-on
+        # (measured: even just the action bar + two io-info lines, ~140 px collapsed, was
+        # enough to push test_the_noise_tab_divides_into_thirds' "chrome+settings" share
+        # from ~33% to ~45% of an 800 px window) — so the collapsed footprint has to be as
+        # close to nothing as this screen can make it, not merely "smaller than before".
+        # A run auto-expands this (see _set_running), so nobody has to remember the toggle
+        # exists just to see their own results.
+        header_row = QHBoxLayout()
+        # ElideRight, not ElideMiddle: this line's own most useful prefix — the file COUNT —
+        # sits at the very start ("N files from …"), unlike read_info/write_info (a single
+        # path, where the informative part is the tail). Middle-eliding it risked cutting
+        # through the arrow separator and reading as one fused, ambiguous path.
+        self._drawer_summary = ElidingLabel(mode=Qt.ElideRight)
+        self._drawer_summary.setProperty("status", "muted")
+        self.btn_toggle_results = QPushButton("Run & results ▸")
+        self.btn_toggle_results.setCheckable(True)
+        self.btn_toggle_results.setAutoDefault(False)
+        self.btn_toggle_results.setToolTip(
+            "Show the run controls, log and per-study averages (or hide them again).")
+        self.btn_toggle_results.toggled.connect(self._on_toggle_results)
+        header_row.addWidget(self._drawer_summary, 1)
+        header_row.addWidget(self.btn_toggle_results, 0)
+        root.addLayout(header_row)
+
+        self._results_section = QWidget()
+        section = QVBoxLayout(self._results_section)
+        section.setContentsMargins(0, 8, 0, 0); section.setSpacing(6)
+        self._results_section.setVisible(False)
+        root.addWidget(self._results_section, 1)
+
         # A WRAPPING row, not a QHBoxLayout. Measured on Windows font metrics these five
         # buttons sum to 1184 px, and a plain row's minimum IS that sum — which Qt propagates
         # to the window, so this bar alone set the whole application's 1234 px minimum width
@@ -131,6 +193,11 @@ class RunScreen(QWidget):
         self.btn_write_elsewhere.setToolTip(
             "Available when the analysis finished but writing its results failed. Writes "
             "the SAME, already-computed results to a folder you choose — no re-analysis.")
+        self.btn_show_report = QPushButton("Show run report")
+        self.btn_show_report.setEnabled(False)   # enabled once a run has written run-report.txt
+        self.btn_show_report.setToolTip(
+            "Available once a run has written its own run-report.txt — a plain-English "
+            "account of what was read, kept, skipped and written.")
         if _theme is not None:
             _theme.make_primary(self.btn_run)
         self.btn_run.clicked.connect(lambda: self._start(write=True))
@@ -140,10 +207,24 @@ class RunScreen(QWidget):
         self.btn_open.clicked.connect(self._open_output_folder)
         self.btn_show_plan.clicked.connect(self._show_full_plan)
         self.btn_write_elsewhere.clicked.connect(self._write_elsewhere)
+        self.btn_show_report.clicked.connect(self._show_run_report)
         for _b in (self.btn_run, self.btn_dry, self.btn_cancel, self.btn_rerun, self.btn_open,
-                  self.btn_show_plan, self.btn_write_elsewhere):
+                  self.btn_show_report, self.btn_show_plan, self.btn_write_elsewhere):
             bar.addWidget(_b)
-        root.addWidget(self.action_bar)
+        section.addWidget(self.action_bar)
+
+        # B03: what a run would touch — the one thing this screen used to say nothing
+        # about until a dry run or a real run had already been started. Middle elision (a
+        # long shared network path elides worst at the end, since the leaf name is what
+        # identifies it) with the unabridged path always one hover away. Lives inside the
+        # collapsible section (see _build's header_row above); the always-visible summary
+        # line keeps a condensed version of the same two facts.
+        self.read_info = ElidingLabel(mode=Qt.ElideMiddle)
+        self.read_info.setProperty("status", "muted")
+        self.write_info = ElidingLabel(mode=Qt.ElideMiddle)
+        self.write_info.setProperty("status", "muted")
+        section.addWidget(self.read_info)
+        section.addWidget(self.write_info)
 
         self.progress = QProgressBar()
         # The bar's own centred % text is drawn in one colour over a two-tone track (dark
@@ -151,37 +232,57 @@ class RunScreen(QWidget):
         # blue in light mode. Hide it and put the % in the status label below, which the
         # theme keeps readable in either mode.
         self.progress.setTextVisible(False)
-        root.addWidget(self.progress)
+        # B03: slimmer, and hidden whenever nothing is running (see _set_running) — a bar
+        # that spans the whole width at ~26 px, sitting at a static full accent colour once
+        # a run finishes, used to be the single most prominent thing on an otherwise idle
+        # screen while claiming the opposite.
+        self.progress.setMaximumHeight(6)
+        self.progress.hide()
+        section.addWidget(self.progress)
         # Status is shown ONLY in the main-window bottom status bar now (like Setup and
         # Preview — see main_window._on_screen_status): this was the one screen that showed
         # its status twice at once, here AND in the shared bar. The label stays as the state
         # holder _set_status writes (and tests read pv/rn.status), just never placed on screen.
         self.status = QLabel("Idle.")
         self.status.setWordWrap(True)
-        root.addWidget(self.status)
+        section.addWidget(self.status)
         self.status.hide()
 
         self.log = QPlainTextEdit(); self.log.setReadOnly(True)
-        root.addWidget(self.log, 2)
+        # B03: a muted empty state that explains the one distinction that actually matters
+        # before anything has run — dry run previews, Run batch writes — instead of a blank
+        # box whose only other explanation lived in a status label the user may never visit.
+        self.log.setPlaceholderText(
+            "Nothing has run yet.\n\n"
+            "Dry run (no files written) previews exactly what a run would read and write, "
+            "without changing anything on disk. Run batch does the same read, and actually "
+            "writes the results.")
+        log_panel = titled_panel("Run log", self.log)
 
-        # P20/B02: per-file results — one rail row per file (verdict + breath count),
-        # replacing the old files_table. Double-click drills into Preview & QC.
-        files_caption = QLabel("Files processed — double-click a row to open it in Preview & QC")
-        files_caption.setProperty("role", "heading")
-        root.addWidget(files_caption)
-        self.file_rail = FileRail()
-        self.file_rail.setToolTip("Double-click a file to open it in Preview & QC.")
-        self.file_rail.fileActivated.connect(self._on_file_row_activated)
-        root.addWidget(self.file_rail, 1)
-
+        # P20/B02/B03: per-file results live in the ONE shared file rail (Preview & QC's —
+        # see MainWindow/PreviewScreen.install_run_drawer), not a second copy here — a file's
+        # verdict/breath count/exclusions must read the same wherever it is shown.
         average_caption = QLabel("Average per file — the rows written to data/Average breathdata.xlsx")
         average_caption.setProperty("role", "heading")
-        root.addWidget(average_caption)
         self.table = QTableView()           # the averaged-metrics table
         self._table_model = ResultTableModel()
         self.table.setModel(self._table_model)
         configure_result_table(self.table)
-        root.addWidget(self.table, 1)
+        # a table with zero rows already reads as empty via its column headers alone; a
+        # muted line under the caption additionally SAYS so instead of leaving it to a
+        # first-time user to infer from a blank grid.
+        self._table_empty_hint = QLabel("No batch run yet — this fills in after Run batch or Dry run.")
+        self._table_empty_hint.setProperty("status", "muted")
+        table_col = QWidget(); table_lay = QVBoxLayout(table_col)
+        table_lay.setContentsMargins(0, 0, 0, 0); table_lay.setSpacing(4)
+        table_lay.addWidget(average_caption)
+        table_lay.addWidget(self._table_empty_hint)
+        table_lay.addWidget(self.table, 1)
+        self._table_model.modelReset.connect(self._update_table_empty_hint)
+        self._update_table_empty_hint()
+
+        section.addWidget(log_panel, 2)
+        section.addWidget(table_col, 1)
 
         # Heartbeat for the write phase. The busy progress bar animates on its own, but the
         # figure step can be tens of seconds of silence, and we do not want the window's only
@@ -228,6 +329,124 @@ class RunScreen(QWidget):
         elif self._incomplete_shown and not busy:
             self._set_status("Ready to run.")     # clear the stale warning once valid
             self._incomplete_shown = False
+        self._update_io_info()
+
+    def _update_io_info(self):
+        """The two-line read/write summary (B03): folder and mask come straight out of
+        Settings (free), and the file COUNT comes from the shared file rail's ALREADY-BUILT
+        manifest (:meth:`FileRail.count`, an O(1) read of rows Preview's own scan already
+        populated) — never a fresh :func:`matching_files` glob here. This runs on every
+        ``settings_changed`` tick (see MainWindow's wiring), so a per-call folder scan would
+        be a filesystem round trip per keystroke, worst on exactly the kind of network drive
+        this whole screen already has to be careful about elsewhere (``path_problem``)."""
+        s = self.state.settings
+        folder = (s.input.folder or "").strip()
+        mask = s.input.files or "*.*"
+        out = (s.output.folder or "").strip()
+        n = self.file_rail.count()
+        self.read_info.setFullText(
+            f"Reading: {n} file{'s' if n != 1 else ''} matching '{mask}' in {folder or '(input folder not set)'}")
+        self.write_info.setFullText(f"Writing: {out or '(output folder not set)'}")
+        # the always-visible condensed line (collapsed-state summary): the same two facts,
+        # one line, so the folder/mask/count/output are on screen even before the section
+        # is ever expanded.
+        self._drawer_summary.setFullText(
+            f"{n} file{'s' if n != 1 else ''} from {folder or '(input not set)'} "
+            f"→ {out or '(output not set)'}")
+
+    def _update_plan_summary(self):
+        """The log's empty-state placeholder (B03): unlike ``_update_io_info`` above, this
+        DOES resolve the actual matched file list (``matching_files``, a real glob) so it can
+        name what a run would write — but only when the input folder/mask actually change
+        (wired to ``inputs_changed`` in MainWindow, not every-keystroke ``settings_changed``),
+        matching how expensive Preview's OWN rail rebuild (``refresh_files``) is allowed to
+        be. Deliberately NOT ``_append_plan``: that writes into the log itself and headlines
+        "DRY RUN — nothing will be written", which would be a lie before any run has actually
+        been asked for."""
+        s = self.state.settings
+        folder = (s.input.folder or "").strip()
+        mask = s.input.files or "*.*"
+        out = (s.output.folder or "").strip()
+        files = []
+        if folder and os.path.isdir(folder):
+            try:
+                files = matching_files(folder, mask)
+            except Exception:                      # noqa: BLE001 - display-only, never fatal
+                files = []
+        lines = [f"{len(files)} file{'s' if len(files) != 1 else ''} matching '{mask}' "
+                f"in {folder or '(not set)'}."]
+        total_line = None
+        if files:
+            try:
+                from respmech.core.io.plan import plan_outputs
+                plan = plan_outputs(s, files, cohort_outputs=True)
+                cap = "up to " if plan.is_cap else ""
+                total_line = (f"A run would write {cap}{plan.total_count} "
+                              f"file{'s' if plan.total_count != 1 else ''} into "
+                              f"{out or '(output folder not set)'}.")
+            except Exception:                      # noqa: BLE001 - display-only, never fatal
+                total_line = None
+        lines.append(total_line or f"Results would be written into {out or '(output folder not set)'}.")
+        lines.append("")
+        lines.append("Dry run (no files written) previews this without writing anything; "
+                     "Run batch writes it for real.")
+        self.log.setPlaceholderText("\n".join(lines))
+
+    def _update_table_empty_hint(self):
+        self._table_empty_hint.setVisible(self._table_model.rowCount() == 0)
+
+    def _on_toggle_results(self, checked):
+        self._results_section.setVisible(checked)
+        self.btn_toggle_results.setText("Run & results ▾" if checked else "Run & results ▸")
+
+    def _run_report_path(self) -> str | None:
+        """The most recently written ``run-report*.txt`` in the active output folder, or
+        ``None``. A subset write (P18/P19) names its report ``run-report (partial,
+        <timestamp>).txt`` rather than the full run's ``run-report.txt`` (A05, so a partial
+        write can never silently replace the full run's own record) — the exact name is not
+        otherwise known to this screen (``BatchWorker.finished`` delivers only the computed
+        ``BatchResult``, not ``write_batch``'s own returned file list), so this reads the
+        folder rather than assuming a filename.
+
+        Reads ``self._run_settings_snapshot`` (the settings the JUST-FINISHED run actually
+        used), never the live, still-editable ``self.state.settings`` — self-review finding:
+        a user is free to change the output folder in Setup the moment a run ends, and the
+        live folder reading this against would then resolve to a DIFFERENT study's report,
+        not the one this run just wrote. Falls back to live settings only when no run has
+        completed yet (so a standalone call before any run still resolves something sane).
+
+        Every filesystem call is inside the same try/except: ``getmtime`` on a candidate
+        that a concurrent process deletes between the ``listdir`` and the sort is exactly as
+        real a race as ``listdir`` itself failing, and letting it escape here would leave
+        ``run_finished`` never emitted (this is called from ``_on_finished`` BEFORE that
+        signal) — MainWindow's Settings-lock from ``_on_run_started`` would then never lift."""
+        out = (self._write_target_folder or (self._run_settings_snapshot or self.state.settings)
+              .output.folder or "").strip()
+        if not out or not os.path.isdir(out):
+            return None
+        try:
+            candidates = [f for f in os.listdir(out) if f.startswith("run-report") and f.endswith(".txt")]
+            if not candidates:
+                return None
+            candidates.sort(key=lambda f: os.path.getmtime(os.path.join(out, f)), reverse=True)
+            return os.path.join(out, candidates[0])
+        except OSError:
+            return None
+
+    def _show_run_report(self):
+        path = self._last_report_path
+        if not path:
+            self._set_status("No run report available yet.")
+            return
+        try:
+            text = open(path, encoding="utf-8").read()
+        except OSError as e:
+            text = f"Could not read {os.path.basename(path)}: {e}"
+        dlg = TextViewerDialog("Run report", text, self,
+                               intro=f"{os.path.basename(path)} — the app's own plain-English "
+                                    "account of what this run read, kept, skipped and wrote.")
+        dlg.show()
+        dlg.raise_()
 
     def _set_status(self, text):
         self.status.setText(text)
@@ -509,6 +728,11 @@ class RunScreen(QWidget):
         self._last_result = None
         self._write_target_folder = None      # a new run invalidates any earlier redirect
         self.btn_write_elsewhere.setEnabled(False)
+        # B03 self-review: a stale "Show run report" must not survive into a run that could
+        # fail before writing anything (or into a different output folder) — the button, and
+        # the path it would open, are only ever trusted for the run that just enabled them.
+        self._last_report_path = None
+        self.btn_show_report.setEnabled(False)
         # A07: fresh per-run progress/cancel state. _file_index counts file_start events
         # (1-based, "file i of N"); _ok_file_count counts file_done events and becomes the
         # figure step's denominator, since the write phase has no BatchResult yet to read
@@ -758,11 +982,23 @@ class RunScreen(QWidget):
         # a clean real-write run leaves results on disk — offer to open them
         if self._last_write and result is not None and not fatal and not cancelled:
             self.btn_open.setEnabled(True)
+            report = self._run_report_path()
+            if report:
+                self._last_report_path = report                # B03: resolved once, not re-read live
+                self.btn_show_report.setEnabled(True)
             # A05: a subset write leaves the study's cohort spreadsheets exactly as they
             # were — say so here, permanently in the log, not just in the pre-write dialog,
             # so a "Process & write this file" click doesn't quietly leave them stale.
             if self._safe_is_subset_run(self._only_files):
                 self._append(f"\n{self._subset_cohort_note(self._only_files)}")
+            elif getattr(result, "average_table", None) is not None:
+                # B03: the completion message names the main deliverable, not just a
+                # generic "finished" — the file a user reaching for their stats package
+                # should open first. getattr, not a direct attribute read: some fixtures
+                # (and a fatal-but-with-result outcome) hand in a result with no such field.
+                n = len(result.average_table)
+                self._append(f"\nAverage breathdata.xlsx ({n} row{'s' if n != 1 else ''}) "
+                            "is the file to open first.")
         self.btn_rerun.setEnabled(bool(self._last_failed))    # P18: re-run only if something failed
         self.run_finished.emit()
         # surface a copyable error-log window if anything failed
@@ -839,6 +1075,16 @@ class RunScreen(QWidget):
         self.btn_run.setEnabled(not running)
         self.btn_dry.setEnabled(not running)
         self.btn_cancel.setEnabled(running)
+        # B03: the bar is the one thing on this screen that should look "busy" — visible
+        # only WHILE something is actually in flight, hidden again the instant _on_finished
+        # calls this with False, whatever the outcome. Leaving it up at a static 0%/100%
+        # fill after a run used to be the loudest object on an otherwise idle screen.
+        self.progress.setVisible(running)
+        # B03: a run starting is exactly the moment the collapsed log/results section
+        # stops being optional — auto-expand it so the user is never left watching a
+        # collapsed toggle button while their batch runs.
+        if running and not self.btn_toggle_results.isChecked():
+            self.btn_toggle_results.setChecked(True)
         if running:
             self.btn_rerun.setEnabled(False)      # can't re-run while a run is in flight
             # A fresh run starts in the (interruptible) compute phase — clear any
@@ -872,7 +1118,19 @@ class RunScreen(QWidget):
             names = sorted(files.keys())
         else:
             names = sorted(set(self.file_rail.filenames()) | set(files.keys()))
+        # Self-review finding: manifest_from_filenames is deliberately caveat-free (it knows
+        # only the resolved run file list, not column/frequency probing), but FileRail.
+        # set_manifest ALWAYS recomputes caveat from whatever manifest it is given — so a
+        # naive call here would silently erase Preview & QC's own outlier/frequency-mismatch
+        # warnings from the ONE shared rail the instant any run (even a dry run) finishes.
+        # Capture what each row already knew and hand it straight back afterwards; the rail
+        # itself defers entirely to the caller for what a caveat should be.
+        old_caveats = {name: e.caveat for name in self.file_rail.filenames()
+                       if (e := self.file_rail.entry(name)) is not None and e.caveat}
         self.file_rail.set_manifest(manifest_from_filenames(folder, names))
+        for name, caveat in old_caveats.items():
+            if name in names:
+                self.file_rail.set_caveat(name, caveat)
         for fname, fr in files.items():
             err = getattr(fr, "error", None)
             bt = getattr(fr, "breaths_table", None)
@@ -880,10 +1138,6 @@ class RunScreen(QWidget):
                                        breaths=None if err else (len(bt) if bt is not None else 0),
                                        error=str(err) if err else None)
         self.file_rail.sort_failed_first(self.file_rail.any_failed())
-
-    def _on_file_row_activated(self, filename):
-        if filename:
-            self.open_file_requested.emit(filename)   # MainWindow -> Preview tab + select
 
     def _rerun_failed(self):
         """Re-run only the files that failed in the last run (P18)."""
@@ -964,6 +1218,10 @@ class RunScreen(QWidget):
         self._append(f"Wrote {n} file{'s' if n != 1 else ''} to {target}.")
         self._set_status(f"Wrote {n} file{'s' if n != 1 else ''} to the new folder.")
         self.btn_open.setEnabled(True)
+        report = self._run_report_path()               # self._write_target_folder is set above
+        if report:
+            self._last_report_path = report            # B03: this write has its own report too
+            self.btn_show_report.setEnabled(True)
         # The same result can still be written to a THIRD folder if this one turns out to
         # be wrong too — self._last_result/_run_settings_snapshot/_last_plan are untouched.
         self.btn_write_elsewhere.setEnabled(True)
