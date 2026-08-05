@@ -447,7 +447,8 @@ def _write_emg_audio(fr, fname, fs, figdir):
 # --------------------------------------------------------------------------- #
 # orchestration
 # --------------------------------------------------------------------------- #
-def write_figures(result, settings, outputfolder: str, progress=None) -> tuple[list, list]:
+def write_figures(result, settings, outputfolder: str, progress=None,
+                  cohort_outputs: bool = True) -> tuple[list, list]:
     """Write every enabled diagnostic figure (and WAV export). Returns (written_paths,
     failures) where failures is a list of ``(name, error)`` — a bad figure is skipped,
     not fatal, so a run always finishes even if one plot cannot be drawn.
@@ -457,12 +458,19 @@ def write_figures(result, settings, outputfolder: str, progress=None) -> tuple[l
     below would otherwise inherit at Figure()/add_subplot()/savefig() time.
 
     ``progress`` is an optional ``callable(fname)`` fired before each file's figures — the
-    slowest part of a batch — so the GUI can show which file is being drawn."""
+    slowest part of a batch — so the GUI can show which file is being drawn.
+
+    ``cohort_outputs`` (default True) gates the one figure built across the WHOLE batch
+    rather than per file — the "All files – Campbell (average)" cohort figure. A subset/
+    re-run (ticket A05) passes False so that figure, which the writer already treats as
+    cohort-level, is never silently rebuilt from a fraction of the study."""
     with plot_style.light_rc_context():
-        return _write_figures_impl(result, settings, outputfolder, progress=progress)
+        return _write_figures_impl(result, settings, outputfolder, progress=progress,
+                                   cohort_outputs=cohort_outputs)
 
 
-def _write_figures_impl(result, settings, outputfolder: str, progress=None) -> tuple[list, list]:
+def _write_figures_impl(result, settings, outputfolder: str, progress=None,
+                        cohort_outputs: bool = True) -> tuple[list, list]:
     dg = settings.output.diagnostics
     emg = settings.processing.emg
     cols, rows = dg.pv_columns, dg.pv_rows
@@ -524,8 +532,9 @@ def _write_figures_impl(result, settings, outputfolder: str, progress=None) -> t
             except Exception as e:              # noqa: BLE001
                 failures.append((f"{fname}/EMG audio", str(e)))
 
-    # one cohort "all-files average" Campbell across the whole batch
-    if dg.save_pv_individual and len(result.ok_files) > 1:
+    # one cohort "all-files average" Campbell across the whole batch — never built from a
+    # subset (A05): a 2+-file re-run/single-file write is still not the whole study.
+    if dg.save_pv_individual and len(result.ok_files) > 1 and cohort_outputs:
         path = os.path.join(figdir, "All files – Campbell (average).pdf")
         try:
             p = _pv_cohort(result, path, cols, rows)

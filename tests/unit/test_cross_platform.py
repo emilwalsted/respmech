@@ -16,7 +16,7 @@ import pandas as pd
 import pytest
 
 from respmech.core.io.loaders import _read_table, _checkcolumn, DataValidationError
-from respmech.core.pipeline import match_input_files
+from respmech.core.pipeline import is_subset_run, match_input_files
 
 
 # --- encoding tolerance -----------------------------------------------------
@@ -119,6 +119,52 @@ def test_match_input_files_returns_sorted_full_paths(tmp_path):
     assert out == sorted(out)                            # deterministic order
     assert all(os.path.isfile(p) for p in out)           # full paths (a drop-in for glob.glob)
     assert os.path.basename(out[0]) == "a.csv"
+
+
+# --- is_subset_run: the single yes/no BatchWorker/RunScreen/write_batch agree on (A05) ------
+def _settings_for(tmp_path):
+    from types import SimpleNamespace
+    (tmp_path / "a.csv").write_text("x")
+    (tmp_path / "b.csv").write_text("x")
+    (tmp_path / "c.csv").write_text("x")
+    return SimpleNamespace(input=SimpleNamespace(folder=str(tmp_path), files="*.csv"))
+
+
+def test_is_subset_run_true_for_a_real_subset(tmp_path):
+    s = _settings_for(tmp_path)
+    assert is_subset_run(s, ["a.csv"]) is True
+    assert is_subset_run(s, ["a.csv", "b.csv"]) is True     # 2 of 3 — still a subset
+
+
+def test_is_subset_run_false_for_none_or_empty(tmp_path):
+    s = _settings_for(tmp_path)
+    assert is_subset_run(s, None) is False
+    assert is_subset_run(s, []) is False
+
+
+def test_is_subset_run_false_when_only_files_names_everything(tmp_path):
+    """A re-run/single-file write that HAPPENS to list every matching file (a 1-file study,
+    or a 'Re-run failed' after everything failed) is not a real subset — the cohort outputs
+    it would (re)build ARE the whole study, so treating it as one would wrongly skip them."""
+    s = _settings_for(tmp_path)
+    assert is_subset_run(s, ["a.csv", "b.csv", "c.csv"]) is False
+    # order and full-path-vs-basename must not matter
+    assert is_subset_run(s, [os.path.join(str(tmp_path), "c.csv"),
+                             "a.csv", "b.csv"]) is False
+
+
+def test_is_subset_run_ignores_a_stale_name_that_no_longer_matches_anything(tmp_path):
+    """Regression: comparing only_files to allnames by set INEQUALITY (rather than by
+    whether every CURRENTLY-matching file is covered) made a stale name — e.g. a file
+    deleted from the input folder between an earlier run and a later 'Re-run failed' that
+    still carries its old basename — look like a real subset, even though run_batch itself
+    only ever processes the intersection (allfiles ∩ only_files) and that intersection is
+    every file the study currently has."""
+    s = _settings_for(tmp_path)
+    # every CURRENT file (a, b, c) is named, plus one that no longer exists on disk
+    assert is_subset_run(s, ["a.csv", "b.csv", "c.csv", "deleted.csv"]) is False
+    # a genuine subset PLUS a stale name is still a genuine subset
+    assert is_subset_run(s, ["a.csv", "deleted.csv"]) is True
 
 
 # --- analysis file: relative folders rebase against the file, not the CWD ----

@@ -243,6 +243,23 @@ class RunScreen(QWidget):
         newest = max(os.path.getmtime(p) for p in hits)
         return newest, len(hits)
 
+    def _safe_is_subset_run(self, only_files) -> bool:
+        """``core.pipeline.is_subset_run``, guarded: it re-lists the input folder
+        (``os.listdir``), which — like the very same check inside ``BatchWorker.run``
+        (see its comment) — can raise on a folder that has gone transiently unreadable
+        (a dropped network drive, a permissions change). Unlike the worker's write path,
+        both GUI call sites of this (before a run starts, and after one has already
+        finished successfully) have no "fail the write" outcome to report through — so on
+        any error this defaults to False (treat it as a plain, non-subset write) rather
+        than let an unhandled exception escape a Qt slot. ``_start``'s caller already ran
+        ``path_problem`` moments earlier, which narrows this to a genuine race; the
+        default keeps that race harmless instead of crashing the screen."""
+        from respmech.core.pipeline import is_subset_run
+        try:
+            return is_subset_run(self.state.settings, only_files)
+        except OSError:
+            return False
+
     def _confirm_overwrite(self, existing) -> bool:
         from datetime import datetime
         newest, count = existing
@@ -255,6 +272,75 @@ class RunScreen(QWidget):
             "Running now will overwrite them. Continue?",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         return ans == QMessageBox.Yes
+
+    def _cohort_output_names(self) -> str:
+        """The cohort-level output names to mention in subset-write UI text, joined into one
+        readable phrase — shared by the subset dialog and the post-write log note so the two
+        can never name a different set of artefacts."""
+        bits = ["Average breathdata.xlsx", "Cohort summary.xlsx"]
+        if self.state.settings.output.diagnostics.save_pv_individual:
+            bits.append("the cohort Campbell figure")
+        return bits[0] if len(bits) == 1 else ", ".join(bits[:-1]) + " and " + bits[-1]
+
+    def _full_run_timestamp(self) -> str | None:
+        """When the study's cohort-level outputs were last built by a FULL run, or ``None``
+        if they never have been — anchored to ``data/Average breathdata.xlsx``'s own mtime, a
+        file only a full run ever writes. Deliberately NOT ``_existing_output()`` (whose
+        "newest" mtime is a max over every file under ``data/``, including this very output
+        folder's own PER-FILE artefacts): after even one prior subset write, that generic
+        mtime reflects the subset write, not the full run, and would make subset UI text
+        claim "from a full run on <time>" for a time that was never a full run."""
+        out = self.state.settings.output.folder
+        avg_path = os.path.join(out, "data", "Average breathdata.xlsx")
+        if not os.path.isfile(avg_path):
+            return None
+        from datetime import datetime
+        return datetime.fromtimestamp(os.path.getmtime(avg_path)).strftime("%Y-%m-%d %H:%M")
+
+    def _confirm_overwrite_subset(self, files) -> bool:
+        """The subset-specific overwrite guard (A05): the generic ``_confirm_overwrite``
+        reads as "yes, replace the results I just adjusted", but for a subset write it
+        silently rebuilt the WHOLE study's cohort spreadsheets from the one or two files
+        being processed — exactly the data-loss bug this ticket exists to fix. This dialog
+        names what actually gets written or replaced, and states plainly what is left alone
+        instead of a generic file count."""
+        out = self.state.settings.output.folder
+        n = len(files)
+        names = ", ".join(files)
+        subj = "this file's" if n == 1 else "these files'"
+        cohort_txt = self._cohort_output_names()
+        when = self._full_run_timestamp()
+        cohort_state = (f"they still reflect the full run at {when}" if when
+                        else "no full run has produced them yet")
+        ans = QMessageBox.question(
+            self, "Write a subset into existing results",
+            f"{out}\n\n"
+            f"This will write or replace {subj} enabled per-file outputs — breathdata "
+            f"workbook, processed CSV, diagnostic figures — for {n} file{'s' if n != 1 else ''}: "
+            f"{names}.\n\n"
+            f"{cohort_txt}, built from the whole study, will NOT be touched — {cohort_state}. "
+            f"This write's own run report and settings snapshot are saved under a separate, "
+            f"timestamped name rather than replacing the full run's.\n\nContinue?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        return ans == QMessageBox.Yes
+
+    def _subset_cohort_note(self, files) -> str:
+        """A persistent, plain-English line for the log after a subset write (A05):
+        Read back from DISK (the just-written or left-alone ``Average breathdata.xlsx``),
+        never tracked in memory, so it is correct even the first time this output folder is
+        touched, or after the app has been restarted between runs."""
+        n = len(files)
+        plural = "s" if n != 1 else ""
+        # "in this write", not "since <time>": this counts only the files just processed,
+        # not a running total across every subset write since the last full run (which
+        # would need state this app does not keep) — phrasing it as a total would overclaim.
+        when = self._full_run_timestamp()
+        note = (f"{n} file{plural} processed in this write.")
+        if when:
+            return (f"{self._cohort_output_names()} are still from the full run at {when} — "
+                    f"{note} Run the full batch to update them.")
+        return (f"No full-batch {self._cohort_output_names()} exist yet — "
+                f"{note} Run the full batch to create them.")
 
     def _open_output_folder(self):
         out = (self.state.settings.output.folder or "").strip()
@@ -278,9 +364,15 @@ class RunScreen(QWidget):
         # overwrite guard: a real run into a folder that already holds results asks first
         if write:
             existing = self._existing_output()
-            if existing and not self._confirm_overwrite(existing):
-                self._set_status("Run cancelled — existing results kept.")
-                return
+            if existing:
+                if self._safe_is_subset_run(only_files):
+                    names = [os.path.basename(f) for f in only_files]
+                    confirmed = self._confirm_overwrite_subset(names)
+                else:
+                    confirmed = self._confirm_overwrite(existing)
+                if not confirmed:
+                    self._set_status("Run cancelled — existing results kept.")
+                    return
         self._only_files = list(only_files) if only_files else None
         self.log.clear(); self.progress.setRange(0, 0)  # busy until first file
         self._fatal_msg = None
@@ -407,6 +499,11 @@ class RunScreen(QWidget):
         # a clean real-write run leaves results on disk — offer to open them
         if self._last_write and result is not None and not fatal and not cancelled:
             self.btn_open.setEnabled(True)
+            # A05: a subset write leaves the study's cohort spreadsheets exactly as they
+            # were — say so here, permanently in the log, not just in the pre-write dialog,
+            # so a "Process & write this file" click doesn't quietly leave them stale.
+            if self._safe_is_subset_run(self._only_files):
+                self._append(f"\n{self._subset_cohort_note(self._only_files)}")
         self.btn_rerun.setEnabled(bool(self._last_failed))    # P18: re-run only if something failed
         self.run_finished.emit()
         # surface a copyable error-log window if anything failed

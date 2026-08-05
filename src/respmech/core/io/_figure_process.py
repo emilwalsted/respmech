@@ -49,18 +49,19 @@ def _probe_ok() -> str:
     return "ok"
 
 
-def _run_write_figures(result, settings, outputfolder: str):
+def _run_write_figures(result, settings, outputfolder: str, cohort_outputs: bool = True):
     """Child-side entry point: import the plotting stack fresh and do the work.
 
     Runs in a process that has never imported Qt, which is the whole point.
     """
     from respmech.core import plots
-    return plots.write_figures(result, settings, outputfolder)
+    return plots.write_figures(result, settings, outputfolder, cohort_outputs=cohort_outputs)
 
 
-def _in_process(result, settings, outputfolder: str, progress=None):
+def _in_process(result, settings, outputfolder: str, progress=None, cohort_outputs: bool = True):
     from respmech.core import plots
-    return plots.write_figures(result, settings, outputfolder, progress=progress)
+    return plots.write_figures(result, settings, outputfolder, progress=progress,
+                               cohort_outputs=cohort_outputs)
 
 
 def _executor():
@@ -107,7 +108,8 @@ def _can_spawn() -> bool:
     return _CAN_SPAWN
 
 
-def write_figures(result, settings, outputfolder: str, *, on_fallback=None, progress=None):
+def write_figures(result, settings, outputfolder: str, *, on_fallback=None, progress=None,
+                  cohort_outputs: bool = True):
     """``plots.write_figures``, in a child process when that works, else here.
 
     ``on_fallback(reason)`` is called when the in-process path is taken, so a caller can
@@ -116,6 +118,8 @@ def write_figures(result, settings, outputfolder: str, *, on_fallback=None, prog
     ``progress`` is an optional ``callable(fname)`` for per-file progress. It is honoured
     only on the in-process path — a spawned child cannot call back into this process — so
     the child path reports figures as a single stage, which the animated busy bar covers.
+
+    ``cohort_outputs`` (default True) is forwarded to ``plots.write_figures`` — see there.
     """
     if not _can_spawn():
         # A packaged build ALWAYS writes in-process by design (a spawn would re-launch the app),
@@ -124,11 +128,13 @@ def write_figures(result, settings, outputfolder: str, *, on_fallback=None, prog
         # still reported so the run report can record why the child was not used.
         if on_fallback and not _spawn_relaunches_the_app():
             on_fallback("figure subprocess unavailable; wrote figures in-process")
-        return _in_process(result, settings, outputfolder, progress=progress)
+        return _in_process(result, settings, outputfolder, progress=progress,
+                           cohort_outputs=cohort_outputs)
 
     try:
         with _executor() as ex:
-            fut = ex.submit(_run_write_figures, result, settings, outputfolder)
+            fut = ex.submit(_run_write_figures, result, settings, outputfolder,
+                            cohort_outputs=cohort_outputs)
             return fut.result(timeout=_WORK_TIMEOUT_S)
     except BaseException as e:     # noqa: BLE001 - never let isolation break a run
         # One failure is not necessarily permanent (a timeout may just be a huge test), so the
@@ -136,4 +142,5 @@ def write_figures(result, settings, outputfolder: str, *, on_fallback=None, prog
         if on_fallback:
             on_fallback(f"figure subprocess failed ({type(e).__name__}: {e}); "
                         "wrote figures in-process")
-        return _in_process(result, settings, outputfolder, progress=progress)
+        return _in_process(result, settings, outputfolder, progress=progress,
+                           cohort_outputs=cohort_outputs)
