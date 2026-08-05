@@ -65,6 +65,16 @@ class BatchWorker(QObject):
         self._write = write
         self._only = only_files
         self._cancel = False
+        # Set True the instant this thread commits to the uninterruptible write phase (A07)
+        # — a plain attribute, read directly by RunScreen._cancel() on the GUI thread. A
+        # Cancel click cannot wait for the "writing" ProgressEvent to make it through Qt's
+        # QueuedConnection (necessarily asynchronous, since this thread must never touch
+        # widgets): that gap is exactly wide enough for a click landing in it to still log
+        # the old, plain "cancelling…" line for a click that in fact arrived too late to
+        # cancel anything. CPython's GIL makes a bool assignment/read atomic across threads,
+        # so this closes the race to the width of one bytecode op instead of one event-loop
+        # tick.
+        self._writing = False
 
     @Slot()
     def cancel(self):
@@ -100,6 +110,7 @@ class BatchWorker(QObject):
         # click that lands during writing can't be reported as "no output written".
         cancelled = self._cancel
         if self._write and not cancelled:
+            self._writing = True     # see __init__ — set before anything else in this phase
             # Signal the Run screen that the (previously silent) write phase has begun, so it
             # can switch the progress bar to its animated busy state and stop looking frozen.
             # Lazy import keeps pipeline out of GUI startup (Wave 1.4); it is already loaded
