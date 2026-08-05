@@ -8,7 +8,7 @@ import pytest
 
 from respmech.ui.state import AppState
 
-from _helpers import INPUT, requires_synth, synth_settings
+from _helpers import INPUT, requires_synth, synth_settings, write_delim, write_xlsx
 
 pytestmark = requires_synth()
 
@@ -460,5 +460,90 @@ def test_run_lock_covers_the_header_analysis_menu(qapp, tmp_path):
     assert not win.settings_screen.isEnabled() and not win.analysis_btn.isEnabled()
     win._on_run_finished()
     assert win.settings_screen.isEnabled() and win.analysis_btn.isEnabled()
+    win.close()
+
+
+# --------------------------------------------------------------------------- #
+# B01: the batch manifest — the read-out and QC strip reflect the WHOLE folder, not
+# just the first matching file
+# --------------------------------------------------------------------------- #
+def test_format_readout_flags_a_column_outlier_and_qc_is_not_green(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    for n in ("a", "b", "c"):
+        write_delim(tmp_path / f"{n}.csv", 9)
+    write_delim(tmp_path / "d.csv", 8)             # the one outlier
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
+    sc._on_inputs_changed()
+    text = sc.format_readout.text()
+    assert "4 files matched" in text
+    assert "d.csv" in text and "8 columns" not in text.split("d.csv")[0]  # named as the outlier
+    assert sc.format_readout.property("status") == "warn"
+    # the QC strip must ALSO carry the caveat — _update_qc must never say "no warnings"
+    # about a batch it has not looked at file-by-file
+    assert sc.qc.property("status") == "warn"
+    assert "d.csv" in sc.qc.text()
+    win.close()
+
+
+def test_format_readout_no_longer_misreports_xlsx(qapp, tmp_path):
+    pytest.importorskip("openpyxl")
+    from respmech.ui.main_window import MainWindow
+    write_xlsx(tmp_path / "a.xlsx", 9)
+    write_xlsx(tmp_path / "b.xlsx", 9)
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.xlsx")
+    sc._on_inputs_changed()
+    text = sc.format_readout.text()
+    assert "whitespace-separated" not in text
+    assert "1 columns" not in text
+    assert "9 columns" in text and "Excel" in text
+    win.close()
+
+
+def test_qc_strip_flags_a_sampling_frequency_mismatch(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    write_delim(tmp_path / "at1000.csv", 9, fs=1000.0)
+    write_delim(tmp_path / "at2000.csv", 9, fs=2000.0)
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
+    sc.samp_freq.setValue(1000)
+    sc._on_inputs_changed()
+    assert sc.qc.property("status") == "warn"
+    assert "2000 Hz" in sc.qc.text() and "at2000.csv" in sc.qc.text()
+    # not a hard block — a frequency caveat must not by itself take down the guided flow
+    assert "not the 1000 Hz" in sc.qc.text()
+    win.close()
+
+
+def test_mask_narrowing_is_reported_on_setup(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    for n in ("a", "b", "c"):
+        write_delim(tmp_path / f"{n}.csv", 9)
+    write_delim(tmp_path / "d.txt", 9, sep="\t")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv; *.txt")
+    sc._on_inputs_changed()
+    assert sc.in_files.text() == "*.csv"                   # still narrows, exactly as before
+    assert "narrowed" in sc.format_readout.text()
+    assert "*.csv" in sc.format_readout.text()
+    assert sc.format_readout.property("status") == "warn"
+    assert "narrowed" in sc.qc.text()
+    win.close()
+
+
+def test_manifest_cache_survives_across_edits_and_is_reused(qapp, tmp_path):
+    """The same cache dict is reused for the screen's whole lifetime, so re-editing an
+    unrelated field (which re-triggers nothing folder-related) never re-probes a file the
+    scan has already seen for this exact folder+mask."""
+    from respmech.ui.main_window import MainWindow
+    write_delim(tmp_path / "a.csv", 9)
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
+    sc._on_inputs_changed()
+    assert len(sc._manifest_cache) > 0
+    cache_before = dict(sc._manifest_cache)
+    sc._on_inputs_changed()                                # same folder/mask again
+    assert sc._manifest_cache == cache_before               # nothing new probed
     win.close()
 

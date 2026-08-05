@@ -21,6 +21,7 @@ from PySide6.QtCore import Signal, QTimer
 from respmech.core.settings import BreathCountEntry, Settings, SettingsError
 from respmech.ui.dialogs import open_error_dialog, short_error
 from respmech.ui.help_text import tooltip as _tip
+from respmech.ui.manifest import build_manifest, narrow_mask
 from respmech.ui.startup_dialog import LEGACY_FILTER, OPEN_FILTER, TOML_FILTER
 from respmech.ui.validation import matching_files
 from respmech.ui import wheel as _wheel
@@ -47,6 +48,8 @@ class SettingsScreen(QWidget):
         self._err_dialog = None       # copyable error dialog (replace, don't accumulate)
         self._report_dialog = None    # migration report dialog
         self._save_preview_warm = False   # see _update_save_preview
+        self._manifest = None         # last-built ui.manifest.Manifest for the current folder/mask
+        self._manifest_cache = {}     # (path, mtime, size)-keyed probe memo, reused across builds
         self._build()
         self.from_state()
         self._wire_reactivity()
@@ -497,59 +500,85 @@ class SettingsScreen(QWidget):
         if self._loading:
             return
         self.to_state()
+        raw_mask = self.state.settings.input.files   # captured BEFORE narrowing, for the manifest
         self._normalize_mask()      # keep the mask a single pattern the core runner can glob
         self._mark_dirty()
-        self._update_format_readout()
+        self._update_format_readout(raw_mask=raw_mask)
         self.inputs_changed.emit()
         self.settings_changed.emit()
         self._update_disclosure()   # last, so guided-flow status wins (see above)
 
-    def _update_format_readout(self):
-        """P28: peek the first matching recording and report what was detected —
-        column count + delimiter — so a mis-picked folder/mask is obvious at once."""
+    def _delimiter_label(self, manifest):
+        """A deterministic delimiter label from the format actually being parsed — never
+        sniffed from raw bytes, which misreported a binary .xlsx as 'whitespace-separated'
+        (an .xlsx is a zip archive of XML, not delimited text at all)."""
+        ext = manifest.files[0].ext if manifest.files else ""
+        if ext == ".txt":
+            return "tab-separated"
+        if ext == ".csv":
+            dec = getattr(self.state.settings.input.format, "decimal", ".") or "."
+            return "semicolon-separated" if dec == "," else "comma-separated"
+        if ext in (".xls", ".xlsx"):
+            return "Excel"
+        if ext == ".mat":
+            return "MATLAB"
+        return "unknown format"
+
+    @staticmethod
+    def _named_list(entries, limit=3):
+        """'#.filename' for up to ``limit`` entries, then '+N more' — keeps a caution from
+        growing unboundedly long over a batch of a hundred files."""
+        names = ", ".join(e.filename for e in entries[:limit])
+        extra = len(entries) - limit
+        if extra > 0:
+            names += f", +{extra} more"
+        return names
+
+    def _update_format_readout(self, raw_mask=None):
+        """P28 / B01: build the batch MANIFEST (ui/manifest.py) for the current folder/mask
+        and report what it found — not just the first file, as before, but the majority
+        column layout and every file that disagrees with it — so a mis-picked folder/mask,
+        or a single outlier file buried in a large batch, is obvious here rather than only
+        surfacing as a run-time DataValidationError. ``raw_mask`` is the mask BEFORE
+        ``_normalize_mask`` narrows it (the caller captures it first) — build_manifest
+        narrows it again itself, so the two computations can never disagree, and the
+        narrowing note survives being told AFTER the settings model already collapsed to a
+        single pattern."""
         lab = getattr(self, "format_readout", None)
         if lab is None:
             return
         folder = self.in_folder.text().strip()
-        mask = self.in_files.text().strip()
+        mask = raw_mask if raw_mask is not None else self.state.settings.input.files
         status, text = "muted", ""
+        self._manifest = None
         if folder and os.path.isdir(folder):
-            files = matching_files(folder, mask)
-            if not files:
-                status, text = "warn", f"No files match '{mask or '*.*'}' in this folder."
+            m = build_manifest(folder, mask, self.state.settings, cache=self._manifest_cache)
+            self._manifest = m
+            if not m.files:
+                status, text = "warn", f"No files match '{m.mask or '*.*'}' in this folder."
             else:
-                first = files[0]
-                line = ""
-                try:
-                    # Sniff the raw bytes so the column-count hint is right across encodings:
-                    # UTF-16 (Excel "Unicode Text"), UTF-8(-BOM) and cp1252 all decode here
-                    # rather than mojibake under the Windows locale default. Matches the
-                    # tolerant reader core.load actually uses; latin-1 never raises.
-                    with open(first, "rb") as fh:
-                        head = fh.read(8192)
-                    if head[:2] in (b"\xff\xfe", b"\xfe\xff"):
-                        text0 = head.decode("utf-16", errors="replace")
-                    else:
-                        for enc in ("utf-8-sig", "cp1252", "latin-1"):
-                            try:
-                                text0 = head.decode(enc)
-                                break
-                            except UnicodeDecodeError:
-                                continue
-                    line = text0.splitlines()[0].strip() if text0 else ""
-                except Exception:               # pragma: no cover - unreadable file
-                    line = ""
-                if "\t" in line:
-                    delim, dname = "\t", "tab"
-                elif "," in line:
-                    delim, dname = ",", "comma"
+                n = len(m.files)
+                parts = [f"{n} file{'s' if n != 1 else ''} matched"]
+                if m.majority_columns is None:
+                    parts.append("none of these files could be read")
+                elif m.outliers:
+                    delim = self._delimiter_label(m)
+                    n_maj = len(m.included_files)
+                    parts.append(f"{n_maj} with {m.majority_columns} columns, {delim}")
+                    parts.append(f"{len(m.outliers)} file{'s' if len(m.outliers) != 1 else ''} "
+                                 f"differ: {self._named_list(m.outliers)}")
                 else:
-                    delim, dname = None, "whitespace"
-                ncol = len(line.split(delim)) if line else 0
-                status = "info"
-                n = len(files)
-                text = (f"{n} file{'s' if n != 1 else ''} matched · "
-                        f"first: {os.path.basename(first)} — {ncol} columns, {dname}-separated")
+                    delim = self._delimiter_label(m)
+                    parts.append(f"{m.majority_columns} columns, {delim}")
+                if m.mask_narrowed_from:
+                    exts = ", ".join(e.lstrip(".") for e in sorted(m.narrowed_out_exts))
+                    parts.append(
+                        f"only one file pattern can be analysed at a time, narrowed to "
+                        f"'{m.mask}' ({m.narrowed_out_count} matching .{exts} file"
+                        f"{'s' if m.narrowed_out_count != 1 else ''} excluded)")
+                status = "warn" if (m.outliers or m.mask_narrowed_from
+                                    or m.majority_columns is None) else "info"
+                text = " · ".join(parts)
         lab.setText(text)
         lab.setProperty("status", status)
         lab.style().unpolish(lab); lab.style().polish(lab)
@@ -617,7 +646,9 @@ class SettingsScreen(QWidget):
         so any problem in the opened analysis is surfaced right away."""
         self._mode = "full"
         self._revealed = len(self._stage_cards)
+        raw_mask = self.state.settings.input.files   # captured BEFORE narrowing, for the manifest
         self._normalize_mask()      # a saved analysis may carry a multi-pattern mask
+        self._update_format_readout(raw_mask=raw_mask)   # reflect the (possibly just-narrowed) mask
         self._apply_card_visibility()
         self._flow_ready = None
         self._set_flow_ready(True)
@@ -745,9 +776,14 @@ class SettingsScreen(QWidget):
         fs = s.input.format.sampling_frequency or 1000
         if initial is None:
             initial = self._current_channel_mapping()
+        # B01: name the files the manifest excluded (a different column count) so the
+        # dialog's "this mapping applies to all N files" banner can reconcile itself with
+        # the batch's true size, instead of only ever describing the majority subset.
+        excluded = ([(f.filename, f.columns) for f in self._manifest.outliers]
+                   if self._manifest is not None else [])
         try:
-            dlg = ChannelSetupDialog(files, fs, initial,
-                                     loader=lambda p: load_raw_matrix(s, p), parent=self)
+            dlg = ChannelSetupDialog(files, fs, initial, loader=lambda p: load_raw_matrix(s, p),
+                                     parent=self, excluded=excluded)
         except Exception:                        # noqa: BLE001 — copyable error, don't trap the flow
             self._report_error("Channel setup", traceback.format_exc())
             return False
@@ -762,29 +798,22 @@ class SettingsScreen(QWidget):
         pattern: a multi-pattern mask (the '*.csv; *.txt' default, or any ';'/','-separated
         mask) is narrowed to the dominant extension of the files it currently matches. A
         specific single mask the user chose is left untouched; a no-op when nothing matches
-        yet (or no folder). Never raises."""
+        yet (or no folder). Never raises.
+
+        Delegates the actual narrowing decision to ``ui.manifest.narrow_mask`` (B01) — the
+        same function the format read-out's Manifest uses to decide (and report) what it
+        narrowed FROM, so this mutation and that report can never compute a different
+        answer for the same folder/mask."""
         s = self.state.settings
-        mask = s.input.files or ""
-        if ";" not in mask and "," not in mask:
+        narrowed, narrowed_from, _dropped = narrow_mask(s.input.folder, s.input.files)
+        if narrowed_from is None:
             return
-        folder = (s.input.folder or "").strip()
-        if not folder or not os.path.isdir(folder):
-            return
-        from collections import Counter
-        exts = [os.path.splitext(f)[1].lower() for f in matching_files(folder, mask)]
-        if not exts:
-            return
-        counts = Counter(exts)
-        top = max(counts.values())
-        ext = sorted(e for e, c in counts.items() if c == top)[0]   # deterministic on a tie
-        narrowed = f"*{ext}"
-        if narrowed != mask:
-            prev, self._loading = self._loading, True
-            try:
-                s.input.files = narrowed
-                self.in_files.setText(narrowed)
-            finally:
-                self._loading = prev
+        prev, self._loading = self._loading, True
+        try:
+            s.input.files = narrowed
+            self.in_files.setText(narrowed)
+        finally:
+            self._loading = prev
 
     def _probe_and_apply_file_settings(self, files):
         """On channel-setup OK, intelligently read the actual data to fill format fields the
@@ -1083,6 +1112,18 @@ class SettingsScreen(QWidget):
                                 ("pgas", ch.pgas), ("pdi", ch.pdi)) if c and c in ch.emg]
         if clash:
             out.append(f"EMG columns overlap {', '.join(clash)}")
+        # A per-file sampling-frequency mismatch invalidates essentially every derived
+        # number for the affected files (every time-derived quantity is wrong by exactly
+        # the frequency ratio, and the values stay plausible rather than absurd — see the
+        # B01 manifest scanner), so it outranks the two notes below it, which only degrade
+        # signal quality rather than silently misreporting it.
+        m = self._manifest
+        if m is not None and m.freq_mismatches:
+            mism = m.freq_mismatches
+            rates = sorted({f.detected_fs for f in mism})
+            rate_txt = " or ".join(f"{r} Hz" for r in rates)
+            out.append(f"{len(mism)} of {len(m.included_files)} files look like {rate_txt}, "
+                       f"not the {m.settings_fs} Hz set here: {self._named_list(mism)}")
         # A missing prerequisite outranks advice about signal quality: this one makes a
         # requested output come back empty, rather than merely making it noisier. The gated
         # peak reuses the heartbeats the ECG stage detects, and with ECG removal off there are
@@ -1101,13 +1142,36 @@ class SettingsScreen(QWidget):
         notes = self._science_notes()
         return notes[0] if notes else ""
 
+    def _manifest_cautions(self):
+        """B01: caveats about the batch ITSELF (mask narrowing, a column-count outlier) —
+        as distinct from ``_science_notes``, which is about the channel/settings
+        configuration. Kept separate so ``_science_notes`` (used verbatim for the guided-
+        flow one-line verdict) is not forced to explain a fact about the file set."""
+        m = self._manifest
+        if m is None:
+            return []
+        out = []
+        if m.mask_narrowed_from:
+            exts = ", ".join(e.lstrip(".") for e in sorted(m.narrowed_out_exts))
+            out.append(f"only one file pattern can be analysed at a time — narrowed to "
+                       f"'{m.mask}' ({m.narrowed_out_count} matching .{exts} file"
+                       f"{'s' if m.narrowed_out_count != 1 else ''} excluded)")
+        if m.outliers:
+            out.append(f"{len(m.outliers)} file{'s' if len(m.outliers) != 1 else ''} "
+                       f"differ in column count and are not included in channel assignment: "
+                       f"{self._named_list(m.outliers)}")
+        return out
+
     def _all_cautions(self):
-        """Every current caution (hard channel collision first, then soft science notes) —
-        for the live QC strip."""
+        """Every current caution (hard channel collision first, then the batch's own
+        manifest caveats, then soft science notes) — for the live QC strip. As long as the
+        manifest has a caveat, this list is never empty, so ``_update_qc`` cannot say
+        'no warnings' about a batch it has not actually looked at file-by-file."""
         out = []
         c = self._channel_collision()
         if c:
             out.append(c)
+        out.extend(self._manifest_cautions())
         out.extend(self._science_notes())   # every note, not just the first
         return out
 
