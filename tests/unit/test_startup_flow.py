@@ -113,11 +113,11 @@ def test_analysis_menu_uses_analysis_terminology_not_toml(qapp):
 
 def test_plain_construction_keeps_full_access(qapp):
     """No begin_session/enter_new_mode -> every tab visible (what all other GUI
-    tests depend on)."""
+    tests depend on). Run & results has no tab of its own since B03 (it lives inside
+    Preview & QC as a drawer) — locking that ONE tab is now the whole mechanism."""
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState())
     assert win.tabs.isTabEnabled(win._i_preview)
-    assert win.tabs.isTabEnabled(win._i_run)
     win.close()
 
 
@@ -132,7 +132,6 @@ def test_new_mode_shows_only_input_and_hides_downstream(qapp):
     inp, out, rest = sc._stage_cards[0][0], sc._stage_cards[1][0], sc._stage_cards[2][0]
     assert _shown(inp) and not _shown(out) and not _shown(rest)
     assert not win.tabs.isTabEnabled(win._i_preview)
-    assert not win.tabs.isTabEnabled(win._i_run)
     win.close()
 
 
@@ -189,7 +188,6 @@ def test_progressive_reveal_then_unlock_downstream(qapp, tmp_path):
     assert _shown(rest)
     assert sc._all_ok()
     assert win.tabs.isTabEnabled(win._i_preview)
-    assert win.tabs.isTabEnabled(win._i_run)
     win.close()
 
 
@@ -207,7 +205,6 @@ def test_reveal_is_monotonic_but_downstream_relocks(qapp, tmp_path):
     assert _shown(out) and _shown(rest)
     # ...but the downstream tabs re-lock because the settings are no longer valid
     assert not win.tabs.isTabEnabled(win._i_preview)
-    assert not win.tabs.isTabEnabled(win._i_run)
     win.close()
 
 
@@ -230,7 +227,6 @@ def test_open_mode_reveals_everything(qapp):
     for card, predicate in sc._cond_cards:
         assert _shown(card) == predicate()
     assert win.tabs.isTabEnabled(win._i_preview)
-    assert win.tabs.isTabEnabled(win._i_run)
     win.close()
 
 
@@ -363,7 +359,6 @@ def test_channel_modal_cancel_reveals_rest_but_keeps_downstream_locked(qapp, tmp
     qapp.processEvents()                           # auto-open -> cancelled
     assert _shown(rest)                            # the rest reveals (non-trapping)...
     assert not win.tabs.isTabEnabled(win._i_preview)   # ...but stays locked (channels unset)
-    assert not win.tabs.isTabEnabled(win._i_run)
     win.close()
 
 
@@ -516,7 +511,6 @@ def test_reenter_new_mode_after_completing_collapses_and_blanks(qapp, tmp_path):
     assert not _shown(sc._stage_cards[1][0]) and not _shown(sc._stage_cards[2][0])
     assert sc.in_folder.text() == "" and sc.out_folder.text() == ""
     assert not win.tabs.isTabEnabled(win._i_preview)
-    assert not win.tabs.isTabEnabled(win._i_run)
     win.close()
 
 
@@ -709,7 +703,7 @@ def test_downstream_tabs_locked_not_hidden(qapp):
     assert not win.tabs.isTabEnabled(win._i_preview)      # …but LOCKED until valid
     assert win.tabs.tabToolTip(win._i_preview)            # explains why
     assert sc.open_sample_analysis()
-    assert win.tabs.isTabEnabled(win._i_preview) and win.tabs.isTabEnabled(win._i_run)
+    assert win.tabs.isTabEnabled(win._i_preview)
     win.close()
 
 

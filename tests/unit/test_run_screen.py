@@ -1,7 +1,9 @@
 """Run screen — the tune-to-run loop & batch control: re-run only the failed files (P18),
-"Process & write this file" from Preview (P19), and the per-file results table with
-drill-back into Preview (P20). Previously test_review_wave5.py; the run-screen tests from
-wave 2 (dry-run plan P5, overwrite guard, open-folder P7) are appended below."""
+"Process & write this file" from Preview (P19), and the per-file results table (P20/B02,
+now shown in the ONE file rail shared with Preview & QC — see the B03 section near the
+end for the drawer/collapse/shared-rail tests specifically). Previously
+test_review_wave5.py; the run-screen tests from wave 2 (dry-run plan P5, overwrite guard,
+open-folder P7) are appended below."""
 from types import SimpleNamespace
 
 import pandas as pd
@@ -17,6 +19,36 @@ pytestmark = requires_synth()
 def _win(tmp):
     from respmech.ui.main_window import MainWindow
     return MainWindow(AppState(synth_settings(tmp)))
+
+
+def _pump_until_thread_done(qapp, rn, timeout=30.0):
+    """Spin a REAL Qt event loop until ``rn``'s batch thread has finished and cleared
+    itself, or ``timeout`` seconds pass. A hand-rolled ``processEvents()`` loop does not
+    reliably deliver a WORKER THREAD's cross-thread queued ``finished`` signal on every
+    platform (see test_gui_reactive.py's own ``_pump_until``, which exists for the same
+    reason) — a real ``QEventLoop`` does. Needed whenever a test lets ``_start()`` create
+    a real thread and must not close the window (destroying the slot the signal targets)
+    before that signal is actually delivered."""
+    from PySide6.QtCore import QElapsedTimer, QEventLoop, QTimer
+    if rn._thread is None:
+        return True
+    loop = QEventLoop()
+    clock = QElapsedTimer(); clock.start()
+    state = {"ok": False}
+    timer = QTimer(); timer.setInterval(10)
+
+    def _tick():
+        if rn._thread is None:
+            state["ok"] = True
+            loop.quit()
+        elif clock.elapsed() > timeout * 1000:
+            loop.quit()
+
+    timer.timeout.connect(_tick)
+    timer.start()
+    loop.exec()
+    timer.stop()
+    return state["ok"] or rn._thread is None
 
 
 def _result_with_failure():
@@ -92,16 +124,20 @@ def test_subset_rerun_keeps_an_untouched_failed_file_sorted_first(qapp, tmp_path
     win.close()
 
 
-def test_double_click_drills_into_preview(qapp, tmp_path):
-    win = _win(tmp_path); rn = win.run_screen
+def test_run_and_preview_share_one_file_rail(qapp, tmp_path):
+    """B03: Run & results has no rail of its own any more — it shares Preview & QC's, the
+    ONE place per-file rows are shown. Selecting a row there already re-renders Preview &
+    QC for it, so there is no separate destination left to 'drill back' to."""
+    win = _win(tmp_path); rn = win.run_screen; pv = win.preview_screen
+    assert rn.file_rail is pv.file_rail
     rn._fill_file_rail(_result_with_failure())
     seen = []
-    rn.open_file_requested.connect(seen.append)
-    idx = rn.file_rail._find_proxy_row("synth_case_A.csv")
-    rn.file_rail._on_double_clicked(rn.file_rail._proxy.index(idx, 0))
-    assert seen == ["synth_case_A.csv"]
-    win._open_file_in_preview("synth_case_A.csv")        # MainWindow routing
-    assert win.tabs.currentIndex() == win._i_preview
+    pv.file_rail.selectionChanged.connect(seen.append)
+    # the rail already auto-adopted its first file quietly on construction (no signal for
+    # that) — select the OTHER one to actually observe a real change
+    pv.file_rail.select_filename("synth_case_B.csv")
+    assert seen == ["synth_case_B.csv"]
+    assert pv.file_rail.current_filename() == "synth_case_B.csv"
     win.close()
 
 
@@ -131,13 +167,16 @@ def test_rerun_button_enabled_only_with_failures(qapp, tmp_path):
 # P19 — process & write this file from Preview
 # --------------------------------------------------------------------------- #
 def test_process_this_file_routes_to_single_file_run(qapp, tmp_path):
+    """B03: the request originates on Preview & QC, and the Run drawer lives on that same
+    tab now — there is no separate 'Run screen' left to switch to, so the tab never moves."""
     win = _win(tmp_path); pv = win.preview_screen; rn = win.run_screen
+    before = win.tabs.currentIndex()
     calls = []
     rn._start = lambda write, only_files=None: calls.append((write, only_files))
     pv._previewed_file = "synth_case_A.csv"
     pv._process_this_file()                              # emits → MainWindow → run_single_file
     assert calls == [(True, ["synth_case_A.csv"])]       # write=True, just this file
-    assert win.tabs.currentIndex() == win._i_run         # and it switched to the Run screen
+    assert win.tabs.currentIndex() == before             # no tab to switch to any more
     win.close()
 
 
@@ -481,3 +520,278 @@ def test_persistent_subset_note_appears_only_after_a_successful_subset_write(qap
     log2 = rn2.log.toPlainText()
     assert "Average breathdata.xlsx" not in log2 and "Cohort summary.xlsx" not in log2
     win.close(); win2.close()
+
+
+# ---------------------------------------------------------------------------
+# B03 — Run & results folded into the workspace as a drawer under the file rail
+# ---------------------------------------------------------------------------
+def test_run_has_no_tab_of_its_own(qapp, tmp_path):
+    win = _win(tmp_path)
+    assert win.tabs.count() == 2
+    tab_widgets = [win.tabs.widget(i) for i in range(win.tabs.count())]
+    assert win.run_screen not in tab_widgets
+    assert win.preview_screen in tab_widgets
+    win.close()
+
+
+def test_run_and_preview_share_the_same_file_rail_instance(qapp, tmp_path):
+    win = _win(tmp_path)
+    assert win.run_screen.file_rail is win.preview_screen.file_rail
+    win.close()
+
+
+def test_io_info_shows_folder_mask_count_and_output_before_running(qapp, tmp_path):
+    """Ticket acceptance: before Run is ever pressed, the input folder, the mask, the file
+    count and the output folder must already be on screen. Asserted on toolTip() (always
+    the untruncated text) and on label text, never on pixel widths."""
+    win = _win(tmp_path); rn = win.run_screen
+    assert rn.file_rail.count() == 2                  # synth_case_A.csv + synth_case_B.csv
+    read_tip = rn.read_info.toolTip()
+    write_tip = rn.write_info.toolTip()
+    assert "2 file" in read_tip
+    assert "synth_case_*.csv" in read_tip
+    assert INPUT in read_tip
+    assert "Writing:" in write_tip
+    assert str(tmp_path) in write_tip
+    # the label text (unshown widget, width 0 -> ElidingLabel shows the full string) matches
+    assert rn.read_info.text() == read_tip
+    assert rn.write_info.text() == write_tip
+    win.close()
+
+
+def test_refresh_actions_never_globs_for_the_file_count(qapp, tmp_path, monkeypatch):
+    """The file count in the two-line io info must come from the file rail's already-built
+    manifest, never a fresh directory scan on every settings tick."""
+    import respmech.ui.screens.run_screen as run_screen_mod
+    win = _win(tmp_path); rn = win.run_screen
+    calls = []
+    monkeypatch.setattr(run_screen_mod, "matching_files",
+                        lambda *a, **k: calls.append(a) or [])
+    for i in range(5):
+        rn.state.settings.output.folder = str(tmp_path / f"out{i}")
+        rn.refresh_actions()
+    assert calls == []
+    win.close()
+
+
+def test_progress_bar_hidden_when_idle_and_after_a_run_finishes(qapp, tmp_path):
+    win = _win(tmp_path); rn = win.run_screen
+    assert rn.progress.isHidden()
+    assert rn.progress.isTextVisible() is False
+    rn._set_running(True)
+    assert not rn.progress.isHidden()
+    rn._last_write = True
+    rn._only_files = None
+    rn._fatal_msg = None
+    rn._on_finished(_result_with_failure())
+    assert rn.progress.isHidden()               # hidden again once the run is over
+    assert rn.progress.isTextVisible() is False
+    win.close()
+
+
+def test_log_placeholder_explains_dry_run_vs_run(qapp, tmp_path):
+    win = _win(tmp_path); rn = win.run_screen
+    ph = rn.log.placeholderText().lower()
+    assert "dry run" in ph and "run batch" in ph
+    win.close()
+
+
+def test_table_empty_hint_toggles_with_a_real_result(qapp, tmp_path):
+    win = _win(tmp_path); rn = win.run_screen
+    assert not rn._table_empty_hint.isHidden()
+    rn._fill_table(SimpleNamespace(average_table=pd.DataFrame({"vt": [0.5, 0.6]})))
+    assert rn._table_empty_hint.isHidden()
+    win.close()
+
+
+def test_run_report_path_resolves_the_written_report(qapp, tmp_path):
+    win = _win(tmp_path); rn = win.run_screen
+    assert rn._run_report_path() is None
+    (tmp_path / "run-report.txt").write_text("hello")
+    assert rn._run_report_path() == str(tmp_path / "run-report.txt")
+    win.close()
+
+
+def test_run_report_path_prefers_a_partial_report_name(qapp, tmp_path):
+    """A05: a subset write's report is named ``run-report (partial, <timestamp>).txt`` so
+    it never overwrites the full run's own record — the button must still find it."""
+    win = _win(tmp_path); rn = win.run_screen
+    (tmp_path / "run-report (partial, 20260101-000000).txt").write_text("partial")
+    assert rn._run_report_path() == str(tmp_path / "run-report (partial, 20260101-000000).txt")
+    win.close()
+
+
+def test_show_run_report_button_disabled_until_a_run_writes_one(qapp, tmp_path):
+    win = _win(tmp_path); rn = win.run_screen
+    assert not rn.btn_show_report.isEnabled()
+    (tmp_path / "run-report.txt").write_text("Read 2 files.\nWrote 3 files.\n")
+    rn._last_write = True
+    rn._only_files = None
+    rn._fatal_msg = None
+    rn._on_finished(_result_with_failure())
+    assert rn.btn_show_report.isEnabled()
+    win.close()
+
+
+def test_show_run_report_opens_the_written_report_in_the_text_viewer(qapp, tmp_path, monkeypatch):
+    import respmech.ui.screens.run_screen as run_screen_mod
+    win = _win(tmp_path); rn = win.run_screen
+    (tmp_path / "run-report.txt").write_text("Wrote 3 files.")
+    seen = {}
+
+    class _StubDialog:
+        def __init__(self, title, text, parent=None, intro=None):
+            seen["title"] = title; seen["text"] = text
+        def show(self):
+            pass
+        def raise_(self):
+            pass
+
+    monkeypatch.setattr(run_screen_mod, "TextViewerDialog", _StubDialog)
+    rn._last_report_path = str(tmp_path / "run-report.txt")   # as a completed run would set it
+    rn._show_run_report()
+    assert seen["title"] == "Run report"
+    assert "Wrote 3 files." in seen["text"]
+    win.close()
+
+
+def test_show_run_report_is_a_noop_before_any_report_exists(qapp, tmp_path):
+    win = _win(tmp_path); rn = win.run_screen
+    rn._show_run_report()                        # must not raise
+    assert "no run report" in rn.status.text().lower()
+    win.close()
+
+
+def test_finish_message_names_the_primary_deliverable(qapp, tmp_path):
+    win = _win(tmp_path); rn = win.run_screen
+    rn._last_write = True
+    rn._only_files = None
+    rn._fatal_msg = None
+    result = SimpleNamespace(
+        files={"synth_case_A.csv": SimpleNamespace(error=None, breaths_table=pd.DataFrame({"vt": [0.5, 0.6]}))},
+        failed_files={}, ok_files={"synth_case_A.csv": SimpleNamespace(
+            error=None, breaths_table=pd.DataFrame({"vt": [0.5, 0.6]}))},
+        average_table=pd.DataFrame({"vt": [0.5, 0.6]}))
+    rn._on_finished(result)
+    log = rn.log.toPlainText()
+    assert "Average breathdata.xlsx (2 rows) is the file to open first." in log
+    win.close()
+
+
+# ---------------------------------------------------------------------------
+# B03 self-review follow-ups — the drawer's own collapse/expand, the shared
+# rail's caveat preservation, and the run-report path's snapshot/reset fixes.
+# ---------------------------------------------------------------------------
+def test_results_section_starts_collapsed_and_toggles(qapp, tmp_path):
+    win = _win(tmp_path); rn = win.run_screen
+    assert not rn.btn_toggle_results.isChecked()
+    assert rn._results_section.isHidden()
+    assert rn.btn_toggle_results.text() == "Run & results ▸"
+    rn.btn_toggle_results.setChecked(True)
+    assert not rn._results_section.isHidden()
+    assert rn.btn_toggle_results.text() == "Run & results ▾"
+    rn.btn_toggle_results.setChecked(False)
+    assert rn._results_section.isHidden()
+    win.close()
+
+
+def test_starting_a_run_auto_expands_the_results_section(qapp, tmp_path):
+    win = _win(tmp_path); rn = win.run_screen
+    assert rn._results_section.isHidden()
+    rn._set_running(True)
+    assert not rn._results_section.isHidden()
+    assert rn.btn_toggle_results.isChecked()
+    win.close()
+
+
+def test_run_report_path_prefers_the_newer_of_two_reports(qapp, tmp_path):
+    """A05: a subset write's report never overwrites the full run's own run-report.txt, so
+    both can legitimately exist at once — the newer one (by mtime) is the one to show."""
+    import os as _os
+    win = _win(tmp_path); rn = win.run_screen
+    old = tmp_path / "run-report.txt"; old.write_text("full run")
+    new = tmp_path / "run-report (partial, 20260101-000000).txt"; new.write_text("subset")
+    now = _os.path.getmtime(old)
+    _os.utime(old, (now - 100, now - 100))       # make the full-run report demonstrably older
+    assert rn._run_report_path() == str(new)
+    win.close()
+
+
+def test_run_report_path_uses_the_runs_own_snapshot_not_live_settings(qapp, tmp_path):
+    """Self-review finding: a user can change the output folder in Setup the instant a run
+    ends. 'Show run report' must keep pointing at the folder the JUST-FINISHED run actually
+    wrote to, never wherever Setup happens to point at when the button is clicked."""
+    import copy
+    win = _win(tmp_path); rn = win.run_screen
+    (tmp_path / "run-report.txt").write_text("the real one")
+    rn._run_settings_snapshot = copy.deepcopy(win.state.settings)    # frozen, as _start() does
+    other = tmp_path / "elsewhere"; other.mkdir()
+    (other / "run-report.txt").write_text("a different study's report")
+    win.state.settings.output.folder = str(other)     # live edit, after the snapshot was taken
+    assert rn._run_report_path() == str(tmp_path / "run-report.txt")
+    win.close()
+
+
+def test_dry_run_finishing_does_not_leave_a_stale_report_button_enabled(qapp, tmp_path):
+    """A run that starts after a previous run enabled the button, but is itself still in
+    flight (or fails before writing), must not go on offering the PREVIOUS run's report."""
+    win = _win(tmp_path); rn = win.run_screen
+    (tmp_path / "run-report.txt").write_text("from an earlier run")
+    rn._last_write = True; rn._only_files = None; rn._fatal_msg = None
+    rn._on_finished(_result_with_failure())
+    assert rn.btn_show_report.isEnabled() and rn._last_report_path
+    rn._start(write=False)                        # a fresh dry run begins; resets happen
+    assert not rn.btn_show_report.isEnabled()      # before the worker thread is even created
+    assert rn._last_report_path is None
+    # A REAL QThread/BatchWorker is now running (write=False skips the overwrite guard that
+    # would otherwise short-circuit _start early). It must be let finish and its queued
+    # `finished` signal delivered BEFORE the window closes — closing (and so destroying
+    # `rn`) while that signal is still queued left it undelivered until a LATER, unrelated
+    # test's own processEvents() call finally reached it, segfaulting there (found via a
+    # reproducible crash in test_section_flow.py two full-suite runs in a row).
+    _pump_until_thread_done(qapp, rn)
+    win.close()
+
+
+def test_a_run_preserves_the_shared_rails_manifest_caveats(qapp, tmp_path):
+    """Self-review finding: _fill_file_rail's manifest is deliberately caveat-free (it only
+    knows the resolved run file list), but the rail is now SHARED with Preview & QC, whose
+    own build_manifest scan is the thing that actually knows about column/frequency
+    outliers. A run finishing must not silently erase those warnings from the one rail both
+    screens show."""
+    win = _win(tmp_path); rn = win.run_screen
+    rn.file_rail.set_caveat("synth_case_A.csv", "detected 500 Hz sampling — settings say 1000 Hz")
+    rn._fill_file_rail(_result_with_failure())
+    assert rn.file_rail.entry("synth_case_A.csv").caveat == \
+        "detected 500 Hz sampling — settings say 1000 Hz"
+    win.close()
+
+
+def test_standalone_run_screen_without_a_shared_rail_still_works(qapp, tmp_path):
+    """RunScreen(state) with no file_rail argument (several existing tests construct it
+    this way directly) must still get a usable, private rail rather than fail."""
+    from respmech.ui.screens.run_screen import RunScreen
+    from respmech.ui.state import AppState
+    rn = RunScreen(AppState(synth_settings(tmp_path)))
+    assert rn.file_rail is not None
+    assert rn.read_info.toolTip()          # io-info still renders with the private rail
+    rn.deleteLater()
+
+
+def test_install_run_drawer_actually_embeds_the_widget(qapp, tmp_path):
+    win = _win(tmp_path); pv = win.preview_screen
+    assert pv._run_drawer is win.run_screen
+    assert pv.layout().indexOf(win.run_screen) != -1
+    win.close()
+
+
+def test_drawer_summary_reads_sensibly_with_folder_and_output_unset(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    win.state.settings.input.folder = ""       # AppState()'s own default is the placeholder
+    win.state.settings.output.folder = ""      # "input"/"output", not an empty string
+    win.run_screen.refresh_actions()
+    text = win.run_screen._drawer_summary.toolTip()
+    assert "(input not set)" in text and "(output not set)" in text
+    assert "  " not in text                    # no accidental double space from empty bits
+    win.close()

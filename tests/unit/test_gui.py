@@ -23,7 +23,9 @@ def _settings(outdir):
 def test_mainwindow_constructs(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path))))
-    assert win.tabs.count() == 3
+    # Setup, Preview & QC — Run & results has no tab of its own since B03 (it lives
+    # inside Preview & QC as a drawer instead).
+    assert win.tabs.count() == 2
     # settings form round-trips into shared state
     win.settings_screen.from_state()
     win.settings_screen.to_state()
@@ -222,16 +224,25 @@ def test_validate_checks_paths(qapp, tmp_path):
 # for a run's progress, which stays visible across tabs while it is in flight.
 # --------------------------------------------------------------------------- #
 def test_status_bar_shows_only_the_active_screens_message(qapp, tmp_path):
+    """Run & results has no tab of its own since B03 — it lives inside Preview & QC as a
+    drawer. A LIVE Run status update reaches the bar exactly when Preview & QC (the tab
+    that hosts the drawer) is active, and not otherwise — the same per-tab ownership rule
+    as before, just naming the tab that actually contains the drawer now. (Switching TO
+    Preview & QC itself shows Preview's OWN message, since that tab's primary content is
+    Preview, not Run — covered by test_refresh_files_skips_the_pick_one_line_when_already_drawn.)"""
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path))))
     rn = win.run_screen
     assert win.tabs.currentWidget() is win.settings_screen    # Setup is the default active tab
     rn._set_status("RUN OWN MESSAGE")
-    # Run is not the active tab -> its message must not reach the shared bar
+    # Setup is the active tab -> Run's message must not reach the shared bar
     assert win.statusBar().currentMessage() != "RUN OWN MESSAGE"
-    win.tabs.setCurrentWidget(rn)                              # switch to Run
-    # the incoming screen's own (already-live) message is shown
+    win.tabs.setCurrentWidget(win.preview_screen)              # switch to Preview & QC (hosts the drawer)
+    rn._set_status("RUN OWN MESSAGE")                          # a fresh update, now that this tab is active
     assert win.statusBar().currentMessage() == "RUN OWN MESSAGE"
+    win.tabs.setCurrentWidget(win.settings_screen)             # away again
+    rn._set_status("STILL NOT SHOWN")
+    assert win.statusBar().currentMessage() != "STILL NOT SHOWN"
     win.close()
 
 
@@ -244,11 +255,13 @@ def test_run_progress_shows_globally_while_a_batch_is_active(qapp, tmp_path):
     rn._set_status("breath 3/10")
     assert win.statusBar().currentMessage() == "Run: breath 3/10"
     win._on_run_finished()
-    # the run is over: the bar hands straight back to the active tab (Setup) rather than
-    # leaving the stale "Run: …" line sitting there until something else happens to fire
-    assert win.statusBar().currentMessage() != "Run: breath 3/10"
+    # the run is over: the bar shows Run's own last message directly (its outcome is what
+    # the user is looking at, regardless of which tab happens to be current — Run has no
+    # tab of its own since B03), losing the "Run: " prefix that belonged to the exclusive
+    # in-flight window rather than leaving the stale "Run: …" line sitting there
+    assert win.statusBar().currentMessage() == "breath 3/10"
     rn._set_status("breath 4/10")            # Run isn't the active tab -> stays off the bar
-    assert win.statusBar().currentMessage() != "Run: breath 4/10"
+    assert win.statusBar().currentMessage() != "breath 4/10"
     win.close()
 
 
@@ -276,7 +289,8 @@ def test_analysis_menu_actions_show_feedback_regardless_of_active_tab(qapp, tmp_
     active tab. Regression for the ticket's self-review finding."""
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path))))
-    win.tabs.setCurrentWidget(win.run_screen)      # looking at Run, not Setup
+    win.tabs.setCurrentWidget(win.preview_screen)  # looking at Preview & QC (hosts the Run
+                                                    # drawer since B03), not Setup
     win._new_analysis()
     # New analysis's own feedback moved to the guidance label (guided flow), so this is a
     # neutral fallback rather than a blank bar — the real regression check is that it is

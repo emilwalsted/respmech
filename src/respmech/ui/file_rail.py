@@ -172,6 +172,22 @@ class FileRailModel(QAbstractListModel):
         idx = self.index(i)
         self.dataChanged.emit(idx, idx)
 
+    def set_caveat(self, filename: str, caveat: str | None) -> None:
+        """Restore a manifest-derived caveat (outlier reason / frequency mismatch) a caller
+        already knew, without a full :meth:`set_manifest` rebuild. Needed since B03: a
+        caveat-free manifest rebuild (``manifest_from_filenames``, used when a batch run's
+        OWN resolved file list repopulates the rail) always resets ``caveat`` to ``None`` for
+        every row — by design for that caller, but wrong for a caller sharing the rail with
+        a real manifest scan (Preview & QC's own ``build_manifest``) that already knew
+        better. The caller is responsible for knowing what the caveat should be; this only
+        writes it."""
+        i = self._by_name.get(filename)
+        if i is None or self._entries[i].caveat == caveat:
+            return
+        self._entries[i].caveat = caveat
+        idx = self.index(i)
+        self.dataChanged.emit(idx, idx)
+
     def set_excluded_count(self, filename: str, count: int) -> None:
         i = self._by_name.get(filename)
         if i is None or self._entries[i].excluded_count == count:
@@ -385,6 +401,9 @@ class FileRail(QWidget):
 
     def mark_result(self, filename: str, *, ok: bool, breaths=None, error=None) -> None:
         self._model.mark_result(filename, ok=ok, breaths=breaths, error=error)
+
+    def set_caveat(self, filename: str, caveat: str | None) -> None:
+        self._model.set_caveat(filename, caveat)
 
     def set_excluded_count(self, filename: str, count: int) -> None:
         self._model.set_excluded_count(filename, count)

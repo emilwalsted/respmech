@@ -1,4 +1,7 @@
-"""Main window — a tabbed shell holding the three screens, sharing one AppState.
+"""Main window — a tabbed shell holding Setup and the Preview & QC workspace, sharing
+one AppState. Run & results (B03, UI-overhaul) is no longer a third tab: it lives inside
+the workspace as a drawer under Preview & QC's file rail, so running a batch never means
+leaving the file you are looking at.
 
 The Settings screen is the single source of change events; the main window is the
 only place cross-screen signals are wired, so the Qt-free ``AppState`` never grows
@@ -51,12 +54,17 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.settings_screen = SettingsScreen(self.state, on_settings_changed=self._on_settings_changed)
         self.preview_screen = PreviewScreen(self.state)
-        self.run_screen = RunScreen(self.state)
+        # B03 (UI-overhaul): Run & results is no longer its own tab. It is built the same
+        # way as before (same class, same worker/thread lifecycle) and shares Preview & QC's
+        # file rail — one set of per-file rows, not two — then PreviewScreen embeds it as a
+        # titled "Run & results" section under its own file rail + subtabs, so the user can
+        # dry-run, run and read the run report without leaving the file they are looking at.
+        self.run_screen = RunScreen(self.state, file_rail=self.preview_screen.file_rail)
+        self.preview_screen.install_run_drawer(self.run_screen)
         # No wizard "1./2./3." numbering — the real workflow loops back (tune -> re-run),
         # it is not one-way. ("&&" renders a literal "&"; a lone "&" is a tab mnemonic.)
         self._i_settings = self.tabs.addTab(self.settings_screen, "Setup")
         self._i_preview = self.tabs.addTab(self.preview_screen, "Preview && QC")
-        self._i_run = self.tabs.addTab(self.run_screen, "Run && results")
         self.tabs.currentChanged.connect(self._on_tab_changed)
         # A wheel that starts on the Setup form and drifts up onto the tab bar would
         # otherwise change tab — landing on Preview, which schedules work.
@@ -75,6 +83,10 @@ class MainWindow(QMainWindow):
         sc.inputs_changed.connect(pv.refresh_files)
         sc.settings_changed.connect(pv.sync_from_settings)
         sc.settings_changed.connect(rn.refresh_actions)
+        # B03: the drawer's log-empty-state plan summary resolves the actual matched file
+        # list (a real glob), so — like Preview's own rail rebuild above — it is refreshed
+        # only on an actual input folder/mask edit, never on every settings_changed tick.
+        sc.inputs_changed.connect(rn._update_plan_summary)
         # the guided "new analysis" flow LOCKS (does not hide) Preview/Run until every
         # setting is valid, so the whole workflow is visible as a stepper (P24)
         sc.flow_ready_changed.connect(self._set_downstream_enabled)
@@ -101,10 +113,12 @@ class MainWindow(QMainWindow):
         # Setup channel summary's 'derived from flow' row, and normalisation drives the
         # 'You will get' normalised-EMG-sheet line — so both must refresh on a Preview edit.
         pv.settings_edited.connect(sc.sync_from_preview)
-        # P19: "Process & write this file" on Preview → run just that file on the Run screen
+        # P19: "Process & write this file" on Preview → run just that file on the Run drawer
         pv.process_file_requested.connect(self._process_single_file)
-        # P20: double-clicking a file in the Run results drills back into Preview
-        rn.open_file_requested.connect(self._open_file_in_preview)
+        # P20's "drill back into Preview" no longer needs its own signal/handler (B03):
+        # the file rail is now the SAME widget instance for both, so selecting/activating a
+        # row already re-renders Preview & QC's subtabs for it — there is no separate
+        # destination left to drill back to.
         # while a batch runs, lock the Settings screen so its state can't be swapped
         # (e.g. Load TOML) out from under the running worker
         rn.run_started.connect(self._on_run_started)
@@ -153,14 +167,15 @@ class MainWindow(QMainWindow):
         self.settings_screen.enter_new_mode(use_last_rig=(dlg.mode == "new_rig"))
 
     def _set_downstream_enabled(self, ready: bool):
-        """Lock/unlock the Preview & Run tabs together (they both need valid settings).
-        They stay *visible* so the user always sees the three steps of the workflow;
-        a tooltip on a locked step says why it can't be entered yet (P24)."""
+        """Lock/unlock the Preview & QC tab (needs valid settings). It stays *visible* so
+        the user always sees the step exists; a tooltip on the locked tab says why it can't
+        be entered yet (P24). Run & results has no tab of its own to lock any more (B03: it
+        lives inside this same tab as a drawer) — locking this ONE tab already keeps it out
+        of reach exactly as before, since there is nowhere else left to get to it from."""
         ready = bool(ready)
         hint = "" if ready else "Complete the Setup to unlock this step."
-        for i in (self._i_preview, self._i_run):
-            self.tabs.setTabEnabled(i, ready)
-            self.tabs.setTabToolTip(i, hint)
+        self.tabs.setTabEnabled(self._i_preview, ready)
+        self.tabs.setTabToolTip(self._i_preview, hint)
 
     def _update_window_title(self):
         """Name the active analysis in the title bar and flag unsaved edits, so it is
@@ -174,8 +189,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"RespMech {__version__} — {name}{dirty}")
 
     def _process_single_file(self, filename: str):
-        """P19: switch to the Run screen and process+write just the previewed file."""
-        self.tabs.setCurrentIndex(self._i_run)
+        """P19: process+write just the previewed file. The request originates on Preview &
+        QC itself, and the Run drawer (B03) lives on that same tab, so there is no longer a
+        separate screen to switch to — the tab is already the right one."""
         self.run_screen.run_single_file(filename)
 
     def _on_noise_reference_changed(self, file, intervals, use_expiration):
@@ -194,15 +210,6 @@ class MainWindow(QMainWindow):
         own feedback lives on Setup's guidance label rather than the status line."""
         self.statusBar().showMessage(self.settings_screen.status.text() or "Ready.")
 
-    def _open_file_in_preview(self, filename: str):
-        """P20: drill back from the Run results into Preview & QC for one file."""
-        self.tabs.setCurrentIndex(self._i_preview)
-        self.preview_screen.refresh_files()
-        try:
-            self.preview_screen.file_rail.select_filename(filename)
-        except Exception:                       # pragma: no cover - best-effort selection
-            pass
-
     def _on_run_started(self):
         self.settings_screen.setEnabled(False)
         # the Analysis menu lives in the header, OUTSIDE the screen being locked, so it
@@ -215,9 +222,12 @@ class MainWindow(QMainWindow):
         self.settings_screen.setEnabled(True)
         self.analysis_btn.setEnabled(True)
         self._run_active = False
-        # Hand the bar straight back to the active tab's own message — otherwise the last
-        # "Run: …" line would sit there indefinitely if the user never switches tabs again.
-        self._show_active_tab_status()
+        # Hand the bar straight to Run's OWN last message (its outcome — "Run failed — …",
+        # "Finished writing…" — is exactly what the user is looking at right after a run,
+        # since the drawer lives on the tab they are already on) rather than the generic
+        # "whichever tab is current" lookup _show_active_tab_status uses for a plain tab
+        # switch: Run has had no tab of its own to be "the current one" since B03.
+        self.statusBar().showMessage(self.run_screen.status.text() or "Ready.")
 
     def _on_screen_status(self, screen, msg):
         """Route one screen's status_changed to the shared bar, per the ownership rule
@@ -225,7 +235,10 @@ class MainWindow(QMainWindow):
         belongs to Run's progress ALONE (every other screen's status is suppressed, not just
         de-prioritised — otherwise _on_tab_changed's own refresh_files()/refresh_actions()
         calls, which fire on the newly-current tab, would cover the "Run: " line up again);
-        otherwise a screen's message shows only while it is the active tab."""
+        otherwise a screen's message shows only while it is the active tab. Run & results
+        has no tab of its own any more (B03: it lives inside Preview & QC as a drawer), so
+        its own idle-state messages ("Ready to run.", "Cannot run: …") are shown exactly
+        when Preview & QC — the tab that actually hosts it — is the active one."""
         bar = self.statusBar()
         if self._run_active:
             if screen is self.run_screen:
@@ -234,7 +247,8 @@ class MainWindow(QMainWindow):
                 prefix = "" if msg[:4].lower() == "run " else "Run: "
                 bar.showMessage(f"{prefix}{msg}")
             return
-        if screen is self.tabs.currentWidget():
+        owner = self.preview_screen if screen is self.run_screen else screen
+        if owner is self.tabs.currentWidget():
             bar.showMessage(msg)
 
     def _show_active_tab_status(self):
@@ -403,14 +417,19 @@ class MainWindow(QMainWindow):
         w = self.tabs.widget(index)
         if w is self.preview_screen:
             self.preview_screen.refresh_files()
-        elif w is self.run_screen:
+            # Self-review finding: the Run drawer's io-info (file count) is read from the
+            # shared file rail, but nothing else re-reads it on a plain tab switch — a file
+            # added or removed on disk between visits (no Settings edit involved) used to be
+            # caught by the old "switching TO the Run tab" refresh_actions() call, which has
+            # no tab-switch equivalent since Run stopped being its own tab.
             self.run_screen.refresh_actions()
-        # Re-show the INCOMING screen's own last message — refresh_files()/refresh_actions()
-        # above may already have done this via _on_screen_status (index has already moved, so
-        # currentWidget() is w), but this also covers a tab with nothing to refresh (Setup).
+        # Re-show the INCOMING screen's own last message — refresh_files() above may already
+        # have done this via _on_screen_status (index has already moved, so currentWidget()
+        # is w), but this also covers a tab with nothing to refresh (Setup).
         # Skipped while a batch is running: the bar belongs to the global "Run: " progress
         # line then (see _on_screen_status), which a plain tab switch must not paint over —
-        # switching TO Run needs no help either, since that line is already the live one.
+        # switching TO Preview & QC (which hosts the Run drawer) needs no help either, since
+        # that line is already the live one.
         if not self._run_active:
             self._show_active_tab_status()
 

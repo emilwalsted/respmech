@@ -226,6 +226,78 @@ respmech.ui.screens.preview._mechanics, "stage_mechanics_preview", fake)` (or im
 writing a B02 test that meant to simulate "a file that cannot be loaded" and silently
 patched nothing.
 
+### Embedding one screen permanently under another's content can blow the combined minimum-size budget — even collapsed
+
+Ticket B03 folded `RunScreen` into `PreviewScreen`'s own layout (a drawer under the file
+rail, replacing the old third tab) instead of a separate `QTabWidget` page. Each screen's
+own `minimumSizeHint()` was independently within the `test_window_fits_screen.py` budget
+(1280×547 usable) — but STACKING one under the other in one tab measured 611 px against
+that 547 px ceiling, because a tab-page's minimum used to be measured on its own; two
+screens sharing one tab sum their minimums instead of each being measured in isolation.
+
+Fixed with a genuinely collapsed-by-default drawer (`RunScreen._results_section`, hidden
+until a "Run & results ▸" toggle — or a run itself — expands it), so only a single compact
+summary row (~44-56 px) is ever a permanent tax on the tab. Two further findings from
+getting there:
+
+- **`FitScrollArea`/`_PageScroll`'s "fill the viewport, else use minimumSizeHint" fit
+  logic is for STATIC pages, not ones that change size at runtime.** Wrapping the whole
+  drawer in it (reusing Preview's own subtab-page scrolling, lifted out to
+  `ui/panel.py::FitScrollArea`/`scrollable()`) made the collapsed drawer WORSE (362 px,
+  not smaller) — an early fit pass against the page's larger pre-collapse size stuck in
+  the scroll area's own reported size and fed back into the outer layout as if that were
+  still the page's natural height. Don't reach for it when a page's own content toggles
+  visibility; it is the right tool only for a page whose natural height is fixed once
+  built (Preview & QC's own EMG/mechanics/noise subtabs are the case it was built for).
+- **Even a minimal, collapsed addition can still tip an unrelated, previously-passing
+  layout test that was calibrated close to a threshold.** `test_the_noise_tab_divides_
+  into_thirds` (an unrelated Preview subtab test) went from ~33% to ~44-50% "chrome" share
+  of an 800 px test window purely from the drawer's ~56-90 px collapsed footprint, and a
+  DIFFERENT test's "tall panel" splitter scenario (`test_the_diagnostic_figures_follow_
+  their_panel_in_both_directions`) stopped delivering enough absolute height for a
+  matplotlib legend to render at all, at the SAME window height that used to work. Fixed
+  by giving that one test more window height (with the reasoning written into the test
+  itself), not by chasing the drawer's footprint down further — there is a floor below
+  which "collapsed" can't go and still be an affordance a user can find. **Any future
+  permanent addition to Preview & QC's tab must be checked against the WHOLE of
+  `test_window_fits_screen.py` and `test_compact_plots.py`, not just the tests that
+  exercise the new code directly** — both are tuned against absolute window/splitter
+  pixels, and neither failure looked anything like the change that caused it.
+
+### A construction-time `QTimer.singleShot(0, ...)` can segfault a COMPLETELY unrelated test, hundreds of tests later
+
+Deferring `RunScreen.__init__`'s one real disk glob (`_update_plan_summary`, which
+lazy-imports pandas/scipy via `core.io.plan.plan_outputs`) past construction looked like
+the obviously-correct fix for "don't do this synchronously in every window's `__init__``"
+— schedule it with `QTimer.singleShot(0, self._update_plan_summary)` instead. It produced
+a **reproducible segfault in `test_section_flow.py`**, a file with no relationship to
+`RunScreen` at all, always at the same ~71% point in a full `pytest tests/unit` run,
+confirmed 3 times in a row before the cause was found and once more (clean) after
+reverting to a plain synchronous call.
+
+The mechanism: almost no unit test spins a real Qt event loop before it constructs a
+`RunScreen`/`MainWindow` and closes it — `qapp.processEvents()` is called explicitly only
+where a test actually needs it. A zero-delay `singleShot` scheduled in `__init__` and
+never fired before the widget is closed does not fire NEVER; it sits queued on the
+(session-scoped) `QApplication` forever, still holding a bound-method reference to the
+widget. Across a ~900-test suite, hundreds of these accumulate. The first test anywhere
+in the suite that happens to call `processEvents()` — in this case `test_section_flow.py`,
+which pumps events for an unrelated reason — flushes the ENTIRE backlog in one burst,
+invoking `_update_plan_summary()` on widgets that were destroyed dozens or hundreds of
+tests earlier. That is a use-after-free at the C++ level (a shiboken-wrapped deleted
+`QObject`), hence a segfault rather than a clean Python exception — and it always lands
+in whatever test happens to be first to call `processEvents()` after the backlog has
+grown large enough, which looks completely unrelated to the actual defect.
+
+**Never schedule a construction-time `QTimer.singleShot` (any delay, but especially 0) on
+`self` inside a widget's `__init__` unless something in the SAME constructor guarantees
+the event loop will run before the widget can be destroyed** (a real GUI session does;
+nearly all unit tests do not). If deferred, one-shot work is genuinely needed, tie its
+lifetime to something that gets cancelled on teardown, or — the simpler, correct choice
+made here — just call it synchronously and accept the (real, but far smaller and already
+precedented — `_start()`'s `_append_plan` pays the identical import cost on every click)
+construction-time cost instead.
+
 ## Releases (`.github/workflows/release.yml` = "Build installers")
 
 - Trigger: push a `v*` tag (or manual dispatch). Builds a Windows **MSI** and a

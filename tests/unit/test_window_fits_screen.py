@@ -69,9 +69,11 @@ def _window(qapp, tmp_path, **kw):
     return win
 
 
-@pytest.mark.parametrize("tab", [0, 1, 2])
+@pytest.mark.parametrize("tab", [0, 1])
 def test_window_minimum_fits_a_laptop_screen(qapp, tmp_path, tab):
-    """On every screen — Setup, Preview & QC, Run — the window must be able to be small.
+    """On every tab — Setup and the Preview & QC workspace (which since B03 also hosts the
+    Run drawer, so there is no separate third tab to parametrise any more) — the window
+    must be able to be small.
 
     Both axes off ONE ``minimumSizeHint()`` call. The height half used to be discarded, and
     it is the axis that actually ran out: a 1080p laptop at 150% scaling has 650 px to give.
