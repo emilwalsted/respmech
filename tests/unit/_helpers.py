@@ -63,3 +63,30 @@ def is_dark_hex(h):
     h = h.lstrip("#")
     r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
     return (0.299 * r + 0.587 * g + 0.114 * b) < 110
+
+
+def write_delim(path, ncols, sep=",", nrows=30, fs=1000.0, header=True):
+    """A synthetic delimited recording (write ``path`` with a ``.csv``/``.txt`` suffix):
+    column 0 is a real, regularly-sampled time-in-seconds axis, so
+    ``workers.detect_sampling_frequency`` recognises it (used by the manifest scanner's
+    ``probe_sampling_frequency`` and by tests exercising it directly). The rest are
+    arbitrary numbers — this is for column-count/frequency detection, not physiology."""
+    dt = 1.0 / fs
+    lines = []
+    if header:
+        lines.append(sep.join(["time"] + [f"c{i}" for i in range(2, ncols + 1)]))
+    for i in range(nrows):
+        row = [f"{i * dt:.6f}"] + [str(i + j) for j in range(2, ncols + 1)]
+        lines.append(sep.join(row))
+    with open(path, "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
+def write_xlsx(path, ncols, nrows=30, fs=1000.0):
+    """A synthetic .xlsx recording, same shape convention as :func:`write_delim`."""
+    import pandas as pd
+    dt = 1.0 / fs
+    cols = {"time": [i * dt for i in range(nrows)]}
+    for i in range(2, ncols + 1):
+        cols[f"c{i}"] = [i + j for j in range(nrows)]
+    pd.DataFrame(cols).to_excel(path, index=False)

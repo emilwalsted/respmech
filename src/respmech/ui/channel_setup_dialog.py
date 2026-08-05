@@ -46,7 +46,7 @@ class ChannelSetupDialog(QDialog):
     pre-selects the dropdowns. After ``exec()``, ``selected_mapping()`` returns
     {'flow': col1based or None, ..., 'emg': [cols], 'entropy': [cols]}."""
 
-    def __init__(self, files, fs, initial=None, loader=None, parent=None):
+    def __init__(self, files, fs, initial=None, loader=None, parent=None, excluded=None):
         super().__init__(parent)
         self.setModal(True)
         # Opening size, clamped to the screen in showEvent. The HEIGHT is content-derived
@@ -59,6 +59,11 @@ class ChannelSetupDialog(QDialog):
         self._fs = fs or 1.0
         self._cache = {}
         self._file_idx = 0
+        # B01: files the caller's manifest scan already excluded (a different column count)
+        # — named here so the banner below reconciles the "N files in the batch" it shows
+        # with the true size of the matched folder, instead of silently only ever
+        # describing the majority subset this dialog itself was handed.
+        self._excluded = list(excluded or [])
 
         # The first file is the default, but a file can pass the cheap column probe and
         # still fail a full read (e.g. a ragged row) — fall forward to the first file that
@@ -109,10 +114,21 @@ class ChannelSetupDialog(QDialog):
         hint.setProperty("status", "muted"); hint.setWordWrap(True)
         v.addWidget(hint)
         nfiles = len(self._files)
-        banner = QLabel(f"This mapping is applied to all {nfiles} file"
-                        f"{'s' if nfiles != 1 else ''} in the batch.")
+        banner_text = (f"This mapping is applied to all {nfiles} file"
+                      f"{'s' if nfiles != 1 else ''} in the batch.")
+        if self._excluded:
+            names = ", ".join(f"{name} ({cols} col{'s' if cols != 1 else ''})"
+                              for name, cols in self._excluded[:3])
+            if len(self._excluded) > 3:
+                names += f", +{len(self._excluded) - 3} more"
+            n_ex = len(self._excluded)
+            banner_text += (f" {n_ex} file{'s' if n_ex != 1 else ''} with a different "
+                            f"column count {'is' if n_ex == 1 else 'are'} not shown here: "
+                            f"{names}.")
+        banner = QLabel(banner_text)
         banner.setProperty("banner", True)
-        banner.setProperty("status", "info"); banner.setWordWrap(True)
+        banner.setProperty("status", "warn" if self._excluded else "info")
+        banner.setWordWrap(True)
         v.addWidget(banner)
 
         scroll = QScrollArea(); scroll.setWidgetResizable(True)

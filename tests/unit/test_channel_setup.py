@@ -685,3 +685,57 @@ def test_channel_role_labels_are_descriptive(qapp):
     labels = dict(_ROLES)
     assert "oesophageal" in labels["poes"] and "gastric" in labels["pgas"]
     assert "transdiaphragmatic" in labels["pdi"] and "diaphragm" in labels["emg"]
+
+
+# ---------------------------------------------------------------------------
+# B01: the batch banner reconciles with the manifest's excluded files
+# ---------------------------------------------------------------------------
+def test_banner_names_excluded_files_when_given(qapp):
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+    dlg = ChannelSetupDialog(_files(), 1000, loader=_loader(),
+                             excluded=[("odd_one.csv", 8), ("also_odd.csv", 11)])
+    text = None
+    for w in dlg.findChildren(type(dlg.info)):
+        if "applied to all" in w.text():
+            text = w.text()
+            break
+    assert text is not None
+    assert "odd_one.csv" in text and "8" in text
+    assert "also_odd.csv" in text
+    assert "not shown here" in text
+    dlg.close()
+
+
+def test_banner_says_nothing_extra_without_excluded_files(qapp):
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+    dlg = ChannelSetupDialog(_files(), 1000, loader=_loader())
+    banners = [w.text() for w in dlg.findChildren(type(dlg.info)) if "applied to all" in w.text()]
+    assert len(banners) == 1
+    assert "not shown here" not in banners[0]
+    dlg.close()
+
+
+def test_settings_screen_passes_manifest_outliers_to_the_dialog(qapp, monkeypatch, tmp_path):
+    """_open_channel_setup must hand the dialog exactly what its own manifest scan found —
+    not silently drop the fact that a file was excluded."""
+    from _helpers import write_delim
+    from respmech.ui.main_window import MainWindow
+    for n in ("a", "b", "c"):
+        write_delim(tmp_path / f"{n}.csv", 9)
+    write_delim(tmp_path / "outlier.csv", 8)
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
+    sc.samp_freq.setValue(1000)
+    sc._on_inputs_changed()
+    assert sc._manifest is not None and len(sc._manifest.outliers) == 1
+
+    seen = {}
+
+    def fake_dialog(files, fs, initial, loader=None, parent=None, excluded=None):
+        seen["excluded"] = excluded
+        raise ValueError("stop before actually opening a modal")
+
+    monkeypatch.setattr("respmech.ui.channel_setup_dialog.ChannelSetupDialog", fake_dialog)
+    sc._open_channel_setup(initial={})
+    assert seen["excluded"] == [("outlier.csv", 8)]
+    win.close()
