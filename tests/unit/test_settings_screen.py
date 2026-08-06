@@ -195,9 +195,11 @@ def test_form_fields_are_bounded_not_full_width(qapp, tmp_path):
     narrowest_wide = min(w.width() for w, k in capped.items() if k == "wide")
     assert widest_compact <= narrowest_wide
 
-    # the browse-row paths (in/out folder, noise reference) legitimately stay full width:
-    # they hold absolute paths and share their row with the Browse button
-    assert sc.in_folder.width() > win.width() / 2
+    # the browse-row paths (in/out folder, noise reference) legitimately stay full width —
+    # of their own CARD, not the whole window (ticket B05: Setup splits into two columns,
+    # so the Input card is now roughly half the window, and a field filling its card's
+    # width no longer fills half the window's own width either)
+    assert sc.in_folder.width() > sc._card_input.width() / 2
     win.close()
 
 
@@ -664,6 +666,228 @@ def test_all_files_too_few_columns_gives_an_accurate_message(qapp, tmp_path):
     text = sc.format_readout.text()
     assert "enough columns" in text and "unreadable" in text
     assert sc.format_readout.property("status") == "warn"
+    win.close()
+
+
+# --------------------------------------------------------------------------- #
+# B05: Setup splits into two columns — the rig (Input + Channels) and the leverance
+# (Output + Sample entropy) — and collapses to one below a threshold width.
+# --------------------------------------------------------------------------- #
+def test_setup_splits_into_two_columns_when_wide(qapp, tmp_path):
+    """Derives its 'wide' width from the layout's OWN measured column target (the house
+    convention — see test_section_flow.py::test_the_column_count_follows_the_width_and_
+    never_oscillates), never a hand-picked pixel literal, and asserts unconditionally: a
+    gated ``if columns_for(...) >= 2:`` around the one real assertion would let this test
+    pass even if the split silently never triggered at any realistic width — which is
+    exactly what happened here in self-review (06-08-2026): the Output card's FlowLayout
+    checkbox rows inflated ``leverance.sizeHint()`` enough that the real two-column
+    threshold sat past 1550 px, above a 1700 px-gated test's own comfort zone, but STILL
+    inside where that old test's silent skip would have hidden it. See _FlowGroup for the
+    fix (its sizeHint no longer votes with a full one-line width)."""
+    from PySide6.QtCore import QRect
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(str(tmp_path))))
+    sc = win.settings_screen
+    win.show()
+    for _ in range(4):
+        qapp.processEvents()
+    cols = sc._columns_layout
+    target, gap = cols.column_target(), cols._hgap
+    wide = 2 * target + gap + 80                   # comfortably past the 2-column floor
+    cols.setGeometry(QRect(0, 0, wide, 4000))
+    assert cols.columns_for(wide) == 2, (
+        f"two columns never afforded even at {wide}px (target={target}, gap={gap}) — "
+        f"the split is not actually happening")
+    assert sc._card_output.mapTo(sc, sc._card_output.rect().topLeft()).x() >= \
+        sc._card_input.mapTo(sc, sc._card_input.rect().topRight()).x()
+    win.close()
+
+
+def test_setup_collapses_to_one_column_when_narrow(qapp, tmp_path):
+    """Mirrors the wide test: the narrow width is derived from ``column_target()`` (one
+    pixel under the floor a single column needs to stop being the only legal answer),
+    never guessed, and the geometry assertion is unconditional."""
+    from PySide6.QtCore import QRect
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(str(tmp_path))))
+    sc = win.settings_screen
+    win.show()
+    for _ in range(4):
+        qapp.processEvents()
+    cols = sc._columns_layout
+    target = cols.column_target()
+    narrow = max(1, target - 1)                     # too narrow to afford a second column
+    cols.setGeometry(QRect(0, 0, narrow, 4000))
+    assert cols.columns_for(narrow) == 1, (
+        f"still more than one column at {narrow}px (target={target}) — the width chosen "
+        f"for 'narrow' was not actually narrow enough")
+    # a single column: rig and leverance share an x position (stacked, not side by side)
+    assert sc._card_input.mapTo(sc, sc._card_input.rect().topLeft()).x() == \
+        sc._card_output.mapTo(sc, sc._card_output.rect().topLeft()).x()
+    win.close()
+
+
+def test_setup_column_layout_never_demands_more_than_its_widest_card(qapp, tmp_path):
+    """The load-bearing half of section_flow's contract (see test_section_flow.py): one
+    column must always be a legal answer, so Setup can be squeezed to a laptop screen."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(str(tmp_path))))
+    sc = win.settings_screen
+    win.show()
+    for _ in range(4):
+        qapp.processEvents()
+    widest = max(sc._rig.minimumSizeHint().width(), sc._leverance.minimumSizeHint().width())
+    assert sc._columns_layout.minimumSize().width() <= widest + 4
+    assert sc._columns_layout.minimumSize().height() == 0, (
+        "the columns layout must not demand a minimum height — the scroll area, not the "
+        "window, absorbs the content")
+    win.close()
+
+
+def test_setup_no_max_width_cap_is_imposed(qapp, tmp_path):
+    """Item 1's explicit instruction: unlike the Advanced modals (clamped to the screen by
+    ``screen_fit`` as a top-level DIALOG — irrelevant here, Setup is a tab, not a window),
+    nothing in this screen may narrow its own or its columns' width. QLayout.maximumSize()
+    is Qt's constant sentinel regardless of any real cap (self-review finding, 06-08-2026:
+    an earlier version of this test compared that sentinel to itself, which can never fail)
+    — the actual constraint lives on the WIDGETS, so assert none of them were ever handed an
+    explicit setMaximumWidth()/setMaximumSize() below Qt's own QWIDGETSIZE_MAX default
+    (16777215 — not importable from PySide6, so read off a fresh, untouched QWidget)."""
+    from PySide6.QtWidgets import QWidget
+    from respmech.ui.main_window import MainWindow
+    qwidgetsize_max = QWidget().maximumWidth()
+    win = MainWindow(AppState(synth_settings(str(tmp_path))))
+    sc = win.settings_screen
+    for w in (sc, sc._columns_layout.parentWidget(), sc._rig, sc._leverance,
+              sc._card_input, sc._card_output):
+        assert w.maximumWidth() == qwidgetsize_max, f"{w} was given an explicit width cap"
+    win.close()
+
+
+def test_output_checkbox_groups_wrap_with_the_grouping_intact(qapp):
+    """Tables and Diagnostic figures each reflow independently rather than one long stack —
+    each FlowLayout still lists exactly its own checkboxes, in order, and no checkbox leaks
+    from one group into the other's flow."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    tables = {sc._tables_flow.itemAt(i).widget() for i in range(sc._tables_flow.count())}
+    diagnostics = {sc._diagnostics_flow.itemAt(i).widget()
+                  for i in range(sc._diagnostics_flow.count())}
+    assert tables == {sc.save_average, sc.save_bbb, sc.save_processed, sc.include_ignored}
+    assert diagnostics == {sc.save_pv_avg, sc.save_pv_ind, sc.save_raw_fig,
+                           sc.save_trimmed_fig, sc.save_drift_fig, sc.save_emg_fig}
+    assert tables.isdisjoint(diagnostics)
+    win.close()
+
+
+def test_channels_card_is_the_compact_sparkline_not_the_full_dialog_view(qapp, tmp_path):
+    """The Setup summary must actually be showing ColumnStack's sparkline mode, not the
+    full tick-labelled panels the channel-assignment dialog uses — the whole point of
+    'a compact opsummering' is that Setup no longer spends hundreds of vertical pixels on
+    axis chrome nobody can interact with."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.in_folder.setText(INPUT); sc.in_files.setText("synth_case_*.csv")
+    sc._on_inputs_changed()
+    sc._apply_channel_mapping({"flow": 5, "volume": None, "poes": 7, "pgas": 8, "pdi": 9,
+                               "emg": [], "entropy": []})
+    stack = sc.channel_summary.stack
+    assert stack is not None
+    from respmech.ui.channel_summary import SUMMARY_ROW_HEIGHT
+    assert stack.plots[0].minimumHeight() == SUMMARY_ROW_HEIGHT
+    assert stack.plots[0].getAxis("left").isVisible() is False
+    win.close()
+
+
+# --------------------------------------------------------------------------- #
+# B05: the empty format-readout row takes no space; Output gets its own sticky-folder key
+# and a suggested sibling; and a caution when Output points at the recordings folder.
+# --------------------------------------------------------------------------- #
+def test_the_empty_format_readout_row_is_hidden_not_just_blank(qapp):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    assert sc.format_readout.text() == ""
+    assert sc._input_form.isRowVisible(sc.format_readout) is False
+    sc.in_folder.setText(INPUT); sc.in_files.setText("synth_case_*.csv")
+    sc._on_inputs_changed()
+    assert sc.format_readout.text() != ""
+    assert sc._input_form.isRowVisible(sc.format_readout) is True
+    sc.in_files.setText("*.nope"); sc._on_inputs_changed()
+    # a "no files match" warning is still SOMETHING to say -> the row stays visible
+    assert sc.format_readout.text() != ""
+    assert sc._input_form.isRowVisible(sc.format_readout) is True
+    # and it must re-hide, not just stay stuck visible once shown once
+    sc.in_folder.setText(""); sc._on_inputs_changed()
+    assert sc.format_readout.text() == ""
+    assert sc._input_form.isRowVisible(sc.format_readout) is False
+    win.close()
+
+
+def test_output_browser_remembers_its_own_folder_not_the_input_ones(qapp, tmp_path, isolated_prefs, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+    from respmech.ui.main_window import MainWindow
+    in_dir = tmp_path / "recordings"; in_dir.mkdir()
+    out_dir = tmp_path / "results"; out_dir.mkdir()
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory",
+                        staticmethod(lambda *a, **k: str(in_dir)))
+    sc._browse(sc.in_folder, folder=True)
+    assert isolated_prefs.last_folder("browse", ".") == str(in_dir)
+    assert isolated_prefs.last_folder("browse_output", ".") == "."   # untouched by the input pick
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory",
+                        staticmethod(lambda *a, **k: str(out_dir)))
+    sc._browse(sc.out_folder, folder=True)
+    assert isolated_prefs.last_folder("browse_output", ".") == str(out_dir)
+    assert isolated_prefs.last_folder("browse", ".") == str(in_dir)   # untouched by the output pick
+    win.close()
+
+
+def test_choosing_the_input_folder_suggests_a_sibling_output_folder(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+    from respmech.ui.main_window import MainWindow
+    in_dir = tmp_path / "study" / "recordings"; in_dir.mkdir(parents=True)
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.out_folder.setText("")                          # the guided ('New analysis') state
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory",
+                        staticmethod(lambda *a, **k: str(in_dir)))
+    sc._browse(sc.in_folder, folder=True)
+    assert sc.out_folder.text() == str(in_dir.parent / "respmech-output")
+    assert sc.state.settings.output.folder == sc.out_folder.text()   # committed via to_state
+    win.close()
+
+
+def test_a_manually_entered_output_folder_is_never_overwritten_by_the_suggestion(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+    from respmech.ui.main_window import MainWindow
+    in_dir = tmp_path / "recordings"; in_dir.mkdir()
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.out_folder.setText(str(tmp_path / "chosen-by-the-user"))
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory",
+                        staticmethod(lambda *a, **k: str(in_dir)))
+    sc._browse(sc.in_folder, folder=True)
+    assert sc.out_folder.text() == str(tmp_path / "chosen-by-the-user")
+    win.close()
+
+
+def test_output_equal_to_input_is_cautioned(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    same = tmp_path / "shared"; same.mkdir()
+    assert sc._output_is_input_folder() is False       # both blank
+    sc.in_folder.setText(str(same)); sc.out_folder.setText(str(same))
+    sc._on_inputs_changed()
+    assert sc._output_is_input_folder() is True
+    assert "recordings folder" in sc.qc.text()
+    sc.out_folder.setText(str(tmp_path / "elsewhere")); sc._on_field_changed()
+    assert sc._output_is_input_folder() is False
+    assert "recordings folder" not in sc.qc.text()
     win.close()
 
 

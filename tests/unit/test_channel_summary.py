@@ -164,13 +164,27 @@ def test_a_column_with_two_roles_names_both(qapp):
 
 
 def test_the_previews_are_shorter_here_than_in_the_dialog(qapp):
-    """A readout, not a working surface — but not so short that the axis text clips."""
-    from respmech.ui.column_stack import BOTTOM_AXIS_EXTRA, ROW_HEIGHT
+    """A readout, not a working surface: a low sparkline (ticket B05) with no axis
+    apparatus at all, so unlike the dialog's full ColumnStack there is no axis text left to
+    clip and every row — including the last — is the same, uniformly short, height."""
+    from respmech.ui.column_stack import ROW_HEIGHT
     from respmech.ui.channel_summary import SUMMARY_ROW_HEIGHT
     assert SUMMARY_ROW_HEIGHT < ROW_HEIGHT
     ch = _channels(flow=5, poes=7)
     m, names = _matrix()
     su = ChannelSummary().show_mapping(ch, matrix=m, names=names)
     assert su.stack.plots[0].minimumHeight() == SUMMARY_ROW_HEIGHT
-    # the last row also carries the tick values and the "Time (s)" label
-    assert su.stack.plots[-1].minimumHeight() == SUMMARY_ROW_HEIGHT + BOTTOM_AXIS_EXTRA
+    # unlike the dialog, no row reserves extra height for a time axis — it is hidden
+    assert su.stack.plots[-1].minimumHeight() == SUMMARY_ROW_HEIGHT
+
+
+def test_the_summary_has_no_visible_axis(qapp):
+    """The compact readout shows the SHAPE of a signal, not values one could read off it —
+    the header text already names the role/column/source-name, so a tick-labelled axis
+    would only repeat that while costing the vertical space the summary exists to save."""
+    ch = _channels(flow=5, poes=7)
+    m, names = _matrix()
+    su = ChannelSummary().show_mapping(ch, matrix=m, names=names)
+    for plot in su.stack.plots:
+        assert plot.getAxis("left").isVisible() is False
+        assert plot.getAxis("bottom").isVisible() is False

@@ -17,6 +17,8 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 import pyqtgraph as pg
 
+from respmech.ui.plot_axis import MinPitchAxis
+
 try:
     from respmech.ui import theme as _theme
 except Exception:  # pragma: no cover
@@ -120,12 +122,19 @@ class ColumnStack(QWidget):
     """
 
     def __init__(self, fs, columns=None, header_factory=None, row_height=ROW_HEIGHT,
-                 parent=None):
+                 parent=None, sparkline=False):
         super().__init__(parent)
         self._fs = fs or 1.0
         self._columns = columns
         self._header_factory = header_factory
         self._row_height = row_height
+        # B05: a caller-facing readout (Setup's channel summary) wants the signal visible
+        # but without any axis apparatus — the header text already says the role, the
+        # column and its name, so tick labels and a time axis would only repeat what the
+        # row already says while eating the vertical space that made the card tall in the
+        # first place. The channel-assignment DIALOG keeps the full, editable ColumnStack
+        # (the one place a user needs the axis to actually read a value off the trace).
+        self._sparkline = bool(sparkline)
         self._prefixes = {}
         self._names = []
         self.pal = plot_palette()
@@ -158,15 +167,27 @@ class ColumnStack(QWidget):
             cv.addLayout(head)
 
             last = row == len(cols) - 1
-            plot = pg.PlotWidget()
+            # MinPitchAxis (ticket B05): these rows are short even in the full (dialog)
+            # mode — 74 px — and pyqtgraph draws its top tick level unconditionally, so a
+            # left axis without this thins its own labels apart instead of overlapping
+            # them. Harmless when the axis is hidden below (sparkline mode never draws it).
+            plot = pg.PlotWidget(axisItems={"left": MinPitchAxis(orientation="left")})
             plot.setBackground(pal["bg"])
-            plot.setFixedHeight(self._row_height + (BOTTOM_AXIS_EXTRA if last else 0))
+            if self._sparkline:
+                # No axis apparatus at all: the header text already names the role, the
+                # column and its source name, so ticks/time-axis would only repeat that
+                # while costing the vertical space a compact summary exists to save.
+                plot.hideAxis("left")
+                plot.hideAxis("bottom")
+                plot.setFixedHeight(self._row_height)
+            else:
+                plot.setFixedHeight(self._row_height + (BOTTOM_AXIS_EXTRA if last else 0))
+                if _theme is not None:
+                    _theme.align_left_axis(plot)   # stacked column previews share one left margin
+                plot.getAxis("bottom").setStyle(showValues=last)
             plot.setMenuEnabled(False)
             plot.getViewBox().setMouseEnabled(x=False, y=False)
             plot.hideButtons()                          # no auto-range 'A' in the corner
-            if _theme is not None:
-                _theme.align_left_axis(plot)       # stacked column previews share one left margin
-            plot.getAxis("bottom").setStyle(showValues=last)
             role = "" if roles is None else roles.get(i, "")
             # A saved mapping can name a column this file does not have — a re-export with
             # fewer channels, say. Draw the row blank rather than raising: the row still
@@ -174,7 +195,7 @@ class ColumnStack(QWidget):
             y = matrix[:, i] if i < matrix.shape[1] else np.full(matrix.shape[0], np.nan)
             curve = plot.plot(t[:len(y)], y, pen=pg.mkPen(role_color(pal, role), width=1),
                               connect="finite")
-            if last:
+            if last and not self._sparkline:
                 plot.setLabel("bottom", "Time (s)")
             if prev is not None:
                 plot.setXLink(prev)

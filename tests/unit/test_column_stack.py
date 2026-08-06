@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QLabel
 
 from respmech.ui.column_stack import (ASSIGNABLE, ColumnStack, ROLE_NAMES, ROLES,
                                       name_suffix, role_color)
+from respmech.ui.plot_axis import MinPitchAxis
 
 
 def _matrix(n=200, cols=6):
@@ -112,6 +113,36 @@ def test_one_column_is_accepted(qapp):
     """A single-channel recording arrives as a 1-D array from some paths."""
     st = ColumnStack(1000, columns=[0]).build(np.arange(50.0), ["only"])
     assert len(st.plots) == 1 and len(st.curves[0].getData()[0]) == 50
+
+
+# -- B05: MinPitchAxis + the compact sparkline mode -----------------------------
+def test_rows_use_min_pitch_axis_by_default(qapp):
+    """Even the dialog's rows (74 px) are short enough that pyqtgraph's top tick level can
+    overlap itself; every ColumnStack row gets the thinning axis, not just Preview's."""
+    m, names = _matrix()
+    st = ColumnStack(1000, columns=[0]).build(m, names)
+    assert isinstance(st.plots[0].getAxis("left"), MinPitchAxis)
+
+
+def test_sparkline_mode_hides_the_axes_and_is_uniformly_short(qapp):
+    m, names = _matrix()
+    st = ColumnStack(1000, columns=[0, 1, 2], row_height=20, sparkline=True).build(m, names)
+    for plot in st.plots:
+        assert plot.getAxis("left").isVisible() is False
+        assert plot.getAxis("bottom").isVisible() is False
+        assert plot.minimumHeight() == 20              # no extra height for a hidden time axis
+    assert st.plots[-1].getAxis("bottom").labelText == ""
+
+
+def test_non_sparkline_mode_keeps_the_last_row_time_axis(qapp):
+    """The channel-assignment dialog is unaffected by the sparkline addition: only the
+    last row shows tick values, and it still carries the 'Time (s)' label."""
+    m, names = _matrix()
+    st = ColumnStack(1000, columns=[0, 1]).build(m, names)
+    assert st.plots[0].getAxis("bottom").style["showValues"] is False
+    assert st.plots[1].getAxis("bottom").style["showValues"] is True
+    assert st.plots[1].getAxis("bottom").labelText == "Time (s)"
+    assert st.plots[0].getAxis("left").isVisible() is True
 
 
 # -- the vocabulary the two views must agree on --------------------------------
