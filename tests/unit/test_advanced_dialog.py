@@ -329,6 +329,51 @@ def test_breath_count_overrides_survive_the_modal(qapp, tmp_path, monkeypatch):
     pv.shutdown()
 
 
+def test_breath_count_overrides_are_stamped_with_the_current_input_folder(qapp, tmp_path, monkeypatch):
+    """Ticket B06: every line the box commits belongs to the CURRENT input folder — the
+    box holds one flat list, so re-parsing it always relabels the whole thing fresh, which
+    is correct here (the user is looking at THIS folder's batch while editing it)."""
+    from _helpers import INPUT
+    pv = _preview(qapp, tmp_path)
+    _mech_stub(monkeypatch, lambda d: d.widget("breath_counts").setPlainText(
+        "synth_case_A.csv = 12\nsynth_case_B.csv = 9"))
+    pv._open_mech_advanced()
+    counts = pv.state.settings.processing.breath_counts
+    assert {c.file: c.folder for c in counts} == {
+        "synth_case_A.csv": INPUT, "synth_case_B.csv": INPUT}
+    pv.shutdown()
+
+
+def test_an_untouched_breath_count_box_never_gets_reparsed_or_restamped(qapp, tmp_path, monkeypatch):
+    """_parse_breath_counts only ever runs when the user actually edited the field
+    (edited_values() gates on that) — OK without touching this box must be a pure no-op,
+    never silently restamping folders on entries the user never looked at."""
+    from respmech.core.settings import BreathCountEntry
+    pv = _preview(qapp, tmp_path)
+    original = BreathCountEntry(file="synth_case_A.csv", count=12, folder="/some/old/folder")
+    pv.state.settings.processing.breath_counts = [original]
+    _mech_stub(monkeypatch, lambda d: None)      # OK without touching anything
+    pv._open_mech_advanced()
+    assert pv.state.settings.processing.breath_counts == [original]
+    assert pv.state.settings.processing.breath_counts[0].folder == "/some/old/folder"
+    pv.shutdown()
+
+
+def test_the_per_file_overrides_card_points_at_the_file_rail_for_exclusions(qapp, tmp_path, monkeypatch):
+    """Ticket B06 point 5: a user looking for where exclusions are tracked would
+    reasonably check this card (the only "per-file" thing in Mechanics — advanced) and,
+    finding nothing, conclude exclusions aren't tracked at all. The card must now say
+    where they actually live."""
+    from PySide6.QtWidgets import QLabel
+    pv = _preview(qapp, tmp_path)
+    captured = {}
+    _mech_stub(monkeypatch, lambda d: captured.setdefault("dlg", d))
+    pv._open_mech_advanced()
+    texts = [w.text() for w in captured["dlg"].findChildren(QLabel)]
+    assert any("file rail" in t and "exclu" in t.lower() for t in texts)
+    pv.shutdown()
+
+
 def test_the_emg_advanced_modal_hosts_the_rms_settings(qapp, tmp_path, monkeypatch):
     """RMS window, outlier limit and normalisation left Setup for the EMG Advanced modal."""
     pv = _preview(qapp, tmp_path)

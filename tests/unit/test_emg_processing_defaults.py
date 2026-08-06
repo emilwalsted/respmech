@@ -196,6 +196,27 @@ def test_the_picker_writes_both_halves_together(qapp, tmp_path):
     win.close()
 
 
+def test_setting_the_noise_reference_stamps_the_current_input_folder(qapp, tmp_path):
+    """Ticket B06: NoiseSettings.reference_folder lets the carried-over banner tell a
+    reference chosen against one recordings folder apart from one chosen against another
+    that happens to share the reference filename."""
+    from respmech.ui.main_window import MainWindow
+    from _helpers import INPUT
+    s = synth_settings(str(tmp_path), noise=True, data_out=_OUT)
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files()
+    pv.file_rail.select_filename("synth_case_A.csv")
+
+    pv._apply_noise_expiration()
+    assert s.processing.emg.noise.reference_folder == INPUT
+
+    s.processing.emg.noise.reference_folder = "/a/different/folder"   # simulate a stale tag
+    pv._apply_noise_reference(2.0, 4.0)
+    assert s.processing.emg.noise.reference_folder == INPUT           # restamped on re-apply
+    win.close()
+
+
 def test_the_noise_enable_checkbox_is_reachable_to_turn_noise_on(qapp, tmp_path):
     """Regression (change 5): the enable checkbox was placed inside the noise_opts chip,
     which _update_actions disables while noise is off — and a Qt child of a disabled parent

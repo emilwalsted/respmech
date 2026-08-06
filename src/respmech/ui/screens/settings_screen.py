@@ -278,6 +278,39 @@ class SettingsScreen(QWidget):
         self.qc.setProperty("banner", True)   # the box comes from the QSS, not extra margins
         outer.addWidget(self.qc)
 
+        # Carried-over exclusions/breath-counts/noise-reference banner: shown only when the
+        # input folder just changed AND state named against a DIFFERENT (or unrecorded)
+        # folder is still sitting in the analysis — see core.settings.carried_over_state.
+        # Two explicit choices, no default: "Keep" just dismisses (the state was never
+        # touched, so it still applies exactly as it did before — an inherited exclusion is
+        # only ever hatched/named differently in Preview, never silently dropped); "Clear"
+        # actually removes it. Pinned beside the QC strip, not inside the scrolling form, so
+        # it is seen without hunting for it.
+        self.carried_banner = QWidget()
+        self.carried_banner.setVisible(False)
+        cb = QHBoxLayout(self.carried_banner)
+        cb.setContentsMargins(0, 0, 0, 0)
+        self.carried_label = QLabel("")
+        self.carried_label.setWordWrap(True)
+        self.carried_label.setProperty("banner", True)
+        self.carried_label.setProperty("status", "warn")
+        cb.addWidget(self.carried_label, 1)
+        self.btn_carried_keep = QPushButton("Keep")
+        self.btn_carried_keep.setProperty("compact", True)
+        self.btn_carried_keep.setToolTip(
+            "Dismiss this notice. Nothing is changed — the carried-over state keeps "
+            "applying exactly as before, shown hatched in Preview & QC.")
+        self.btn_carried_keep.clicked.connect(self._dismiss_carried_banner)
+        self.btn_carried_clear = QPushButton("Clear")
+        self.btn_carried_clear.setProperty("compact", True)
+        self.btn_carried_clear.setToolTip(
+            "Remove the exclusions/breath-count overrides/noise reference that belong to "
+            "the previous recordings folder.")
+        self.btn_carried_clear.clicked.connect(self._clear_carried_banner)
+        cb.addWidget(self.btn_carried_keep)
+        cb.addWidget(self.btn_carried_clear)
+        outer.addWidget(self.carried_banner)
+
         # B04: progressive disclosure is retired — every card (Input/Channels/Output) is
         # visible from the first frame in every mode. Only cards whose RELEVANCE depends on
         # the analysis itself still hide/show (_cond_cards, ANDed in its own pass by
@@ -420,6 +453,11 @@ class SettingsScreen(QWidget):
         # (self-review finding, 05-08-2026) — a separate _update_qc() call here would read
         # the manifest from BEFORE this rebuild (stale, or None on the very first call).
         self._update_format_readout()       # P28 detected-format read-out
+        # a freshly opened analysis can ALREADY carry state from a folder other than the
+        # one it currently names — most commonly one written before this field existed
+        # (folder is unrecorded, which counts as carried too, see is_carried_folder) — so
+        # this has to be checked here, not only after a live folder edit.
+        self._update_carried_banner()
 
     def to_state(self):
         s = self.state.settings
@@ -453,9 +491,14 @@ class SettingsScreen(QWidget):
 
     def set_noise_reference(self, file, intervals, use_expiration):
         """Record that the picker chose a noise reference. The picker (Preview) is the only
-        writer of the three fields and shows the read-out itself now; Setup just marks the
-        analysis modified."""
+        writer of the four fields (Preview also stamps reference_folder — see
+        preview/_emg_noise.py) and shows the read-out itself now; Setup just marks the
+        analysis modified and, since picking a reference can resolve carried-over state the
+        banner is showing, refreshes it (this signal is Preview's only path to Setup for a
+        noise-reference edit — the generic pv.settings_edited that other Preview edits use
+        for this same refresh is not emitted here)."""
         self._mark_dirty()   # a picked noise reference is a user edit that lands in the .toml
+        self._update_carried_banner()
         where = "every expiration" if use_expiration else "a marked rest span"
         self._set_status(f"Noise reference set from {file}: {where}.")
 
@@ -569,14 +612,66 @@ class SettingsScreen(QWidget):
     def _on_inputs_changed(self, *_):
         if self._loading:
             return
+        prev_folder = self.state.settings.input.folder
         self.to_state()
         raw_mask = self.state.settings.input.files   # captured BEFORE narrowing, for the manifest
         self._normalize_mask()      # keep the mask a single pattern the core runner can glob
         self._mark_dirty()
         self._update_format_readout(raw_mask=raw_mask)
+        # only a REAL folder change (not a files-mask-only edit, which fires this same
+        # handler, and not a field re-committed unchanged) can make previously-fine state
+        # start naming the wrong folder — see core.settings.carried_over_state.
+        if self.state.settings.input.folder != prev_folder:
+            self._update_carried_banner()
         self.inputs_changed.emit()
         self.settings_changed.emit()
         self._update_disclosure()   # last, so this screen's own validation status wins (see above)
+
+    def _update_carried_banner(self):
+        """Show/hide the carried-over exclusions/breath-counts/noise-reference notice —
+        see core.settings.carried_over_state, and the banner built in _build()."""
+        from respmech.core.settings import carried_over_state
+        state = carried_over_state(self.state.settings)
+        if not state:
+            self.carried_banner.setVisible(False)
+            return
+        parts = []
+        if state.exclude_files:
+            parts.append(f"breath exclusions for {self._named_by_filename(state.exclude_files)}")
+        if state.breath_count_files:
+            parts.append("breath-count overrides for "
+                         f"{self._named_by_filename(state.breath_count_files)}")
+        if state.noise_reference:
+            parts.append("the EMG noise reference")
+        self.carried_label.setText(
+            "This analysis still has " + "; ".join(parts) + " set against a DIFFERENT "
+            "recordings folder than the one now loaded. Keep them if you want the same "
+            "choices reapplied here; clear them if they belong to the other folder.")
+        self.carried_banner.setVisible(True)
+
+    @staticmethod
+    def _named_by_filename(names, limit=3):
+        """'a, b, c' for up to ``limit`` plain filenames, then '+N more' — same shape as
+        _named_list, which takes manifest File objects rather than bare strings."""
+        text = ", ".join(names[:limit])
+        extra = len(names) - limit
+        return text + (f", +{extra} more" if extra > 0 else "")
+
+    def _dismiss_carried_banner(self):
+        """"Keep": nothing is mutated — the carried-over state keeps applying exactly as it
+        already did (an inherited exclusion is only ever drawn differently, in Preview &
+        QC's overlay), this only stops the notice asking again this session."""
+        self.carried_banner.setVisible(False)
+
+    def _clear_carried_banner(self):
+        from respmech.core.settings import clear_carried_over
+        clear_carried_over(self.state.settings)
+        self._mark_dirty()
+        self.carried_banner.setVisible(False)
+        # exclude_breaths/breath_counts/the noise reference all just changed — the same
+        # signal a live edit of any of them would emit, so Preview & QC's rail badges and
+        # overlay pick the clear up the same way they would any other settings edit.
+        self.settings_changed.emit()
 
     def _delimiter_label(self, manifest):
         """A deterministic delimiter label from the format actually being parsed — never

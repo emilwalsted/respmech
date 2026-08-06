@@ -20,12 +20,25 @@ def _rebase_folders(settings: Settings, base: str) -> None:
     directory), not the process CWD. A frozen app's CWD is the install dir / System32, so
     a shared analysis carrying the default relative 'input'/'output' folders would
     otherwise read from and write to the wrong place (often a PermissionError after a full
-    run). The EMG noise reference is left as-is — a bare filename is resolved against the
-    input folder downstream."""
+    run). The EMG noise reference FILE is left as-is — a bare filename is resolved against
+    the input folder downstream.
+
+    The carried-folder provenance tags (ExcludeEntry/BreathCountEntry.folder,
+    NoiseSettings.reference_folder — see core.settings.carried_over_state) are rebased the
+    SAME way, for the same reason: they are compared directly against the live, rebased
+    ``settings.input.folder`` (core.settings.is_carried_folder), and a shared/moved study
+    that only rebased input.folder itself would make every entry look falsely carried over
+    the moment it was reopened somewhere else."""
     for obj, attr in ((settings.input, "folder"), (settings.output, "folder")):
         val = getattr(obj, attr)
         if val and not os.path.isabs(val):
             setattr(obj, attr, os.path.normpath(os.path.join(base, val)))
+    for entry in (*settings.processing.exclude_breaths, *settings.processing.breath_counts):
+        if entry.folder and not os.path.isabs(entry.folder):
+            entry.folder = os.path.normpath(os.path.join(base, entry.folder))
+    noise = settings.processing.emg.noise
+    if noise.reference_folder and not os.path.isabs(noise.reference_folder):
+        noise.reference_folder = os.path.normpath(os.path.join(base, noise.reference_folder))
 
 
 def load_toml(path: str | Path) -> Settings:
@@ -69,6 +82,16 @@ def save_toml(settings: Settings, path: str | Path) -> None:
         sec = data.get(section)
         if isinstance(sec, dict) and sec.get("folder"):
             sec["folder"] = _relativize_folder(sec["folder"], base)
+    # inverse of the carried-folder rebase in _rebase_folders — see its docstring.
+    proc = data.get("processing")
+    if isinstance(proc, dict):
+        for key in ("exclude_breaths", "breath_counts"):
+            for entry in proc.get(key) or ():
+                if isinstance(entry, dict) and entry.get("folder"):
+                    entry["folder"] = _relativize_folder(entry["folder"], base)
+        noise = (proc.get("emg") or {}).get("noise")
+        if isinstance(noise, dict) and noise.get("reference_folder"):
+            noise["reference_folder"] = _relativize_folder(noise["reference_folder"], base)
     with open(path, "wb") as f:
         f.write(tomli_w.dumps(data).encode("utf-8"))
 

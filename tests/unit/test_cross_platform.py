@@ -224,6 +224,69 @@ def test_toml_open_save_roundtrip_keeps_folders_relative(tmp_path):
     assert raw["output"]["folder"] == "output"
 
 
+# --- carried-folder provenance tags: rebased/relativized like input/output.folder --------
+def test_load_toml_rebases_carried_folder_tags_against_file_dir(tmp_path):
+    """ExcludeEntry/BreathCountEntry.folder and NoiseSettings.reference_folder are compared
+    directly against the live, rebased settings.input.folder (core.settings.
+    is_carried_folder) — so they must go through the exact same relative->absolute rebase
+    input.folder/output.folder already get, or a portable (relative-folder) analysis would
+    look falsely carried over the moment it's reopened anywhere but the machine that wrote
+    it."""
+    from respmech.settingsio.toml_io import load_toml, save_toml
+    from respmech.core.settings import Settings, ExcludeEntry, BreathCountEntry
+    sub = tmp_path / "study"
+    sub.mkdir()
+    s = Settings()
+    s.input.folder = "input"
+    s.processing.exclude_breaths.append(ExcludeEntry(file="x.csv", breaths=[2], folder="input"))
+    s.processing.breath_counts.append(BreathCountEntry(file="x.csv", count=9, folder="input"))
+    s.processing.emg.noise.reference_file = "x.csv"
+    s.processing.emg.noise.reference_intervals = [[0.0, 1.0]]
+    s.processing.emg.noise.reference_folder = "input"
+    save_toml(s, str(sub / "analysis.toml"))
+    loaded = load_toml(str(sub / "analysis.toml"))
+    want = os.path.normpath(str(sub / "input"))
+    assert loaded.input.folder == want
+    assert loaded.processing.exclude_breaths[0].folder == want
+    assert loaded.processing.breath_counts[0].folder == want
+    assert loaded.processing.emg.noise.reference_folder == want
+
+
+def test_load_toml_leaves_external_absolute_carried_folder_tags_untouched(tmp_path):
+    from respmech.settingsio.toml_io import load_toml, save_toml
+    from respmech.core.settings import Settings, ExcludeEntry
+    ext = tmp_path / "external"
+    ext.mkdir()
+    abs_in = os.path.normpath(str(ext / "in"))
+    sub = tmp_path / "study"
+    sub.mkdir()
+    s = Settings()
+    s.input.folder = abs_in
+    s.processing.exclude_breaths.append(ExcludeEntry(file="x.csv", breaths=[1], folder=abs_in))
+    save_toml(s, str(sub / "a.toml"))
+    loaded = load_toml(str(sub / "a.toml"))
+    assert loaded.processing.exclude_breaths[0].folder == abs_in
+
+
+def test_toml_open_save_roundtrip_keeps_carried_folder_tags_relative(tmp_path):
+    import tomllib
+    from respmech.settingsio.toml_io import load_toml, save_toml
+    from respmech.core.settings import Settings, ExcludeEntry
+    sub = tmp_path / "study"
+    sub.mkdir()
+    p = str(sub / "analysis.toml")
+    s = Settings()
+    s.input.folder = "input"
+    s.processing.exclude_breaths.append(ExcludeEntry(file="x.csv", breaths=[1], folder="input"))
+    save_toml(s, p)
+    loaded = load_toml(p)                             # rebases to absolute for the run
+    assert os.path.isabs(loaded.processing.exclude_breaths[0].folder)
+    save_toml(loaded, p)                              # …and Save must re-relativize
+    with open(p, "rb") as f:
+        raw = tomllib.load(f)
+    assert raw["processing"]["exclude_breaths"][0]["folder"] == "input"
+
+
 # --- recent-analyses: case-insensitive dedup on a case-insensitive FS --------
 def test_recent_analyses_dedups_case_insensitively(qapp, isolated_prefs, monkeypatch):
     """On Windows (case-insensitive FS) the same analysis opened under different casing

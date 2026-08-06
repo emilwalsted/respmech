@@ -2,6 +2,8 @@
 state, replacing Preview & QC's plain ``file_combo`` and Run & results' ``files_table``.
 Pure widget-level tests against :class:`respmech.ui.file_rail.FileRail` — no
 ``MainWindow``/screen needed, since the widget carries no dependency on either."""
+from PySide6.QtCore import Qt
+
 from respmech.ui.file_rail import FileRail
 from respmech.ui.manifest import FileEntry, Manifest, manifest_from_filenames
 
@@ -165,6 +167,49 @@ def test_exclusion_badge_visible_without_selecting_the_file(qapp):
     assert rail.entry("b.csv").excluded_count == 3
     text = rail._model.data(rail._model.index(1))     # the row's DisplayRole text
     assert "3" in text and "excl" in text
+
+
+def test_carried_over_exclusion_gets_its_own_glyph_and_tooltip_note(qapp):
+    """Ticket B06: a filename's exclusion recorded against a DIFFERENT recordings folder
+    reads differently from an ordinary one — the row text carries a distinct marker (not
+    just the same '[N excl]') and the tooltip names why."""
+    rail = FileRail()
+    rail.set_manifest(_manifest(["a.csv", "b.csv"]))
+    rail.set_excluded_count("a.csv", 2, carried=False)
+    rail.set_excluded_count("b.csv", 2, carried=True)
+    plain = rail._model.data(rail._model.index(0))
+    carried = rail._model.data(rail._model.index(1))
+    assert "2 excl" in plain and "2 excl" in carried
+    assert plain != carried                              # visibly distinguishable
+    tip_plain = rail._model.data(rail._model.index(0), role=Qt.ToolTipRole)
+    tip_carried = rail._model.data(rail._model.index(1), role=Qt.ToolTipRole)
+    assert "carried over" not in tip_plain
+    assert "carried over" in tip_carried
+
+
+def test_carried_flag_survives_a_manifest_rebuild_for_persisting_filenames(qapp):
+    rail = FileRail()
+    rail.set_manifest(_manifest(["a.csv"]))
+    rail.set_excluded_count("a.csv", 2, carried=True)
+    rail.set_manifest(_manifest(["a.csv", "b.csv"]))
+    assert rail.entry("a.csv").excluded_carried is True
+
+
+def test_carried_defaults_to_false_and_a_bare_count_update_does_not_reset_it():
+    """set_excluded_count is called from more than one place (a toggle, a rail sync);
+    a caller that only wants to update the count and does not pass carried should not
+    silently CLEAR a carried flag another caller just set for the same file."""
+    from respmech.ui.file_rail import FileRailModel
+    model = FileRailModel()
+    model.set_manifest(_manifest(["a.csv"]))
+    model.set_excluded_count("a.csv", 2, carried=True)
+    assert model.entry("a.csv").excluded_carried is True
+    # explicit re-affirmation, same as _sync_rail_exclusions does every time it runs
+    model.set_excluded_count("a.csv", 2, carried=True)
+    assert model.entry("a.csv").excluded_carried is True
+    # an explicit carried=False (a confirming click — see _toggle_breath) does reset it
+    model.set_excluded_count("a.csv", 2, carried=False)
+    assert model.entry("a.csv").excluded_carried is False
 
 
 def test_mark_result_updates_verdict_and_breaths(qapp):

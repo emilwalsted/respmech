@@ -89,6 +89,48 @@ def test_qc_overview_ok_and_warn(qapp):
     win.close()
 
 
+def test_qc_overview_names_a_carried_over_exclusion(qapp, tmp_path):
+    """Ticket B06: the QC line must say when the excluded count includes breaths carried
+    over from a different recordings folder — not just report a bare number, which is
+    exactly what made the original bug invisible."""
+    from respmech.core.settings import ExcludeEntry
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    s = synth_settings("")
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    pv._toggle_breath(a_breath)
+    fr = run_batch(s).ok_files["synth_case_A.csv"]
+    pv._update_qc_overview(fr)
+    assert "excluded" in pv.qc_overview.text() and "carried over" not in pv.qc_overview.text()
+    # restamp the SAME entry to a different folder, without touching its breaths — the
+    # "switched folders, never revisited this file" case
+    entry = next(e for e in s.processing.exclude_breaths if e.file == "synth_case_A.csv")
+    entry.folder = str(tmp_path / "a-different-folder")
+    pv._update_qc_overview(fr)
+    assert "carried over from a previous recordings folder" in pv.qc_overview.text()
+    win.close()
+
+
+def test_breath_brush_hatches_a_carried_exclusion_not_an_ordinary_one(qapp):
+    """The overlay's own visual distinction (ticket B06 point 3): an ordinary exclusion is
+    solid, a carried-over one is hatched — never the same brush style, so the two are never
+    visually indistinguishable, and an included breath ignores `carried` entirely (there is
+    nothing to distinguish when nothing is excluded)."""
+    from PySide6.QtCore import Qt
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings("")
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    assert pv._breath_brush(False, carried=True).style() == pv._breath_brush(False, carried=False).style()
+    solid = pv._breath_brush(True, carried=False)
+    hatched = pv._breath_brush(True, carried=True)
+    assert solid.style() == Qt.SolidPattern
+    assert hatched.style() != Qt.SolidPattern
+    assert solid.style() != hatched.style()
+    win.close()
+
+
 # --------------------------------------------------------------------------- #
 # B02 — the file rail's per-file state + the QC chip/'Process & write' reset discipline
 # --------------------------------------------------------------------------- #
@@ -236,6 +278,129 @@ def test_sync_rail_exclusions_clears_a_stale_badge_from_a_previous_analysis(qapp
     pv.sync_from_settings()
     assert pv.file_rail.entry(name).excluded_count == 0, (
         "the previous analysis's exclusion badge must not survive switching analyses")
+    win.close()
+
+
+# --------------------------------------------------------------------------- #
+# B06 — carried-over exclusions are named, not silently reapplied
+# --------------------------------------------------------------------------- #
+def test_switching_folders_names_the_carried_exclusion_and_clear_actually_changes_compute(
+        qapp, tmp_path):
+    """The ticket's own reproduction: two folders, each with a file of the same name,
+    breaths excluded in the first. Switching to the second must not apply them invisibly
+    — but MUST still apply them (unchanged numeric behaviour, matching the pre-ticket
+    result) until the user explicitly clears them, at which point compute's own output —
+    not just what the file rail/overlay draw — demonstrably changes. Asserts on
+    run_batch's actual breath count in both branches, per the ticket's own instruction not
+    to trust the interface alone."""
+    import shutil
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    from respmech.core.settings import clear_carried_over, is_carried_folder
+
+    name = "sample_recording.csv"
+    s01 = tmp_path / "S01"; s01.mkdir()
+    s02 = tmp_path / "S02"; s02.mkdir()
+    shutil.copy(os.path.join(INPUT, "synth_case_A.csv"), s01 / name)
+    shutil.copy(os.path.join(INPUT, "synth_case_A.csv"), s02 / name)
+
+    s = synth_settings(str(tmp_path / "out"))
+    s.input.folder = str(s01)
+    s.input.files = name
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    pv._refresh_files(); pv.file_rail.select_filename(name)
+    from respmech.ui.workers import stage_mechanics_preview
+    pv._render_preview(stage_mechanics_preview(s, str(s01 / name)))
+    a_breath = next(iter(pv._breath_spans))
+    pv._toggle_breath(a_breath)                      # excluded in S01
+    entry = next(e for e in s.processing.exclude_breaths if e.file == name)
+    assert entry.folder == str(s01)                  # stamped with the folder it was made in
+
+    total_breaths = len(pv._breath_spans)
+    baseline = run_batch(s).ok_files[name]
+    assert len(baseline.breaths_table) == total_breaths - 1   # the exclusion took effect
+
+    # switch to S02 — same filename, no user interaction with THIS file's exclusions
+    s.input.folder = str(s02)
+    pv.refresh_files()                                # what MainWindow wires inputs_changed to
+    assert is_carried_folder(entry.folder, s.input.folder) is True
+    pv.file_rail.select_filename(name)
+    assert pv._exclusion_carried_for(name) is True
+    assert pv.file_rail.entry(name).excluded_carried is True
+
+    # named, not silently applied — but NOT silently dropped either: the same list still
+    # gives the same number until the user explicitly says otherwise (no golden change).
+    still_applied = run_batch(s).ok_files[name]
+    assert len(still_applied.breaths_table) == total_breaths - 1
+
+    clear_carried_over(s)                             # the banner's "Clear" action
+    assert not any(e.file == name for e in s.processing.exclude_breaths)
+    cleared = run_batch(s).ok_files[name]
+    assert len(cleared.breaths_table) == total_breaths   # compute itself now excludes nothing
+    win.close()
+
+
+def test_toggling_one_breath_does_not_launder_the_rest_of_a_carried_entry(qapp, tmp_path):
+    """Self-review finding: entry.folder is ONE tag for the whole file, but a click only
+    ever decides ONE breath. Un-excluding breath #1 of a carried entry that ALSO still
+    excludes breath #2 (which this click never touched) must not silently promote #2 to
+    'confirmed for this folder' too — only a fresh entry (created here) or the Setup
+    banner's explicit Clear may change what an entry's folder tag says."""
+    from respmech.core.settings import ExcludeEntry, is_carried_folder
+    from respmech.ui.main_window import MainWindow
+    other_folder = str(tmp_path / "a-different-folder")     # never actually loaded/scanned
+    s = synth_settings("")                                   # s.input.folder stays INPUT (real)
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    spans = sorted(pv._breath_spans)
+    b1, b2 = spans[0], spans[1]
+    s.processing.exclude_breaths.append(
+        ExcludeEntry(file="synth_case_A.csv", breaths=[b1, b2], folder=other_folder))  # carried
+
+    pv._toggle_breath(b1)                              # un-exclude b1 only
+    entry = next(e for e in s.processing.exclude_breaths if e.file == "synth_case_A.csv")
+    assert entry.breaths == [b2]
+    assert entry.folder == other_folder, (
+        "an EXISTING entry's folder must not be restamped by a plain toggle")
+    assert is_carried_folder(entry.folder, s.input.folder) is True   # b2 still reads carried
+    win.close()
+
+
+def test_a_brand_new_entry_is_still_stamped_fresh(qapp, tmp_path):
+    """The other half of the same fix: a file with NO prior exclusion at all must still get
+    a fresh, current-folder entry on its very first toggle — only an EXISTING entry is left
+    alone."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings("")
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    pv._toggle_breath(a_breath)
+    entry = next(e for e in s.processing.exclude_breaths if e.file == "synth_case_A.csv")
+    assert entry.folder == s.input.folder
+    win.close()
+
+
+def test_qc_overview_checks_the_result_files_own_name_not_the_selected_one(qapp, tmp_path):
+    """Self-review finding: _on_batch_result's fallback (result.files.get(cur) or
+    next(iter(...))) can hand _update_qc_overview a DIFFERENT file's result than the one
+    currently selected. The carried-over check must follow fr's OWN filename, or a stale/
+    mismatched result could blame the wrong file's exclusions."""
+    from types import SimpleNamespace
+    import pandas as pd
+    from respmech.core.settings import ExcludeEntry
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings("")
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    # "selected" file has no carried exclusion; a DIFFERENT file (never selected) does
+    s.processing.exclude_breaths.append(
+        ExcludeEntry(file="synth_case_B.csv", breaths=[1], folder="/a/different/folder"))
+    fr_for_other_file = SimpleNamespace(
+        file="synth_case_B.csv", breaths=[1, 2],
+        breaths_table=pd.DataFrame({"vt": [0.5]}))
+    pv._update_qc_overview(fr_for_other_file)
+    assert "carried over from a previous recordings folder" in pv.qc_overview.text()
     win.close()
 
 

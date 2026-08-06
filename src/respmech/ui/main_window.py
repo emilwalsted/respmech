@@ -119,6 +119,12 @@ class MainWindow(QMainWindow):
         # Setup channel summary's 'derived from flow' row, and normalisation drives the
         # 'You will get' normalised-EMG-sheet line — so both must refresh on a Preview edit.
         pv.settings_edited.connect(sc.sync_from_preview)
+        # A breath toggle or a breath-count-overrides commit on Preview can resolve (or
+        # create) carried-over state the Setup banner is showing/should show — without this,
+        # confirming a carried exclusion from Preview leaves the banner on Setup naming a
+        # file that no longer needs it (see _on_noise_reference_changed below for the
+        # noise-reference write path, which goes through a different signal).
+        pv.settings_edited.connect(sc._update_carried_banner)
         # P19: "Process & write this file" on Preview → run just that file on the Run drawer
         pv.process_file_requested.connect(self._process_single_file)
         # P20's "drill back into Preview" no longer needs its own signal/handler (B03):

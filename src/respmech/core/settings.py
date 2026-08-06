@@ -14,6 +14,7 @@ The dataclasses mirror the TOML schema (``schema_version = 1``). ``from_dict`` i
 tolerant (unknown keys are collected, not fatal) and ``validate`` raises
 ``SettingsError`` with a clear message.
 """
+import os
 from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Any, Optional, Union, get_args, get_origin, get_type_hints
 
@@ -120,6 +121,13 @@ class NoiseSettings:
     # explicit EMG-free windows [[t0, t1], ...] in reference_file; if empty and
     # use_expiration is True, the profile is built from the reference's expiration.
     reference_intervals: list[Any] = field(default_factory=list)
+    # the recordings folder that was active when reference_file/reference_intervals were
+    # captured (rebased/relativized the same way as input.folder/output.folder — see
+    # settingsio.toml_io). None means "unrecorded" (an analysis from before this field
+    # existed) and is always treated as unproven, the same as a genuine mismatch — see
+    # is_carried_folder(). Lets the GUI warn when a reference chosen against one input
+    # folder is still active after the folder changes, instead of silently reusing it.
+    reference_folder: str | None = None
     use_expiration: bool = True
     # fixed STFT parameters (decoupled from the noise-clip length — the legacy bug).
     n_fft: int = 256
@@ -223,12 +231,23 @@ class PtpSettings:
 class ExcludeEntry:
     file: str
     breaths: list[int] = field(default_factory=list)
+    # the recordings folder (input.folder) active when this entry was last written —
+    # rebased/relativized like input.folder/output.folder (settingsio.toml_io). None means
+    # "unrecorded" (an analysis written before this field existed): from_dict/_toml_clean
+    # already tolerate an unknown/missing key on either side of the schema change, so an
+    # older analysis loads unchanged and a newer one opened by older code just files the
+    # key under Settings.unknown. See is_carried_folder()/carried_over_state() — this field
+    # never reaches core.compute (core/_legacy_ns.py deliberately drops it), it exists
+    # purely so the UI can tell a same-name exclusion from a DIFFERENT folder apart from
+    # one made in the folder currently loaded.
+    folder: str | None = None
 
 
 @dataclass
 class BreathCountEntry:
     file: str
     count: int
+    folder: str | None = None
 
 
 @dataclass
@@ -376,6 +395,98 @@ class Settings:
                     "processing.volume.trend_peak_min_distance_s must be at least one "
                     f"sample at the analysis rate ({fs_eff} Hz)")
         return self
+
+
+# --- carried-over per-folder state ------------------------------------------
+#
+# exclude_breaths/breath_counts key on the bare filename, and the noise reference is a
+# filename too — neither carries which recordings folder it was set against. Point the
+# same analysis at a DIFFERENT folder that happens to share a filename (the common
+# multi-subject workflow: one LabChart export named the same in every subject folder) and
+# the old entries silently keep applying, because nothing about the key changed. The
+# folder fields above let the UI tell the two situations apart; these pure, Qt-free
+# helpers are the one place that decides "does this recorded folder still match" so the
+# comparison can't drift between the banner, the Preview overlay and the file rail.
+
+def _norm_folder(p: str | None) -> str | None:
+    # normcase folds drive-letter/separator case on Windows (a no-op on case-sensitive
+    # macOS/Linux — see ui.prefs.set_last_folder's recent-analyses dedup for the same
+    # pattern already established elsewhere in this codebase); without it, a folder
+    # re-typed or re-browsed with different case than how it was first recorded (the same
+    # real folder, unchanged) would falsely compare as carried-over on a case-insensitive
+    # filesystem.
+    return os.path.normcase(os.path.normpath(p)) if p else None
+
+
+def is_carried_folder(entry_folder: str | None, current_folder: str | None) -> bool:
+    """True if ``entry_folder`` does not demonstrably match ``current_folder``.
+
+    An unrecorded folder (None on either side — an older analysis, or no input folder
+    chosen yet) can never be PROVEN current, so it counts as carried too rather than being
+    silently trusted. This is a deliberate choice, not a migration gap to fill in later:
+    guessing a folder for old data would risk the opposite mistake (a real cross-folder
+    exclusion applied without ever being shown), so an unrecorded folder is always the
+    cautious answer. See Settings.processing.exclude_breaths / .breath_counts and
+    ProcessingSettings.emg.noise.reference_folder.
+    """
+    a, b = _norm_folder(entry_folder), _norm_folder(current_folder)
+    return not (a and b and a == b)
+
+
+@dataclass
+class CarriedOverState:
+    """What in ``settings.processing`` still names a DIFFERENT (or unrecorded) recordings
+    folder than ``settings.input.folder`` right now. Built by :func:`carried_over_state`;
+    consumed by the Setup banner, Preview & QC's overlay/QC line, and the file rail badge —
+    every one of them must agree on the same set, so they all go through this."""
+    exclude_files: list[str] = field(default_factory=list)
+    breath_count_files: list[str] = field(default_factory=list)
+    noise_reference: bool = False
+
+    def __bool__(self) -> bool:
+        return bool(self.exclude_files or self.breath_count_files or self.noise_reference)
+
+
+def carried_over_state(settings: "Settings") -> CarriedOverState:
+    """Nothing can be "carried over" relative to an input folder that isn't set yet (a
+    fresh/guided analysis with no folder chosen) — every entry would trivially mismatch an
+    empty string, which would just flag stale state that was never applied against
+    anything. Return the empty (falsy) state in that case."""
+    current = settings.input.folder
+    if not current:
+        return CarriedOverState()
+    # an entry with an empty breaths list (every breath re-included — the state
+    # _toggle_breath leaves an ExcludeEntry in before it removes it entirely) or a
+    # breath-count override of nothing names no actual state to warn about.
+    exclude_files = sorted({e.file for e in settings.processing.exclude_breaths
+                            if e.breaths and is_carried_folder(e.folder, current)})
+    breath_count_files = sorted({e.file for e in settings.processing.breath_counts
+                                 if is_carried_folder(e.folder, current)})
+    noise = settings.processing.emg.noise
+    noise_reference = bool(
+        (noise.reference_file or noise.reference_intervals)
+        and is_carried_folder(noise.reference_folder, current))
+    return CarriedOverState(exclude_files, breath_count_files, noise_reference)
+
+
+def clear_carried_over(settings: "Settings") -> None:
+    """The banner's "Clear" action: drop exclude_breaths/breath_counts entries, and the
+    noise reference, whose recorded folder does not match ``settings.input.folder`` right
+    now. Mutates in place. Entries that already match the current folder — the ordinary
+    case, nothing changed — are left completely untouched; this only ever removes state
+    :func:`carried_over_state` would also flag."""
+    current = settings.input.folder
+    settings.processing.exclude_breaths = [
+        e for e in settings.processing.exclude_breaths
+        if not (e.breaths and is_carried_folder(e.folder, current))]
+    settings.processing.breath_counts = [
+        e for e in settings.processing.breath_counts
+        if not is_carried_folder(e.folder, current)]
+    noise = settings.processing.emg.noise
+    if is_carried_folder(noise.reference_folder, current):
+        noise.reference_file = None
+        noise.reference_intervals = []
+        noise.reference_folder = None
 
 
 # --- schema upgrades -------------------------------------------------------

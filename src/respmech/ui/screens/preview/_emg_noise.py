@@ -631,6 +631,7 @@ class _EmgNoiseMixin:
         n = self.state.settings.processing.emg.noise
         n.reference_file = name
         n.reference_intervals = []
+        n.reference_folder = self.state.settings.input.folder
         n.use_expiration = True
         self.noise_reference_changed.emit(name, [], True)
         self._refresh_noise_readout()
@@ -654,6 +655,7 @@ class _EmgNoiseMixin:
         n = self.state.settings.processing.emg.noise
         n.reference_file = name
         n.reference_intervals = [[t0, t1]]
+        n.reference_folder = self.state.settings.input.folder
         n.use_expiration = False
         fs = self.state.settings.input.format.sampling_frequency or 0
         span = int(round((t1 - t0) * fs))
