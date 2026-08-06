@@ -100,7 +100,26 @@ class SettingsScreen(QWidget):
         self.format_readout.setWordWrap(True)
         self.format_readout.setProperty("banner", True)   # box baked at first polish (theme.py)
         self.format_readout.setProperty("status", "muted")
-        f.addRow("", self.format_readout)
+        # ticket C03 point 6: shown only when the recordings folder is SET but no longer
+        # exists (renamed/moved/unmounted since the analysis was saved) — see
+        # _update_format_readout's missing_folder branch. Wrapped with the read-out label
+        # in one field widget so _input_form.setRowVisible still takes a single reference.
+        self.btn_locate_folder = QPushButton("Locate folder…")
+        self.btn_locate_folder.setProperty("compact", True)
+        self.btn_locate_folder.setVisible(False)
+        self.btn_locate_folder.setToolTip(
+            "The recordings folder saved with this analysis no longer exists at this "
+            "location. Pick its new location.")
+        self.btn_locate_folder.clicked.connect(self._locate_missing_folder)
+        _readout_row = QWidget(); _rr = QVBoxLayout(_readout_row)
+        _rr.setContentsMargins(0, 0, 0, 0); _rr.setSpacing(4)
+        _rr.addWidget(self.format_readout)
+        _locate_wrap = QWidget(); _lw = QHBoxLayout(_locate_wrap)
+        _lw.setContentsMargins(0, 0, 0, 0)
+        _lw.addWidget(self.btn_locate_folder); _lw.addStretch(1)
+        _rr.addWidget(_locate_wrap)
+        self._format_readout_row = _readout_row
+        f.addRow("", _readout_row)
         self.matlab_variant = QComboBox()
         # 'wide', not 'compact': "MATLAB (Unix/Mac)" plus the drop-down arrow outgrows the
         # 150px column on wider fonts (measured 131px of text against the column's 126px
@@ -269,6 +288,19 @@ class SettingsScreen(QWidget):
         # marked the analysis modified and scheduled a recompute — a wheel over "EMG RMS
         # window" moved it from 0.05 s to 0.02 s, which changes every reported EMG number.
         self._wheel_guard = _wheel.guard_scroll_area(scroll)
+
+        # ticket C03 point 8: a persisting notice while the built-in sample is loaded,
+        # pinned ABOVE the scrolling form (mirroring how the QC strip is pinned below it)
+        # so it is seen immediately regardless of scroll position — nothing on screen used
+        # to say "sample" at all, and it writes into a temp folder the OS may clean up.
+        self.sample_banner = QLabel(
+            "Built-in sample recording — results go to a temporary folder. Pick your own "
+            "recordings and output folder to start a real analysis.")
+        self.sample_banner.setWordWrap(True)
+        self.sample_banner.setProperty("banner", True)
+        self.sample_banner.setProperty("status", "info")
+        self.sample_banner.setVisible(False)
+        outer.addWidget(self.sample_banner)
         outer.addWidget(scroll, 1)
 
         # Live QC strip, pinned below the (scrolling) form: every current caution at a
@@ -416,6 +448,31 @@ class SettingsScreen(QWidget):
                 return
             (self._on_inputs_changed if line is self.in_folder else self._on_field_changed)()
 
+    @staticmethod
+    def _deepest_existing_ancestor(path):
+        """The deepest directory in ``path``'s chain that still exists on disk — where the
+        'Locate folder…' picker (ticket C03 point 6) should start, rather than a bare '.'
+        (the process cwd, unrelated to the missing recordings) or the dead path itself
+        (which most native file dialogs refuse to start in at all)."""
+        p = os.path.abspath(path) if path else ""
+        while p and not os.path.isdir(p):
+            parent = os.path.dirname(p)
+            if parent == p:                     # reached the filesystem root
+                break
+            p = parent
+        return p if p and os.path.isdir(p) else os.path.expanduser("~")
+
+    def _locate_missing_folder(self):
+        """'Locate folder…' (ticket C03 point 6): point the analysis at the recordings
+        folder's new location, reusing the ordinary input-folder-edit pipeline
+        (_on_inputs_changed) so this behaves exactly like editing the field by hand."""
+        folder = self.in_folder.text().strip()
+        start = self._deepest_existing_ancestor(folder)
+        d = QFileDialog.getExistingDirectory(self, "Locate recordings folder", start)
+        if d:
+            self.in_folder.setText(d)
+            self._on_inputs_changed()
+
     # -- state <-> widgets --------------------------------------------------
     def from_state(self):
         prev, self._loading = self._loading, True
@@ -458,6 +515,7 @@ class SettingsScreen(QWidget):
         # (folder is unrecorded, which counts as carried too, see is_carried_folder) — so
         # this has to be checked here, not only after a live folder edit.
         self._update_carried_banner()
+        self._update_sample_banner()   # ticket C03 point 8 — every load/import/new path routes through here
 
     def to_state(self):
         s = self.state.settings
@@ -488,6 +546,16 @@ class SettingsScreen(QWidget):
         if self.on_settings_changed:
             self.on_settings_changed()
         return s
+
+    def set_output_folder(self, folder: str):
+        """Point the analysis's output folder at ``folder`` — the Run drawer's temporary-
+        output-folder confirmation (ticket C03 point 8) calls this via
+        ``RunScreen.output_folder_change_requested`` rather than writing
+        ``self.state.settings.output.folder`` directly: this widget is what
+        ``to_state()`` reads on the next Setup edit, and a model-only write behind its
+        back would be silently reverted by that."""
+        self.out_folder.setText(folder)
+        self._on_field_changed()
 
     def set_noise_reference(self, file, intervals, use_expiration):
         """Record that the picker chose a noise reference. The picker (Preview) is the only
@@ -657,6 +725,12 @@ class SettingsScreen(QWidget):
         extra = len(names) - limit
         return text + (f", +{extra} more" if extra > 0 else "")
 
+    def _update_sample_banner(self):
+        """Show/hide the built-in-sample notice (ticket C03 point 8) — reads
+        ``AppState.is_sample``, set True only by ``open_sample_analysis`` and cleared by
+        every other load/import/new/save path (see their own docstrings)."""
+        self.sample_banner.setVisible(bool(getattr(self.state, "is_sample", False)))
+
     def _dismiss_carried_banner(self):
         """"Keep": nothing is mutated — the carried-over state keeps applying exactly as it
         already did (an inherited exclusion is only ever drawn differently, in Preview &
@@ -740,7 +814,15 @@ class SettingsScreen(QWidget):
         mask = raw_mask if raw_mask is not None else self.state.settings.input.files
         status, text = "muted", ""
         self._manifest = None
-        if folder and os.path.isdir(folder):
+        # ticket C03 point 6: a folder that is SET but no longer resolves (renamed, moved,
+        # or an unmounted network share since the analysis was saved) used to leave this
+        # read-out silently empty and the QC strip's own 'muted — nothing scanned yet'
+        # message, which reads as "no folder chosen", not "this one is gone". Checked
+        # before the isdir branch below, which only ever runs for a folder that DOES exist.
+        missing_folder = bool(folder) and not os.path.isdir(folder)
+        if missing_folder:
+            status, text = "warn", f"This folder no longer exists: {folder}"
+        elif folder and os.path.isdir(folder):
             m = build_manifest(folder, mask, self.state.settings, cache=self._manifest_cache)
             self._manifest = m
             if not m.files:
@@ -784,8 +866,19 @@ class SettingsScreen(QWidget):
         # variant" with nothing in it. setRowVisible hides label and field together, so an
         # empty read-out takes no space at all rather than an empty banner-shaped hole.
         form = getattr(self, "_input_form", None)
+        row = getattr(self, "_format_readout_row", lab)
         if form is not None:
-            form.setRowVisible(lab, bool(text))
+            form.setRowVisible(row, bool(text))
+        btn = getattr(self, "btn_locate_folder", None)
+        if btn is not None:
+            btn.setVisible(missing_folder)
+        if missing_folder:
+            # ticket C03 point 6, the "warm" case: a folder that vanishes MID-session must
+            # not go on showing the previous load's channel traces beside a dead path.
+            # force=True bypasses _channel_view_signature's cache, which would otherwise
+            # see an unchanged folder STRING (only the filesystem changed) and skip the
+            # rebuild entirely.
+            self._refresh_channel_view(force=True)
         self._update_qc()   # self._manifest just (re)built — the QC strip must never lag it
 
     def _set_status(self, text):
@@ -885,6 +978,12 @@ class SettingsScreen(QWidget):
             # switches on ECG removal + noise reduction to demonstrate the full pipeline
             s = build_sample_settings(desc, os.path.join(base, "output"))
             self.state.settings, self.state.settings_path = s, None
+            self.state.display_name = None
+            self.state.legacy_source_path = None
+            # ticket C03 point 8: say so — before this nothing on screen distinguished the
+            # sample from a real analysis, and it writes into a temp folder the OS may
+            # clean up. _update_sample_banner (called from from_state below) reads this.
+            self.state.is_sample = True
             self.from_state()
             self.enter_open_mode()
             self._mark_clean()
@@ -941,9 +1040,28 @@ class SettingsScreen(QWidget):
             return
         self.state.settings = Settings()
         self.state.settings_path = None
+        self.state.display_name = None
+        self.state.legacy_source_path = None
+        self.state.is_sample = False
         self.from_state()
         self.enter_new_mode()       # emits inputs/settings_changed then sets guided status
         self._mark_clean()          # a fresh analysis has no unsaved edits yet
+
+    def _analysis_dialog_start(self):
+        """Where an Open-analysis-style file dialog should start (ticket C03 point 4):
+        the CURRENT analysis's own folder if one is open, so importing/opening the next
+        file for the same study starts right there — else the sticky 'analysis' folder
+        from the last one opened, mirroring ``_browse``'s existing
+        ``line.text() or prefs.last_folder`` precedence. ``open_analysis_dialog`` and
+        ``_import`` used to start at a bare '.', the PROCESS's cwd — in a packaged .app or
+        .msi that is nowhere near the user's data, so the action a returning user repeats
+        most (open the next subject's file from the same study folder) opened somewhere
+        unrelated every time. ``_load`` and ``save_analysis_as`` already got this right."""
+        from respmech.ui import prefs  # noqa: PLC0415
+        p = getattr(self.state, "settings_path", None)
+        if p:
+            return os.path.dirname(p)
+        return prefs.last_folder("analysis", ".")
 
     def open_analysis_dialog(self):
         """Analysis > 'Open analysis…': pick a saved .toml analysis or a legacy .py setup
@@ -953,7 +1071,7 @@ class SettingsScreen(QWidget):
         if not self.confirm_discard_changes(
                 "Open analysis", question="Save them before opening another analysis?"):
             return
-        p, _ = QFileDialog.getOpenFileName(self, "Open analysis", ".", OPEN_FILTER)
+        p, _ = QFileDialog.getOpenFileName(self, "Open analysis", self._analysis_dialog_start(), OPEN_FILTER)
         if p:
             self.open_analysis(p)
 
@@ -1353,7 +1471,15 @@ class SettingsScreen(QWidget):
           changes what the batch actually does or writes.
         - ``'ok'``: only once ``_all_ok()``'s own checks are clean AND the manifest has
           actually read at least one file — never for a caveat-free batch nobody has looked
-          inside yet."""
+          inside yet.
+
+        Ticket C03 point 6: a folder that is SET but no longer exists is not the same fact
+        as "nobody has pointed the app at one yet" — checked before the muted branch below,
+        which would otherwise catch it too (``_update_format_readout`` never builds a
+        manifest for a missing folder, so ``self._manifest`` is ``None`` either way)."""
+        folder = self.in_folder.text().strip()
+        if folder and not os.path.isdir(folder):
+            return "warn", f"Recordings folder not found: {folder}"
         m = self._manifest
         if m is None or not m.files:
             return "muted", "Nothing scanned yet — set an input folder with matching files."
@@ -1534,26 +1660,91 @@ class SettingsScreen(QWidget):
             return False
         return self._write_analysis(p)
 
-    def save_analysis_as(self):
+    def save_analysis_as(self, suggested_path=None):
         """Analysis > 'Save as…': write the current settings to a chosen analysis file. The
         chooser asks before overwriting, so unlike Save it needs no extra confirmation.
-        Returns True iff saved."""
+        ``suggested_path`` (ticket C03 point 5) lets a caller pre-fill somewhere other
+        than the currently-open file — 'Duplicate for another recordings folder…' uses it
+        to suggest the SAME analysis filename inside the NEW recordings folder, since the
+        currently-open path is the template being duplicated, not where the duplicate
+        belongs. Returns True iff saved."""
         from respmech.ui import prefs  # noqa: PLC0415
         self.to_state()
         blocker = self._save_blocker()
         if blocker:
             return self._refuse_save(blocker)
-        start = self.state.settings_path or os.path.join(
+        start = suggested_path or self.state.settings_path or os.path.join(
             prefs.last_folder("analysis", "."), "analysis.toml")
         p, _ = QFileDialog.getSaveFileName(self, "Save analysis as", start, TOML_FILTER)
         if not p:
             return False
         return self._write_analysis(p)
 
+    def duplicate_for_another_folder(self):
+        """Analysis > 'Duplicate for another recordings folder…' (ticket C03 point 5): keep
+        every setting, point the analysis at a NEW batch of recordings, and open Save
+        as… so the duplicate is written to a NEW file — never overwriting the template it
+        came from.
+
+        The output folder is only ever a SUGGESTION (``ui.duplicate.derive_sibling_output``),
+        shown in ``DuplicateFolderDialog`` for confirmation/editing, never applied silently.
+
+        The file-keyed state (exclude_breaths/breath_counts/the EMG noise reference) is
+        deliberately NOT force-cleared here: switching ``input.folder`` makes every entry
+        recorded against the OLD folder "carried-over" by B06's own definition
+        (``core.settings.carried_over_state``), so the Setup Behold/Ryd banner this screen
+        already shows will ask about exactly that state right after — reusing B06's
+        existing ask, not a second copy of it, per this ticket's own instruction to prefer
+        the already-built helper. ``processing.emg.ecg_reference_file`` has no such
+        folder-tracked ask mechanism (see core/settings.py), so it is cleared directly —
+        it can only ever have named a file in the OLD folder."""
+        if not self.confirm_discard_changes(
+                "Duplicate for another recordings folder",
+                question="Save them before duplicating this analysis?"):
+            return
+        from respmech.ui import prefs  # noqa: PLC0415
+        from respmech.ui.duplicate import derive_sibling_output
+        from respmech.ui.duplicate_dialog import DuplicateFolderDialog
+        old_input = self.state.settings.input.folder
+        old_output = self.state.settings.output.folder
+        old_settings_path = self.state.settings_path
+        start = old_input or prefs.last_folder("browse", ".")
+        new_input = QFileDialog.getExistingDirectory(
+            self, "New recordings folder for the duplicate", start)
+        if not new_input:
+            return
+        suggested_output = derive_sibling_output(old_input, old_output, new_input)
+        dlg = DuplicateFolderDialog(new_input, suggested_output or "", parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        new_output = dlg.output_folder()
+        if not new_output:
+            QMessageBox.warning(self, "Duplicate for another recordings folder",
+                                "An output folder is required.")
+            return
+        self.in_folder.setText(new_input)
+        self.out_folder.setText(new_output)
+        self.to_state()
+        self.state.settings.processing.emg.ecg_reference_file = None
+        # Duplicating a sample-derived analysis onto real folders means it is no longer
+        # the built-in sample — see AppState.is_sample's own docstring.
+        self.state.is_sample = False
+        self._normalize_mask()
+        self._mark_dirty()
+        self.inputs_changed.emit()
+        self.settings_changed.emit()
+        self._update_format_readout()
+        self._update_carried_banner()      # B06's own Behold/Ryd ask — see docstring above
+        self._update_sample_banner()
+        self._set_status(f"Duplicated for {new_input}. Choose where to save this as a new analysis.")
+        suggested_name = os.path.basename(old_settings_path) if old_settings_path else "analysis.toml"
+        self.save_analysis_as(suggested_path=os.path.join(new_input, suggested_name))
+
     def _import(self, path=None):
         """Import a legacy .py setup (runs the migrator). Returns True on success, False
         if cancelled or rolled back, so open_analysis can gate the mode transition."""
-        p = path or QFileDialog.getOpenFileName(self, "Open legacy analysis (.py)", ".", LEGACY_FILTER)[0]
+        p = path or QFileDialog.getOpenFileName(
+            self, "Open legacy analysis (.py)", self._analysis_dialog_start(), LEGACY_FILTER)[0]
         if not p:
             return False
         prior, prior_path = self.state.settings, self.state.settings_path
@@ -1570,7 +1761,13 @@ class SettingsScreen(QWidget):
             self, "Migration report", report,
             intro="Legacy analysis imported and converted.", prior=self._report_dialog)
         self._set_status(f"Imported {p}")
-        self._mark_clean()
+        # ticket C03 point 7: a converted 1.x analysis has no .toml of its own yet — it was
+        # marked CLEAN before, which is what let closeEvent's confirm_discard_changes and
+        # the Analysis menu's Save-enable check both treat a just-imported migration as
+        # nothing-to-lose. The conversion itself is deterministic and repeatable from the
+        # untouched .py (state.import_legacy can be re-run any time), but the analysis now
+        # sitting in memory is genuinely unsaved work.
+        self._mark_dirty()
         self.inputs_changed.emit()
         self.settings_changed.emit()
         return True

@@ -101,6 +101,23 @@ def last_rig() -> dict | None:
     return rig if isinstance(rig, dict) and rig else None
 
 
+def recent_label(path: str, max_dir: int = 34) -> str:
+    """Label one recent analysis: the file name plus just enough of its folder to tell two
+    same-named analyses apart (ticket C03 — moved here from ``ui.main_window`` so the
+    startup chooser's recent buttons and the header's Analysis menu can never describe the
+    same file differently). Bare basenames collide across studies (every study has an
+    "analysis.toml"); full paths are unreadable at menu/dialog width. The folder is elided
+    at its HEAD — the leaf folder is the one that names the study."""
+    import os  # noqa: PLC0415
+    folder, name = os.path.split(path)
+    home = os.path.expanduser("~")
+    if folder.startswith(home):
+        folder = "~" + folder[len(home):]
+    if len(folder) > max_dir:
+        folder = "…" + folder[-max_dir:]
+    return f"{name}  —  {folder}" if folder else name
+
+
 def apply_rig(settings, rig: dict) -> None:
     """Apply a saved rig onto a Settings object (channel columns + sampling only)."""
     if not rig:
