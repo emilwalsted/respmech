@@ -779,23 +779,32 @@ class RunScreen(QWidget):
             self._set_status("Output folder does not exist yet.")
 
     def _confirm_temp_output(self):
-        """Ticket C03 point 8: a REAL run (write=True) whose output folder resolves under
-        the OS temp directory writes into a place the operating system may delete without
-        warning — most concretely a saved-but-forgotten sample-derived analysis
+        """Ticket C03 point 8: a REAL run (write=True) whose output folder resolves inside
+        the built-in sample's own temp subfolder writes into a place the operating system
+        may delete without warning — a saved-but-forgotten sample-derived analysis
         (``open_sample_analysis`` writes both folders under
-        ``tempfile.gettempdir()/respmech_sample``, and nothing on screen said "sample"
-        once it is reopened as a plain saved .toml months later, see
-        ``AppState.load_toml``). Deliberately PATH-based, not a flag check on
-        ``AppState.is_sample``: that is exactly the case this guards against, since the
-        flag has already been forgotten by the time a saved analysis is reopened, but the
-        output folder's actual location has not changed. Returns True to proceed."""
+        ``tempfile.gettempdir()/respmech_sample``), reopened as a plain saved .toml months
+        later with nothing on screen left to say "sample" (see ``AppState.load_toml``).
+        Deliberately PATH-based, not a flag check on ``AppState.is_sample``: that is
+        exactly the case this guards against, since the flag has already been forgotten by
+        the time a saved analysis is reopened, but the output folder's actual location has
+        not changed.
+
+        Scoped to the SAMPLE's own subfolder rather than "anywhere under the OS temp
+        directory": ``tempfile.gettempdir()`` is also where pytest's own ``tmp_path``
+        fixture lives on this platform, and a broader check fired on every real-run test
+        in this suite that uses ``tmp_path`` as its output folder — popping a real,
+        un-mocked confirmation dialog and hanging the test on its modal event loop
+        (caught in self-review: a real, wholesale test-suite hang, not a style nit).
+        The sample's own subfolder name is specific enough that this narrower check still
+        catches every case the ticket names. Returns True to proceed."""
         out = (self.state.settings.output.folder or "").strip()
         if not out:
             return True
         out_abs = os.path.abspath(out)
-        temp_root = os.path.abspath(tempfile.gettempdir())
+        sample_root = os.path.abspath(os.path.join(tempfile.gettempdir(), "respmech_sample"))
         try:
-            under_temp = os.path.commonpath([out_abs, temp_root]) == temp_root
+            under_temp = os.path.commonpath([out_abs, sample_root]) == sample_root
         except ValueError:                      # different drives on Windows
             under_temp = False
         if not under_temp:

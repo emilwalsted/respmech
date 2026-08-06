@@ -944,7 +944,7 @@ def test_confirm_temp_output_warns_and_continues(qapp, tmp_path):
     under the OS temp directory — this must still catch it."""
     import os
     import tempfile
-    out = os.path.join(tempfile.gettempdir(), "respmech_c03_test_output")
+    out = os.path.join(tempfile.gettempdir(), "respmech_sample", "output")
     win = _win(out); rn = win.run_screen
     assert rn.state.is_sample is False
     rn._ask_temp_output_choice = lambda: "continue"
@@ -955,7 +955,7 @@ def test_confirm_temp_output_warns_and_continues(qapp, tmp_path):
 def test_confirm_temp_output_cancel_aborts(qapp, tmp_path):
     import os
     import tempfile
-    out = os.path.join(tempfile.gettempdir(), "respmech_c03_test_output")
+    out = os.path.join(tempfile.gettempdir(), "respmech_sample", "output")
     win = _win(out); rn = win.run_screen
     rn._ask_temp_output_choice = lambda: "cancel"
     assert rn._confirm_temp_output() is False
@@ -971,7 +971,7 @@ def test_confirm_temp_output_choose_another_folder_asks_setup_not_the_model(
     import os
     import tempfile
     from respmech.ui.screens import run_screen as rs
-    out = os.path.join(tempfile.gettempdir(), "respmech_c03_test_output")
+    out = os.path.join(tempfile.gettempdir(), "respmech_sample", "output")
     win = _win(out); rn, sc = win.run_screen, win.settings_screen
     new_out = str(tmp_path / "real-output")
     monkeypatch.setattr(rs.QFileDialog, "getExistingDirectory",
