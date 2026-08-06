@@ -75,6 +75,28 @@ def path_problem(settings, probe_write: bool = False, matches: list | None = Non
     return None
 
 
+def blockers(settings, matches: list | None = None) -> list:
+    """Every reason a run cannot start yet, worst first, as full sentences naming the
+    control to fix — channel mapping, then core validation, then filesystem paths. The
+    ONE shared list Setup's QC strip (``settings_screen.SettingsScreen._qc_verdict``, ticket
+    B07) and the Run screen's commitment sheet (``run_screen.RunScreen._blockers``, ticket
+    B04) both read, so the two can never name a different top blocker for the identical
+    settings — short-circuits to the first hard blocker found, matching both screens'
+    pre-existing behaviour.
+
+    ``matches`` is passed straight through to :func:`path_problem` — see its own docstring;
+    omit it to glob fresh, as Setup's live validation does."""
+    c = channel_collision(settings)
+    if c:
+        return [c]
+    try:
+        settings.validate()
+    except Exception as e:                      # noqa: BLE001 — any invalidity blocks a run
+        return [str(e) or e.__class__.__name__]
+    p = path_problem(settings, matches=matches)
+    return [p] if p else []
+
+
 def channel_collision(settings) -> str | None:
     """A HARD channel-mapping error (message, else None): a required channel
     (flow/poes/pgas/pdi) not assigned at all, one pointing at column 1 — the time axis —

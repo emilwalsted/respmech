@@ -26,7 +26,7 @@ from respmech.ui.flow_layout import ElidingLabel, install_flow as _install_flow
 from respmech.ui.manifest import manifest_from_filenames
 from respmech.ui.panel import titled_panel
 from respmech.ui.result_table import ResultTableModel, configure_result_table, resize_result_table
-from respmech.ui.validation import channel_collision, matching_files, path_problem
+from respmech.ui.validation import blockers as _shared_blockers, matching_files, path_problem
 from respmech.ui.workers import BatchWorker, WriteWorker
 
 try:
@@ -352,33 +352,15 @@ class RunScreen(QWidget):
                 self._matched_files = []
         return self._matched_files
 
-    def _quick_path_problem(self):
-        """Cheap-enough-for-every-keystroke path check, sharing ``validation.path_problem``
-        (never ``probe_write=True`` — that is a real disk write, reserved for ``_start``)
-        so this can never phrase a blocker differently from Setup's own live validation.
-        Ticket B04: this used to skip the file-matching glob entirely ("the full
-        glob-based check runs at start"), so the primary button — and this drawer's own
-        summary — both said the run was ready over a mask that matched nothing, right up
-        until the click, which then failed with exactly the message this now shows up
-        front. Passes the already-memoised match list (``_cached_matching_files``) so
-        this still costs nothing extra per keystroke."""
-        return path_problem(self.state.settings, matches=self._cached_matching_files())
-
     def _blockers(self):
         """Every reason the primary Run action cannot start yet, worst first, as full
         sentences naming the control to fix (ticket B04) — the ONE list the commitment
         sheet and the primary button's enablement/tooltip both read, so they can never
-        name a different blocker than each other. Same priority order as Setup's own
-        ``_first_blocker`` used to (collision, then core validation, then path), and the
-        same shared helpers, so the two screens can never disagree either."""
-        collision = channel_collision(self.state.settings)
-        if collision:
-            return [collision]
-        ok, why = self._settings_ok()
-        if not ok:
-            return [why]
-        why = self._quick_path_problem()
-        return [why] if why else []
+        name a different blocker than each other. Delegates to ``ui.validation.blockers``
+        (ticket B07), the SAME ordered check (collision, then core validation, then path)
+        Setup's QC strip now reads too, so the two screens can never disagree either — the
+        already-memoised match list keeps this exactly as cheap per keystroke as before."""
+        return _shared_blockers(self.state.settings, matches=self._cached_matching_files())
 
     def refresh_actions(self):
         blockers = self._blockers()
