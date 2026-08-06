@@ -111,6 +111,11 @@ environment (e.g. required reviewer, or restrict to tags) for a manual gate befo
    with the recipe, because `notify.php` sends once per version and a thin mail cannot
    be taken back.
 
+   To read the announcement itself before it goes out, `php tools/preview-mail.php`
+   in the website repo renders it to a file, and **Actions ▸ Send a test release
+   e-mail** sends the real thing to one allowlisted address without touching the
+   subscriber list or spending the release's one announcement.
+
 6. **Verify locally** (optional but recommended):
 
    ```bash
