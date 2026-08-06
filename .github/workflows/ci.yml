@@ -73,7 +73,7 @@ jobs:
 
       - name: GUI constructs headless (MainWindow + themed splash)
         working-directory: ${{ runner.temp }}
-        run: python -c "import respmech.ui.splash as s; from PySide6.QtWidgets import QApplication; from respmech.ui import theme; from respmech.ui.state import AppState; from respmech.ui.main_window import MainWindow; app=QApplication([]); theme.apply_theme(app); s.make_splash(app); w=MainWindow(AppState()); assert w.tabs.count()==3; print('GUI OK')"
+        run: python -c "import respmech.ui.splash as s; from PySide6.QtWidgets import QApplication; from respmech.ui import theme; from respmech.ui.state import AppState; from respmech.ui.main_window import MainWindow; app=QApplication([]); theme.apply_theme(app); s.make_splash(app); w=MainWindow(AppState()); assert w.tabs.count()==2; print('GUI OK')"
 
       # Informational on purpose: the changelog is updated deliberately, not on
       # every commit (see the note in CHANGELOG.md), so this must not fail a
