@@ -25,24 +25,51 @@ def short_error(detail: str) -> str:
 class TextViewerDialog(QDialog):
     """A modeless window showing read-only, selectable, copyable monospace text
     (an error trace or the batch error log). A Copy button puts it on the
-    clipboard; the text is also selectable directly."""
+    clipboard; the text is also selectable directly.
 
-    def __init__(self, title: str, text: str, parent=None, intro: str | None = None):
+    ``collapsed_detail=True`` (ticket D01) treats ``text`` as SUPPORTING detail (a stack
+    trace) rather than the primary message: the monospace view starts hidden behind a
+    "Details" toggle, and ``intro`` is shown in the normal (non-muted) style, since it IS
+    the message, not a caption above one. Used when a caller already has a plain-language
+    diagnosis and wants to lead with it instead of a traceback, while still keeping the
+    traceback one click away. A caller passing ``collapsed_detail=True`` with no ``intro``
+    gets the ordinary (uncollapsed) layout instead of a dialog whose only visible content
+    would otherwise be two buttons — self-review finding, not something any current caller
+    triggers, but a foot-gun worth closing for the next one."""
+
+    def __init__(self, title: str, text: str, parent=None, intro: str | None = None,
+                collapsed_detail: bool = False):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setMinimumSize(560, 340)
         self.resize(780, 500)
+        collapsed_detail = collapsed_detail and bool(intro)
         lay = QVBoxLayout(self)
+        self.intro_label = None
         if intro:
             lab = QLabel(intro)
             lab.setWordWrap(True)
-            lab.setProperty("status", "muted")
+            # PlainText, not Qt's default AutoText: ``intro`` can now be an exception's own
+            # message (ticket D01's diagnosis path), and Qt's mightBeRichText heuristic can
+            # misread stray '<'/'>' in a pandas/numpy message (e.g. a dtype '<f8') as HTML
+            # and silently mangle the diagnosis instead of showing it verbatim.
+            lab.setTextFormat(Qt.PlainText)
+            if not collapsed_detail:
+                lab.setProperty("status", "muted")
             lay.addWidget(lab)
+            self.intro_label = lab
         self.view = QPlainTextEdit()
         self.view.setReadOnly(True)
         self.view.setPlainText(text or "")
         self.view.setLineWrapMode(QPlainTextEdit.NoWrap)
         self.view.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+        self.details_btn = None
+        if collapsed_detail:
+            self.view.setVisible(False)
+            self.details_btn = QPushButton("Details")
+            self.details_btn.setAutoDefault(False)
+            self.details_btn.setCheckable(True)
+            self.details_btn.toggled.connect(self.view.setVisible)
         lay.addWidget(self.view, 1)
         row = QHBoxLayout()
         self.copy_btn = QPushButton("Copy to clipboard")
@@ -54,6 +81,8 @@ class TextViewerDialog(QDialog):
         if _theme is not None:
             _theme.make_primary(close_btn)
         row.addStretch(1)
+        if self.details_btn is not None:
+            row.addWidget(self.details_btn)
         row.addWidget(self.copy_btn)
         row.addWidget(close_btn)
         lay.addLayout(row)
@@ -80,17 +109,18 @@ class TextViewerDialog(QDialog):
         return self.view.toPlainText()
 
 
-def open_error_dialog(parent, title: str, detail: str, intro: str | None = None, prior=None):
+def open_error_dialog(parent, title: str, detail: str, intro: str | None = None, prior=None,
+                      collapsed_detail: bool = False):
     """Show a copyable full-detail (traceback) dialog, replacing ``prior`` if given
     so repeated errors don't accumulate windows. Returns the new dialog to keep a
-    reference on the caller."""
+    reference on the caller. ``collapsed_detail`` — see ``TextViewerDialog``."""
     if prior is not None:
         try:
             prior.close()
             prior.deleteLater()
         except Exception:                          # pragma: no cover - prior already gone
             pass
-    dlg = TextViewerDialog(title, detail, parent, intro=intro)
+    dlg = TextViewerDialog(title, detail, parent, intro=intro, collapsed_detail=collapsed_detail)
     dlg.show()
     dlg.raise_()
     return dlg

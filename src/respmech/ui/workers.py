@@ -701,6 +701,80 @@ def peek_columns(settings: Settings, file_path: str):
     return len(line.split(sep))
 
 
+def peek_header_warning(settings: Settings, file_path: str):
+    """Cheap two-line consistency probe for the manifest scanner (ticket D01): flags a file
+    whose FIRST non-blank line looks like it belongs to an instrument export's preamble
+    rather than real channel data — either because that line's own field count is under 3
+    (a real multi-channel recording needs at least a time column plus two signals; a header
+    line like LabChart's 'Interval=<TAB>0.001 s' has exactly two), or because the first two
+    non-blank lines disagree on field count. Delimited-text files only (.csv/.txt); returns
+    ``None`` for any other extension, an unreadable head, a head this function's fixed
+    encoding chain cannot decode (see below — narrower than it sounds), or a first line
+    that is itself empty — the same "nothing to say" cases ``peek_columns`` already
+    returns ``None`` for. Never raises.
+
+    Deliberately its OWN small decode block rather than sharing ``peek_columns``'s: the two
+    probes answer different questions (this one wants up to two non-blank lines,
+    ``peek_columns`` wants exactly line zero, blank or not) and folding them into one
+    shared helper risked silently changing ``peek_columns``'s existing, already-tested
+    blank-first-line behaviour for the sake of a probe that postdates it — a handful of
+    duplicated lines is the safer trade. In practice the "undecodable head" case above
+    never actually happens for a non-UTF-16 file: ``latin-1`` maps every byte, so the
+    decode loop always succeeds by the time it gets there — the guard exists for the same
+    defensive reason ``peek_columns``'s does, not because it is expected to fire.
+
+    ONLY sniffs the first 8 KB, same as ``peek_columns``: a data-row mismatch further into
+    the file (a short row, a quoted delimiter) is not caught here, only the specific,
+    common case of a header/preamble block ahead of the real data. That surfaces later as a
+    run-time ``DataValidationError``, exactly as before this probe existed. When the file is
+    at least 8 KB and the buffer's last line has no trailing newline, that line may be
+    mid-row rather than genuinely short — dropped before comparison (self-review finding: a
+    500-column recording's own row can exceed 8 KB, and a truncated SECOND row read as
+    "fewer fields" would otherwise manufacture a false disagreement on a perfectly uniform,
+    clean file)."""
+    import os
+
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext not in (".csv", ".txt"):
+        return None
+    try:
+        with open(file_path, "rb") as fh:
+            head = fh.read(8192)
+    except OSError:
+        return None
+    if head[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        text = head.decode("utf-16", errors="replace")
+    else:
+        text = None
+        for enc in ("utf-8-sig", "cp1252", "latin-1"):
+            try:
+                text = head.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
+    if not text:
+        return None
+    all_lines = text.splitlines()
+    if len(head) >= 8192 and not text.endswith(("\n", "\r")):
+        all_lines = all_lines[:-1]              # drop the possibly mid-row trailing line
+    first_line = all_lines[0].strip() if all_lines else ""
+    if not first_line:
+        return None
+    lines = [ln.strip() for ln in all_lines if ln.strip()][:2]
+    fmt = settings.input.format
+    dec = getattr(fmt, "decimal", ".") or "."
+    sep = "\t" if ext == ".txt" else (";" if dec == "," else ",")
+    counts = [len(ln.split(sep)) for ln in lines]
+    if counts[0] < 3:
+        plural = "" if counts[0] == 1 else "s"
+        return (f"the first row has only {counts[0]} field{plural} — too few to be "
+               "channel data")
+    if len(counts) > 1 and counts[1] != counts[0]:
+        return (f"the first two rows disagree on the number of fields "
+               f"({counts[0]} vs {counts[1]})")
+    return None
+
+
 def probe_sampling_frequency(settings: Settings, file_path: str):
     """Cheap per-file sampling-frequency probe for the manifest scanner: read only column 0
     (the time axis), capped at 5000 rows — measured at 4.3 ms and a correct 2000 Hz on a

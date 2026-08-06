@@ -498,6 +498,48 @@ def test_format_readout_flags_a_column_outlier_and_qc_is_not_green(qapp, tmp_pat
     win.close()
 
 
+def test_format_readout_flags_a_header_block_folder(qapp, tmp_path):
+    """Ticket D01: a LabChart-style export whose header block (Interval=/ChannelTitle=/
+    Range= lines) sniffs as a low, but MAJORITY-consistent, column count must show up as a
+    warning on the Input card — not the previous 'info'/clean status the bare first-line
+    sniff used to give it, since every file in the repro batch agrees on the same wrong
+    shape and so wins the majority vote outright."""
+    from respmech.ui.main_window import MainWindow
+    header = "Interval=\t0.001 s\nChannelTitle=\tFlow\tPoes\tPgas\tPdi\n"
+    rows = "\n".join(f"{i * 0.001:.3f}\t{i}\t{i + 1}\t{i + 2}\t{i + 3}" for i in range(10))
+    for name in ("P05_60W.txt", "P06_60W.txt"):
+        (tmp_path / name).write_text(header + rows + "\n")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.txt")
+    sc._on_inputs_changed()
+    text = sc.format_readout.text()
+    assert "2 files matched" in text
+    assert "header block" in text.lower()
+    assert sc.format_readout.property("status") == "warn"
+    win.close()
+
+
+def test_qc_strip_also_flags_a_header_block_folder(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    header = "Interval=\t0.001 s\nChannelTitle=\tFlow\tPoes\tPgas\tPdi\n"
+    rows = "\n".join(f"{i * 0.001:.3f}\t{i}\t{i + 1}\t{i + 2}\t{i + 3}" for i in range(10))
+    for name in ("P05_60W.txt", "P06_60W.txt"):
+        (tmp_path / name).write_text(header + rows + "\n")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.txt")
+    sc._on_inputs_changed()
+    # a valid channel mapping + output folder (ticket B07 pattern): otherwise the strip's
+    # own hard blocker (unset channels/output) masks the softer header caution under test.
+    # integrate_from_flow=True stands in for a volume column: the fixture's 5-column file
+    # (time + 4 data columns) has no column left to spare for one.
+    sc.samp_freq.setValue(1000); sc.out_folder.setText(str(tmp_path / "out"))
+    sc.state.settings.processing.volume.integrate_from_flow = True
+    _assign(sc, flow=2, poes=3, pgas=4, pdi=5)
+    assert sc.qc.property("status") == "warn"
+    assert "header block" in sc.qc.text().lower()
+    win.close()
+
+
 def test_format_readout_no_longer_misreports_xlsx(qapp, tmp_path):
     pytest.importorskip("openpyxl")
     from respmech.ui.main_window import MainWindow

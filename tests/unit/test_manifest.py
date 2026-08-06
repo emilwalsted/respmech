@@ -321,6 +321,103 @@ def test_manifest_cache_is_invalidated_when_a_file_changes(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# header-block detection (ticket D01): a LabChart-style export's preamble
+# (Interval=/ExcelDateTime=/ChannelTitle=/Range= lines) can sniff as a LOW column count
+# that is nonetheless the MAJORITY across a batch sharing the same instrument export
+# shape — outliers alone can never catch this, because there is no minority to exclude.
+# --------------------------------------------------------------------------- #
+def test_manifest_flags_a_majority_consistent_header_block_as_a_warning(tmp_path):
+    header = "Interval=\t0.001 s\nChannelTitle=\tFlow\tPoes\tPgas\tPdi\n"
+    rows = "\n".join(f"{i * 0.001:.3f}\t{i}\t{i + 1}\t{i + 2}\t{i + 3}" for i in range(10))
+    for name in ("a.txt", "b.txt"):
+        (tmp_path / name).write_text(header + rows + "\n")
+    s = _settings(str(tmp_path), "*.txt")
+    m = build_manifest(str(tmp_path), "*.txt", s)
+    assert m.majority_columns == 2                   # both files' first line has 2 fields
+    assert m.outliers == ()                           # no minority to exclude — both agree
+    assert {f.filename for f in m.header_warnings} == {"a.txt", "b.txt"}
+    assert not m.is_clean
+
+
+def test_manifest_a_clean_folder_has_no_header_warnings(tmp_path):
+    for n in ("a", "b", "c"):
+        _write_delim(tmp_path / f"{n}.csv", 9)
+    s = _settings(str(tmp_path), "*.csv")
+    m = build_manifest(str(tmp_path), "*.csv", s)
+    assert m.header_warnings == ()
+    assert m.is_clean
+
+
+def test_manifest_header_prober_is_injectable_and_skipped_for_excluded_files(tmp_path):
+    """Mirrors the existing columns_prober/freq_prober injection tests: a caller can assert
+    on/count calls without touching the real byte-peek, and — like freq_prober — the header
+    probe never runs for a file the majority vote already excluded (its own column count,
+    not its head, is why it failed, so its head is not worth reading)."""
+    for n in ("a", "b", "c"):
+        _write_delim(tmp_path / f"{n}.csv", 9)
+    _write_delim(tmp_path / "d.csv", 8)               # column-count outlier, excluded
+    s = _settings(str(tmp_path), "*.csv")
+    seen = []
+
+    def fake_header_prober(_settings, path):
+        seen.append(os.path.basename(path))
+        return None
+
+    m = build_manifest(str(tmp_path), "*.csv", s, header_prober=fake_header_prober)
+    assert sorted(seen) == ["a.csv", "b.csv", "c.csv"]   # d.csv (excluded) never probed
+    assert m.header_warnings == ()
+
+
+def test_manifest_header_prober_result_is_cached(tmp_path):
+    _write_delim(tmp_path / "a.csv", 9)
+    s = _settings(str(tmp_path), "*.csv")
+    calls = {"n": 0}
+
+    def counting(_settings, _path):
+        calls["n"] += 1
+        return None
+
+    cache = {}
+    build_manifest(str(tmp_path), "*.csv", s, header_prober=counting, cache=cache)
+    build_manifest(str(tmp_path), "*.csv", s, header_prober=counting, cache=cache)
+    assert calls["n"] == 1                             # second build served from cache
+
+
+def test_manifest_does_not_false_flag_a_clean_wide_file(tmp_path):
+    """Self-review regression: peek_header_warning only sniffs 8 KB, and a WIDE recording's
+    own row can exceed that on its own (measured: a 500-column row is ~5.4 KB) — the second
+    row then gets truncated mid-line inside the byte-peek, which used to read as a false
+    'the first two rows disagree on the number of fields' on a perfectly uniform file."""
+    ncols = 500
+    header = "\t".join(["time"] + [f"c{i}" for i in range(2, ncols + 1)])
+    row = "\t".join(f"{i:.3f}" for i in range(ncols))
+    (tmp_path / "wide.txt").write_text(header + "\n" + (row + "\n") * 5)
+    s = _settings(str(tmp_path), "*.txt")
+    m = build_manifest(str(tmp_path), "*.txt", s)
+    assert m.majority_columns == ncols
+    assert m.header_warnings == ()
+    assert m.is_clean
+
+
+def test_manifest_supplying_all_three_probers_never_imports_workers(tmp_path, monkeypatch):
+    """The docstring's promise ('inject your own probers to test this function without
+    importing workers at all') must still hold now that there are THREE probers, not two —
+    self-review finding after ``header_prober`` was added: the import guard must stay
+    per-argument, not regress to 'import if ANY default is used' once a caller supplies
+    every one of them."""
+    import sys
+    _write_delim(tmp_path / "a.csv", 9)
+    s = _settings(str(tmp_path), "*.csv")
+    monkeypatch.delitem(sys.modules, "respmech.ui.workers", raising=False)
+    m = build_manifest(str(tmp_path), "*.csv", s,
+                       columns_prober=lambda _s, _p: 9,
+                       freq_prober=lambda _s, _p: None,
+                       header_prober=lambda _s, _p: None)
+    assert "respmech.ui.workers" not in sys.modules
+    assert m.majority_columns == 9
+
+
+# --------------------------------------------------------------------------- #
 # empty / missing folder
 # --------------------------------------------------------------------------- #
 def test_manifest_over_a_missing_folder_is_empty_not_an_error(tmp_path):
