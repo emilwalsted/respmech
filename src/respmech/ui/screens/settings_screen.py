@@ -779,6 +779,19 @@ class SettingsScreen(QWidget):
                f"{'s' if m.narrowed_out_count != 1 else ''} excluded)")
 
     @staticmethod
+    def _header_warning_note(m):
+        """Ticket D01: the read-out's phrase for files whose sniffed head looks like an
+        instrument export's preamble rather than channel data — a majority-consistent
+        caveat ``outliers`` cannot see (see ``Manifest.header_warnings``). Deliberately
+        names BOTH possible reasons rather than asserting "header block": the underlying
+        probe (``workers.peek_header_warning``) also fires on a first line with under 3
+        fields, which is not itself proof of a preamble — self-review finding, to avoid
+        mis-diagnosing a merely too-narrow file as one with a header it does not have."""
+        n = len(m.header_warnings)
+        return (f"{n} file{'s' if n != 1 else ''} may not be real channel data (a header "
+               f"block, or too few columns): {SettingsScreen._named_list(m.header_warnings)}")
+
+    @staticmethod
     def _named_list(entries, limit=3):
         """'#.filename' for up to ``limit`` entries, then '+N more' — keeps a caution from
         growing unboundedly long over a batch of a hundred files."""
@@ -856,6 +869,8 @@ class SettingsScreen(QWidget):
                 else:
                     delim = self._delimiter_label(m)
                     parts.append(f"{m.majority_columns} columns, {delim}")
+                if m.header_warnings:
+                    parts.append(self._header_warning_note(m))
                 if m.mask_narrowed_from:
                     parts.append(self._narrowed_note(m))
                 # B01 self-review fix (05-08-2026): status now follows Manifest.is_clean
@@ -1117,7 +1132,7 @@ class SettingsScreen(QWidget):
         if not files:
             self._set_status("No valid data files found to assign channels — set them in the Channels card.")
             return False
-        from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+        from respmech.ui.channel_setup_dialog import ChannelSetupDialog, NoReadableFileError
         from respmech.ui.workers import load_raw_matrix
         s = self.state.settings
         fs = s.input.format.sampling_frequency or 1000
@@ -1131,6 +1146,19 @@ class SettingsScreen(QWidget):
         try:
             dlg = ChannelSetupDialog(files, fs, initial, loader=lambda p: load_raw_matrix(s, p),
                                      parent=self, excluded=excluded)
+        except NoReadableFileError as exc:
+            # ticket D01: the dialog already diagnosed WHY none of its files could be read
+            # (see _no_files_readable_message) — show that diagnosis as the message, not a
+            # traceback, with the copyable trace one click away behind Details instead of
+            # dumped straight on screen. A dedicated exception type, not a bare ValueError:
+            # self-review found that catching ValueError broadly would also swallow an
+            # UNRELATED ValueError from elsewhere in the dialog's constructor (e.g. a numpy
+            # reshape error) and misrepresent its raw message as if it were this diagnosis.
+            self._set_status(f"Channel setup failed — {exc}")
+            self._err_dialog = open_error_dialog(
+                self, "Channel setup — error", traceback.format_exc(), intro=str(exc),
+                prior=self._err_dialog, collapsed_detail=True)
+            return False
         except Exception:                        # noqa: BLE001 — copyable error, don't trap the flow
             self._report_error("Channel setup", traceback.format_exc())
             return False
@@ -1418,10 +1446,12 @@ class SettingsScreen(QWidget):
         return notes[0] if notes else ""
 
     def _manifest_cautions(self):
-        """B01: caveats about the batch ITSELF (mask narrowing, a column-count outlier) —
-        as distinct from ``_science_notes``, which is about the channel/settings
-        configuration. Kept separate so ``_science_notes`` (used verbatim for the guided-
-        flow one-line verdict) is not forced to explain a fact about the file set."""
+        """B01: caveats about the batch ITSELF (mask narrowing, a column-count outlier,
+        and — ticket D01 — a header-block file that is majority-consistent and so invisible
+        to the outlier check) — as distinct from ``_science_notes``, which is about the
+        channel/settings configuration. Kept separate so ``_science_notes`` (used verbatim
+        for the guided-flow one-line verdict) is not forced to explain a fact about the
+        file set."""
         m = self._manifest
         if m is None:
             return []
@@ -1432,6 +1462,11 @@ class SettingsScreen(QWidget):
             n_out = len(m.outliers)
             out.append(f"{n_out} of {len(m.files)} files have a different column count "
                        f"and will fail: {self._named_list(m.outliers)}")
+        if m.header_warnings:
+            n_hdr = len(m.header_warnings)
+            out.append(f"{n_hdr} of {len(m.files)} files may not be real channel data (a "
+                       f"header block, or too few columns): "
+                       f"{self._named_list(m.header_warnings)}")
         return out
 
     def _output_is_input_folder(self):
@@ -1475,7 +1510,8 @@ class SettingsScreen(QWidget):
           but could not read ANY of them as data (B01's ``majority_columns is None``, e.g. a
           decimal-separator mismatch: the mask matched real files, so ``path_problem`` alone
           cannot see the problem).
-        - ``'warn'``: a soft caution — a column-count outlier, a narrowed mask, output
+        - ``'warn'``: a soft caution — a column-count outlier, a header-block file that
+          slipped past that outlier check (ticket D01), a narrowed mask, output
           pointing at the input folder, or a science note (frequency mismatch, ECG
           prerequisite, low EMG rate) — nothing here blocks a run, but every one of them
           changes what the batch actually does or writes.

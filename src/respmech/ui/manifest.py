@@ -50,6 +50,10 @@ class FileEntry:
     detected_fs: int | None = None      # None: not probed (excluded, or .mat, or inconclusive)
     included: bool = True               # part of the majority-column-count batch
     exclude_reason: str | None = None   # human reason `included` is False; None when included
+    header_warning: str | None = None   # ticket D01: sniffed head looks like a
+                                        # preamble/header block, not channel data (see
+                                        # workers.peek_header_warning); None when clean, or
+                                        # not probed (excluded, or .xlsx/.mat)
 
 
 @dataclass
@@ -87,10 +91,23 @@ class Manifest:
                     if f.detected_fs is not None and f.detected_fs != self.settings_fs)
 
     @property
+    def header_warnings(self):
+        """Included files whose sniffed head looks like an instrument export's preamble
+        (a header block) rather than real channel data — ticket D01. Deliberately
+        a SEPARATE caveat from ``outliers``: a header-block file's first line can easily
+        share its field count with every other file the same instrument exports (both
+        LabChart files in the ticket's repro sniffed as '2 columns'), so it wins the
+        majority vote and is 'included' by column-count alone — outliers alone would never
+        catch it. See ``FileEntry.header_warning``/``workers.peek_header_warning``."""
+        return tuple(f for f in self.included_files if f.header_warning)
+
+    @property
     def is_clean(self):
         """No caveats at all: nothing was narrowed, nothing disagrees on columns or
-        frequency. The condition ``_update_qc`` must require before it may say so."""
-        return not self.mask_narrowed_from and not self.outliers and not self.freq_mismatches
+        frequency, and no included file's head looks like a header block. The condition
+        ``_update_qc`` must require before it may say so."""
+        return (not self.mask_narrowed_from and not self.outliers
+               and not self.freq_mismatches and not self.header_warnings)
 
 
 def narrow_mask(folder, mask):
@@ -138,7 +155,8 @@ def manifest_from_filenames(folder, paths):
     return Manifest(folder=folder, mask="", files=entries)
 
 
-def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=None, cache=None):
+def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=None,
+                   header_prober=None, cache=None):
     """Build a :class:`Manifest` describing every file ``mask`` matches in ``folder``.
 
     Column counts and detected sampling frequencies are probed at most ONCE per
@@ -151,15 +169,21 @@ def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=N
     ``columns_prober(settings, path) -> int|None`` and ``freq_prober(settings, path) ->
     int|None`` default to :func:`respmech.ui.workers.peek_columns` (the cheap 8 KB byte-peek
     for .csv/.txt, falling back to ``probe_data_columns`` for .xlsx/.mat) and
-    :func:`respmech.ui.workers.probe_sampling_frequency` (a capped column-0 read). Inject
-    your own to test this function without importing ``workers`` at all, or to count/assert
-    probe calls (see the ticket's "zero calls to probe_data_columns for a .csv folder"
-    requirement).
+    :func:`respmech.ui.workers.probe_sampling_frequency` (a capped column-0 read).
+    ``header_prober(settings, path) -> str|None`` (ticket D01) defaults to
+    :func:`respmech.ui.workers.peek_header_warning` — same 8 KB byte-peek budget, sniffing
+    whether the head looks like an instrument preamble rather than channel data. Inject your
+    own probers to test this function without importing ``workers`` at all — as of ticket
+    D01 that means supplying all THREE (a caller injecting only the original two, as some
+    existing tests still do, now pulls ``workers`` in for the header default; the import
+    guard below is per-argument, so supplying all three still avoids it entirely) — or to
+    count/assert probe calls (see the ticket's "zero calls to probe_data_columns for a .csv
+    folder" requirement).
 
-    Frequency is probed only for INCLUDED files (the majority column-count group) — an
-    outlier is already excluded from the batch on column count alone, so its frequency
-    would never be acted on."""
-    if columns_prober is None or freq_prober is None:
+    Frequency and header probing both run only for INCLUDED files (the majority
+    column-count group) — an outlier is already excluded from the batch on column count
+    alone, so neither its frequency nor its header shape would ever be acted on."""
+    if columns_prober is None or freq_prober is None or header_prober is None:
         from respmech.ui import workers as _workers   # lazy: keeps this module importable
                                                         # without pulling PySide6 in for a
                                                         # caller that injects its own probers
@@ -167,6 +191,8 @@ def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=N
             columns_prober = _workers.peek_columns
         if freq_prober is None:
             freq_prober = _workers.probe_sampling_frequency
+        if header_prober is None:
+            header_prober = _workers.peek_header_warning
     if cache is None:
         cache = {}
 
@@ -221,6 +247,7 @@ def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=N
             continue
         included = columns == majority
         detected_fs = None
+        header_warning = None
         if included:
             fkey = ("fs", token, decimal) if token is not None else None
             if fkey is not None and fkey in cache:
@@ -229,9 +256,17 @@ def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=N
                 detected_fs = freq_prober(settings, path)
                 if fkey is not None:
                     cache[fkey] = detected_fs
+            hkey = ("hdr", token, decimal) if token is not None else None
+            if hkey is not None and hkey in cache:
+                header_warning = cache[hkey]
+            else:
+                header_warning = header_prober(settings, path)
+                if hkey is not None:
+                    cache[hkey] = header_warning
         reason = None if included else f"{columns} column{'s' if columns != 1 else ''} (majority is {majority})"
         entries.append(FileEntry(path=path, filename=filename, ext=ext, columns=columns,
-                                 detected_fs=detected_fs, included=included, exclude_reason=reason))
+                                 detected_fs=detected_fs, included=included, exclude_reason=reason,
+                                 header_warning=header_warning))
 
     return Manifest(folder=folder, mask=effective_mask, settings_fs=settings_fs,
                     mask_narrowed_from=narrowed_from,

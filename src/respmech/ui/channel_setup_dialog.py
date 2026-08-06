@@ -16,6 +16,7 @@ exactly like the other RespMech plots.
 from __future__ import annotations
 
 import os
+import re
 
 import numpy as np
 from PySide6.QtCore import QSize
@@ -35,6 +36,72 @@ except Exception:  # pragma: no cover
 # kept as module-level aliases: the tests and _index_of_role read them by these names
 _ROLES, _SINGLE, _REQUIRED, _REQUIRED_LABELS = ROLES, SINGLE, REQUIRED, REQUIRED_LABELS
 _as_2d, _role_color, _plot_pal = as_2d, role_color, plot_palette   # legacy aliases
+
+# ticket D01: pandas' own ParserError for a ragged row reads e.g. "Error tokenizing data.
+# C error: Expected 3 fields in line 4, saw 9" — recognisable, but in pandas' vocabulary
+# (fields, tokenizing, a C-level error prefix), not RespMech's (rows/values). Translated
+# below into the phrasing a physiologist can act on.
+_FIELD_COUNT_RE = re.compile(r"Expected (\d+) fields? in line (\d+), saw (\d+)")
+
+_HEADER_BLOCK_HINT = (
+    "Instrument exports often start with a header block (LabChart writes Interval= / "
+    "ChannelTitle= / Range= lines). Delete the lines above the channel data, or "
+    "re-export without the header.")
+
+# The header-block guidance only makes sense for a mismatch NEAR THE TOP of the file — a
+# preamble is a handful of lines, not thousands. A ragged row deep in an otherwise-good
+# file (self-review finding: a truncated export, a quoted field pandas miscounts at line
+# 5000) is a different problem, and telling a physiologist to "delete the lines above the
+# channel data" when the fault is at the BOTTOM would send them looking in the wrong place.
+_HEADER_BLOCK_HINT_MAX_LINE = 15
+
+
+def _describe_read_failure(exc):
+    """A short, non-technical phrase for why one file failed to load — the exception's own
+    message when nothing more specific is recognised, or a translated, actionable phrasing
+    when the shape of the failure (pandas' "Expected N fields… saw M" ParserError) is
+    recognised. ``_HEADER_BLOCK_HINT`` is appended ONLY when the mismatch is near the top
+    of the file (see ``_HEADER_BLOCK_HINT_MAX_LINE``) — the one real-world shape that
+    actually IS a preamble/header block sitting above the actual channel data. Never
+    raises."""
+    msg = str(exc).strip()
+    m = _FIELD_COUNT_RE.search(msg)
+    if m:
+        expected, line, saw = m.groups()
+        plural = "" if saw == "1" else "s"
+        phrase = f"row {line} has {saw} value{plural} but the first row has {expected}."
+        if int(line) <= _HEADER_BLOCK_HINT_MAX_LINE:
+            phrase += " " + _HEADER_BLOCK_HINT
+        return phrase
+    return msg or exc.__class__.__name__
+
+
+class NoReadableFileError(ValueError):
+    """Raised by ``ChannelSetupDialog.__init__`` when NONE of the candidate files could be
+    read (ticket D01). A dedicated subclass, not a bare ``ValueError``: the caller
+    (``SettingsScreen._open_channel_setup``) needs to tell THIS specific, already-diagnosed
+    failure apart from an incidental ``ValueError`` an unrelated bug elsewhere in the
+    constructor might raise (e.g. a numpy reshape error) — the latter must still show as a
+    generic, full-traceback error, not be presented as if it were a plain-language
+    diagnosis."""
+
+
+def _no_files_readable_message(nfiles, failures):
+    """The message for the :class:`NoReadableFileError` raised when every candidate file
+    failed to load. ``failures`` is ``[(filename, exception), ...]`` in the order the files
+    were tried — this names the FIRST one (the one a user would investigate first) and its
+    cause, replacing the previous bare "None of the matching data files could be read."
+    sentence, which named neither. Falls back to that same bare sentence if, somehow,
+    nothing was recorded (defensive only — the caller always tries at least one file
+    first)."""
+    if not failures:
+        return "None of the matching data files could be read."
+    name, exc = failures[0]
+    detail = _describe_read_failure(exc)
+    if nfiles == 1:
+        return f"{name} could not be read: {detail}"
+    return f"None of the {nfiles} matching files could be read. {name}: {detail}"
+
 
 class ChannelSetupDialog(QDialog):
     """Assign each raw data column to a physiological role, across a batch of files.
@@ -68,17 +135,22 @@ class ChannelSetupDialog(QDialog):
         # The first file is the default, but a file can pass the cheap column probe and
         # still fail a full read (e.g. a ragged row) — fall forward to the first file that
         # actually loads, so one bad default never kills the whole modal (switching to a
-        # later bad file is handled gracefully by _on_file_changed's revert).
+        # later bad file is handled gracefully by _on_file_changed's revert). Every file's
+        # own exception is kept (not just discarded), so that if NONE could be read, the
+        # error below can name the file and the underlying cause instead of a bare
+        # sentence (ticket D01).
         matrix0 = names0 = None
         start = 0
+        failures = []                       # [(filename, exception), ...], in try order
         for start in range(len(self._files)):
             try:
                 matrix0, names0 = self._get(self._files[start])
                 break
-            except Exception:                              # try the next file
+            except Exception as exc:                       # remember, then try the next file
+                failures.append((os.path.basename(self._files[start]), exc))
                 continue
         if matrix0 is None:
-            raise ValueError("None of the matching data files could be read.")
+            raise NoReadableFileError(_no_files_readable_message(len(self._files), failures))
         matrix0 = _as_2d(matrix0)
         self._file_idx = start
         self._ncols = matrix0.shape[1]

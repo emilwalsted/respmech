@@ -168,6 +168,84 @@ def test_dialog_switch_to_unreadable_file_reverts(qapp):
     assert "could not read" in dlg.info.text().lower()
 
 
+# --------------------------------------------------------------------------- #
+# ticket D01: a diagnosis, not a bare sentence, when nothing could be read
+# --------------------------------------------------------------------------- #
+def test_dialog_diagnoses_a_field_count_mismatch_instead_of_a_bare_sentence(qapp):
+    """An instrument export with a header block above the real channel data is unreadable
+    end to end; the raised error must name the file and translate pandas' 'Expected N
+    fields...saw M' into RespMech's own words, plus the header-block hint — not the
+    previous bare 'None of the matching data files could be read.'"""
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog, NoReadableFileError
+
+    def loader(_p):
+        raise ValueError("Error tokenizing data. C error: Expected 3 fields in line 4, saw 9")
+    with pytest.raises(NoReadableFileError) as excinfo:
+        ChannelSetupDialog(["P05_60W.txt"], 1000, loader=loader)
+    assert isinstance(excinfo.value, ValueError)     # still a plain ValueError to old callers
+    msg = str(excinfo.value)
+    assert "P05_60W.txt" in msg
+    assert "row 4" in msg and "9 values" in msg and "the first row has 3" in msg
+    assert "header block" in msg.lower()
+    assert "Traceback" not in msg
+
+
+def test_dialog_diagnosis_omits_the_header_hint_for_a_mismatch_deep_in_the_file(qapp):
+    """Self-review finding: the header-block guidance ('delete the lines above the channel
+    data') only makes sense for a mismatch NEAR THE TOP of the file. A ragged row 5000
+    lines in (a truncated export, a quoted delimiter pandas miscounts) is a different
+    problem, and telling the user to look at the top would send them the wrong way."""
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+
+    def loader(_p):
+        raise ValueError("Error tokenizing data. C error: Expected 6 fields in line 5000, saw 2")
+    with pytest.raises(ValueError) as excinfo:
+        ChannelSetupDialog(["deep.csv"], 1000, loader=loader)
+    msg = str(excinfo.value)
+    assert "row 5000" in msg and "2 values" in msg and "the first row has 6" in msg
+    assert "header block" not in msg.lower()
+
+
+def test_dialog_diagnosis_names_the_first_of_several_failed_files(qapp):
+    """Every file's own exception is kept (not just discarded), but the raised message
+    leads with the FIRST failure — the one a user would investigate first — while still
+    saying how many files failed in total."""
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+
+    def loader(_p):
+        raise ValueError("boom")
+    with pytest.raises(ValueError) as excinfo:
+        ChannelSetupDialog(["A.txt", "B.txt", "C.txt"], 1000, loader=loader)
+    msg = str(excinfo.value)
+    assert msg.startswith("None of the 3 matching files could be read.")
+    assert "A.txt" in msg and "boom" in msg
+    assert "B.txt" not in msg and "C.txt" not in msg
+
+
+def test_dialog_diagnosis_for_a_single_file_reads_naturally(qapp):
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+
+    def loader(_p):
+        raise ValueError("boom")
+    with pytest.raises(ValueError) as excinfo:
+        ChannelSetupDialog(["A.txt"], 1000, loader=loader)
+    assert str(excinfo.value) == "A.txt could not be read: boom"
+
+
+def test_dialog_diagnosis_falls_back_to_the_raw_message_for_an_unrecognised_failure(qapp):
+    """Not every read failure is a field-count mismatch — an unrelated exception must still
+    surface, just without the header-block guess grafted onto it."""
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+
+    def loader(_p):
+        raise PermissionError("Permission denied")
+    with pytest.raises(ValueError) as excinfo:
+        ChannelSetupDialog(["locked.csv"], 1000, loader=loader)
+    msg = str(excinfo.value)
+    assert msg == "locked.csv could not be read: Permission denied"
+    assert "header block" not in msg.lower()
+
+
 def test_dialog_updates_column_names_on_file_switch(qapp):
     import numpy as np
     from respmech.ui.channel_setup_dialog import ChannelSetupDialog
@@ -473,6 +551,66 @@ def test_open_channel_setup_cancel_changes_nothing(qapp, monkeypatch):
     before = list(sc.state.settings.input.channels.emg)
     assert sc._open_channel_setup(initial={}) is False
     assert sc.state.settings.input.channels.emg == before
+    win.close()
+
+
+def test_open_channel_setup_shows_a_diagnosis_not_a_traceback(qapp, monkeypatch):
+    """Ticket D01: when ChannelSetupDialog raises its diagnostic ``NoReadableFileError``
+    (every matching file unreadable), the screen must lead with that diagnosis — no
+    'Traceback' text and no path into RespMech's own source on the primary surface — with
+    the full trace still one click away behind Details, not silently dropped.
+
+    Uses ``isVisibleTo(dlg)``, not bare ``isVisible()``: the latter also asks whether the
+    whole ancestor chain up to the screen is realised, and would give a false answer for an
+    unshown top-level widget regardless of the child's own explicit visibility flag — the
+    same class of gotcha CLAUDE.md documents for QShortcut. It happens to read correctly
+    here only because ``open_error_dialog`` calls ``dlg.show()``; asserting the form that is
+    correct regardless is the point."""
+    import respmech.ui.channel_setup_dialog as csd
+    diagnosis = ("None of the 2 matching files could be read. P05_60W.txt: row 4 has 9 "
+                "values but the first row has 3. Instrument exports often start with a "
+                "header block.")
+
+    def _raise(*a, **k):
+        raise csd.NoReadableFileError(diagnosis)
+    monkeypatch.setattr(csd, "ChannelSetupDialog", _raise)
+    win, sc = _screen_pointed_at_input(qapp)
+    assert sc._open_channel_setup(initial={}) is False
+    assert diagnosis in sc.status.text()
+    dlg = sc._err_dialog
+    assert dlg is not None
+    assert dlg.intro_label is not None
+    assert dlg.intro_label.text() == diagnosis
+    assert "Traceback" not in dlg.intro_label.text()
+    assert ".py" not in dlg.intro_label.text()            # no source path on the primary surface
+    assert dlg.view.isVisibleTo(dlg) is False              # the trace starts collapsed
+    assert dlg.details_btn is not None
+    dlg.details_btn.setChecked(True)
+    assert dlg.view.isVisibleTo(dlg) is True
+    assert "NoReadableFileError" in dlg.text()             # still reachable, one click away
+    win.close()
+
+
+def test_open_channel_setup_shows_a_full_traceback_for_an_unrelated_valueerror(qapp, monkeypatch):
+    """Self-review finding: an unrelated ``ValueError`` from elsewhere in
+    ``ChannelSetupDialog.__init__`` (e.g. a numpy reshape error) is NOT the dialog's own
+    diagnosed no-files-readable case, and must not be mistaken for one — it must still go
+    through the ordinary, full-traceback error surface, not be presented as a trustworthy
+    plain-language diagnosis. This is what distinguishes ``NoReadableFileError`` from
+    catching bare ``ValueError``."""
+    import respmech.ui.channel_setup_dialog as csd
+
+    def _raise(*a, **k):
+        raise ValueError("cannot reshape array of size 12 into shape (5,3)")
+    monkeypatch.setattr(csd, "ChannelSetupDialog", _raise)
+    win, sc = _screen_pointed_at_input(qapp)
+    assert sc._open_channel_setup(initial={}) is False
+    assert "channel setup failed" in sc.status.text().lower()
+    dlg = sc._err_dialog
+    assert dlg is not None
+    assert dlg.details_btn is None                         # NOT the collapsed-diagnosis mode
+    assert dlg.view.isVisibleTo(dlg) is True                # the trace is visible immediately
+    assert "reshape" in dlg.text()
     win.close()
 
 

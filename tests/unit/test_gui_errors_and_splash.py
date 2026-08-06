@@ -44,6 +44,52 @@ def test_text_viewer_dialog_is_copyable(qapp):
     assert QApplication.clipboard().text() == "line one\nline two"
 
 
+def test_text_viewer_dialog_collapsed_detail_starts_hidden_behind_details(qapp):
+    """Ticket D01: a caller with an already-diagnosed failure leads with the diagnosis
+    (``intro``, shown in the normal — not muted — style, since it IS the message) and keeps
+    the trace reachable but out of the way, instead of dumping it straight on screen.
+
+    Checks visibility with ``isVisibleTo(dlg)`` rather than ``isVisible()``: the latter also
+    asks whether the whole ancestor chain up to the screen is shown, which is False for an
+    unshown top-level QDialog regardless of the child's own explicit setVisible() state — a
+    property of the widget's OWN visibility flag, not of whether the dialog is on screen."""
+    from respmech.ui.dialogs import TextViewerDialog
+    dlg = TextViewerDialog("Channel setup — error", "Traceback (most recent call last):\n...",
+                           intro="P05_60W.txt: row 4 has 9 values but the first row has 3.",
+                           collapsed_detail=True)
+    assert dlg.view.isVisibleTo(dlg) is False
+    assert dlg.intro_label is not None
+    assert dlg.intro_label.property("status") != "muted"
+    assert dlg.details_btn is not None
+    dlg.details_btn.setChecked(True)
+    assert dlg.view.isVisibleTo(dlg) is True
+    assert "Traceback" in dlg.text()        # still reachable — nothing was dropped
+    dlg.details_btn.setChecked(False)
+    assert dlg.view.isVisibleTo(dlg) is False    # toggles back off
+
+
+def test_text_viewer_dialog_without_collapsed_detail_is_unchanged(qapp):
+    """The default (existing) behaviour must be untouched: no Details button, the trace
+    visible immediately, and the intro (when given) muted — the previous, plain error
+    surface every OTHER caller of open_error_dialog still uses."""
+    from respmech.ui.dialogs import TextViewerDialog
+    dlg = TextViewerDialog("Open analysis — error", "Traceback...", intro="Open analysis failed.")
+    assert dlg.details_btn is None
+    assert dlg.view.isVisibleTo(dlg) is True
+    assert dlg.intro_label.property("status") == "muted"
+
+
+def test_text_viewer_dialog_collapsed_detail_without_an_intro_falls_back(qapp):
+    """Self-review finding: no current caller passes ``collapsed_detail=True`` without an
+    ``intro`` (there would be nothing to lead with), but a dialog that silently hid its
+    only content behind a button labelled 'Details' would be a foot-gun for the next one —
+    it must fall back to the ordinary, uncollapsed layout instead."""
+    from respmech.ui.dialogs import TextViewerDialog
+    dlg = TextViewerDialog("Channel setup — error", "Traceback...", collapsed_detail=True)
+    assert dlg.details_btn is None
+    assert dlg.view.isVisibleTo(dlg) is True
+
+
 # -- splash -----------------------------------------------------------------
 def test_build_splash_svg_has_brand_and_version():
     from respmech.ui.splash import build_splash_svg
