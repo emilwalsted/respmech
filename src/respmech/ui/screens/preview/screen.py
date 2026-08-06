@@ -538,9 +538,14 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         the same folder/mask, with no exclusion for a file the FIRST analysis had
         excluded breaths in, must not leave that first analysis's stale badge on
         screen."""
+        from respmech.core.settings import is_carried_folder
+        current_folder = self.state.settings.input.folder
         counts = {e.file: len(e.breaths) for e in self.state.settings.processing.exclude_breaths}
+        carried = {e.file: is_carried_folder(e.folder, current_folder)
+                  for e in self.state.settings.processing.exclude_breaths if e.breaths}
         for name in self.file_rail.filenames():
-            self.file_rail.set_excluded_count(name, counts.get(name, 0))
+            self.file_rail.set_excluded_count(name, counts.get(name, 0),
+                                              carried=carried.get(name, False))
 
     def _refresh_files(self):        # kept for existing wiring + tests
         self.refresh_files()

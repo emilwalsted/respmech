@@ -338,6 +338,69 @@ FlowLayout row, and any future card combining `install_sections` with `install_f
 reach for the same honest-`sizeHint` pattern from the start, not discover it by measuring a
 threshold that never fires.
 
+### Filename-keyed batch state needs a folder tag, or a re-pointed analysis silently reapplies stale decisions
+
+Ticket B06 found and fixed a real data-integrity bug, not just a UI one: `exclude_breaths`,
+`breath_counts` and the EMG noise reference (`core/settings.py`) all key on a bare
+**filename**, with no idea which recordings folder that filename was chosen in. Point the
+same loaded analysis at a DIFFERENT folder that happens to contain a file of the same
+name — routine in a multi-subject study where every export shares a fixed LabChart
+filename — and the old exclusions/overrides/reference kept silently applying to the new
+folder's file. Nothing said so: the Setup QC strip stayed green, and only the excluded-
+breath count in Preview's QC line hinted anything was off, with no way to tell it apart
+from a genuine decision.
+
+**The fix, and the pattern to reuse for anything ELSE that keys on a bare filename in
+future work:** give the entry an optional `folder` field (`ExcludeEntry.folder`,
+`BreathCountEntry.folder`, `NoiseSettings.reference_folder`), stamped with the live
+`settings.input.folder` wherever the entry is *created* (never on a mere edit of an
+existing entry — see below), rebased/relativized in `settingsio/toml_io.py` exactly like
+`input.folder`/`output.folder` already are (so a portable, relative-path analysis doesn't
+falsely read as carried-over the moment it's reopened somewhere else). `core.settings`
+gets ONE pure, Qt-free source of truth for "does this still match" —
+`is_carried_folder(entry_folder, current_folder)` (an unrecorded/`None` folder on EITHER
+side always counts as unproven, never guessed at; `os.path.normcase` + `os.path.normpath`,
+matching `ui.prefs`'s existing recent-analyses dedup, so a same-folder path differing only
+in case on Windows doesn't false-flag) — reused identically by `carried_over_state()`/
+`clear_carried_over()`, the Setup banner, Preview's overlay hatching, the QC line and the
+file rail's badge, so none of them can disagree about what counts as carried.
+
+**The calculation core is deliberately blind to all of this.** `core.compute`/
+`core.pipeline`/`core._legacy_ns` still key purely on filename — `folder` is dropped at
+the `to_legacy_ns()` boundary (`excludebreaths=[[e.file, list(e.breaths)] for e in ...]`)
+and never reaches a run. The UI/settings layer alone decides which entries are even IN the
+list by the time a run starts (mutating `settings.processing.exclude_breaths` directly);
+compute's own numeric behaviour for a given list is byte-identical to before this ticket
+— any golden-test change here would be a bug in the change, not the reference.
+
+**A subtlety worth knowing before touching this again:** the folder tag is ONE per
+file-entry, not one per breath, because `ExcludeEntry.breaths` is a flat `list[int]`. Two
+self-review rounds converged on the same rule from opposite directions: `_toggle_breath`
+(`ui/screens/preview/_mechanics.py`) stamps `folder` **only when creating a brand-new
+entry** — an existing entry's `folder` is never rewritten by a plain click, even one that
+un-excludes one of ITS OWN breaths, because the entry can hold a MIX of a breath the user
+just decided on and others still carried from a different folder that this click never
+looked at. An earlier version restamped on every touch; that silently "confirmed" the
+untouched breaths too, exactly the invisible application this ticket exists to stop, one
+click later. The accepted, documented imprecision this leaves: a genuinely NEW breath
+added to an already-carried entry still reads as carried until the whole entry is cleared.
+Building true per-breath provenance would fix that but is a bigger change than this
+ticket's own field, singular, on the entry — out of scope unless a future ticket
+specifically asks for it.
+
+**Wherever a write path can resolve carried-over state, refresh whatever is SHOWING it.**
+The Setup banner only rechecks on an actual `input.folder` value change
+(`_on_inputs_changed`) or on `from_state()` (opening/loading an analysis) — by itself that
+leaves it blind to a Preview-side edit (a breath toggle, committing the breath-count-
+overrides dialog, picking a noise reference) that resolves the very state it's warning
+about, so a dismissed-but-then-fixed banner could sit there indefinitely as a stale, already
+wrong warning. Fixed by wiring `PreviewScreen.settings_edited` to
+`SettingsScreen._update_carried_banner` in `main_window.py`, plus a direct call in
+`SettingsScreen.set_noise_reference` for the one write path (the noise-reference picker)
+that goes through its own dedicated signal instead. Any FUTURE state this pattern is
+extended to needs the same treatment: know every path that can create OR resolve it, not
+just the one this ticket happened to add a banner for.
+
 ## Releases (`.github/workflows/release.yml` = "Build installers")
 
 - Trigger: push a `v*` tag (or manual dispatch). Builds a Windows **MSI** and a

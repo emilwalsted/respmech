@@ -321,6 +321,11 @@ def build_sample_settings(desc: dict, output_folder: str):
     e.noise.reference_file = desc["filename"]
     e.noise.use_expiration = False
     e.noise.reference_intervals = [desc["reference_interval"]]
+    e.noise.reference_folder = desc["folder"]   # matches s.input.folder set above — see
+    # core.settings.carried_over_state: leaving this unset reads as "unrecorded", which is
+    # ALWAYS carried (an unknown provenance can never be proven current), so the very first
+    # load of a freshly BUILT (not migrated) sample analysis would falsely show the
+    # carried-over banner even though it never named a different folder.
     e.noise.auto_prop = True
     e.plot_yscale = []          # auto-scale the diagnostic EMG figures: the raw stage is
                                 # dominated by the R-waves, the conditioned stages are ~5× smaller

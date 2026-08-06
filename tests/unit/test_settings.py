@@ -1,6 +1,9 @@
 import pytest
 
-from respmech.core.settings import SCHEMA_VERSION, Settings, SettingsError
+from respmech.core.settings import (
+    SCHEMA_VERSION, BreathCountEntry, CarriedOverState, ExcludeEntry, Settings,
+    SettingsError, carried_over_state, clear_carried_over, is_carried_folder,
+)
 
 
 def _minimal():
@@ -167,3 +170,130 @@ def test_a_legacy_zero_trend_threshold_is_not_rejected():
     Settings.from_dict(_trend_settings(trend_peak_min_height=0.0)).validate()
     with pytest.raises(SettingsError):
         Settings.from_dict(_trend_settings(trend_peak_min_height=-0.5)).validate()
+
+
+# -- carried-over per-folder state (ticket B06) -------------------------------
+# exclude_breaths/breath_counts/the noise reference key on the bare filename, which is
+# ambiguous the moment two recordings folders share a filename (the common multi-subject
+# workflow). ExcludeEntry/BreathCountEntry.folder and NoiseSettings.reference_folder let
+# the UI tell the two situations apart; is_carried_folder/carried_over_state/
+# clear_carried_over are the one place that decides it, reused by the Setup banner, the
+# Preview overlay and the file rail so none of them can disagree.
+
+def test_a_file_written_before_this_field_existed_loads_with_folder_none():
+    """Backward compat: an exclude_breaths entry with no 'folder' key (every analysis
+    written before this ticket) must load unchanged, with folder defaulting to None."""
+    d = _minimal()
+    d["processing"] = {"exclude_breaths": [{"file": "a.txt", "breaths": [1, 2]}]}
+    s = Settings.from_dict(d).validate()
+    assert s.processing.exclude_breaths[0].folder is None
+    assert s.processing.exclude_breaths[0].breaths == [1, 2]     # nothing else is lost
+
+
+def test_an_unrecognised_field_on_an_exclude_entry_is_captured_not_fatal():
+    """Forward compat: a FUTURE field this version doesn't know about, on one list entry,
+    must not crash the loader or drop the entry's own known fields (the same tolerance
+    Settings.from_dict already gives top-level unknown sections, exercised here at the
+    per-list-item level added by this ticket)."""
+    d = _minimal()
+    d["processing"] = {"exclude_breaths": [
+        {"file": "a.txt", "breaths": [1], "folder": "input", "some_future_field": "x"}]}
+    s = Settings.from_dict(d).validate()
+    assert s.processing.exclude_breaths[0].file == "a.txt"
+    assert s.processing.exclude_breaths[0].folder == "input"
+    assert "processing.exclude_breaths.[0].some_future_field" in s.unknown
+
+
+def test_is_carried_folder_true_for_mismatch_or_either_side_unknown():
+    assert is_carried_folder("/data/S01", "/data/S02") is True
+    assert is_carried_folder(None, "/data/S02") is True          # unrecorded -> unproven
+    assert is_carried_folder("/data/S01", None) is True          # no current folder yet
+    assert is_carried_folder(None, None) is True
+    assert is_carried_folder("/data/S01", "/data/S01") is False
+    assert is_carried_folder("/data/S01/", "/data/S01") is False  # normpath-equal
+
+
+def test_is_carried_folder_uses_normcase_like_the_rest_of_the_codebase():
+    """Self-review finding: the SAME real folder re-typed or re-browsed with different case
+    must not read as carried-over on a case-insensitive filesystem (Windows) — matches the
+    normcase dedup ui.prefs already relies on for the same reason. normcase is a no-op on
+    case-sensitive macOS/Linux, so this test derives its expectation from what normcase
+    ACTUALLY does on the platform running it, rather than hard-coding one OS's answer —
+    meaningful, and correct, on every CI runner."""
+    import os
+    a, b = "/data/S01", "/DATA/S01"
+    same_on_this_platform = os.path.normcase(a) == os.path.normcase(b)
+    assert is_carried_folder(a, b) is (not same_on_this_platform)
+
+
+def test_carried_over_state_is_empty_with_no_current_folder():
+    """Nothing can be 'carried over' relative to a folder that isn't set yet (a fresh
+    guided analysis) — every entry would trivially mismatch an empty string, which is
+    noise, not a real warning."""
+    s = Settings()
+    s.input.folder = ""          # e.g. settings_screen.enter_new_mode's guided-flow blank
+    s.processing.exclude_breaths.append(ExcludeEntry(file="a.txt", breaths=[1], folder=None))
+    st = carried_over_state(s)
+    assert not st
+    assert st == CarriedOverState()
+
+
+def test_carried_over_state_names_every_kind_of_carried_state():
+    s = Settings()
+    s.input.folder = "/data/S02"
+    s.processing.exclude_breaths.append(
+        ExcludeEntry(file="a.txt", breaths=[1, 2], folder="/data/S01"))
+    s.processing.exclude_breaths.append(
+        ExcludeEntry(file="b.txt", breaths=[3], folder="/data/S02"))    # matches -> not carried
+    s.processing.breath_counts.append(
+        BreathCountEntry(file="a.txt", count=9, folder="/data/S01"))
+    s.processing.emg.noise.reference_file = "a.txt"
+    s.processing.emg.noise.reference_intervals = [[0.0, 1.0]]
+    s.processing.emg.noise.reference_folder = "/data/S01"
+    st = carried_over_state(s)
+    assert st.exclude_files == ["a.txt"]
+    assert st.breath_count_files == ["a.txt"]
+    assert st.noise_reference is True
+    assert bool(st) is True
+
+
+def test_carried_over_state_ignores_an_empty_exclusion_and_an_unset_noise_reference():
+    """An ExcludeEntry with no breaths left (the include-everything state _toggle_breath
+    leaves behind — see preview/_mechanics.py) and a NoiseSettings with no reference set at
+    all must never be reported as carried: there is nothing there to warn about."""
+    s = Settings()
+    s.input.folder = "/data/S02"
+    s.processing.exclude_breaths.append(ExcludeEntry(file="a.txt", breaths=[], folder="/data/S01"))
+    st = carried_over_state(s)
+    assert st.exclude_files == []
+    assert st.noise_reference is False
+
+
+def test_clear_carried_over_drops_only_the_mismatched_entries():
+    s = Settings()
+    s.input.folder = "/data/S02"
+    kept = ExcludeEntry(file="b.txt", breaths=[3], folder="/data/S02")
+    dropped = ExcludeEntry(file="a.txt", breaths=[1], folder="/data/S01")
+    s.processing.exclude_breaths.extend([dropped, kept])
+    s.processing.breath_counts.append(BreathCountEntry(file="a.txt", count=9, folder="/data/S01"))
+    s.processing.emg.noise.reference_file = "a.txt"
+    s.processing.emg.noise.reference_intervals = [[0.0, 1.0]]
+    s.processing.emg.noise.reference_folder = "/data/S01"
+    clear_carried_over(s)
+    assert s.processing.exclude_breaths == [kept]
+    assert s.processing.breath_counts == []
+    assert s.processing.emg.noise.reference_file is None
+    assert s.processing.emg.noise.reference_intervals == []
+    assert not carried_over_state(s)
+
+
+def test_clear_carried_over_is_a_no_op_when_nothing_is_carried():
+    """The ordinary case — nothing has ever pointed at a different folder — must be left
+    completely untouched, not merely end up equal."""
+    s = Settings()
+    s.input.folder = "/data/S02"
+    entry = ExcludeEntry(file="b.txt", breaths=[3], folder="/data/S02")
+    s.processing.exclude_breaths.append(entry)
+    clear_carried_over(s)
+    assert s.processing.exclude_breaths == [entry]
+    assert s.processing.exclude_breaths[0] is entry      # same object, never touched

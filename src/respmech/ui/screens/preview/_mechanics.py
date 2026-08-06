@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QScrollArea, QSplitter, QTableView,
                                QTabWidget, QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt, QEvent, QObject, QSize, QThread, QTimer, Signal
-from PySide6.QtGui import QFont, QFontMetrics
+from PySide6.QtGui import QBrush, QFont, QFontMetrics
 
 import pyqtgraph as pg
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -48,9 +48,16 @@ from ._plot_helpers import SciAxis, _CHANNELS, _pen, _plot_pal, _restrict_body_w
 
 
 
-def _parse_breath_counts(text, entry_cls):
+def _parse_breath_counts(text, entry_cls, folder=None):
     """Parse the 'filename = count' lines of the breath-count override box into entries.
-    Splits on the LAST '=' so a filename may itself contain one; skips blank/malformed lines."""
+    Splits on the LAST '=' so a filename may itself contain one; skips blank/malformed lines.
+
+    ``folder`` (the CURRENT ``input.folder``) is stamped onto every entry the box
+    produces. This dialog holds one flat list — the file the box currently names, current
+    input folder included — so every line it commits belongs to that folder by
+    construction; an untouched OK never gets here at all (see the caller, which only
+    re-parses when the user actually edited this field), so this cannot relabel an entry
+    the user never looked at."""
     out = []
     for line in text.splitlines():
         line = line.strip()
@@ -62,7 +69,7 @@ def _parse_breath_counts(text, entry_cls):
         except ValueError:
             continue
         if fpart.strip():
-            out.append(entry_cls(fpart.strip(), cnt))
+            out.append(entry_cls(fpart.strip(), cnt, folder))
     return out
 
 # Per-file errors that mean "this recording cannot support this step", not "something
@@ -158,7 +165,9 @@ class _MechanicsMixin:
         self.qc_overview = QLabel("")
         self.qc_overview.setProperty("banner", True)   # box baked at first polish (theme.py)
         self.qc_overview.setProperty("status", "muted")
-        self.qc_overview.setToolTip("Quality overview of the most recent test run.")
+        self.qc_overview.setToolTip(
+            "Quality overview of the CURRENTLY PREVIEWED file's most recent test run — "
+            "not a batch summary. See the file rail for every file's exclusion count.")
         self.btn_export_fig = QPushButton("Export Campbell…")
         self.btn_export_fig.setEnabled(False)          # enabled once a diagram is drawn
         self.btn_export_fig.setToolTip("Save the Campbell diagram as a PNG or PDF.")
@@ -217,7 +226,17 @@ class _MechanicsMixin:
             for c in ("wobtotal", "vt", "ve"):          # core metrics must be finite
                 if c in bt.columns and not np.isfinite(bt[c].to_numpy(dtype=float)).all():
                     flags.append(f"{c} NaN")
-        msg = f"QC:  {used} breaths used" + (f",  {excl} excluded" if excl else "")
+        excl_note = ""
+        # fr.file, NOT self._selected_filename(): _on_batch_result's own fallback
+        # (`result.files.get(cur) or next(iter(result.files.values()), None)`) can hand this
+        # a DIFFERENT file's FileResult than the one currently selected (e.g. a stale batch
+        # result racing a file switch, or cur missing from the result set) — checking the
+        # selected name against fr's own exclusion count would then blame/clear the wrong
+        # file. fr.file is a real FileResult field; getattr defends the same "fr may be a
+        # plain SimpleNamespace" case _qc_overview's other fields already guard against.
+        if excl and self._exclusion_carried_for(getattr(fr, "file", None)):
+            excl_note = " (carried over from a previous recordings folder)"
+        msg = f"QC:  {used} breaths used" + (f",  {excl} excluded{excl_note}" if excl else "")
         status = "ok"
         if flags:
             msg += "   ⚠ " + "; ".join(dict.fromkeys(flags))
@@ -413,7 +432,10 @@ class _MechanicsMixin:
                          "processing.breath_counts",
                          "Per-file override of the breath count used for per-minute scaling — "
                          "one 'filename = count' per line. Blank = each file's detected count.",
-                         placeholder="one 'filename = count' per line")
+                         placeholder="one 'filename = count' per line",
+                         note="Excluded breaths are NOT set here — click a breath in the "
+                              "channel plots above to include/exclude it; the file rail "
+                              "shows each file's exclusion count.")
         bc_text = "\n".join(f"{e.file} = {e.count}" for e in s.processing.breath_counts)
         # Which card each setting is shown on, in display order. Grouping only: the flat
         # ``fields`` list above still drives building, reading and committing, so a setting
@@ -499,7 +521,8 @@ class _MechanicsMixin:
         # only when the user actually edited the box — ``staged`` carries edited keys only,
         # so an untouched OK must not re-parse (and re-write) the existing entries
         if "breath_counts" in staged:
-            parsed = _parse_breath_counts(staged["breath_counts"], BreathCountEntry)
+            parsed = _parse_breath_counts(staged["breath_counts"], BreathCountEntry,
+                                          folder=s.input.folder)
             if parsed != s.processing.breath_counts:
                 s.processing.breath_counts = parsed
                 changed = True
@@ -575,7 +598,8 @@ class _MechanicsMixin:
             ln = p.addLine(x=0, pen=pg.mkPen(pal["separator"], width=1, style=Qt.DashLine))
             ln.hide()
             self._crosshair_lines.append(ln)
-        self._draw_breath_overlays(spans, data["label_y"])
+        self._draw_breath_overlays(spans, data["label_y"],
+                                   carried=self._exclusion_carried_for(data["name"]))
         self._render_raw_stack(data["emg"], fs, data.get("emg_flow"))
         # breaths are now known -> (re)number any EMG detail/result already rendered
         self._repaint_view_breaths("detail")
@@ -655,9 +679,19 @@ class _MechanicsMixin:
 
     # -- feature A: breath overlays + include/exclude ----------------------
     @staticmethod
-    def _breath_brush(ignored):
+    def _breath_brush(ignored, carried=False):
+        """``carried``: this exclusion was recorded against a different (or unrecorded)
+        recordings folder than the one now loaded — see ``_exclusion_carried_for``. Drawn
+        HATCHED instead of solid, so an inherited exclusion reads differently from one made
+        in the folder actually on screen without needing a second colour (which would
+        collide with the included/excluded palette already in use elsewhere)."""
         pal = _plot_pal()
-        return pg.mkBrush(*(pal["breath_excl_brush"] if ignored else pal["breath_incl_brush"]))
+        if not ignored:
+            return pg.mkBrush(*pal["breath_incl_brush"])
+        colour = pg.mkColor(*pal["breath_excl_brush"])
+        if carried:
+            return QBrush(colour, Qt.BDiagPattern)
+        return QBrush(colour, Qt.SolidPattern)
 
     @staticmethod
     def _breath_label_color(ignored):
@@ -775,17 +809,23 @@ class _MechanicsMixin:
         omitted from per-breath numbering — it is implicit from context on every graph."""
         return f"#{num}"
 
-    def _draw_breath_overlays(self, spans, label_y=0.0):
+    def _draw_breath_overlays(self, spans, label_y=0.0, carried=False):
         self._mech_unpin()               # the old labels are torn down with their pin slot
         self._breath_spans = {n: (t0, t1) for (n, t0, t1, _ig) in spans}
         self._breath_regions = {n: [] for (n, _0, _1, _ig) in spans}
         self._breath_texts = {}
         sep = _plot_pal()["separator"]
+        tip = ("Excluded — carried over from a previous recordings folder. Confirm on the "
+               "Setup screen or click the breath to make this folder's own decision."
+               if carried else None)
         for n, t0, t1, ignored in spans:
             for plot in self._channel_plots:
                 reg = pg.LinearRegionItem(values=(t0, t1), movable=False,
-                                          brush=self._breath_brush(ignored), pen=pg.mkPen(None))
+                                          brush=self._breath_brush(ignored, carried=carried),
+                                          pen=pg.mkPen(None))
                 reg.setZValue(-10)
+                if ignored and tip:
+                    reg.setToolTip(tip)
                 plot.addItem(reg)
                 self._breath_regions[n].append(reg)
                 plot.addLine(x=t0, pen=pg.mkPen(sep, width=1, style=Qt.DashLine))
@@ -827,7 +867,23 @@ class _MechanicsMixin:
         excl = self.state.settings.processing.exclude_breaths
         entry = next((e for e in excl if e.file == name), None)
         if entry is None:
-            entry = ExcludeEntry(file=name, breaths=[])
+            # ONLY a brand-new entry gets stamped with the current folder here. An EXISTING
+            # entry's folder is deliberately left untouched by a plain toggle, even when the
+            # user is un-excluding one of ITS OWN breaths: entry.folder is one tag for the
+            # WHOLE file, but excl.breaths can hold a MIX of breaths the user just decided on
+            # and others still carried from a different folder that this click never looked
+            # at. Restamping on every touch (an earlier version of this fix did) would
+            # silently "confirm" those untouched breaths too — exactly the invisible
+            # application this ticket exists to stop, just moved one click later. Per the
+            # ticket, an entry only stops reading as carried via a fresh creation here or via
+            # the Setup banner's "Clear" (core.settings.clear_carried_over); "Keep" is a
+            # pure dismiss and — like this — never restamps either, matching "as long as the
+            # user has chosen to keep them, a carried exclusion is still drawn hatched", not
+            # "keeping it once makes it look native from then on". Known accepted
+            # imprecision: a genuinely NEW breath added to an EXISTING carried entry still
+            # reads as carried until the whole entry is cleared — ExcludeEntry.folder is one
+            # tag per FILE, not per breath, by the ticket's own design.
+            entry = ExcludeEntry(file=name, breaths=[], folder=self.state.settings.input.folder)
             excl.append(entry)
         now_excluded = breath_no not in entry.breaths
         if now_excluded:
@@ -862,8 +918,10 @@ class _MechanicsMixin:
         # the rail's badge is the raw exclusion count (matches _sync_rail_exclusions, which
         # reads it the same way for every file the settings name — not the nexcl above,
         # which is scoped to spans of the file CURRENTLY previewed). entry.breaths is []
-        # once excl.remove(entry) above has run, so this is correct even then.
-        self.file_rail.set_excluded_count(name, len(entry.breaths))
+        # once excl.remove(entry) above has run, so this is correct even then. carried is
+        # always False here: the folder restamp just above means this entry, by
+        # definition, now matches the current folder.
+        self.file_rail.set_excluded_count(name, len(entry.breaths), carried=False)
         # excluding/including a breath must update the AVERAGED result in lockstep with the
         # overlay — otherwise the Campbell loop + per-breath table stay stale and the user
         # tunes blind. Recompute the (mechanics-only) test run, debounced.
@@ -895,6 +953,18 @@ class _MechanicsMixin:
         entry = next((e for e in self.state.settings.processing.exclude_breaths if e.file == name), None)
         return set(entry.breaths) if entry else set()
 
+    def _exclusion_carried_for(self, name):
+        """True iff ``name``'s exclusion entry was recorded against a DIFFERENT (or
+        unrecorded) recordings folder than the one currently loaded — the file-scoped
+        counterpart of ``core.settings.carried_over_state``, used to hatch the overlay
+        (``_breath_brush``) and word the QC line (``_update_qc_overview``) for exactly the
+        file on screen, without recomputing the whole-analysis state on every repaint."""
+        from respmech.core.settings import is_carried_folder
+        entry = next((e for e in self.state.settings.processing.exclude_breaths if e.file == name), None)
+        if entry is None or not entry.breaths:
+            return False
+        return is_carried_folder(entry.folder, self.state.settings.input.folder)
+
     def _paint_breaths(self, view, plot_items, offset, label_y):
         """Idempotent per-view overlay: remove the view's previous items (guarded),
         then shade every breath + a boundary line on each plot and a number on the
@@ -911,6 +981,7 @@ class _MechanicsMixin:
         if not plot_items or not self._breaths:
             return
         excl = self._excluded_now()
+        carried = self._exclusion_carried_for(self._selected_filename())
         reg_map = self._bov[view]["regions"]; txt_map = self._bov[view]["texts"]
         items = self._bov[view]["items"]
         sep = _plot_pal()["separator"]
@@ -919,7 +990,8 @@ class _MechanicsMixin:
             a, b = t0 + offset, t1 + offset
             for p in plot_items:
                 reg = pg.LinearRegionItem(values=(a, b), movable=False,
-                                          brush=self._breath_brush(ignored), pen=pg.mkPen(None))
+                                          brush=self._breath_brush(ignored, carried=carried),
+                                          pen=pg.mkPen(None))
                 reg.setZValue(-10)
                 p.addItem(reg)
                 items.append((p, reg)); reg_map.setdefault(num, []).append(reg)
@@ -1023,7 +1095,7 @@ class _MechanicsMixin:
             self.file_rail.mark_result(cur, ok=True, breaths=len(fr.breaths_table))
         self._fill_table(fr.breaths_table)
         self._draw_campbell(fr.breaths)
-        self._update_qc_overview(fr)                  # P16 batch QC overview
+        self._update_qc_overview(fr)                  # P16 QC line, for THIS file only
         nr = getattr(result, "noise_report", None)
         if nr:
             self.render_noise_report(result)         # sets its own status incl. prop_decrease

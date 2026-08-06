@@ -910,3 +910,183 @@ def test_narrowing_three_or_more_extensions_keeps_every_dot(qapp, tmp_path):
     assert not re.search(r"(?<!\.)\bxlsx\b", text)   # "xlsx" never appears without its dot
     win.close()
 
+
+# -- carried-over exclusions/breath-counts/noise-reference banner (ticket B06) -----------
+# The workflow the ticket exists to fix: point the same analysis at a DIFFERENT recordings
+# folder that shares a filename with the old one, and the old exclusions must not just
+# keep applying invisibly — see core.settings.carried_over_state.
+
+def _entry_folder(s, filename):
+    e = next(x for x in s.processing.exclude_breaths if x.file == filename)
+    return e.folder
+
+
+def test_switching_input_folder_shows_the_carried_over_banner(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import ExcludeEntry
+    s01 = tmp_path / "S01"; s01.mkdir()
+    s02 = tmp_path / "S02"; s02.mkdir()
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(s01)); sc._on_inputs_changed()
+    sc.state.settings.processing.exclude_breaths.append(
+        ExcludeEntry(file="sample_recording.csv", breaths=[2, 3], folder=str(s01)))
+    assert sc.carried_banner.isHidden()          # still in the folder it was recorded for
+    sc.in_folder.setText(str(s02)); sc._on_inputs_changed()
+    assert not sc.carried_banner.isHidden()
+    assert "sample_recording.csv" in sc.carried_label.text()
+    win.close()
+
+
+def test_editing_the_file_mask_alone_does_not_reopen_a_dismissed_banner(qapp, tmp_path):
+    """_on_inputs_changed also fires from the FILES-MASK field, which must not re-check
+    carried-over state on every keystroke commit — only a folder value that actually
+    changed can make previously-fine state start naming the wrong folder. Otherwise a
+    "Keep"-dismissed banner would pop back up on the next unrelated mask edit."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import ExcludeEntry
+    s01 = tmp_path / "S01"; s01.mkdir()
+    s02 = tmp_path / "S02"; s02.mkdir()
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(s01)); sc._on_inputs_changed()
+    sc.state.settings.processing.exclude_breaths.append(
+        ExcludeEntry(file="a.csv", breaths=[1], folder=str(s01)))
+    sc.in_folder.setText(str(s02)); sc._on_inputs_changed()    # a REAL folder change
+    assert not sc.carried_banner.isHidden()
+    sc.btn_carried_keep.click()
+    assert sc.carried_banner.isHidden()
+    sc.in_files.setText("*.txt"); sc._on_inputs_changed()      # mask-only edit
+    assert sc.carried_banner.isHidden()           # must NOT reopen on its own
+    win.close()
+
+
+def test_keep_dismisses_without_touching_settings(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import ExcludeEntry
+    s01 = tmp_path / "S01"; s01.mkdir()
+    s02 = tmp_path / "S02"; s02.mkdir()
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(s01)); sc._on_inputs_changed()
+    sc.state.settings.processing.exclude_breaths.append(
+        ExcludeEntry(file="a.csv", breaths=[2, 3], folder=str(s01)))
+    sc.in_folder.setText(str(s02)); sc._on_inputs_changed()
+    assert not sc.carried_banner.isHidden()
+    sc.btn_carried_keep.click()
+    assert sc.carried_banner.isHidden()
+    assert [e.file for e in sc.state.settings.processing.exclude_breaths] == ["a.csv"]
+    assert _entry_folder(sc.state.settings, "a.csv") == str(s01)   # never restamped
+    win.close()
+
+
+def test_clear_removes_only_the_carried_entries_and_hides_the_banner(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import ExcludeEntry
+    s01 = tmp_path / "S01"; s01.mkdir()
+    s02 = tmp_path / "S02"; s02.mkdir()
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(s02)); sc._on_inputs_changed()
+    sc.state.settings.processing.exclude_breaths.append(
+        ExcludeEntry(file="fresh.csv", breaths=[1], folder=str(s02)))     # matches -> kept
+    sc.in_folder.setText(str(s01)); sc._on_inputs_changed()
+    sc.state.settings.processing.exclude_breaths.append(
+        ExcludeEntry(file="stale.csv", breaths=[2], folder=str(s01)))
+    sc.in_folder.setText(str(s02)); sc._on_inputs_changed()
+    assert not sc.carried_banner.isHidden()
+    sc.btn_carried_clear.click()
+    assert sc.carried_banner.isHidden()
+    assert [e.file for e in sc.state.settings.processing.exclude_breaths] == ["fresh.csv"]
+    assert sc._dirty is True                       # a real edit -> unsaved changes
+    win.close()
+
+
+def test_opening_an_analysis_written_before_this_field_existed_shows_the_banner(qapp, tmp_path):
+    """An entry with no recorded folder (folder=None — every analysis written before this
+    ticket) can never be proven to match the folder it's loaded into, so it is always shown
+    as carried, the cautious default the ticket explicitly chose over guessing."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import ExcludeEntry, Settings
+    s01 = tmp_path / "S01"; s01.mkdir()
+    win = MainWindow(AppState()); sc = win.settings_screen
+    s = Settings()
+    s.input.format.sampling_frequency = 1000
+    s.input.folder = str(s01)
+    s.processing.exclude_breaths.append(ExcludeEntry(file="a.csv", breaths=[1], folder=None))
+    sc.state.settings, sc.state.settings_path = s, None
+    sc.from_state()
+    assert not sc.carried_banner.isHidden()
+    win.close()
+
+
+def test_no_input_folder_yet_never_shows_the_banner(qapp, tmp_path):
+    """A fresh guided analysis (no folder chosen) must not warn about carried-over state —
+    there is no current folder for anything to mismatch against yet."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import ExcludeEntry
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.enter_new_mode()
+    sc.state.settings.processing.exclude_breaths.append(
+        ExcludeEntry(file="a.csv", breaths=[1], folder=str(tmp_path / "S01")))
+    sc._update_carried_banner()
+    assert sc.carried_banner.isHidden()
+    win.close()
+
+
+def test_the_sample_analysis_never_shows_a_false_carried_over_banner(qapp):
+    """Self-review finding: build_sample_settings (core/sample.py) sets input.folder AND
+    the noise reference in the same function — reference_folder must be stamped to match,
+    or the very first "Explore sample data" would show a false carried-over banner (an
+    unrecorded reference_folder always reads as carried, by design, since it can never be
+    proven current)."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    assert sc.open_sample_analysis() is True
+    assert sc.carried_banner.isHidden()
+    win.close()
+
+
+def test_a_preview_side_edit_refreshes_a_showing_setup_banner(qapp, tmp_path):
+    """Self-review finding: confirming/clearing carried state from Preview & QC (a breath
+    toggle, a breath-count-overrides commit) must not leave Setup's banner showing a
+    stale, already-resolved warning — pv.settings_edited is wired to
+    sc._update_carried_banner precisely for this (main_window.py)."""
+    from respmech.core.settings import ExcludeEntry
+    from respmech.ui.main_window import MainWindow
+    from _helpers import INPUT, synth_settings
+    s = synth_settings(str(tmp_path))
+    s.processing.exclude_breaths.append(
+        ExcludeEntry(file="synth_case_A.csv", breaths=[1], folder="/a/different/folder"))
+    win = MainWindow(AppState(s))
+    sc, pv = win.settings_screen, win.preview_screen
+    sc._update_carried_banner()
+    assert not sc.carried_banner.isHidden()
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
+    from respmech.ui.workers import stage_mechanics_preview
+    import os as _os
+    pv._render_preview(stage_mechanics_preview(s, _os.path.join(INPUT, "synth_case_A.csv")))
+    pv._toggle_breath(1)                       # un-excludes the only (carried) breath
+    assert sc.carried_banner.isHidden(), (
+        "resolving the only carried entry from Preview must refresh Setup's banner")
+    win.close()
+
+
+def test_a_noise_reference_pick_refreshes_a_showing_setup_banner(qapp, tmp_path):
+    """Same fix, the noise-reference write path — which goes through set_noise_reference,
+    not the generic pv.settings_edited signal (see its docstring)."""
+    from respmech.core.settings import ExcludeEntry
+    from respmech.ui.main_window import MainWindow
+    from _helpers import synth_settings
+    s = synth_settings(str(tmp_path))
+    # any carried exclusion is enough to show the banner; the noise pick itself will match
+    # the current folder and so resolve it (nothing else is carried in this settings object)
+    s.processing.emg.noise.reference_file = "synth_case_A.csv"
+    s.processing.emg.noise.reference_intervals = [[0.0, 1.0]]
+    s.processing.emg.noise.reference_folder = "/a/different/folder"
+    win = MainWindow(AppState(s))
+    sc, pv = win.settings_screen, win.preview_screen
+    sc._update_carried_banner()
+    assert not sc.carried_banner.isHidden()
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
+    pv._apply_noise_expiration()
+    assert sc.carried_banner.isHidden()
+    win.close()
+

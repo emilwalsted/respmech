@@ -52,6 +52,11 @@ class FileRailEntry:
     breaths: int | None = None
     error: str | None = None
     excluded_count: int = 0
+    # this file's exclusion entry was recorded against a DIFFERENT (or unrecorded)
+    # recordings folder than the one currently loaded — see
+    # core.settings.carried_over_state. Meaningless (and always False) when
+    # excluded_count is 0: there is nothing to have carried over.
+    excluded_carried: bool = False
 
 
 def _row_text(e: FileRailEntry) -> str:
@@ -59,7 +64,8 @@ def _row_text(e: FileRailEntry) -> str:
     bits = [f"{glyph}  {e.filename}"]
     if e.excluded_count:
         n = e.excluded_count
-        bits.append(f"[{n} excl]")
+        mark = " ↺" if e.excluded_carried else ""
+        bits.append(f"[{n} excl{mark}]")
     if e.caveat:
         bits.append("⚠")
     return "   ".join(bits)
@@ -76,7 +82,8 @@ def _row_tooltip(e: FileRailEntry) -> str:
         lines.append("Not previewed or run yet this session.")
     if e.excluded_count:
         n = e.excluded_count
-        lines.append(f"{n} breath{'s' if n != 1 else ''} manually excluded")
+        note = " — carried over from a previous recordings folder" if e.excluded_carried else ""
+        lines.append(f"{n} breath{'s' if n != 1 else ''} manually excluded{note}")
     if e.caveat:
         lines.append(f"⚠ {e.caveat}")
     if not e.seen:
@@ -131,7 +138,8 @@ class FileRailModel(QAbstractListModel):
             if prev is not None:
                 new_entries.append(FileRailEntry(
                     filename=f.filename, caveat=caveat, seen=prev.seen, verdict=prev.verdict,
-                    breaths=prev.breaths, error=prev.error, excluded_count=prev.excluded_count))
+                    breaths=prev.breaths, error=prev.error, excluded_count=prev.excluded_count,
+                    excluded_carried=prev.excluded_carried))
             else:
                 new_entries.append(FileRailEntry(filename=f.filename, caveat=caveat))
         self.beginResetModel()
@@ -188,11 +196,15 @@ class FileRailModel(QAbstractListModel):
         idx = self.index(i)
         self.dataChanged.emit(idx, idx)
 
-    def set_excluded_count(self, filename: str, count: int) -> None:
+    def set_excluded_count(self, filename: str, count: int, carried: bool = False) -> None:
         i = self._by_name.get(filename)
-        if i is None or self._entries[i].excluded_count == count:
+        if i is None:
             return
-        self._entries[i].excluded_count = count
+        e = self._entries[i]
+        if e.excluded_count == count and e.excluded_carried == carried:
+            return
+        e.excluded_count = count
+        e.excluded_carried = carried
         idx = self.index(i)
         self.dataChanged.emit(idx, idx)
 
@@ -405,8 +417,8 @@ class FileRail(QWidget):
     def set_caveat(self, filename: str, caveat: str | None) -> None:
         self._model.set_caveat(filename, caveat)
 
-    def set_excluded_count(self, filename: str, count: int) -> None:
-        self._model.set_excluded_count(filename, count)
+    def set_excluded_count(self, filename: str, count: int, carried: bool = False) -> None:
+        self._model.set_excluded_count(filename, count, carried=carried)
 
     def sort_failed_first(self, on: bool) -> None:
         self._proxy.set_failed_first(on)

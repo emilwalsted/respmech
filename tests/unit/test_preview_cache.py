@@ -68,6 +68,25 @@ def test_ref_clip_key_ignores_prop_and_drift_but_tracks_ecg(tmp_path):
     assert pc.ref_clip_key(s, ref) != k0
 
 
+def test_ref_clip_key_tracks_an_exclude_entrys_folder_in_the_expiration_branch(tmp_path):
+    """Ticket B06: ExcludeEntry gained a `folder` provenance tag. It never changes which
+    breaths compute excludes (core.compute keys purely on filename), but the entry it
+    lives on can now change independently of (file, breaths) — e.g. a folder restamp with
+    an unchanged breath set (see preview/_mechanics.py._toggle_breath) — so _exclude_key
+    must carry it too, in the expiration branch where the clip depends on which breaths
+    are masked out."""
+    from respmech.core.settings import ExcludeEntry
+    s = _s(tmp_path)
+    s.processing.emg.noise.use_expiration = True      # force the branch _exclude_key feeds
+    ref = os.path.join(INPUT, "synth_case_A.csv")
+    s.processing.exclude_breaths.append(ExcludeEntry(file="synth_case_A.csv", breaths=[1],
+                                                      folder="/data/S01"))
+    k0 = pc.ref_clip_key(s, ref)
+    assert k0 is not None
+    s.processing.exclude_breaths[0].folder = "/data/S02"     # breaths unchanged, folder restamped
+    assert pc.ref_clip_key(s, ref) != k0
+
+
 def test_noise_report_key_tracks_all_files_and_stft(tmp_path):
     s = _s(tmp_path)
     ref = os.path.join(INPUT, "synth_case_A.csv")
