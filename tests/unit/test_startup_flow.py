@@ -430,6 +430,9 @@ def test_reentry_rearms_the_channel_gate(qapp, tmp_path):
     assert sc._channel_modal_done is False and sc._channel_modal_pending is False
     _fill_valid_input(sc)                           # input alone is enough to re-trigger (B04)
     assert sc._channel_modal_pending is True
+    sc._channel_modal_done = True                   # disarm the still-pending singleShot(0, ...)
+                                                      # before it can fire against a REAL, unstubbed
+                                                      # modal later in the run (hung the reviewer)
     win.close()
 
 

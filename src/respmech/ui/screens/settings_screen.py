@@ -988,7 +988,13 @@ class SettingsScreen(QWidget):
         if (self._mode == "new" and not self._channel_modal_done
                 and not self._channel_modal_pending and self._input_stage_ok()):
             self._channel_modal_pending = True
-            QTimer.singleShot(0, self._open_channel_setup_for_flow)
+            # Bound to self (same idiom as dialogs.py's copy-button reset): if this screen
+            # is ever destroyed before the deferred open runs, Qt drops the call instead of
+            # firing it against a stale object. Found in self-review after a related bug
+            # (a test that outlived this timer and left it pending — see
+            # test_reentry_rearms_the_channel_gate) that this alone does not fix, since
+            # closing a window without WA_DeleteOnClose does not destroy the C++ object.
+            QTimer.singleShot(0, self, self._open_channel_setup_for_flow)
         ready = self._all_ok()
         self._set_flow_ready(ready)
         self._set_status(self._validation_status())   # no Validate button: every edit re-checks

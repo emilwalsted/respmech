@@ -840,13 +840,23 @@ def test_commitment_sheet_names_a_channel_collision_before_a_path_problem(qapp, 
     """_blockers() priority mirrors Setup's own former _first_blocker order (collision,
     then core validation, then path) via the SAME shared ui.validation helpers — so the
     commitment sheet and Setup's QC strip can never name a different TOP blocker for the
-    identical settings."""
+    identical settings. A REAL path problem is introduced alongside the collision (not
+    just the collision alone) — otherwise the test cannot tell "collision wins over a
+    path problem" from "collision is reported because nothing else is wrong"."""
     win = _win(tmp_path); rn = win.run_screen
     rn.state.settings.input.channels.flow = None    # a hard collision (not assigned)
+    rn.state.settings.input.files = "*.nomatch"     # AND a real path problem, present at once
     rn.refresh_actions()
     assert not rn.btn_run.isEnabled()
     assert "not assigned" in rn.btn_run.toolTip().lower()
-    assert "not assigned" in rn._commitment.text().lower()
+    # Check the LEADING blocker segment specifically, not mere presence/absence of either
+    # message: _blockers()'s own docstring calls it "every reason ... worst first", so a
+    # future version could legitimately list both — this must still prove collision comes
+    # FIRST, rather than pinning today's short-circuit-to-one-item behaviour as if it were
+    # the contract.
+    tail = rn._commitment.text().split("\n")[-1]
+    assert tail.startswith("⚠ ")
+    assert "not assigned" in tail.split("  ·  ")[0].lower()
     win.close()
 
 
@@ -867,4 +877,32 @@ def test_quick_path_problem_never_globs_twice_for_an_unchanged_broken_mask(qapp,
         rn.state.settings.output.folder = str(tmp_path / f"out{i}")
         rn.refresh_actions()
     assert calls == []
+    win.close()
+
+
+def test_cached_matching_files_rescans_when_a_file_is_actually_added(qapp, tmp_path):
+    """The mtime-keyed memoisation in _cached_matching_files (ticket B04) must not become
+    a ONE-WAY cache that only ever proves it doesn't over-scan (the two tests above): it
+    must also actually pick up a real change. A file dropped into the input folder after
+    the first scan has to show up on the very next call, not stay hidden behind a stale
+    (folder, mask, mtime) key. Calls ``_cached_matching_files()`` directly (not via
+    ``refresh_actions()``) since that IS the method under test. ``os.utime`` bumps the
+    folder's mtime explicitly rather than relying on real wall-clock time passing between
+    the two writes, since some filesystems only offer 1-second mtime resolution and a
+    flaky pass/fail on that would say nothing about the cache logic itself."""
+    import os
+    import time
+
+    win = _win(tmp_path); rn = win.run_screen
+    folder = tmp_path / "watched"
+    folder.mkdir()
+    (folder / "a.csv").write_text("x")
+    rn.state.settings.input.folder = str(folder)
+    rn.state.settings.input.files = "*.csv"
+    assert len(rn._cached_matching_files()) == 1
+
+    (folder / "b.csv").write_text("x")
+    bumped = time.time() + 5
+    os.utime(folder, (bumped, bumped))
+    assert len(rn._cached_matching_files()) == 2
     win.close()
