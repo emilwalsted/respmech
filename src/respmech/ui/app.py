@@ -14,6 +14,29 @@ import traceback
 _MIN_SPLASH_MS = 3000
 
 
+def resolve_startup_path(argv, opened_path=None):
+    """Which ``.toml`` analysis (if any) should be opened at startup, and from where.
+
+    Two origins can name a startup file, and on any one platform only ever one of them
+    fires: ``opened_path``, from a native "open this file" launch (macOS's
+    ``QEvent.FileOpen`` for a double-clicked/Dock-opened document — never present in
+    ``argv`` on that platform, see ``qapp.RespMechApplication``), and ``argv[1]``, from a
+    plain command-line/double-click launch on Windows/Linux, where no such event is ever
+    delivered. ``opened_path`` wins if both are somehow present, being the more specific of
+    the two signals. Qt-free so it is trivially testable without a running application.
+
+    Only ``.toml`` is recognised here (a saved analysis) — a dropped ``.py`` legacy setup is
+    handled separately, on an already-open window, by ``settings_screen.open_analysis``
+    (drag-and-drop onto the main window, ticket C04), never through this startup path.
+    """
+    # casefold() so a Windows-style ANALYSIS.TOML / .Toml is recognised too, either way.
+    if opened_path and opened_path.casefold().endswith(".toml"):
+        return opened_path
+    if len(argv) > 1 and argv[1].casefold().endswith(".toml"):
+        return argv[1]
+    return None
+
+
 def _fatal_startup(tb: str) -> None:
     """Report a startup failure with a copyable trace, falling back to stderr."""
     try:
@@ -37,10 +60,11 @@ def main(argv=None) -> int:
     import multiprocessing
     multiprocessing.freeze_support()
 
-    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtWidgets import QMessageBox
     from PySide6.QtCore import QTimer, QLoggingCategory
     from respmech.ui import theme
     from respmech.ui.dialogs import short_error
+    from respmech.ui.qapp import RespMechApplication
     from respmech.ui.splash import make_splash
 
     # Qt's font-database chatter ("Populating font family aliases … missing font
@@ -49,10 +73,14 @@ def main(argv=None) -> int:
     QLoggingCategory.setFilterRules("qt.qpa.fonts.warning=false")
 
     argv = list(sys.argv if argv is None else argv)
-    app = QApplication(argv)
+    app = RespMechApplication(argv)
     # stable identity so QSettings (recent analyses, sticky folders, last rig) persists
     app.setOrganizationName("RespMech")
     app.setApplicationName("RespMech")
+    # Flush a FileOpen event macOS may have already queued for a cold, double-click launch
+    # (Cocoa can deliver it as early as during QApplication construction) before anything
+    # below reads app.opened_path — otherwise a fresh launch would see it one tick too late.
+    app.processEvents()
 
     # Show the splash as the VERY FIRST thing on screen (it is a self-contained
     # pixmap, so it needs neither the theme nor the icon), then keep it up for at
@@ -80,8 +108,7 @@ def main(argv=None) -> int:
     from respmech.ui.state import AppState
     from respmech.ui.main_window import MainWindow
     startup_error = None
-    # casefold() so a Windows-style ANALYSIS.TOML / .Toml drag-drop is recognised too.
-    toml_arg = argv[1] if (len(argv) > 1 and argv[1].casefold().endswith(".toml")) else None
+    toml_arg = resolve_startup_path(argv, app.opened_path)
     try:
         state = AppState()
         # Optional: a settings file passed on the command line is loaded on start.
@@ -108,6 +135,15 @@ def main(argv=None) -> int:
                 splash.close()
             _fatal_startup(build_error)
             return 1
+
+    # From here on the window exists: a LATER FileOpen event (app already running, a second
+    # document opened from the Dock) is routed live through the same guarded open a
+    # drag-and-drop uses (C04) — never through begin_session, which assumes a fresh window.
+    # Relies on no processEvents() call happening between win's construction above and this
+    # line (confirmed true today: none does) — one landing in between could let a FileOpen
+    # event arrive while on_file_open is still unset, and it would be captured into
+    # opened_path instead of forwarded live, silently missing this "already running" open.
+    app.on_file_open = win._open_dropped_path
 
     if splash is not None:          # keep the (modal) splash on top after the build
         splash.raise_()

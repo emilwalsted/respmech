@@ -23,6 +23,7 @@ from respmech.ui.dialogs import open_error_dialog, short_error
 from respmech.ui.flow_layout import install_flow
 from respmech.ui.help_text import tooltip as _tip
 from respmech.ui.manifest import build_manifest, narrow_mask
+from respmech.ui.path_drop import install_path_drop
 from respmech.ui.section_flow import install_sections
 from respmech.ui.startup_dialog import LEGACY_FILTER, OPEN_FILTER, TOML_FILTER
 from respmech.ui.validation import matching_files
@@ -402,6 +403,9 @@ class SettingsScreen(QWidget):
         s = QSpinBox(); s.setRange(0 if allow_zero else 1, 9999); return s
 
     def _with_browse(self, line: QLineEdit, folder=False):
+        # C04: dragging a single local path onto the field; folder= matches the Browse…
+        # button below (getExistingDirectory vs. getOpenFileName) so the two stay consistent.
+        install_path_drop(line, folder=folder)
         w = QWidget(); h = QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0); h.setSpacing(6)
         h.addWidget(line, 1)
         b = QPushButton("Browse…")

@@ -436,6 +436,21 @@ that goes through its own dedicated signal instead. Any FUTURE state this patter
 extended to needs the same treatment: know every path that can create OR resolve it, not
 just the one this ticket happened to add a banner for.
 
+### Sending a `QDropEvent` with no preceding accepted `QDragEnterEvent` segfaults this sandbox's offscreen Qt
+
+Found writing tests for ticket C04 (drag-and-drop). `QApplication.sendEvent(widget,
+QDropEvent(...))` sent on its own — without first sending a `QDragEnterEvent` for the same
+gesture and having it accepted — does not raise or return `False`: it **segfaults the whole
+pytest process**, mid-test, with the crash traceback pointing at pytest's own assertion
+`saferepr()` machinery rather than at anything applicaton-related, which makes it look like
+an unrelated pytest/repr bug rather than what it is. A real drag session (mouse or a native
+Finder/Explorer drop) can never produce a bare drop — the platform always sends
+DragEnter→[DragMove…]→Drop — so this is purely a test-construction hazard, not a
+production one, but it costs real time to diagnose blind: **any test that synthesizes a
+`QDropEvent` must send a matching, accepted `QDragEnterEvent` to the same widget first**,
+even when the assertion under test only cares about the drop. See `install_path_drop`'s
+tests (`tests/unit/test_path_drop.py`, `test_file_association.py`) for the pattern.
+
 ## Releases (`.github/workflows/release.yml` = "Build installers")
 
 - Trigger: push a `v*` tag (or manual dispatch). Builds a Windows **MSI** and a
