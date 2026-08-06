@@ -1229,3 +1229,168 @@ def test_a_noise_reference_pick_refreshes_a_showing_setup_banner(qapp, tmp_path)
     assert sc.carried_banner.isHidden()
     win.close()
 
+
+# ---------------------------------------------------------------------------
+# UI-overhaul ticket C03 — missing recordings folder, 'Duplicate for another folder…'
+# ---------------------------------------------------------------------------
+def test_missing_recordings_folder_warns_instead_of_reading_as_unscanned(qapp, tmp_path):
+    """C03 point 6: a folder that is SET but no longer exists (renamed/moved/unmounted
+    since the analysis was saved) used to read as 'muted — nothing scanned yet', the same
+    message as a genuinely empty Setup — indistinguishable from a folder nobody ever
+    pointed the app at. It must instead say the folder is gone, and offer a way to fix it."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    gone = tmp_path / "moved-away"
+    sc.in_folder.setText(str(gone)); sc._on_inputs_changed()
+    status, text = sc._qc_verdict()
+    assert status == "warn"
+    assert str(gone) in text
+    assert "Recordings folder not found" in text
+    assert sc.format_readout.property("status") == "warn"
+    assert "no longer exists" in sc.format_readout.text()
+    assert not sc.btn_locate_folder.isHidden()
+    win.close()
+
+
+def test_a_folder_that_vanishes_mid_session_clears_the_stale_channel_preview(qapp, tmp_path):
+    """C03 point 6, the 'warm' case: unlike a cold open of a dead path, this folder was
+    VALID a moment ago, and _channel_view_signature's cache keys on the folder STRING (not
+    the filesystem), so simply re-running the normal edit pipeline would not by itself
+    notice anything changed and would keep the previous load's traces on screen next to a
+    dead path."""
+    from respmech.ui.main_window import MainWindow
+    from _helpers import synth_settings
+    win = MainWindow(AppState(synth_settings(str(tmp_path))))
+    sc = win.settings_screen
+    sc.from_state()
+    assert sc.channel_summary.texts()          # a real mapping was rendered
+    moved = str(tmp_path / "moved-recordings")
+    sc.in_folder.setText(moved); sc._on_inputs_changed()   # folder now points nowhere
+    assert not sc._valid_input_files()
+    # the summary must have been asked to re-render with no data (matrix/names None) —
+    # _refresh_channel_view(force=True) is what _update_format_readout calls for this case
+    assert not sc.btn_locate_folder.isHidden()
+    win.close()
+
+
+def test_locate_folder_button_reuses_the_ordinary_input_edit_pipeline(qapp, tmp_path, monkeypatch):
+    """C03 point 6: 'Locate folder…' must behave exactly like editing the field by hand —
+    reusing _on_inputs_changed rather than a second, parallel folder-setting path."""
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    gone = tmp_path / "gone"
+    sc.in_folder.setText(str(gone)); sc._on_inputs_changed()
+    assert not sc.btn_locate_folder.isHidden()
+    real = tmp_path / "real-recordings"; real.mkdir()
+    monkeypatch.setattr(ss.QFileDialog, "getExistingDirectory",
+                        staticmethod(lambda *a, **k: str(real)))
+    sc._locate_missing_folder()
+    assert sc.in_folder.text() == str(real)
+    assert sc.state.settings.input.folder == str(real)   # _on_inputs_changed committed it
+    assert sc.btn_locate_folder.isHidden()
+    win.close()
+
+
+def test_deepest_existing_ancestor_walks_up_to_a_real_directory(tmp_path):
+    from respmech.ui.screens.settings_screen import SettingsScreen
+    real = tmp_path / "real"; real.mkdir()
+    dead = real / "subject" / "S01"
+    assert SettingsScreen._deepest_existing_ancestor(str(dead)) == str(real)
+    assert SettingsScreen._deepest_existing_ancestor(str(real)) == str(real)
+    assert SettingsScreen._deepest_existing_ancestor("") == os.path.expanduser("~")
+
+
+def test_duplicate_for_another_folder_derives_output_clears_ecg_reference_and_opens_save_as(
+        qapp, tmp_path, monkeypatch):
+    """C03 point 5, the end-to-end flow: pick a new recordings folder, confirm the
+    suggested (sibling-derived) output folder, and land on Save as… pre-filled with the
+    SAME analysis filename inside the NEW folder — never overwriting the template. The
+    file-keyed exclude_breaths/breath_counts/noise-reference are left to B06's own
+    Behold/Ryd banner (already exercised by the tests above this section); only
+    ecg_reference_file (no such ask mechanism) is asserted cleared directly here."""
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    from _helpers import synth_settings
+
+    study = tmp_path / "Study"
+    old_input = study / "S01"; old_output = study / "S01-output"
+    old_input.mkdir(parents=True); old_output.mkdir()
+    new_input = study / "S02"; new_input.mkdir()
+
+    s = synth_settings(str(old_output))
+    s.input.folder = str(old_input)
+    s.processing.emg.ecg_reference_file = "synth_case_A.csv"
+    win = MainWindow(AppState(s))
+    sc = win.settings_screen
+    sc.state.settings_path = str(old_input / "analysis.toml")
+    sc.from_state()
+
+    monkeypatch.setattr(ss.QFileDialog, "getExistingDirectory",
+                        staticmethod(lambda *a, **k: str(new_input)))
+
+    from respmech.ui import duplicate_dialog as dd
+    captured = {}
+
+    class _AutoAcceptDialog:
+        def __init__(self, new_in, suggested_out, parent=None):
+            captured["new_input"] = new_in
+            captured["suggested_output"] = suggested_out
+            self._out = suggested_out
+        def exec(self):
+            from PySide6.QtWidgets import QDialog
+            return QDialog.Accepted
+        def output_folder(self):
+            return self._out
+    monkeypatch.setattr(dd, "DuplicateFolderDialog", _AutoAcceptDialog)
+
+    save_as_calls = []
+    monkeypatch.setattr(ss.SettingsScreen, "save_analysis_as",
+                        lambda self, suggested_path=None: save_as_calls.append(suggested_path))
+
+    sc.duplicate_for_another_folder()
+
+    assert captured["new_input"] == str(new_input)
+    assert captured["suggested_output"] == str(study / "S02-output")   # derived, not asked
+    assert sc.in_folder.text() == str(new_input)
+    assert sc.out_folder.text() == str(study / "S02-output")
+    assert sc.state.settings.processing.emg.ecg_reference_file is None
+    assert sc.is_dirty()
+    assert save_as_calls == [str(new_input / "analysis.toml")]
+    win.close()
+
+
+def test_duplicate_dialog_asks_when_output_is_not_a_sibling(qapp, tmp_path, monkeypatch):
+    """C03 point 5: when derive_sibling_output can't guess (output nested inside input),
+    the dialog opens with an EMPTY suggestion rather than a wrong guess."""
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    from _helpers import synth_settings
+
+    old_input = tmp_path / "S01"; old_input.mkdir()
+    old_output = old_input / "output"; old_output.mkdir()    # nested, not a sibling
+    new_input = tmp_path / "S02"; new_input.mkdir()
+
+    s = synth_settings(str(old_output)); s.input.folder = str(old_input)
+    win = MainWindow(AppState(s)); sc = win.settings_screen
+    sc.from_state()
+    monkeypatch.setattr(ss.QFileDialog, "getExistingDirectory",
+                        staticmethod(lambda *a, **k: str(new_input)))
+
+    from respmech.ui import duplicate_dialog as dd
+    captured = {}
+
+    class _CancelDialog:
+        def __init__(self, new_in, suggested_out, parent=None):
+            captured["suggested_output"] = suggested_out
+        def exec(self):
+            from PySide6.QtWidgets import QDialog
+            return QDialog.Rejected
+    monkeypatch.setattr(dd, "DuplicateFolderDialog", _CancelDialog)
+
+    kept_input = sc.in_folder.text()
+    sc.duplicate_for_another_folder()
+    assert captured["suggested_output"] == ""       # nothing guessable -> ask, don't assume
+    assert sc.in_folder.text() == kept_input         # cancelled -> nothing applied
+    win.close()
+
