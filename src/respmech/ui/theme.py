@@ -717,6 +717,15 @@ QPushButton[nav="true"] {
     min-width: 0;
 }
 
+/* ---- startup chooser's recent-analysis buttons (ticket C03) -----------
+   Default QPushButton text is centred, which reads fine for a short caption
+   but scrambles "name  —  folder" into a ragged column once names/folders
+   vary in length. Left-aligning keeps the two halves lined up down the list. */
+QPushButton[recent="true"] {
+    text-align: left;
+    padding-left: 12px;
+}
+
 /* ---- form fields: keep them tidy, not full-width ---------------------
    Fusion's QFormLayout grows every uncapped field to the full form width
    (fieldGrowthPolicy defaults to AllNonFixedFieldsGrow), so a field with no cap

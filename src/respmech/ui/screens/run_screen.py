@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import copy
 import os
+import tempfile
 
 from PySide6.QtCore import Qt, Signal, QThread, QTimer, QUrl, QElapsedTimer
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMessageBox, QProgressBar,
+from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QMessageBox, QProgressBar,
                                QPushButton, QTableView, QPlainTextEdit, QVBoxLayout, QWidget)
 
 from respmech.ui.dialogs import TextViewerDialog, short_error
@@ -76,6 +77,12 @@ class RunScreen(QWidget):
     status_changed = Signal(str)
     run_started = Signal()          # a batch run began (main window locks Settings)
     run_finished = Signal()         # the batch run ended
+    # ticket C03 point 8: "Choose another folder…" in the temp-output confirmation asks
+    # Setup to change the folder rather than writing self.state.settings.output.folder
+    # directly — Setup's out_folder QLineEdit is the live widget to_state() reads on the
+    # next edit, and a model-only write here would be silently reverted by it (main_window
+    # wires this to settings_screen.set_output_folder, mirroring pv.noise_reference_changed).
+    output_folder_change_requested = Signal(str)
 
     def __init__(self, state, file_rail: FileRail | None = None):
         super().__init__()
@@ -771,6 +778,51 @@ class RunScreen(QWidget):
         else:
             self._set_status("Output folder does not exist yet.")
 
+    def _confirm_temp_output(self):
+        """Ticket C03 point 8: a REAL run (write=True) whose output folder resolves under
+        the OS temp directory writes into a place the operating system may delete without
+        warning — most concretely a saved-but-forgotten sample-derived analysis
+        (``open_sample_analysis`` writes both folders under
+        ``tempfile.gettempdir()/respmech_sample``, and nothing on screen said "sample"
+        once it is reopened as a plain saved .toml months later, see
+        ``AppState.load_toml``). Deliberately PATH-based, not a flag check on
+        ``AppState.is_sample``: that is exactly the case this guards against, since the
+        flag has already been forgotten by the time a saved analysis is reopened, but the
+        output folder's actual location has not changed. Returns True to proceed."""
+        out = (self.state.settings.output.folder or "").strip()
+        if not out:
+            return True
+        out_abs = os.path.abspath(out)
+        temp_root = os.path.abspath(tempfile.gettempdir())
+        try:
+            under_temp = os.path.commonpath([out_abs, temp_root]) == temp_root
+        except ValueError:                      # different drives on Windows
+            under_temp = False
+        if not under_temp:
+            return True
+        box = QMessageBox(self)
+        box.setWindowTitle("Temporary output folder")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(
+            "This writes into a temporary folder that your operating system may delete.")
+        btn_continue = box.addButton("Continue", QMessageBox.ButtonRole.AcceptRole)
+        btn_choose = box.addButton("Choose another folder…", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(btn_continue)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is btn_continue:
+            return True
+        if clicked is btn_choose:
+            d = QFileDialog.getExistingDirectory(self, "Choose output folder", out_abs)
+            if d:
+                # Ask Setup to make the change (see output_folder_change_requested's own
+                # docstring for why this screen must not write the model directly) and let
+                # the user press Run again against the commitment sheet's fresh plan,
+                # rather than silently carrying on with a folder just picked in passing.
+                self.output_folder_change_requested.emit(d)
+        return False
+
     # -- run lifecycle ------------------------------------------------------
     def _start(self, write: bool, only_files=None):
         if self._thread is not None or self._write_thread is not None:
@@ -787,6 +839,11 @@ class RunScreen(QWidget):
         problem = path_problem(self.state.settings, probe_write=True)
         if problem:
             self._set_status(f"Cannot run: {problem}")
+            return
+        # ticket C03 point 8: only a REAL write risks losing results to OS temp cleanup —
+        # a dry run touches no disk, so there is nothing here for it to protect.
+        if write and not self._confirm_temp_output():
+            self._set_status("Run cancelled — output folder is under the system temp directory.")
             return
         # overwrite guard: a real run into a folder that already holds results asks first
         if write:

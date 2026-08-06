@@ -27,21 +27,6 @@ from respmech.ui.screens.run_screen import RunScreen
 _MENU_RECENTS = 5
 
 
-def _recent_label(path: str, max_dir: int = 34) -> str:
-    """Label one recent analysis: the file name plus just enough of its folder to tell two
-    same-named analyses apart. Bare basenames collide across studies (every study has an
-    "analysis.toml"); full paths are unreadable at menu width. The folder is elided at its
-    HEAD — the leaf folder is the one that names the study."""
-    import os  # noqa: PLC0415
-    folder, name = os.path.split(path)
-    home = os.path.expanduser("~")
-    if folder.startswith(home):
-        folder = "~" + folder[len(home):]
-    if len(folder) > max_dir:
-        folder = "…" + folder[-max_dir:]
-    return f"{name}  —  {folder}" if folder else name
-
-
 class MainWindow(QMainWindow):
     def __init__(self, state: AppState | None = None):
         super().__init__()
@@ -140,6 +125,9 @@ class MainWindow(QMainWindow):
         # (e.g. Load TOML) out from under the running worker
         rn.run_started.connect(self._on_run_started)
         rn.run_finished.connect(self._on_run_finished)
+        # C03 point 8: "Choose another folder…" in the temp-output confirmation changes
+        # Setup's own widget (see both docstrings for why this can't be a direct model write).
+        rn.output_folder_change_requested.connect(sc.set_output_folder)
         bar = self.statusBar()          # creates the status bar (offscreen-safe)
         # Each screen already keeps its own last message live in its own (hidden, for
         # Setup/Preview/Run alike) status QLabel — see each screen's _set_status. So the
@@ -174,6 +162,13 @@ class MainWindow(QMainWindow):
         from respmech.ui.startup_dialog import StartupDialog
         dlg = StartupDialog(self)
         dlg.exec()
+        self._apply_startup_choice(dlg)
+
+    def _apply_startup_choice(self, dlg):
+        """Act on a finished ``StartupDialog`` — shared between the very first session
+        window (``begin_session``) and 'Get started…' (ticket C03 point 2, reachable again
+        later from the Analysis/File menu) so the two doors can never disagree about what
+        each mode does."""
         # a failed open (corrupt file) falls through to the guided New flow rather than
         # leaving the user in full mode over rolled-back defaults
         if dlg.mode == "open" and dlg.path and self.settings_screen.open_analysis(dlg.path):
@@ -187,10 +182,22 @@ class MainWindow(QMainWindow):
         """Name the active analysis in the title bar and flag unsaved edits, so it is
         obvious which analysis is loaded and whether it has been saved. The unsaved
         analysis is named "new analysis", not "new analysis (unsaved)": the modified
-        marker already carries that, and both would say it twice."""
+        marker already carries that, and both would say it twice.
+
+        Ticket C03 points 7/8: an analysis with no ``settings_path`` of its own is not
+        always a blank one — a just-imported legacy .py or the built-in sample both land
+        here too, and both used to be indistinguishable from "new analysis" in the title.
+        ``is_sample`` wins over ``display_name`` (both are only ever set on the SAME
+        path-less state, never together, but the sample is the more actionable thing to
+        say if that ever changed)."""
         import os  # noqa: PLC0415
         path = getattr(self.state, "settings_path", None)
-        name = os.path.basename(path) if path else "new analysis"
+        if getattr(self.state, "is_sample", False):
+            name = "Sample analysis (built-in)"
+        elif path:
+            name = os.path.basename(path)
+        else:
+            name = getattr(self.state, "display_name", None) or "new analysis"
         dirty = " * (modified)" if self.settings_screen.is_dirty() else ""
         self.setWindowTitle(f"RespMech {__version__} — {name}{dirty}")
 
@@ -324,6 +331,24 @@ class MainWindow(QMainWindow):
         self._act_save_as.setShortcut(QKeySequence("Ctrl+Shift+S"))
         self._act_save_as.triggered.connect(self._save_analysis_as)
         menu.addAction(self._act_save_as)
+        menu.addSeparator()
+        # ticket C03 point 2: both were previously ONE-SHOT — reachable only from the very
+        # first window of a session (StartupDialog via begin_session) and, for the sample,
+        # not reachable again at all once dismissed (open_sample_analysis has no OTHER
+        # caller). Same QAction pattern as the four above: added to both this menu and the
+        # File menu built in _build_menu_bar(), never a second implementation.
+        self._act_get_started = QAction("Get started…", self)
+        self._act_get_started.triggered.connect(self._get_started)
+        menu.addAction(self._act_get_started)
+        self._act_sample = QAction("Explore with sample data", self)
+        self._act_sample.triggered.connect(self._explore_sample)
+        menu.addAction(self._act_sample)
+        # ticket C03 point 5: same-settings-new-folder, the realistic multi-subject case
+        # ("Rammer": subject 1 was set up weeks ago, subjects 2-22 need the identical
+        # protocol against a new recordings folder each).
+        self._act_duplicate = QAction("Duplicate for another recordings folder…", self)
+        self._act_duplicate.triggered.connect(self._duplicate_analysis)
+        menu.addAction(self._act_duplicate)
         # The recents and the Save enable-state both depend on live state, so they are
         # rebuilt each time the menu drops down. Reading prefs at show time cannot go stale;
         # listening to a screen signal would (analysis_state_changed is emitted BEFORE
@@ -346,6 +371,35 @@ class MainWindow(QMainWindow):
 
     def _open_analysis_dialog(self):
         self.settings_screen.open_analysis_dialog()
+        self._show_settings_status()
+
+    def _get_started(self):
+        """Analysis/File > 'Get started…' (ticket C03 point 2): re-raise the startup
+        chooser after the first window — guarded like every other action that would drop
+        unsaved edits, since 'New analysis'/'Open…' inside the chooser both do exactly
+        that."""
+        if not self.settings_screen.confirm_discard_changes(
+                "Get started", question="Save them before starting over?"):
+            return
+        from respmech.ui.startup_dialog import StartupDialog
+        dlg = StartupDialog(self)
+        dlg.exec()
+        self._apply_startup_choice(dlg)
+        self._show_settings_status()
+
+    def _explore_sample(self):
+        """Analysis/File > 'Explore with sample data' (ticket C03 point 2): the sample was
+        previously reachable only from the FIRST window of a session — this makes it a
+        real, repeatable door, guarded the same way 'New analysis' already is."""
+        if not self.settings_screen.confirm_discard_changes(
+                "Explore with sample data",
+                question="Save them before exploring the built-in sample data?"):
+            return
+        self.settings_screen.open_sample_analysis()
+        self._show_settings_status()
+
+    def _duplicate_analysis(self):
+        self.settings_screen.duplicate_for_another_folder()
         self._show_settings_status()
 
     def _save_analysis(self):
@@ -391,7 +445,7 @@ class MainWindow(QMainWindow):
         if self._file_recent_menu is not None:
             self._file_recent_menu.setEnabled(bool(recents))
         for i, path in enumerate(recents, 1):
-            act = QAction(f"&{i}  {_recent_label(path)}", self)
+            act = QAction(f"&{i}  {prefs.recent_label(path)}", self)
             act.setToolTip(path)                       # the exact path, unelided
             act.triggered.connect(lambda _=False, p=path: self._open_recent(p))
             self.analysis_menu.addAction(act)
@@ -432,6 +486,12 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(self._act_save)
         file_menu.addAction(self._act_save_as)
+        file_menu.addSeparator()
+        # ticket C03 point 2: same QAction objects as the header's Analysis menu (see
+        # their own construction in _make_analysis_menu) — one enable-state, two doors.
+        file_menu.addAction(self._act_get_started)
+        file_menu.addAction(self._act_sample)
+        file_menu.addAction(self._act_duplicate)
         file_menu.addSeparator()
         self._act_open_output = QAction("Open output folder", self)
         # Same slot the Run drawer's own button uses (run_screen.py) — one place decides

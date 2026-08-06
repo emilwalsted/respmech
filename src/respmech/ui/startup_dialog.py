@@ -12,8 +12,6 @@ synthetic data — P23). Cancelling rejects and leaves ``mode == "new"``.
 """
 from __future__ import annotations
 
-import os
-
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (QCommandLinkButton, QDialog, QFileDialog,
                                QHBoxLayout, QLabel, QPushButton, QVBoxLayout)
@@ -81,24 +79,36 @@ class StartupDialog(QDialog):
         self.sample_btn.clicked.connect(self._choose_sample)
         v.addWidget(self.sample_btn)
 
-        # P26: recent analyses as one-click entries
+        # P26: recent analyses as one-click entries. Label shared with the header's
+        # Analysis menu (ticket C03) via prefs.recent_label, so the same file is never
+        # described differently on the two doors; left-aligned ("recent" QSS property,
+        # theme.py) so name and folder line up down the column instead of each button's
+        # text sitting centred at a different width.
         recents = prefs.recent_analyses()
         if recents:
             lab = QLabel("Recent analyses")
             lab.setProperty("status", "muted")
             v.addSpacing(4); v.addWidget(lab)
             for path in recents[:5]:
-                btn = QPushButton(os.path.basename(path))
+                btn = QPushButton(prefs.recent_label(path))
                 btn.setToolTip(path)
                 btn.setProperty("compact", True)
+                btn.setProperty("recent", True)
                 btn.clicked.connect(lambda _=False, p=path: self._choose_recent(p))
                 v.addWidget(btn)
 
+        # ticket C03: this used to be a bare "Cancel" wired to reject() — but reject() and
+        # "New analysis" landed on the exact same outcome (mode stays "new", the guided
+        # flow starts), so a user pressing Esc to back out and look for their file first
+        # was silently dropped into the guided flow instead. The wording now says what
+        # actually happens; the first command-link button above already offers the
+        # identical action, so this is deliberately the plain, low-emphasis way out, not a
+        # second copy of the guided flow's entry point.
         foot = QHBoxLayout()
         foot.addStretch(1)
-        cancel = QPushButton("Cancel")
-        cancel.clicked.connect(self.reject)
-        foot.addWidget(cancel)
+        skip = QPushButton("Skip — start a new analysis")
+        skip.clicked.connect(self._choose_new)
+        foot.addWidget(skip)
         v.addLayout(foot)
 
         # size to content — the door/recent count varies, so a fixed height would clip
