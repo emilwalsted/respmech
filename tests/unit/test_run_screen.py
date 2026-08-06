@@ -860,6 +860,27 @@ def test_commitment_sheet_names_a_channel_collision_before_a_path_problem(qapp, 
     win.close()
 
 
+def test_qc_strip_and_commitment_sheet_name_the_identical_blocker(qapp, tmp_path):
+    """Ticket B07 acceptance, verbatim: with the volume channel unset, Setup's QC strip is
+    error-styled and carries the EXACT SAME sentence as the commitment sheet's own top
+    blocker — both now read the one shared ``ui.validation.blockers`` list (this ticket),
+    so a SettingsError can never be paraphrased two different ways on two screens. Compares
+    the actual strings, not two independently hardcoded texts, so a future wording change in
+    either the shared helper or a screen's own formatting is caught here rather than two
+    tests that quietly stopped agreeing with each other."""
+    win = _win(tmp_path); sc, rn = win.settings_screen, win.run_screen
+    sc.state.settings.input.channels.volume = None   # a hard blocker outside channel_collision
+    sc.refresh_qc()
+    rn.refresh_actions()
+    assert sc.qc.property("status") == "error"
+    tail = rn._commitment.text().split("\n")[-1]
+    assert tail.startswith("⚠ ")
+    top_blocker = tail[len("⚠ "):].split("  ·  ")[0]
+    assert "volume" in top_blocker.lower()            # sanity: this is really the volume blocker
+    assert sc.qc.text() == "✗  " + top_blocker
+    win.close()
+
+
 def test_quick_path_problem_never_globs_twice_for_an_unchanged_broken_mask(qapp, tmp_path, monkeypatch):
     """The NEW glob-based check inside _quick_path_problem (ticket B04) must stay as cheap
     as the file-rail-based count already is: repeated refresh_actions() calls over an

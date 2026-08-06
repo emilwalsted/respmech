@@ -488,7 +488,11 @@ def test_format_readout_flags_a_column_outlier_and_qc_is_not_green(qapp, tmp_pat
     assert "d.csv" in text and "8 columns" not in text.split("d.csv")[0]  # named as the outlier
     assert sc.format_readout.property("status") == "warn"
     # the QC strip must ALSO carry the caveat — _update_qc must never say "no warnings"
-    # about a batch it has not looked at file-by-file
+    # about a batch it has not looked at file-by-file. A valid channel mapping + output
+    # folder are needed here (ticket B07) so the strip's own hard-blocker check (unset
+    # channels, unset output) does not mask the softer outlier caution this test is about.
+    sc.samp_freq.setValue(1000); sc.out_folder.setText(str(tmp_path / "out"))
+    _assign(sc, flow=5, volume=6, poes=7, pgas=8, pdi=9, emg=[2, 3, 4])
     assert sc.qc.property("status") == "warn"
     assert "d.csv" in sc.qc.text()
     win.close()
@@ -517,6 +521,10 @@ def test_qc_strip_flags_a_sampling_frequency_mismatch(qapp, tmp_path):
     sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
     sc.samp_freq.setValue(1000)
     sc._on_inputs_changed()
+    # a valid channel mapping + output folder (ticket B07): otherwise the strip's own hard
+    # blocker (unset channels/output) masks the softer frequency caution under test here.
+    sc.out_folder.setText(str(tmp_path / "out"))
+    _assign(sc, flow=5, volume=6, poes=7, pgas=8, pdi=9, emg=[2, 3, 4])
     assert sc.qc.property("status") == "warn"
     assert "2000 Hz" in sc.qc.text() and "at2000.csv" in sc.qc.text()
     # not a hard block — a frequency caveat must not by itself take down the guided flow
@@ -530,6 +538,12 @@ def test_mask_narrowing_is_reported_on_setup(qapp, tmp_path):
         write_delim(tmp_path / f"{n}.csv", 9)
     write_delim(tmp_path / "d.txt", 9, sep="\t")
     win = MainWindow(AppState()); sc = win.settings_screen
+    # valid channels + output FIRST (ticket B07): _assign's own _on_inputs_changed() would
+    # otherwise re-narrow an ALREADY-single-pattern mask on a second pass and rebuild a
+    # manifest with mask_narrowed_from reset to None, silently erasing the very caution
+    # this test is about — narrow the mask exactly once, after everything else is valid.
+    sc.samp_freq.setValue(1000); sc.out_folder.setText(str(tmp_path / "out"))
+    _assign(sc, flow=5, volume=6, poes=7, pgas=8, pdi=9, emg=[2, 3, 4])
     sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv; *.txt")
     sc._on_inputs_changed()
     assert sc.in_files.text() == "*.csv"                   # still narrows, exactly as before
@@ -601,6 +615,9 @@ def test_correcting_the_sampling_frequency_clears_the_stale_caution(qapp, tmp_pa
     sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
     sc.samp_freq.setValue(1000)
     sc._on_inputs_changed()
+    # valid channels + output (ticket B07), else the hard blocker masks the frequency caution
+    sc.out_folder.setText(str(tmp_path / "out"))
+    _assign(sc, flow=5, volume=6, poes=7, pgas=8, pdi=9, emg=[2, 3, 4])
     assert "not the 1000 Hz" in sc.qc.text()
     sc.samp_freq.setValue(2000)                    # the user does exactly what the caution said
     assert sc._manifest.settings_fs == 2000
@@ -625,6 +642,9 @@ def test_frequency_only_mismatch_marks_the_readout_as_warn_too(qapp, tmp_path):
     sc._on_inputs_changed()
     assert sc._manifest.outliers == ()              # columns agree — only frequency disagrees
     assert sc.format_readout.property("status") == "warn"
+    # valid channels + output (ticket B07), else the hard blocker masks the frequency caution
+    sc.out_folder.setText(str(tmp_path / "out"))
+    _assign(sc, flow=5, volume=6, poes=7, pgas=8, pdi=9, emg=[2, 3, 4])
     assert sc.qc.property("status") == "warn"
     win.close()
 
@@ -666,6 +686,119 @@ def test_all_files_too_few_columns_gives_an_accurate_message(qapp, tmp_path):
     text = sc.format_readout.text()
     assert "enough columns" in text and "unreadable" in text
     assert sc.format_readout.property("status") == "warn"
+    win.close()
+
+
+# --------------------------------------------------------------------------- #
+# B07: the QC strip renders the app's own verdict instead of reaching a THIRD,
+# independent one — see ``SettingsScreen._qc_verdict``.
+# --------------------------------------------------------------------------- #
+def test_qc_strip_is_muted_not_green_when_nothing_matches(qapp, tmp_path):
+    """Acceptance (ticket B07): a folder containing only a non-matching file (a PDF, say)
+    is 'nothing has been checked yet', not a clean bill of health — the strip must show
+    neither the green checkmark nor an amber warning, and it must not contradict the
+    Input card's own read-out, which already says the same thing in its own words."""
+    from respmech.ui.main_window import MainWindow
+    (tmp_path / "report.pdf").write_bytes(b"%PDF-1.4\n")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
+    sc._on_inputs_changed()
+    assert sc._manifest is not None and sc._manifest.files == ()
+    assert sc.format_readout.property("status") == "warn"          # the Input card's own note
+    assert "No files match" in sc.format_readout.text()
+    assert sc.qc.property("status") == "muted"
+    assert "✓" not in sc.qc.text() and "⚠" not in sc.qc.text()
+    win.close()
+
+
+def test_qc_strip_flags_unreadable_data_and_names_the_decimal_separator(qapp, tmp_path):
+    """Acceptance (ticket B07), written before the fix per the ticket's own test
+    discipline: a folder of semicolon-separated CSVs read under the default comma-decimal
+    setting never wins the manifest's >=2-column majority vote (peek_columns splits every
+    line on ',' and finds one field) — B01's ``majority_columns is None``. The strip must
+    say so in error style and name the decimal separator as the thing to check, since
+    ``path_problem`` alone cannot see this: the mask genuinely matched real files."""
+    from respmech.ui.main_window import MainWindow
+    for n in ("a", "b"):
+        write_delim(tmp_path / f"{n}.csv", 9, sep=";")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
+    sc.samp_freq.setValue(1000); sc.out_folder.setText(str(tmp_path / "out"))
+    _assign(sc, flow=5, volume=6, poes=7, pgas=8, pdi=9, emg=[2, 3, 4])
+    assert sc._manifest.files != () and sc._manifest.majority_columns is None
+    assert sc.qc.property("status") == "error"
+    assert "could be read as data" in sc.qc.text()
+    assert "decimal separator" in sc.qc.text()
+    win.close()
+
+
+def test_qc_strip_warns_about_the_effective_emg_rate_after_resampling(qapp, tmp_path):
+    """Acceptance (ticket B07): with 'Resample before analysis' on and a 200 Hz target
+    against EMG channels on a 1000 Hz recording, the strip must warn about the rate the
+    batch will actually ANALYSE at (200 Hz), not the recorded rate (1000 Hz, which alone
+    is not low for EMG) — ``workers.py`` documents that Preview never resamples, so this is
+    the one place left that could silently certify a genuinely wrong EMG normalisation."""
+    from respmech.ui.main_window import MainWindow
+    for n in ("a", "b"):
+        write_delim(tmp_path / f"{n}.csv", 9, fs=1000.0)
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
+    sc.samp_freq.setValue(1000); sc.out_folder.setText(str(tmp_path / "out"))
+    _assign(sc, flow=5, volume=6, poes=7, pgas=8, pdi=9, emg=[2, 3, 4])
+    assert sc.qc.property("status") == "ok"                      # sanity: not warned yet
+    assert "low for EMG" not in sc.qc.text()
+    samp = sc.state.settings.processing.sampling
+    samp.resample = True; samp.resample_to_frequency = 200
+    sc.refresh_qc()
+    assert sc.qc.property("status") == "warn"
+    assert "analysis rate 200 Hz (resampled from 1000 Hz) is low for EMG" in sc.qc.text()
+    assert "Mechanics ▸ Advanced" in sc.qc.text()
+    win.close()
+
+
+def test_green_checkmark_only_when_ready_and_at_least_one_file_was_read(qapp, tmp_path):
+    """Acceptance (ticket B07): one test walking every non-green tier plus a genuinely
+    valid batch, asserting the checkmark shows in exactly the last one — the strip's own
+    former promise ('columns/sampling look consistent') covered more than it actually
+    checked; this proves the new, narrower promise ('_all_ok() and >=1 file read') holds
+    across all four non-ready states, not just whichever one a single test happens to try."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+
+    # 1) nothing scanned yet
+    assert sc.qc.property("status") == "muted"
+
+    # 2) hard blocker: no channels assigned
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
+    write_delim(tmp_path / "a.csv", 9)
+    sc.samp_freq.setValue(1000)
+    sc._on_inputs_changed()
+    assert sc.qc.property("status") == "error"
+
+    # 3) hard blocker: unreadable data (decimal-separator mismatch)
+    for f in tmp_path.glob("*.csv"):
+        f.unlink()
+    write_delim(tmp_path / "b.csv", 9, sep=";")
+    sc._on_inputs_changed()
+    _assign(sc, flow=5, volume=6, poes=7, pgas=8, pdi=9, emg=[2, 3, 4])
+    sc.out_folder.setText(str(tmp_path / "out")); sc._on_field_changed()
+    assert sc._manifest.majority_columns is None
+    assert sc.qc.property("status") == "error"
+
+    # 4) soft caution: output folder equals the recordings folder
+    for f in tmp_path.glob("*.csv"):
+        f.unlink()
+    write_delim(tmp_path / "c.csv", 9)
+    sc._on_inputs_changed()
+    sc.out_folder.setText(str(tmp_path)); sc._on_field_changed()
+    assert sc.qc.property("status") == "warn"
+
+    # 5) genuinely ready: valid channels, valid output, one real file actually read
+    sc.out_folder.setText(str(tmp_path / "out")); sc._on_field_changed()
+    assert sc._all_ok()
+    assert sc._manifest.majority_columns is not None
+    assert sc.qc.property("status") == "ok"
+    assert sc.qc.text() == "✓  Ready to run — no warnings."
     win.close()
 
 
@@ -880,9 +1013,15 @@ def test_output_equal_to_input_is_cautioned(qapp, tmp_path):
     win = MainWindow(AppState())
     sc = win.settings_screen
     same = tmp_path / "shared"; same.mkdir()
+    write_delim(same / "a.csv", 9)    # a real, readable file: an empty folder is 'muted',
+                                       # not 'warn' (ticket B07), so this caution needs one
     assert sc._output_is_input_folder() is False       # both blank
-    sc.in_folder.setText(str(same)); sc.out_folder.setText(str(same))
+    sc.in_folder.setText(str(same)); sc.in_files.setText("*.csv")
+    sc.samp_freq.setValue(1000)
     sc._on_inputs_changed()
+    sc.out_folder.setText(str(same))
+    # valid channels (ticket B07), else the hard blocker masks the output==input caution
+    _assign(sc, flow=5, volume=6, poes=7, pgas=8, pdi=9, emg=[2, 3, 4])
     assert sc._output_is_input_folder() is True
     assert "recordings folder" in sc.qc.text()
     sc.out_folder.setText(str(tmp_path / "elsewhere")); sc._on_field_changed()

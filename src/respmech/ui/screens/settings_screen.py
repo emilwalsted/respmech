@@ -723,7 +723,7 @@ class SettingsScreen(QWidget):
         single pattern.
 
         Refreshes the QC strip itself at the end (self-review finding, 05-08-2026): this is
-        the ONLY place ``self._manifest`` is rebuilt, and ``_all_cautions``/``_update_qc``
+        the ONLY place ``self._manifest`` is rebuilt, and ``_qc_verdict``/``_update_qc``
         now read it — a caller that rebuilt the manifest without also refreshing QC could
         leave the strip showing a stale (or, on the very first call, entirely absent)
         verdict. That happened concretely on the open-analysis path: from_state() called
@@ -1266,8 +1266,22 @@ class SettingsScreen(QWidget):
         if rp is not None and rp.enabled and not s.processing.emg.remove_ecg:
             out.append("cardiac-gated peak EMG needs ECG removal on (Preview & QC ▸ "
                        "› EMG – ECG reduction), or its columns will be blank")
-        if ch.emg and (s.input.format.sampling_frequency or 0) < 1000:
-            out.append("sampling frequency < 1000 Hz is low for EMG")
+        # Tests the rate the batch will actually ANALYSE at, not the raw input rate: with
+        # 'Resample before analysis' on (Preview & QC ▸ Mechanics ▸ Advanced…), every EMG
+        # channel is normalised against the resampled envelope, never the recorded one (see
+        # workers.py's own note that Preview never resamples) — same fs_eff formula
+        # core.settings.Settings.validate() already uses for trend_peak_min_distance_s, so
+        # the two can never disagree about what "the analysis rate" means.
+        samp = s.processing.sampling
+        resampling = bool(samp.resample and samp.resample_to_frequency and samp.resample_to_frequency > 0)
+        fs_input = s.input.format.sampling_frequency or 0
+        fs_eff = samp.resample_to_frequency if resampling else fs_input
+        if ch.emg and fs_eff and fs_eff < 1000:
+            if resampling and fs_eff != fs_input:
+                out.append(f"analysis rate {fs_eff} Hz (resampled from {fs_input} Hz) is low "
+                           "for EMG — Preview & QC ▸ Mechanics ▸ Advanced… ▸ Sampling")
+            else:
+                out.append(f"sampling frequency {fs_eff} Hz is low for EMG")
         return out
 
     def _science_note(self):
@@ -1288,11 +1302,8 @@ class SettingsScreen(QWidget):
             out.append(self._narrowed_note(m))
         if m.outliers:
             n_out = len(m.outliers)
-            verb = "differs" if n_out == 1 else "differ"
-            be = "is" if n_out == 1 else "are"
-            out.append(f"{n_out} file{'s' if n_out != 1 else ''} {verb} in column count "
-                       f"and {be} not included in channel assignment: "
-                       f"{self._named_list(m.outliers)}")
+            out.append(f"{n_out} of {len(m.files)} files have a different column count "
+                       f"and will fail: {self._named_list(m.outliers)}")
         return out
 
     def _output_is_input_folder(self):
@@ -1312,20 +1323,59 @@ class SettingsScreen(QWidget):
         except Exception:                       # noqa: BLE001 — a caution is cosmetic
             return False
 
-    def _all_cautions(self):
-        """Every current caution (hard channel collision first, then the batch's own
-        manifest caveats, then soft science notes) — for the live QC strip. As long as the
-        manifest has a caveat, this list is never empty, so ``_update_qc`` cannot say
-        'no warnings' about a batch it has not actually looked at file-by-file."""
-        out = []
-        c = self._channel_collision()
-        if c:
-            out.append(c)
-        out.extend(self._manifest_cautions())
+    def _qc_verdict(self):
+        """The Setup QC strip's single verdict, as ``(status, text)``.
+
+        Ticket B07: the strip used to reach its own conclusion from ``_channel_collision()``
+        plus ``_science_notes()`` alone — never calling ``Settings.validate()`` or
+        ``_path_problem()``, the exact checks ``_all_ok()`` gates a run on — so it could
+        show a green checkmark in states that cannot actually run (an unset volume channel,
+        a broken output path, a folder no file of which could be read as data). The strip no
+        longer judges anything itself: it renders the SAME verdict the rest of the app
+        already reached, worst first.
+
+        Four tiers, in priority order:
+        - ``'muted'``: nothing has been scanned yet (no input folder, or the mask matches no
+          files) — not an error, just nothing to report. Checked FIRST, ahead of the shared
+          hard-blocker list, because ``ui.validation.path_problem``'s own "no files match…"
+          message is exactly this same fact said in alarming style; a folder nobody has
+          pointed the app at yet is not a broken one.
+        - ``'error'``: a hard blocker — channel collision, a ``SettingsError`` from
+          ``validate()``, or a path problem (``ui.validation.blockers``, ticket B07: the ONE
+          shared list the Run screen's commitment sheet also reads, so the two can never
+          name a different top blocker for the same settings) — or the manifest found files
+          but could not read ANY of them as data (B01's ``majority_columns is None``, e.g. a
+          decimal-separator mismatch: the mask matched real files, so ``path_problem`` alone
+          cannot see the problem).
+        - ``'warn'``: a soft caution — a column-count outlier, a narrowed mask, output
+          pointing at the input folder, or a science note (frequency mismatch, ECG
+          prerequisite, low EMG rate) — nothing here blocks a run, but every one of them
+          changes what the batch actually does or writes.
+        - ``'ok'``: only once ``_all_ok()``'s own checks are clean AND the manifest has
+          actually read at least one file — never for a caveat-free batch nobody has looked
+          inside yet."""
+        m = self._manifest
+        if m is None or not m.files:
+            return "muted", "Nothing scanned yet — set an input folder with matching files."
+        from respmech.ui.validation import blockers as _shared_blockers
+        # matches=... straight from the manifest we already built (self-review finding):
+        # path_problem only ever asks "is this non-empty?", and the manifest can never be
+        # non-empty here without a real folder edit having rebuilt it first — so this is the
+        # exact same answer a fresh glob would give, without repeating the directory scan
+        # _update_format_readout() already just did.
+        hard = _shared_blockers(self.state.settings, matches=[f.path for f in m.files])
+        if hard:
+            return "error", hard[0]
+        if m.majority_columns is None:
+            return "error", ("no file in this folder could be read as data — check "
+                             "'Files to analyse' and the decimal separator")
+        cautions = self._manifest_cautions()
         if self._output_is_input_folder():
-            out.append("Results will be written into your recordings folder.")
-        out.extend(self._science_notes())   # every note, not just the first
-        return out
+            cautions.append("Results will be written into your recordings folder.")
+        cautions.extend(self._science_notes())   # every note, not just the first
+        if cautions:
+            return "warn", "   ·   ".join(cautions)
+        return "ok", "Ready to run — no warnings."
 
     def refresh_qc(self):
         """Recompute the caution strip without touching any widget value.
@@ -1338,16 +1388,14 @@ class SettingsScreen(QWidget):
         self._update_qc()
 
     def _update_qc(self):
-        """Refresh the pinned QC strip with the live cautions (styled warn), or an all-clear."""
+        """Refresh the pinned QC strip with the live verdict (``_qc_verdict``): a hard error,
+        a soft caution, a muted "nothing scanned" note, or an all-clear."""
         if getattr(self, "qc", None) is None:
             return
-        cautions = self._all_cautions()
-        if cautions:
-            self.qc.setText("⚠  " + "   ·   ".join(cautions))
-            self.qc.setProperty("status", "warn")
-        else:
-            self.qc.setText("✓  No warnings — channels, columns and sampling look consistent.")
-            self.qc.setProperty("status", "ok")
+        status, text = self._qc_verdict()
+        icon = {"error": "✗  ", "warn": "⚠  ", "muted": "", "ok": "✓  "}[status]
+        self.qc.setText(icon + text)
+        self.qc.setProperty("status", status)
         st = self.qc.style()
         if st is not None:
             st.unpolish(self.qc); st.polish(self.qc)
