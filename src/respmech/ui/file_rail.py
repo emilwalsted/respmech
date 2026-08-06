@@ -312,11 +312,16 @@ class FileRail(QWidget):
 
         self.filter_edit = QLineEdit()
         self.filter_edit.setPlaceholderText("Filter files…")
+        self.filter_edit.setAccessibleName("Filter files")   # C02: named for QAccessible/screen readers
         self.filter_edit.setClearButtonEnabled(True)
         self.filter_edit.textChanged.connect(self._proxy.set_filter_text)
         root.addWidget(self.filter_edit)
 
         self.view = QListView()
+        # C02: this is what used to be the Preview/Run file_combo — a value with no label
+        # (QAccessible reported it announcing only its own current text). "Recording" names
+        # what the value IS, matching the ticket's a11y review.
+        self.view.setAccessibleName("Recording")
         self.view.setModel(self._proxy)
         self.view.setSelectionMode(QAbstractItemView.SingleSelection)
         self.view.setUniformItemSizes(True)

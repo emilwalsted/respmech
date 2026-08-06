@@ -169,17 +169,23 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
     def _build(self):
         root = QVBoxLayout(self); root.setContentsMargins(11, 11, 11, 11)   # deterministic, matches Setup
         bar = QHBoxLayout()
-        # P27: step through files without leaving the plots — buttons + PageUp/PageDown,
-        # now retargeted at the file rail's selection (see _build_workspace below).
+        # P27: step through files without leaving the plots — buttons + keyboard shortcuts,
+        # targeted at the file rail's selection (see _build_workspace below). Tooltips are
+        # filled in once the real shortcuts exist below (C02), so they show the platform's
+        # own key glyphs instead of a hardcoded string.
         self.btn_prev_file = QPushButton("◀")
         self.btn_next_file = QPushButton("▶")
-        for b, tip in ((self.btn_prev_file, "Previous file (PgUp)"),
-                       (self.btn_next_file, "Next file (PgDn)")):
+        # C02: an icon button's accessible name defaults to its visible glyph ("◀"/"▶"),
+        # which QAccessible confirmed a screen reader would read literally. The glyph stays
+        # as the visible label; the accessible name is the actual action.
+        self.btn_prev_file.setAccessibleName("Previous file")
+        self.btn_next_file.setAccessibleName("Next file")
+        for b in (self.btn_prev_file, self.btn_next_file):
             # The nav QSS gives the arrow 6px side air, and its min-width:0 overwrites
             # any code-side minimum at polish — the width simply tracks sizeHint, so the
             # glyph cannot clip. The max only stops layout slack ballooning the button.
             b.setProperty("nav", True)
-            b.setMaximumWidth(34); b.setToolTip(tip)
+            b.setMaximumWidth(34)
         self.btn_prev_file.clicked.connect(lambda: self.file_rail.step(-1))
         self.btn_next_file.clicked.connect(lambda: self.file_rail.step(+1))
         # 'Refresh' recomputes every auto panel (not the test run); the file list itself
@@ -193,9 +199,6 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         bar.addWidget(self.btn_refresh_all)
         bar.addStretch(1)
         root.addLayout(bar)
-        from PySide6.QtGui import QShortcut, QKeySequence  # noqa: PLC0415
-        QShortcut(QKeySequence(Qt.Key_PageUp), self, activated=lambda: self.file_rail.step(-1))
-        QShortcut(QKeySequence(Qt.Key_PageDown), self, activated=lambda: self.file_rail.step(+1))
         # Status is shown ONLY in the main-window bottom status bar (via status_changed).
         # Keep the label object (state holder + tests read pv.status) but never place it
         # under the file selector.
@@ -223,6 +226,34 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self.file_rail = FileRail()
         self.file_rail.setMinimumWidth(170)
         self.file_rail.setMaximumWidth(280)
+
+        # C02: file-navigation shortcuts. Ctrl+[ / Ctrl+] is the primary pair — drawn as
+        # ⌘[ / ⌘] on macOS, the Safari/Xcode "previous/next" convention — plus a
+        # layout-independent alias Alt+Left/Alt+Right, because "[" itself needs Alt/Option
+        # on a Danish or German keyboard. Both are window-scoped (the default QShortcut
+        # context), meant to work anywhere on this screen. PageUp/PageDown are kept for
+        # continuity but rescoped to the file rail with WidgetWithChildrenShortcut: parented
+        # on ``self`` with the default context they used to fire before a focused widget
+        # (e.g. the breath table) ever saw the key — PageDown in the table scrolled nothing
+        # and switched the file out from under the user instead.
+        from PySide6.QtGui import QShortcut, QKeySequence  # noqa: PLC0415
+        sc_prev = QShortcut(QKeySequence("Ctrl+["), self, activated=lambda: self.file_rail.step(-1))
+        sc_next = QShortcut(QKeySequence("Ctrl+]"), self, activated=lambda: self.file_rail.step(+1))
+        QShortcut(QKeySequence("Alt+Left"), self, activated=lambda: self.file_rail.step(-1))
+        QShortcut(QKeySequence("Alt+Right"), self, activated=lambda: self.file_rail.step(+1))
+        sc_pgup = QShortcut(QKeySequence(Qt.Key_PageUp), self.file_rail,
+                             activated=lambda: self.file_rail.step(-1))
+        sc_pgup.setContext(Qt.WidgetWithChildrenShortcut)
+        sc_pgdn = QShortcut(QKeySequence(Qt.Key_PageDown), self.file_rail,
+                             activated=lambda: self.file_rail.step(+1))
+        sc_pgdn.setContext(Qt.WidgetWithChildrenShortcut)
+        self._sc_prev_file = sc_prev
+        self._sc_next_file = sc_next
+        self.btn_prev_file.setToolTip(
+            f"Previous file ({sc_prev.key().toString(QKeySequence.NativeText)})")
+        self.btn_next_file.setToolTip(
+            f"Next file ({sc_next.key().toString(QKeySequence.NativeText)})")
+
         self._workspace_split = QSplitter(Qt.Horizontal)
         self._workspace_split.addWidget(self.file_rail)
         self._workspace_split.addWidget(self.subtabs)

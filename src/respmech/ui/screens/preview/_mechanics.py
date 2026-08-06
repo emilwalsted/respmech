@@ -117,6 +117,7 @@ class _MechanicsMixin:
         v.addLayout(_xh)
         split = QSplitter(Qt.Vertical)
         self.plots = pg.GraphicsLayoutWidget()
+        self.plots.setAccessibleName("Mechanics signals")   # C02: named for QAccessible/screen readers
         _theme.set_plot_floor(self.plots)
         self.plots.setBackground(_plot_pal()["bg"])
         self.plots.scene().sigMouseClicked.connect(self._on_plot_clicked)
@@ -128,6 +129,7 @@ class _MechanicsMixin:
         split.addWidget(self.plots)
         lower = QSplitter(Qt.Horizontal)
         self.table = QTableView()
+        self.table.setAccessibleName("Per-breath results")   # C02: named for QAccessible/screen readers
         self._table_model = ResultTableModel()
         self.table.setModel(self._table_model)
         # breath_no is already a table COLUMN; the row header numbered rows 1..N
@@ -140,6 +142,7 @@ class _MechanicsMixin:
         _theme.set_plot_floor(self.table)
         lower.addWidget(self.table)
         self.campbell = FigureCanvasQTAgg(Figure(figsize=(4, 4)))
+        self.campbell.setAccessibleName("Campbell diagram")   # C02: named for QAccessible/screen readers
         # A matplotlib canvas reports a 10 px minimum, so it was the one Preview graph with
         # no floor at all — measured 90 px on the target screen and 70 px at the window's own
         # minimum, which for the panel a reader takes the recoil line and work fill off is a
