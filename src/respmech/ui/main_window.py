@@ -32,6 +32,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.state = state or AppState()
         self.setWindowTitle(f"RespMech {__version__}")
+        self.setAcceptDrops(True)   # C04: dropping a .toml/.py analysis onto the window opens it
         try:
             from respmech.ui.logo import app_icon
             icon = app_icon()
@@ -456,6 +457,54 @@ class MainWindow(QMainWindow):
     def _open_recent(self, path: str):
         """Open a recent analysis, honouring the same unsaved-changes guard as any other
         action that would discard edits."""
+        if not self.settings_screen.confirm_discard_changes(
+                "Open analysis", question="Save them before opening another analysis?"):
+            return
+        self.settings_screen.open_analysis(path)
+        self._show_settings_status()
+
+    # -- drag-and-drop + double-click open (C04, UI-overhaul) ----------------
+    @staticmethod
+    def _dropped_analysis_path(mime):
+        """The path of a single, local, ``.toml``/``.py`` file carried by ``mime`` — else
+        ``None``. Several files, a folder, a remote URL, or an unrecognised extension are
+        all rejected outright rather than picking one or guessing; ``settings_screen.
+        open_analysis`` itself already routes by extension, so only those two need pass."""
+        if mime is None or not mime.hasUrls():
+            return None
+        urls = mime.urls()
+        if len(urls) != 1 or not urls[0].isLocalFile():
+            return None
+        path = urls[0].toLocalFile()
+        if not path.casefold().endswith((".toml", ".py")):
+            return None
+        return path
+
+    def dragEnterEvent(self, event):
+        if self._dropped_analysis_path(event.mimeData()) is not None:
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if self._dropped_analysis_path(event.mimeData()) is not None:
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        path = self._dropped_analysis_path(event.mimeData())
+        if path is None:
+            super().dropEvent(event)
+            return
+        event.acceptProposedAction()
+        self._open_dropped_path(path)
+
+    def _open_dropped_path(self, path: str):
+        """Open a ``.toml``/``.py`` analysis dropped onto the window — same unsaved-changes
+        guard as every other way of opening (recents, the Open dialog, closing): the drop
+        itself does not carry that guard, so a caller other than ``dropEvent`` must apply it
+        (``settings_screen.open_analysis`` on its own discards unsaved edits silently)."""
         if not self.settings_screen.confirm_discard_changes(
                 "Open analysis", question="Save them before opening another analysis?"):
             return
