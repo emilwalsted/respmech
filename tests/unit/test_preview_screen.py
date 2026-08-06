@@ -7,7 +7,7 @@ import os
 import numpy as np
 import pyqtgraph as pg
 import pytest
-from PySide6.QtCore import QPointF
+from PySide6.QtCore import QPointF, Qt
 
 from respmech.ui.state import AppState
 
@@ -457,6 +457,123 @@ def test_file_stepping(qapp):
     pv._step_file(+1); pv._step_file(+1)                 # clamps at the end
     assert pv.file_rail.current_filename() == "f3.csv"
     pv._step_file(-1); assert pv.file_rail.current_filename() == "f2.csv"
+    win.close()
+
+
+# ---------------------------------------------------------------------------
+# Keyboard, focus and accessible names (C02) — a focused widget must see its own
+# keys before a window-wide shortcut steals them, and icon-only controls need a
+# real accessible name.
+# ---------------------------------------------------------------------------
+def test_pagedown_scrolls_the_focused_table_not_the_file_selection(qapp):
+    """Before this ticket: PageUp/PageDown were registered on the whole PreviewScreen
+    with Qt's default WindowShortcut context, so they fired regardless of which widget
+    actually had focus. A user scrolling the breath table with PageDown got the
+    recording switched out from under them instead — measured as
+    ``table hasFocus: True``, ``vbar 0 -> 0, step calls: [1]``."""
+    import pandas as pd
+    from PySide6.QtTest import QTest
+    from respmech.ui.main_window import MainWindow
+
+    win = MainWindow(AppState())
+    pv = win.preview_screen
+    win.resize(1000, 700)
+    win.show()
+    win.activateWindow()
+    # QShortcut's WindowShortcut/WidgetWithChildrenShortcut matching requires the
+    # widget chain to actually be VISIBLE, not merely embedded — with Setup as the
+    # still-current tab, ``pv``/``pv.table`` report ``isVisible() == False`` even
+    # though the offscreen platform happily lets a hidden widget claim ``hasFocus()``
+    # (found while writing this test: without this line the bug this test targets
+    # cannot reproduce at all, fixed or not, and the test is worthless either way).
+    win.tabs.setCurrentWidget(pv)
+    for _ in range(5):
+        qapp.processEvents()
+    assert pv.isVisible() and pv.table.isVisible()
+
+    # Hundreds of rows, matching a real subject's export — enough to overflow whatever
+    # vertical room the table actually gets, regardless of window/splitter sizing.
+    pv._table_model.set_dataframe(pd.DataFrame({"breath_no": range(1, 301),
+                                                "value": range(1, 301)}))
+    for _ in range(3):
+        qapp.processEvents()
+
+    steps = []
+    pv.file_rail.step = lambda delta: steps.append(delta)   # spy: the shortcut calls this
+    # directly (see the fix — no wrapping through _step_file), so this is what stealing
+    # the key would actually invoke.
+
+    pv.table.setCurrentIndex(pv._table_model.index(0, 0))   # a user has clicked a cell
+    pv.table.setFocus(Qt.FocusReason.OtherFocusReason)
+    qapp.processEvents()
+    assert pv.table.hasFocus(), "the breath table did not actually take focus"
+    row_before = pv.table.currentIndex().row()
+    assert row_before == 0
+
+    QTest.keyClick(pv.table, Qt.Key.Key_PageDown)
+    qapp.processEvents()
+
+    # QAbstractItemView's own PageDown handling moves the CURRENT ROW by a page — the
+    # observable, reliable signal that the table itself consumed the key. (Its vertical
+    # scrollbar's raw ``value()`` is a rendering detail that does not reliably update
+    # under a headless/offscreen platform even when the current row visibly changes.)
+    assert pv.table.currentIndex().row() > row_before, (
+        "PageDown did not move the focused table's current row")
+    assert steps == [], f"PageDown incorrectly changed the file selection: {steps}"
+    win.close()
+
+
+def test_file_nav_shortcuts_registered_with_native_tooltips(qapp):
+    """Ctrl+[ / Ctrl+] (drawn as the Safari/Xcode ⌘[/⌘] pair) and Alt+Left/Alt+Right are
+    the new primary file-nav shortcuts. PageUp/PageDown are kept for continuity but
+    rescoped to the file rail (WidgetWithChildrenShortcut — see the test above), and the
+    tooltips no longer hardcode 'PgUp'/'PgDn', keys no Mac laptop has."""
+    from PySide6.QtGui import QShortcut, QKeySequence
+    from respmech.ui.main_window import MainWindow
+
+    win = MainWindow(AppState())
+    pv = win.preview_screen
+    shortcuts = pv.findChildren(QShortcut)
+
+    def _has(seq):
+        return any(sc.key() == QKeySequence(seq) for sc in shortcuts)
+
+    assert _has("Ctrl+["), "Ctrl+[ (previous file) is not registered"
+    assert _has("Ctrl+]"), "Ctrl+] (next file) is not registered"
+    assert _has("Alt+Left"), "Alt+Left alias is not registered"
+    assert _has("Alt+Right"), "Alt+Right alias is not registered"
+
+    pgup = next(sc for sc in shortcuts if sc.key() == QKeySequence(Qt.Key.Key_PageUp))
+    pgdn = next(sc for sc in shortcuts if sc.key() == QKeySequence(Qt.Key.Key_PageDown))
+    assert pgup.context() == Qt.ShortcutContext.WidgetWithChildrenShortcut
+    assert pgdn.context() == Qt.ShortcutContext.WidgetWithChildrenShortcut
+
+    native = QKeySequence("Ctrl+[").toString(QKeySequence.SequenceFormat.NativeText)
+    assert native in pv.btn_prev_file.toolTip()
+    assert "PgUp" not in pv.btn_prev_file.toolTip()
+    assert "PgDn" not in pv.btn_next_file.toolTip()
+    win.close()
+
+
+def test_accessible_names_on_icon_steppers_file_rail_and_plot_containers(qapp):
+    """A QAccessible query on the built Preview screen used to find: the two icon
+    steppers announced by their glyph ('◀'/'▶'), the (now-removed) file combo
+    announcing only its current VALUE with no label, and every plot container entirely
+    nameless (role Client/Table, empty name). ``accessibleName()`` is what QAccessible's
+    NameRole falls back to, so asserting it directly is equivalent without needing a
+    live accessibility backend in a headless run."""
+    from respmech.ui.main_window import MainWindow
+
+    win = MainWindow(AppState())
+    pv = win.preview_screen
+    assert pv.btn_prev_file.accessibleName() == "Previous file"
+    assert pv.btn_next_file.accessibleName() == "Next file"
+    assert pv.file_rail.view.accessibleName(), "the file rail's list has no accessible name"
+    assert pv.file_rail.filter_edit.accessibleName() == "Filter files"
+    assert pv.plots.accessibleName() == "Mechanics signals"
+    assert pv.table.accessibleName() == "Per-breath results"
+    assert pv.campbell.accessibleName() == "Campbell diagram"
+    assert pv.emg_raw_plots.accessibleName() == "Raw EMG channels"
     win.close()
 
 

@@ -124,6 +124,41 @@ never hit this fallback path, so this is a sandbox-only artefact, not a product 
 Confirmed 29-07-2026 while baselining a documentation-only change (no Python touched):
 553 passed / 1 failed, before and after.
 
+### A `QShortcut`'s context only matches on a VISIBLE widget chain — `hasFocus()` alone lies about this offscreen
+
+Testing a `Qt.ShortcutContext.WindowShortcut`/`WidgetWithChildrenShortcut` fix (ticket
+C02, the PageUp/PageDown-steals-the-focused-table bug) against the real app initially
+looked like it didn't reproduce at all — a shortcut registered on the not-yet-selected
+Preview & QC tab never fired, whether or not the fix was applied, so the "before" and
+"after" test runs were indistinguishable. Cause: `pv`/`pv.table` reported
+`isVisible() == False` (Setup was still the current tab in `MainWindow.tabs`) even
+though `pv.table.setFocus()` still succeeded and `pv.table.hasFocus()` still returned
+`True` — the offscreen QPA platform is lenient about focus on a hidden widget in a way a
+real windowing system is not. Qt's shortcut matcher, unlike `hasFocus()`, DOES check
+that the whole widget chain up to the shortcut's context widget is actually visible, so
+a shortcut on an unshown tab page never gets a chance to fire regardless of which
+widget "has focus". A GUI test exercising a shortcut on any widget that lives inside a
+`QTabWidget` page (or another widget hidden until switched to) must call
+`win.tabs.setCurrentWidget(...)` (and, if the target is on a `PreviewScreen`
+sub-tab, `pv.subtabs.setCurrentWidget(...)` too) BEFORE simulating the key — confirmed
+by making the C02 regression test fail against the unfixed source only once this call
+was added, and pass against the fix.
+
+### A per-widget `setStyleSheet()` shadows the app-wide QSS for pseudo-states it never mentions
+
+`_emg_noise.py`'s per-channel result-picker `QCheckBox`es each carry their own
+`setStyleSheet()` (to draw the indicator in that channel's plot colour). Adding a new
+`QCheckBox::indicator:focus` rule to the GLOBAL theme QSS (`theme.py`, ticket C02) had
+no effect on these checkboxes at all — a keyboard user tabbing to one showed zero
+visual change, the exact defect the ticket existed to fix, but only for widgets with
+their own local stylesheet. A widget-level `setStyleSheet()` does not layer additively
+on top of the app-wide one for a selector it also declares: it wins outright for that
+selector, including pseudo-states the LOCAL sheet never wrote a rule for. Any future
+per-instance-styled control (colour-coded checkboxes, channel-tinted buttons, etc.)
+needs its OWN copy of every shared interaction-state rule (`:focus`, `:hover`,
+`:disabled`) it wants to keep — grep for `setStyleSheet(` on the widget TYPE you are
+adding a global rule for before assuming the app-wide QSS reaches every instance.
+
 ### A `dtype=object` DataFrame column can still silently turn `None` into NaN
 
 Building a test fixture for a "missing value" cell — a real, plausible state in the

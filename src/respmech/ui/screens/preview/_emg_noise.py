@@ -156,6 +156,7 @@ class _EmgNoiseMixin:
         # splitter assembly further down for why each panel sits where it does).
         _bg = _plot_pal()["bg"]
         self.emg_raw_plots = pg.GraphicsLayoutWidget()
+        self.emg_raw_plots.setAccessibleName("Raw EMG channels")   # C02: named for QAccessible/screen readers
         _theme.set_plot_floor(self.emg_raw_plots)
         self.emg_raw_plots.setBackground(_bg)
         # Both working views carry a height-aware left axis (see _FitAxis): at the compact
@@ -498,12 +499,27 @@ class _EmgNoiseMixin:
             check = _check_icon_url(_tick_colour((r, g, b)))
             cb = QCheckBox(f"col {c}")
             cb.setChecked(i < 3)
+            # C02: a widget-level setStyleSheet() shadows the app-wide QSS for every
+            # selector it touches — including pseudo-states the LOCAL sheet never
+            # mentions. These per-channel checkboxes redefine QCheckBox::indicator for
+            # their colour coding, which silently ate the app-wide ::indicator:focus
+            # rule added for C02 (found in review: focusing one produced zero visible
+            # difference, the exact bug this ticket exists to close). So the focus ring
+            # has to be repeated HERE too. Same footprint arithmetic as theme.py's global
+            # rule: 15px content + 1px border == 13px content + 2px border == 17px outer,
+            # unchanged by focus. Accent colour (not the channel colour) marks focus, same
+            # semantic as every other focusable control in the app; read live so it tracks
+            # the active theme rather than freezing at light mode.
+            _accent = _theme.active_theme()["accent"] if _theme else "#2C6E9B"
             cb.setStyleSheet(
                 "QCheckBox { spacing: 6px; }"
                 "QCheckBox::indicator { width: 15px; height: 15px; border-radius: 3px; "
                 f"border: 1px solid rgba({r}, {g}, {b}, 0.9); background: rgba({r}, {g}, {b}, 0.25); }}"
                 f"QCheckBox::indicator:checked {{ background: rgb({r}, {g}, {b}); "
-                f"image: url('{check}'); }}")
+                f"image: url('{check}'); }}"
+                "QCheckBox:focus { outline: none; }"
+                f"QCheckBox::indicator:focus {{ width: 13px; height: 13px; "
+                f"border: 2px solid {_accent}; border-radius: 3px; }}")
             cb.toggled.connect(self._render_emg_result)
             self.result_checks_layout.addWidget(cb)
             self.result_checks.append((c, cb))

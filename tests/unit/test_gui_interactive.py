@@ -574,6 +574,61 @@ def test_result_picker_check_is_inside_the_coloured_box(qapp, tmp_path):
     win.close()
 
 
+def test_result_picker_checks_show_focus_despite_their_own_stylesheet(qapp, tmp_path):
+    """C02: each of these checkboxes carries its OWN ``setStyleSheet()`` (the channel-
+    colour coding above) to draw the indicator as that channel's coloured box. A
+    per-widget stylesheet shadows the app-wide QSS for every selector it redeclares —
+    including pseudo-states the local sheet never mentions — so the global
+    ``QCheckBox::indicator:focus`` rule added for this ticket silently never applied
+    here: found in review, reproduced as "focusing one produces zero visible pixel
+    change", the exact defect C02 exists to close. Each checkbox's own stylesheet now
+    repeats the focus rule (in the accent colour, not the channel colour, matching every
+    other focusable control)."""
+    from PySide6.QtCore import Qt as _Qt
+    from PySide6.QtGui import QImage
+    from respmech.ui.main_window import MainWindow
+
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    assert len(pv.result_checks) >= 2
+    win.resize(900, 650)
+    win.show()
+    win.activateWindow()
+    win.tabs.setCurrentWidget(pv)
+    pv.subtabs.setCurrentWidget(pv._emg_tab)
+    for _ in range(5):
+        qapp.processEvents()
+
+    def _render():
+        img = QImage(win.size(), QImage.Format_ARGB32)
+        img.fill(0)
+        win.render(img)
+        return img
+
+    def _differ(img_a, img_b):
+        for y in range(img_a.height()):
+            for x in range(img_a.width()):
+                if img_a.pixelColor(x, y) != img_b.pixelColor(x, y):
+                    return True
+        return False
+
+    cb_a, cb_b = pv.result_checks[0][1], pv.result_checks[1][1]
+    cb_a.setFocus(_Qt.FocusReason.OtherFocusReason)
+    qapp.processEvents()
+    assert cb_a.hasFocus()
+    img_a_focused = _render()
+    cb_a.clearFocus()
+
+    cb_b.setFocus(_Qt.FocusReason.OtherFocusReason)
+    qapp.processEvents()
+    assert cb_b.hasFocus()
+    img_b_focused = _render()
+
+    assert _differ(img_a_focused, img_b_focused), (
+        "focus moved between two result-channel checkboxes with zero visible difference")
+    win.close()
+
+
 def test_breath_labels_are_prefixed(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     from respmech.ui.workers import stage_emg_channel
