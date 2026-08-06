@@ -927,3 +927,74 @@ def test_cached_matching_files_rescans_when_a_file_is_actually_added(qapp, tmp_p
     os.utime(folder, (bumped, bumped))
     assert len(rn._cached_matching_files()) == 2
     win.close()
+
+
+# ---------------------------------------------------------------------------
+# UI-overhaul ticket C03 point 8 — temporary output folder pre-flight
+# ---------------------------------------------------------------------------
+def test_confirm_temp_output_is_a_noop_for_an_ordinary_output_folder(qapp, tmp_path):
+    win = _win(tmp_path); rn = win.run_screen
+    assert rn._confirm_temp_output() is True
+    win.close()
+
+
+def test_confirm_temp_output_warns_and_continues(qapp, tmp_path):
+    """Path-based, not a flag check on AppState.is_sample (see the docstring): a saved
+    sample-derived analysis reopened later has is_sample False, but the folder is still
+    under the OS temp directory — this must still catch it."""
+    import os
+    import tempfile
+    out = os.path.join(tempfile.gettempdir(), "respmech_c03_test_output")
+    win = _win(out); rn = win.run_screen
+    assert rn.state.is_sample is False
+    rn._ask_temp_output_choice = lambda: "continue"
+    assert rn._confirm_temp_output() is True
+    win.close()
+
+
+def test_confirm_temp_output_cancel_aborts(qapp, tmp_path):
+    import os
+    import tempfile
+    out = os.path.join(tempfile.gettempdir(), "respmech_c03_test_output")
+    win = _win(out); rn = win.run_screen
+    rn._ask_temp_output_choice = lambda: "cancel"
+    assert rn._confirm_temp_output() is False
+    win.close()
+
+
+def test_confirm_temp_output_choose_another_folder_asks_setup_not_the_model(
+        qapp, tmp_path, monkeypatch):
+    """'Choose another folder…' must not write self.state.settings.output.folder directly
+    (Setup's out_folder widget would go stale and a later Setup edit's to_state() would
+    silently revert it) — it asks via output_folder_change_requested instead, which
+    main_window wires to settings_screen.set_output_folder."""
+    import os
+    import tempfile
+    from respmech.ui.screens import run_screen as rs
+    out = os.path.join(tempfile.gettempdir(), "respmech_c03_test_output")
+    win = _win(out); rn, sc = win.run_screen, win.settings_screen
+    new_out = str(tmp_path / "real-output")
+    monkeypatch.setattr(rs.QFileDialog, "getExistingDirectory",
+                        staticmethod(lambda *a, **k: new_out))
+    rn._ask_temp_output_choice = lambda: "choose"
+    assert rn._confirm_temp_output() is False    # aborts THIS start attempt
+    assert sc.out_folder.text() == new_out       # Setup's own widget was updated
+    assert sc.state.settings.output.folder == new_out
+    win.close()
+
+
+def test_start_checks_temp_output_only_for_a_real_run(qapp, tmp_path):
+    """A dry run touches no disk, so there is nothing for this guard to protect — only
+    write=True routes through it. Each _start() is let run to completion (real thread,
+    pumped via _pump_until_thread_done, same pattern the rest of this file uses) so the
+    second call is never blocked by the first still being "busy"."""
+    win = _win(tmp_path); rn = win.run_screen
+    calls = []
+    rn._confirm_temp_output = lambda: calls.append("checked") or True
+    rn._start(write=False)
+    _pump_until_thread_done(qapp, rn)
+    assert calls == []
+    rn._start(write=True)
+    _pump_until_thread_done(qapp, rn)
+    assert calls == ["checked"]
+    win.close()

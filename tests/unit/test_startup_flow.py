@@ -699,3 +699,154 @@ def test_new_from_last_rig(qapp, isolated_prefs):
     assert sc.samp_freq.value() == 800
     assert not sc._all_ok()                               # still guided (folders blank)
     win.close()
+
+
+# ---------------------------------------------------------------------------
+# UI-overhaul ticket C03 — startup screen + the returning-user's stuck paths
+# ---------------------------------------------------------------------------
+def test_startup_dialog_skip_button_replaces_bare_cancel(qapp):
+    """C03 point 1: the old bare "Cancel" was wired to reject(), which landed on the exact
+    same outcome as the guided flow anyway (mode stays "new") — a user backing out with
+    Esc to go find their file first was silently dropped into "New analysis" instead. The
+    button is renamed to say what happens, and wired to the explicit choice rather than
+    left as an implicit reject()."""
+    from PySide6.QtWidgets import QDialog, QPushButton
+    from respmech.ui.startup_dialog import StartupDialog
+    dlg = StartupDialog()
+    texts = [b.text() for b in dlg.findChildren(QPushButton)]
+    assert "Skip — start a new analysis" in texts
+    assert "Cancel" not in texts
+    skip_btn = next(b for b in dlg.findChildren(QPushButton)
+                    if b.text() == "Skip — start a new analysis")
+    skip_btn.click()
+    assert dlg.mode == "new" and dlg.path is None
+    assert dlg.result() == QDialog.Accepted
+
+
+def test_recent_label_is_shared_between_chooser_and_menu(qapp, isolated_prefs, tmp_path):
+    """C03 point 3: the startup chooser's recent buttons and the header's Analysis menu
+    must describe the SAME file the same way — both now go through prefs.recent_label
+    (moved here from main_window._recent_label, which is gone)."""
+    from PySide6.QtWidgets import QPushButton
+    from respmech.ui import prefs
+    from respmech.ui import main_window as mw
+    from respmech.ui.startup_dialog import StartupDialog
+    assert not hasattr(mw, "_recent_label")     # moved to prefs.recent_label, not duplicated
+    p = tmp_path / "analysis.toml"; p.write_text("# analysis")
+    isolated_prefs.add_recent_analysis(str(p))
+    dlg = StartupDialog()
+    expected = prefs.recent_label(str(p))
+    recent_btn = next(b for b in dlg.findChildren(QPushButton) if b.text() == expected)
+    assert recent_btn.toolTip() == str(p)
+    assert recent_btn.property("recent") is True    # left-aligned via theme.py's QSS rule
+
+
+def test_get_started_and_explore_sample_are_repeatable_from_the_menu(qapp, isolated_prefs):
+    """C03 point 2: before this ticket, "Explore with sample data" and the startup chooser
+    were reachable ONLY from the very first window of a session — open_sample_analysis had
+    exactly one caller (begin_session), so a user who dismissed the sample could never see
+    it again in the same process. Both are now real, repeatable menu actions."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    labels = [a.text() for a in win.analysis_btn.menu().actions()]
+    assert "Get started…" in labels
+    assert "Explore with sample data" in labels
+    assert "Duplicate for another recordings folder…" in labels
+    # the exact same QAction objects also sit in the File menu (C01 pattern) — never a
+    # second implementation that could quietly disagree
+    file_labels = [a.text() for a in win._file_menu.actions()]
+    assert "Get started…" in file_labels
+    assert win._act_sample.text() in file_labels
+    assert win._act_get_started in win._file_menu.actions()
+    # exercise the door itself: a fresh window has nothing to lose, so no guard fires
+    win._explore_sample()
+    assert win.settings_screen.state.is_sample is True
+    # dismissible and reachable again — this is the whole point of the ticket
+    win.settings_screen.new_analysis()
+    assert win.settings_screen.state.is_sample is False
+    win._explore_sample()
+    assert win.settings_screen.state.is_sample is True
+    win.close()
+
+
+def test_open_analysis_dialog_and_import_start_in_the_open_analysis_folder(
+        qapp, isolated_prefs, tmp_path, monkeypatch):
+    """C03 point 4: before this ticket both started the file picker at a bare '.' — the
+    PROCESS's cwd, unrelated to the user's data in a packaged .app/.msi. They now start in
+    the CURRENTLY OPEN analysis's own folder (mirroring _browse's existing precedence),
+    falling back to the sticky "analysis" folder when nothing is open."""
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    study_dir = tmp_path / "Study" / "S02"
+    study_dir.mkdir(parents=True)
+    analysis_path = study_dir / "analysis.toml"
+    sc.state.settings_path = str(analysis_path)          # simulate an already-open analysis
+
+    seen = {}
+    def _fake_open(*a, **k):
+        seen["start"] = a[2] if len(a) > 2 else k.get("dir")
+        return ("", "")
+    monkeypatch.setattr(ss.QFileDialog, "getOpenFileName", staticmethod(_fake_open))
+    sc.open_analysis_dialog()
+    assert seen["start"] == str(study_dir)
+
+    seen.clear()
+    sc._import()
+    assert seen["start"] == str(study_dir)
+
+    # nothing open -> falls back to the sticky "analysis" folder, never a bare "."
+    sc.state.settings_path = None
+    isolated_prefs.set_last_folder("analysis", str(tmp_path))
+    seen.clear()
+    sc.open_analysis_dialog()
+    assert seen["start"] == str(tmp_path)
+    win.close()
+
+
+def test_legacy_import_marks_the_analysis_dirty(qapp, tmp_path):
+    """C03 point 7: a just-converted legacy analysis used to be marked CLEAN — indistinct
+    from an untouched save, so closing over it (or opening another analysis) asked
+    nothing even though the conversion had never been written to a .toml of its own."""
+    legacy = tmp_path / "legacy_setup.py"
+    legacy.write_text(
+        "settings = {\n"
+        f"  'input': {{'inputfolder': {INPUT!r}, 'files': 'synth_case_*.csv',\n"
+        "    'format': {'samplingfrequency': 1000},\n"
+        "    'data': {'column_poes':7,'column_pgas':8,'column_pdi':9,'column_volume':6,\n"
+        "             'column_flow':5,'columns_emg':[2,3,4],'columns_entropy':[10,11,12]}},\n"
+        "  'processing': {'mechanics': {'breathseparationbuffer':200,'separateby':'flow',\n"
+        "                               'avgresamplingobs':300},\n"
+        "                 'emg': {'remove_ecg': False, 'remove_noise': False}},\n"
+        f"  'output': {{'outputfolder': {str(tmp_path)!r},\n"
+        "    'data': {'saveaveragedata': True, 'savebreathbybreathdata': True}}}\n")
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    assert sc.open_analysis(str(legacy)) is True
+    assert sc.is_dirty() is True
+    assert sc.state.display_name == "legacy_setup"
+    assert sc.state.legacy_source_path == str(legacy)
+    assert "legacy_setup" in win.windowTitle()
+    assert "* (modified)" in win.windowTitle()
+    win.close()
+
+
+def test_sample_analysis_is_labelled_everywhere(qapp, isolated_prefs):
+    """C03 point 8: nothing on screen used to distinguish the built-in sample from a real
+    analysis, and it writes into a temp folder the OS may clean up. Checks the three
+    on-screen tells: the Setup banner, the window title, and that a real save clears
+    is_sample (a saved-and-reopened sample analysis is a plain analysis from then on)."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    assert sc.open_sample_analysis() is True
+    assert sc.state.is_sample is True
+    assert _shown(sc.sample_banner)          # not isVisible(): the window is never shown here
+    assert "Sample analysis (built-in)" in win.windowTitle()
+    # a NEW analysis clears the flag and hides the banner
+    sc.new_analysis()
+    assert sc.state.is_sample is False
+    assert not _shown(sc.sample_banner)
+    win.close()

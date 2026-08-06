@@ -800,6 +800,24 @@ class RunScreen(QWidget):
             under_temp = False
         if not under_temp:
             return True
+        choice = self._ask_temp_output_choice()
+        if choice == "continue":
+            return True
+        if choice == "choose":
+            d = QFileDialog.getExistingDirectory(self, "Choose output folder", out_abs)
+            if d:
+                # Ask Setup to make the change (see output_folder_change_requested's own
+                # docstring for why this screen must not write the model directly) and let
+                # the user press Run again against the commitment sheet's fresh plan,
+                # rather than silently carrying on with a folder just picked in passing.
+                self.output_folder_change_requested.emit(d)
+        return False
+
+    def _ask_temp_output_choice(self):
+        """The actual modal — split out from ``_confirm_temp_output`` so a test can
+        substitute the answer directly ('continue' | 'choose' | 'cancel') instead of
+        fighting QMessageBox's own modal event loop, the same pattern already used for
+        ``_confirm_overwrite``/``_confirm_overwrite_subset`` elsewhere in this screen."""
         box = QMessageBox(self)
         box.setWindowTitle("Temporary output folder")
         box.setIcon(QMessageBox.Icon.Warning)
@@ -812,16 +830,10 @@ class RunScreen(QWidget):
         box.exec()
         clicked = box.clickedButton()
         if clicked is btn_continue:
-            return True
+            return "continue"
         if clicked is btn_choose:
-            d = QFileDialog.getExistingDirectory(self, "Choose output folder", out_abs)
-            if d:
-                # Ask Setup to make the change (see output_folder_change_requested's own
-                # docstring for why this screen must not write the model directly) and let
-                # the user press Run again against the commitment sheet's fresh plan,
-                # rather than silently carrying on with a folder just picked in passing.
-                self.output_folder_change_requested.emit(d)
-        return False
+            return "choose"
+        return "cancel"
 
     # -- run lifecycle ------------------------------------------------------
     def _start(self, write: bool, only_files=None):

@@ -100,10 +100,13 @@ class SettingsScreen(QWidget):
         self.format_readout.setWordWrap(True)
         self.format_readout.setProperty("banner", True)   # box baked at first polish (theme.py)
         self.format_readout.setProperty("status", "muted")
-        # ticket C03 point 6: shown only when the recordings folder is SET but no longer
-        # exists (renamed/moved/unmounted since the analysis was saved) — see
-        # _update_format_readout's missing_folder branch. Wrapped with the read-out label
-        # in one field widget so _input_form.setRowVisible still takes a single reference.
+        f.addRow("", self.format_readout)
+        # ticket C03 point 6: its OWN row (not nested inside format_readout's), shown only
+        # when the recordings folder is SET but no longer exists (renamed/moved/unmounted
+        # since the analysis was saved) — see _update_format_readout's missing_folder
+        # branch. Kept as a SEPARATE addRow rather than wrapping the two in one container
+        # widget, so setRowVisible(self.format_readout, ...) keeps meaning exactly what it
+        # already did everywhere else in this class.
         self.btn_locate_folder = QPushButton("Locate folder…")
         self.btn_locate_folder.setProperty("compact", True)
         self.btn_locate_folder.setVisible(False)
@@ -111,15 +114,11 @@ class SettingsScreen(QWidget):
             "The recordings folder saved with this analysis no longer exists at this "
             "location. Pick its new location.")
         self.btn_locate_folder.clicked.connect(self._locate_missing_folder)
-        _readout_row = QWidget(); _rr = QVBoxLayout(_readout_row)
-        _rr.setContentsMargins(0, 0, 0, 0); _rr.setSpacing(4)
-        _rr.addWidget(self.format_readout)
         _locate_wrap = QWidget(); _lw = QHBoxLayout(_locate_wrap)
         _lw.setContentsMargins(0, 0, 0, 0)
         _lw.addWidget(self.btn_locate_folder); _lw.addStretch(1)
-        _rr.addWidget(_locate_wrap)
-        self._format_readout_row = _readout_row
-        f.addRow("", _readout_row)
+        f.addRow("", _locate_wrap)
+        self._locate_folder_row = _locate_wrap
         self.matlab_variant = QComboBox()
         # 'wide', not 'compact': "MATLAB (Unix/Mac)" plus the drop-down arrow outgrows the
         # 150px column on wider fonts (measured 131px of text against the column's 126px
@@ -819,7 +818,12 @@ class SettingsScreen(QWidget):
         # read-out silently empty and the QC strip's own 'muted — nothing scanned yet'
         # message, which reads as "no folder chosen", not "this one is gone". Checked
         # before the isdir branch below, which only ever runs for a folder that DOES exist.
-        missing_folder = bool(folder) and not os.path.isdir(folder)
+        # ``isabs`` matters: a brand-new (or guided-flow) analysis's DEFAULT placeholder
+        # (input.folder == "input", a bare relative string nobody chose) also fails
+        # isdir() in almost any cwd, and must keep reading as "nothing scanned yet" —
+        # only an ABSOLUTE path (what a folder picker or a saved .toml always produces)
+        # can be a real folder the user actually pointed at that then went missing.
+        missing_folder = bool(folder) and os.path.isabs(folder) and not os.path.isdir(folder)
         if missing_folder:
             status, text = "warn", f"This folder no longer exists: {folder}"
         elif folder and os.path.isdir(folder):
@@ -866,12 +870,14 @@ class SettingsScreen(QWidget):
         # variant" with nothing in it. setRowVisible hides label and field together, so an
         # empty read-out takes no space at all rather than an empty banner-shaped hole.
         form = getattr(self, "_input_form", None)
-        row = getattr(self, "_format_readout_row", lab)
         if form is not None:
-            form.setRowVisible(row, bool(text))
+            form.setRowVisible(lab, bool(text))
         btn = getattr(self, "btn_locate_folder", None)
+        locate_row = getattr(self, "_locate_folder_row", None)
         if btn is not None:
             btn.setVisible(missing_folder)
+        if form is not None and locate_row is not None:
+            form.setRowVisible(locate_row, missing_folder)
         if missing_folder:
             # ticket C03 point 6, the "warm" case: a folder that vanishes MID-session must
             # not go on showing the previous load's channel traces beside a dead path.
@@ -1478,7 +1484,9 @@ class SettingsScreen(QWidget):
         which would otherwise catch it too (``_update_format_readout`` never builds a
         manifest for a missing folder, so ``self._manifest`` is ``None`` either way)."""
         folder = self.in_folder.text().strip()
-        if folder and not os.path.isdir(folder):
+        # isabs, matching _update_format_readout's own guard: a bare relative default
+        # ("input", nobody's chosen it) must not read as a real, now-missing folder.
+        if folder and os.path.isabs(folder) and not os.path.isdir(folder):
             return "warn", f"Recordings folder not found: {folder}"
         m = self._manifest
         if m is None or not m.files:
