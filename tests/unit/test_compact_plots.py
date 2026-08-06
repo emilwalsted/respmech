@@ -555,10 +555,18 @@ def test_the_campbell_labels_shorten_and_come_back(qapp, tmp_path):
 
 def test_the_noise_tab_divides_into_thirds(qapp, tmp_path):
     """What Emil actually asked for: chrome+settings / the two working views / the three
-    reference panels, each roughly a third of the window at the default size."""
+    reference panels, each roughly a third of the window at the default size.
+
+    Window height raised from 800 to 850 (C01, UI-overhaul): a real QMenuBar adds a fixed
+    ~22 px row of chrome (offscreen/Windows/Linux — on a real macOS run Qt merges it into
+    the system menu bar and it costs the window nothing), which at 800 px pushed
+    chrome+settings to 43% — a fixed cost is a smaller SHARE of a taller window, so this
+    raises the total rather than loosening the "roughly a third" invariant itself. See
+    memory/respmech-skill-udestaaende.md's B03 entry for the same rule applied the other
+    way (a permanent addition eating into this same budget)."""
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QSplitter
-    win, pv = _noise_tab(qapp, tmp_path, 800)
+    win, pv = _noise_tab(qapp, tmp_path, 850)
     page = pv.subtabs.currentWidget().widget()
     splits = [w for w in page.findChildren(QSplitter) if w.orientation() == Qt.Vertical]
     assert splits, "no vertical splitter on the noise page — nothing to measure"

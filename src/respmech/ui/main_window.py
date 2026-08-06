@@ -9,10 +9,13 @@ Qt dependencies. A status bar mirrors each screen's status line.
 """
 from __future__ import annotations
 
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu,
                                QTabWidget, QToolButton, QVBoxLayout, QWidget)
 
 from respmech import __version__
+from respmech.ui.about_dialog import AboutDialog, GITHUB_URL, WEBSITE_URL
 from respmech.ui.flow_layout import ElidingLabel
 from respmech.ui.state import AppState
 from respmech.ui.screens.settings_screen import SettingsScreen
@@ -71,6 +74,7 @@ class MainWindow(QMainWindow):
         from respmech.ui import wheel as _wheel
         self._wheel_guard = _wheel.swallow_wheel(extra=[self.tabs.tabBar()], parent=self)
 
+        self._file_recent_menu = None       # set by _build_menu_bar(), read by _rebuild_recent_analyses
         central = QWidget()
         col = QVBoxLayout(central)
         col.setContentsMargins(0, 0, 0, 0)
@@ -78,6 +82,7 @@ class MainWindow(QMainWindow):
         col.addWidget(self._make_header())
         col.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
+        self._build_menu_bar()
 
         sc, pv, rn = self.settings_screen, self.preview_screen, self.run_screen
         sc.inputs_changed.connect(pv.refresh_files)
@@ -299,11 +304,26 @@ class MainWindow(QMainWindow):
         # silently dropped when triggered from Preview or Run and only resurface, stale, on a
         # later visit to Setup — wrong for an "X just happened" notification the user is
         # looking straight at the header for. Force it onto the bar immediately instead.
-        menu.addAction("New analysis", self._new_analysis)
-        menu.addAction("Open analysis…", self._open_analysis_dialog)
+        # C01 (UI-overhaul): these are real QAction objects, with real shortcuts, so the
+        # SAME objects can be added to the File menu built in _build_menu_bar() below — one
+        # implementation and one enable-state behind two doors, never two that could disagree.
+        self._act_new = QAction("New analysis", self)
+        self._act_new.setShortcut(QKeySequence("Ctrl+N"))
+        self._act_new.triggered.connect(self._new_analysis)
+        menu.addAction(self._act_new)
+        self._act_open = QAction("Open analysis…", self)
+        self._act_open.setShortcut(QKeySequence("Ctrl+O"))
+        self._act_open.triggered.connect(self._open_analysis_dialog)
+        menu.addAction(self._act_open)
         menu.addSeparator()
-        self._act_save = menu.addAction("Save", self._save_analysis)
-        self._act_save_as = menu.addAction("Save as…", self._save_analysis_as)
+        self._act_save = QAction("Save", self)
+        self._act_save.setShortcut(QKeySequence("Ctrl+S"))
+        self._act_save.triggered.connect(self._save_analysis)
+        menu.addAction(self._act_save)
+        self._act_save_as = QAction("Save as…", self)
+        self._act_save_as.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        self._act_save_as.triggered.connect(self._save_analysis_as)
+        menu.addAction(self._act_save_as)
         # The recents and the Save enable-state both depend on live state, so they are
         # rebuilt each time the menu drops down. Reading prefs at show time cannot go stale;
         # listening to a screen signal would (analysis_state_changed is emitted BEFORE
@@ -351,10 +371,16 @@ class MainWindow(QMainWindow):
     def _rebuild_recent_analyses(self):
         """Replace the menu's recents section with the current list (P26). Only the tracked
         recent actions are removed, so New/Open/Save keep their identity — and their
-        shortcuts and enable-state — across rebuilds."""
+        shortcuts and enable-state — across rebuilds.
+
+        C01 (UI-overhaul): each recent is ONE QAction, added to BOTH the header's flat
+        list and the File menu's "Open Recent" submenu (built in _build_menu_bar()) — so
+        the two doors can never name a different set of recents."""
         from respmech.ui import prefs  # noqa: PLC0415
         for act in self._recent_actions:
             self.analysis_menu.removeAction(act)
+            if self._file_recent_menu is not None:
+                self._file_recent_menu.removeAction(act)
             act.deleteLater()      # addAction parented it to the menu; removeAction only
                                    # detaches it, so without this every menu-open leaks 5
         self._recent_actions = []
@@ -362,10 +388,15 @@ class MainWindow(QMainWindow):
         # entry is noise, not information.
         recents = prefs.recent_analyses()[:_MENU_RECENTS]
         self._recent_sep.setVisible(bool(recents))
+        if self._file_recent_menu is not None:
+            self._file_recent_menu.setEnabled(bool(recents))
         for i, path in enumerate(recents, 1):
-            act = self.analysis_menu.addAction(f"&{i}  {_recent_label(path)}")
+            act = QAction(f"&{i}  {_recent_label(path)}", self)
             act.setToolTip(path)                       # the exact path, unelided
             act.triggered.connect(lambda _=False, p=path: self._open_recent(p))
+            self.analysis_menu.addAction(act)
+            if self._file_recent_menu is not None:
+                self._file_recent_menu.addAction(act)
             self._recent_actions.append(act)
 
     def _open_recent(self, path: str):
@@ -376,6 +407,97 @@ class MainWindow(QMainWindow):
             return
         self.settings_screen.open_analysis(path)
         self._show_settings_status()
+
+    # -- menu bar (C01, UI-overhaul) -----------------------------------------
+    def _build_menu_bar(self):
+        """A real ``QMenuBar`` (File/View/Help) alongside the header's Analysis button —
+        the same commands, reachable the way a desktop user actually looks for them: Qt
+        merges this into the system menu bar on macOS and draws Alt-mnemonics on Windows,
+        neither of which the header's QToolButton popup gave. File's New/Open/Save/Save
+        as… are the EXACT SAME QAction objects the Analysis menu already built (added to a
+        second container each), so there is one implementation and one enable-state
+        behind two doors, never two that could quietly disagree. The header's Analysis
+        button is left as it was: a second door, not the only one."""
+        bar = self.menuBar()
+
+        # Kept as attributes, not locals: a QMenu returned by addMenu() is parented to the
+        # bar C++-side, but PySide6 needs a live Python reference to keep re-wrapping it
+        # reliably (an unreferenced wrapper going out of scope has been observed to leave
+        # the C++ side unusable — "Internal C++ object already deleted" the next time it
+        # is touched, e.g. from a test or _refresh_view_menu below).
+        file_menu = self._file_menu = bar.addMenu("&File")
+        file_menu.addAction(self._act_new)
+        file_menu.addAction(self._act_open)
+        self._file_recent_menu = file_menu.addMenu("Open Recent")
+        file_menu.addSeparator()
+        file_menu.addAction(self._act_save)
+        file_menu.addAction(self._act_save_as)
+        file_menu.addSeparator()
+        self._act_open_output = QAction("Open output folder", self)
+        # Same slot the Run drawer's own button uses (run_screen.py) — one place decides
+        # which folder that is (a subset "write elsewhere" target, else the analysis's
+        # own output folder) and whether it currently exists.
+        self._act_open_output.triggered.connect(self.run_screen._open_output_folder)
+        file_menu.addAction(self._act_open_output)
+        file_menu.addSeparator()
+        self._act_close_window = QAction("Close Window", self)
+        self._act_close_window.setShortcut(QKeySequence("Ctrl+W"))
+        self._act_close_window.triggered.connect(self.close)
+        file_menu.addAction(self._act_close_window)
+        # Recomputes Save's enable-state and the recents on EITHER menu's open, not just
+        # the Analysis button's — see _refresh_analysis_menu's own docstring for why this
+        # can't just listen for a state-change signal instead.
+        file_menu.aboutToShow.connect(self._refresh_analysis_menu)
+
+        view_menu = self._view_menu = bar.addMenu("&View")
+        self._view_actions = []
+        # One action per ACTUAL tab, not a fixed Setup/Preview/Run trio: Run & results
+        # stopped being its own tab in B03 (it lives inside Preview & QC as a drawer), so
+        # there is no third tab to name here any more — see
+        # memory/respmech-skill-udestaaende.md's B03 entry.
+        for i in range(self.tabs.count()):
+            act = QAction(self.tabs.tabText(i), self)
+            if i < 9:
+                act.setShortcut(QKeySequence(f"Ctrl+{i + 1}"))
+            act.triggered.connect(lambda _checked=False, idx=i: self.tabs.setCurrentIndex(idx))
+            view_menu.addAction(act)
+            self._view_actions.append(act)
+        # B04 retired all tab locking, so every action is enabled today — but a future
+        # ticket could reintroduce gating, and this keeps the menu honest without needing
+        # its own new plumbing if it does: it just reads isTabEnabled() again on open.
+        view_menu.aboutToShow.connect(self._refresh_view_menu)
+
+        help_menu = self._help_menu = bar.addMenu("&Help")
+        act_docs = QAction("RespMech documentation", self)
+        act_docs.triggered.connect(
+            lambda: QDesktopServices.openUrl(QUrl(f"{WEBSITE_URL}/documentation.html")))
+        help_menu.addAction(act_docs)
+        act_site = QAction("RespMech website", self)
+        act_site.triggered.connect(lambda: QDesktopServices.openUrl(QUrl(WEBSITE_URL)))
+        help_menu.addAction(act_site)
+        act_issue = QAction("Report an issue", self)
+        act_issue.triggered.connect(
+            lambda: QDesktopServices.openUrl(QUrl(f"{GITHUB_URL}/issues")))
+        help_menu.addAction(act_issue)
+        help_menu.addSeparator()
+        act_about = QAction("About RespMech…", self)
+        # AboutRole: on macOS Qt moves this into the application menu (RespMech ▸ About
+        # RespMech) instead of leaving it under Help, matching platform convention.
+        act_about.setMenuRole(QAction.MenuRole.AboutRole)
+        act_about.triggered.connect(self._show_about)
+        help_menu.addAction(act_about)
+
+    def _refresh_view_menu(self):
+        """Mirror each tab's enabled state onto its View menu entry — see the "future
+        ticket" note in _build_menu_bar for why this stays wired even though B04 leaves
+        every tab enabled today."""
+        for i, act in enumerate(self._view_actions):
+            act.setEnabled(self.tabs.isTabEnabled(i))
+
+    def _show_about(self):
+        """Help > About RespMech… — a small, fully offline dialog (see about_dialog.py):
+        version, licence, citation and both project URLs as plain selectable text."""
+        AboutDialog(self).exec()
 
     def _fit_to_screen(self, desired_w: int = 1180, desired_h: int = 820,
                        fraction: float = 0.92) -> None:
