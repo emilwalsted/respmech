@@ -20,8 +20,10 @@ from PySide6.QtCore import Signal, QTimer
 
 from respmech.core.settings import BreathCountEntry, Settings, SettingsError
 from respmech.ui.dialogs import open_error_dialog, short_error
+from respmech.ui.flow_layout import install_flow
 from respmech.ui.help_text import tooltip as _tip
 from respmech.ui.manifest import build_manifest, narrow_mask
+from respmech.ui.section_flow import install_sections
 from respmech.ui.startup_dialog import LEGACY_FILTER, OPEN_FILTER, TOML_FILTER
 from respmech.ui.validation import matching_files
 from respmech.ui import wheel as _wheel
@@ -108,9 +110,10 @@ class SettingsScreen(QWidget):
         self.matlab_variant.addItem("MATLAB (Unix/Mac)", "mac")
         self._row(f, "MATLAB file variant", self.matlab_variant, "input.format.matlab_variant",
                   "Variant/byte-order for .mat input files (ignored for CSV/Excel/text).")
-        root.addWidget(gin)
+        # Kept so _update_format_readout can hide/show the read-out ROW (not just clear its
+        # text) when there is nothing to say yet — see there.
+        self._input_form = f
 
-        # Output (second in the flow: an analysis reads as Input -> Output -> rest) --
         # Channels ---------------------------------------------------------
         gch = QGroupBox("Channels")
         fc = QVBoxLayout(gch)
@@ -129,7 +132,6 @@ class SettingsScreen(QWidget):
         # cannot see is what the picker replaced.
         self.channel_summary = ChannelSummary()
         fc.addWidget(self.channel_summary)
-        root.addWidget(gch)
 
         gout = QGroupBox("Output")
         fo = QFormLayout(gout)
@@ -137,8 +139,6 @@ class SettingsScreen(QWidget):
         self.out_folder = QLineEdit()
         self._browse_row(fo, "Output folder", self.out_folder, "output.folder",
                          "Where results are saved; files are written to a 'data' subfolder inside it; defaults to 'output'.", folder=True)
-        root.addWidget(gout)
-
 
         # Processing — breath mechanics ------------------------------------
         # Entropy ----------------------------------------------------------
@@ -158,10 +158,14 @@ class SettingsScreen(QWidget):
         _enthint = QLabel("Computed on the columns ticked as Entropy in the channel picker.")
         _enthint.setWordWrap(True); _enthint.setProperty("status", "muted")
         fent.addRow("", _enthint)
-        root.addWidget(gent)
 
         # 'What to save' lives inside the Output card now (one place for everything the run
-        # produces and where it goes), so these rows attach to the Output form (fo).
+        # produces and where it goes), so these rows attach to the Output form (fo). The two
+        # checkbox groups are each run through a FlowLayout (B05): ten checkboxes stacked in
+        # one column ran to ~430 px tall in a card measuring ~1700 px wide — a third of a
+        # screen's height for something that would fit two or three columns wide. Wrapping
+        # keeps the grouping (Tables / Diagnostic figures stay their own visual blocks) while
+        # letting each reflow with the card's width, same mechanism as the EMG control strips.
         self.save_average = QCheckBox("Average breath-data workbook")
         self.save_bbb = QCheckBox("Breath-by-breath workbook (per file)")
         self.save_processed = QCheckBox("Processed-signal CSV (per file)")
@@ -173,6 +177,7 @@ class SettingsScreen(QWidget):
         self.save_drift_fig = QCheckBox("Drift-correction figures")
         self.save_emg_fig = QCheckBox("EMG channel overviews")
         _lt = QLabel("Tables"); _lt.setProperty("status", "muted"); _lt.setContentsMargins(0, 8, 0, 0); fo.addRow(_lt)
+        _tables = self._FlowGroup(); self._tables_flow = install_flow(_tables, h=18, v=6)
         for cb, var, tip in (
                 (self.save_average, "output.data.save_average", "The across-breath average workbook."),
                 (self.save_bbb, "output.data.save_breath_by_breath", "A per-file breath-by-breath workbook."),
@@ -180,8 +185,11 @@ class SettingsScreen(QWidget):
                 (self.include_ignored, "output.data.include_ignored_breaths",
                  "Include the breaths you've excluded in the per-file processed-signal CSV only. "
                  "Excluded breaths are always left out of the averages and workbooks; this does not change them.")):
-            self._check_row(fo, cb, var, tip)
+            cb.setToolTip(_tip(var, tip))
+            self._tables_flow.addWidget(cb)
+        fo.addRow(_tables)
         _lf = QLabel("Diagnostic figures"); _lf.setProperty("status", "muted"); _lf.setContentsMargins(0, 8, 0, 0); fo.addRow(_lf)
+        _diag = self._FlowGroup(); self._diagnostics_flow = install_flow(_diag, h=18, v=6)
         for cb, var, tip in (
                 (self.save_pv_avg, "output.diagnostics.save_pv_average", "The averaged Campbell (pressure–volume) diagram."),
                 (self.save_pv_ind, "output.diagnostics.save_pv_individual", "A Campbell diagram per individual breath."),
@@ -191,7 +199,9 @@ class SettingsScreen(QWidget):
                 (self.save_emg_fig, "output.diagnostics.save_emg",
                  "Per-channel EMG overview figures (raw / ECG-removed / noise-reduced) with the flow "
                  "reference and R-peak capture markers.")):
-            self._check_row(fo, cb, var, tip)
+            cb.setToolTip(_tip(var, tip))
+            self._diagnostics_flow.addWidget(cb)
+        fo.addRow(_diag)
         _lg = QLabel("Cohort summary"); _lg.setProperty("status", "muted"); _lg.setContentsMargins(0, 8, 0, 0); fo.addRow(_lg)
         self.group_regex = QLineEdit()
         # 'wide', not 'compact': the placeholder below measures 281px at the 13pt macOS
@@ -207,6 +217,42 @@ class SettingsScreen(QWidget):
         self.save_preview.setProperty("banner", True)
         self.save_preview.setProperty("status", "info")
         fo.addRow("You will get", self.save_preview)
+
+        # Two columns — the rig (Input + Channels) on the left, the leverance (Output +
+        # Sample entropy) on the right — collapsing to one column under a threshold width
+        # (ticket B05). Built with the house mechanic (section_flow.install_sections)
+        # rather than a bespoke layout: it already solves "report the widest single card as
+        # the minimum, zero minimum height, heightForWidth for the scroll area" for the
+        # Advanced modals, and the same three problems apply here. No max-width cap is set —
+        # the folder paths and the channel rows are exactly the content on this screen that
+        # benefits from the width, unlike the Advanced modals' short captions.
+        self._card_input, self._card_channels = gin, gch
+        self._card_output, self._card_entropy = gout, gent
+        rig = QWidget(); rig_col = QVBoxLayout(rig)
+        rig_col.setContentsMargins(0, 0, 0, 0); rig_col.setSpacing(11)
+        rig_col.addWidget(gin); rig_col.addWidget(gch)
+        _rig_sp = rig.sizePolicy(); _rig_sp.setHeightForWidth(True); rig.setSizePolicy(_rig_sp)
+        leverance = QWidget(); lev_col = QVBoxLayout(leverance)
+        lev_col.setContentsMargins(0, 0, 0, 0); lev_col.setSpacing(11)
+        lev_col.addWidget(gout); lev_col.addWidget(gent)
+        _lev_sp = leverance.sizePolicy(); _lev_sp.setHeightForWidth(True); leverance.setSizePolicy(_lev_sp)
+        self._rig, self._leverance = rig, leverance
+        columns = QWidget()
+        self._columns_layout = install_sections(columns, max_columns=2, hgap=16, vgap=11)
+        self._columns_layout.addWidget(rig)
+        self._columns_layout.addWidget(leverance)
+        root.addWidget(columns)
+
+        # Reading order now runs left-column-then-right (Input, Channels, Output, Sample
+        # entropy) rather than one long vertical stack, so it can no longer be inferred from
+        # widget-creation order alone (the old single-column layout's implicit tab order,
+        # which a stale comment above claimed was "Input -> Output -> rest" while the code
+        # actually built Input -> Channels -> Output — see ticket B05). Bridge the seams
+        # between cards explicitly; each card's OWN internal order is still the natural one
+        # Qt derives from construction order.
+        self.setTabOrder(self.matlab_variant, self.btn_assign_channels)
+        self.setTabOrder(self.btn_assign_channels, self.out_folder)
+        self.setTabOrder(self.group_regex, self.ent_epochs)
 
         # Status text is shown in the window's bottom status bar (see main_window). This
         # label is kept only as a hidden text holder mirroring that message — showing it
@@ -248,6 +294,28 @@ class SettingsScreen(QWidget):
         self._channel_modal_done = False
         self._channel_modal_pending = False
 
+    class _FlowGroup(QWidget):
+        """A ``FlowLayout``-wrapped checkbox row, sized HONESTLY for a column-balancing
+        caller (self-review finding, 06-08-2026).
+
+        ``FlowLayout.sizeHint()`` is deliberately "everything on one line" (see its own
+        docstring) — right for a strip placed directly in a plain ``QVBoxLayout``, wrong once
+        it feeds ``SectionColumns``' comfort-width quantile: the Output card's two checkbox
+        rows inflated the card's measured ``sizeHint`` to roughly 1260 px (the sum of every
+        chip on one line), which pushed the two-column split's real threshold to roughly
+        1550 px wide — past the app's own default window width, so the split this ticket
+        exists for silently never happened, even though an offscreen test at a hand-picked
+        1700 px width passed. ``sizeHint`` here reports the layout's own MINIMUM instead: the
+        widest SINGLE chip, which is the width the row can already be safely squeezed to and
+        is what a column-balancer should be comfort-measuring against. This changes nothing
+        about the row's actual runtime wrapping (that is decided by ``heightForWidth`` at
+        whatever width the row is actually given, unaffected by this override), only how wide
+        a column this row is allowed to make its Output card ask for.
+        """
+        def sizeHint(self):                     # noqa: N802 - Qt API
+            lay = self.layout()
+            return lay.minimumSize() if lay is not None else super().sizeHint()
+
     def _row(self, form, label, widget, var, desc):
         """A labelled form row whose LABEL and FIELD both carry the same tooltip:
         the settings variable path (bold) + a one-line description."""
@@ -255,12 +323,6 @@ class SettingsScreen(QWidget):
         lab = QLabel(label); lab.setToolTip(tip)
         widget.setToolTip(tip)
         form.addRow(lab, widget)
-
-    def _check_row(self, form, checkbox, var, desc):
-        """A checkbox row (the checkbox text is the label); the tooltip carries the
-        variable path + description."""
-        checkbox.setToolTip(_tip(var, desc))
-        form.addRow("", checkbox)
 
     def _browse_row(self, form, label, line, var, desc, folder):
         """A labelled 'line edit + Browse…' row; the label, the field and its inner
@@ -287,14 +349,27 @@ class SettingsScreen(QWidget):
 
     def _browse(self, line, folder):
         from respmech.ui import prefs  # noqa: PLC0415
-        start = line.text() or prefs.last_folder("browse", ".")   # P26 sticky folder
+        # B05: the output picker had been sharing the INPUT folder's sticky-folder key —
+        # "browse" — so once a recordings folder was chosen, "Browse…" on Output opened
+        # inside it. The two pickers are for different things and now remember separately.
+        key = "browse_output" if line is self.out_folder else "browse"
+        start = line.text() or prefs.last_folder(key, ".")   # P26 sticky folder
         if folder:
             d = QFileDialog.getExistingDirectory(self, "Select folder", start)
         else:
             d, _ = QFileDialog.getOpenFileName(self, "Select file", start)
         if d:
-            prefs.set_last_folder("browse", d)
+            prefs.set_last_folder(key, d)
             line.setText(d)
+            if line is self.in_folder and not self.out_folder.text().strip():
+                # B05: suggest a sibling folder rather than leaving Output blank (which is
+                # what used to steer a first-time user into picking the SAME folder for
+                # both, per the caution below). Safe by construction: both
+                # validation.path_problem and writers.py only require the PARENT to exist
+                # (writers.py creates the 'data' subfolder, with parents, at write time), and
+                # a not-yet-existing sibling folder satisfies exactly that.
+                sibling = os.path.join(os.path.dirname(os.path.abspath(d)), "respmech-output")
+                self.out_folder.setText(sibling)
             if line is self.out_folder:
                 # A real write probe here (ticket A06 point 6), not just at Run time — the
                 # picker is exactly the moment a user is choosing where results go, so a
@@ -609,6 +684,13 @@ class SettingsScreen(QWidget):
         lab.setText(text)
         lab.setProperty("status", status)
         lab.style().unpolish(lab); lab.style().polish(lab)
+        # B05: a fresh Setup (no folder chosen yet) used to leave the label empty but its
+        # FORM ROW still there — a 28 px gap between "Sampling frequency" and "MATLAB file
+        # variant" with nothing in it. setRowVisible hides label and field together, so an
+        # empty read-out takes no space at all rather than an empty banner-shaped hole.
+        form = getattr(self, "_input_form", None)
+        if form is not None:
+            form.setRowVisible(lab, bool(text))
         self._update_qc()   # self._manifest just (re)built — the QC strip must never lag it
 
     def _set_status(self, text):
@@ -1118,6 +1200,23 @@ class SettingsScreen(QWidget):
                        f"{self._named_list(m.outliers)}")
         return out
 
+    def _output_is_input_folder(self):
+        """True when Output points at the same folder as the recordings (ticket B05).
+
+        Not itself a save/run blocker — ``validation.path_problem`` only requires the
+        output's PARENT to exist — but a run then writes ``analysis-used.toml``,
+        ``run-report.txt`` and a ``data/`` subfolder straight into the raw-data folder,
+        often a synced or read-only patient drive, with nothing on screen to say so until
+        it happens. Compares absolute paths so 'input' and './input' still match."""
+        a = (self.state.settings.input.folder or "").strip()
+        b = (self.state.settings.output.folder or "").strip()
+        if not a or not b:
+            return False
+        try:
+            return os.path.abspath(a) == os.path.abspath(b)
+        except Exception:                       # noqa: BLE001 — a caution is cosmetic
+            return False
+
     def _all_cautions(self):
         """Every current caution (hard channel collision first, then the batch's own
         manifest caveats, then soft science notes) — for the live QC strip. As long as the
@@ -1128,6 +1227,8 @@ class SettingsScreen(QWidget):
         if c:
             out.append(c)
         out.extend(self._manifest_cautions())
+        if self._output_is_input_folder():
+            out.append("Results will be written into your recordings folder.")
         out.extend(self._science_notes())   # every note, not just the first
         return out
 

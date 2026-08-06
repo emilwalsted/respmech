@@ -298,6 +298,46 @@ made here — just call it synchronously and accept the (real, but far smaller a
 precedented — `_start()`'s `_append_plan` pays the identical import cost on every click)
 construction-time cost instead.
 
+### A `FlowLayout`-holding card inside `section_flow.SectionColumns` inflates the column width unless the card's own `sizeHint` is made honest
+
+Ticket B05 split the Setup screen into two columns (`section_flow.install_sections`,
+`max_columns=2`: a "rig" column of Input+Channels, a "leverance" column of Output+Sample
+entropy) and, separately, ran the Output card's two checkbox groups (Tables, Diagnostic
+figures) through `flow_layout.install_flow` so they wrap instead of stacking one checkbox
+per line. Each change alone tested fine. Combined, the two-column split silently almost
+never happened at any realistic window size — an offscreen test resized to a hand-picked
+1700 px "wide enough" width and passed, which is exactly what hid it.
+
+The mechanism: `SectionColumns.column_target()` decides how wide a column should be from
+the upper quartile of its items' `sizeHint().width()` (`_comfort_width`, `section_flow.py`).
+`FlowLayout.sizeHint()` is *deliberately* "everything on one line" (its own docstring) — the
+right contract for a chip strip placed directly in a plain `QVBoxLayout`, where the caller
+just wants the natural, unwrapped width when there's room. But that same "natural" width
+also propagates straight up through Qt's default `QGroupBox`→`QFormLayout` spanning-row
+sizing and the plain `QVBoxLayout` wrapper stacking the cards, into the ONE number
+`SectionColumns` uses to decide how wide a "comfortable" column is. Measured: the Output
+card's checkbox rows inflated its `sizeHint().width()` to ~1260 px (the sum of every chip on
+one line), which pushed the real two-column threshold to ~1550 px — past the app's own
+default window width, so the split existed in the code but not in practice, and a test
+resized to 1700 px (comfortably past that inflated threshold) could not tell the difference.
+
+**Fix and the rule going forward:** any container that both (a) holds a `FlowLayout`
+somewhere inside it (directly or nested in a card) and (b) is fed as an item to a
+width-deciding column balancer (`SectionColumns` or anything using the same
+quartile-of-sizeHint pattern) needs an HONEST `sizeHint()` — one that does not let the
+FlowLayout's one-line width vote. `settings_screen.py`'s `SettingsScreen._FlowGroup` is the
+fix here: a tiny `QWidget` subclass whose `sizeHint()` returns its own layout's
+`minimumSize()` (the width the row can already be safely squeezed to) instead of Qt's
+default delegation. This changes nothing about the row's actual runtime wrapping — that is
+governed by `heightForWidth` at whatever width the row is actually GIVEN, independent of
+`sizeHint()` — only how wide a column the row is allowed to ask for. `SectionCard.sizeHint()`
+(`section_flow.py`) already solves the identical problem for prose notes ("excluded on
+purpose: prose wraps to whatever it is given... letting one paragraph vote here would have
+it decide the column width of the entire dialog") — the same reasoning applies to any
+FlowLayout row, and any future card combining `install_sections` with `install_flow` should
+reach for the same honest-`sizeHint` pattern from the start, not discover it by measuring a
+threshold that never fires.
+
 ## Releases (`.github/workflows/release.yml` = "Build installers")
 
 - Trigger: push a `v*` tag (or manual dispatch). Builds a Windows **MSI** and a

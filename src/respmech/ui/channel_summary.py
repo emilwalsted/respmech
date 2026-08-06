@@ -3,10 +3,14 @@
 The Setup screen used to hold seven editable fields for the channel columns, which meant two
 places could set them and the numbers had to be typed against a column count the user could
 not see. Assignment now happens only in the channel dialog, where each column is plotted, so
-Setup shows what was chosen rather than asking for it: the same stacked preview the dialog
-draws, restricted to the columns that carry something, with each graph headed by the role it
-serves. There is no separate legend — each row names itself, so a list above repeating the
-same facts would only be a second place to keep in sync.
+Setup shows what was chosen rather than asking for it: the same stacked-column machinery the
+dialog draws with (``ColumnStack``), restricted to the columns that carry something and — since
+ticket B05 — rendered as a compact SPARKLINE (no axis apparatus; ``ColumnStack``'s
+``sparkline=True``) rather than the dialog's full, tick-labelled panels. Each graph is still
+headed by the role it serves, and there is no separate legend — each row names itself, so a
+list above repeating the same facts would only be a second place to keep in sync. The full,
+editable view (with a real axis to read a value off) is what the channel-assignment dialog is
+for.
 
 Only columns that HAVE a role appear — an empty summary is the honest rendering of "nothing
 assigned yet", and is what the empty-state line says.
@@ -44,11 +48,14 @@ ORDER = ("flow", "volume", "poes", "pgas", "pdi", "emg", "entropy")
 
 EMPTY_TEXT = "No channels assigned yet — click ‘Assign channels from data…’."
 
-#: the previews here are a readout, not a working surface, so they are shorter than the
-#: dialog's. Measured floor: below this the y tick labels of the wider-range channels clip
-#: (48 loses Poes's end labels, 50 still clips Volume's top), so this is as compact as the
-#: axis text allows rather than an aesthetic pick.
-SUMMARY_ROW_HEIGHT = 56
+#: the previews here are a readout, not a working surface: a low sparkline (no axis
+#: apparatus at all — see ColumnStack's ``sparkline`` mode, ticket B05), so there is no
+#: tick text left to clip and the row can be genuinely compact. The header text above each
+#: trace already says the role, the column and its source name; the trace is there so the
+#: SHAPE of the signal can be seen, not so a value can be read off it — that full, editable
+#: view lives in the channel-assignment dialog (ColumnStack's default, non-sparkline mode,
+#: ROW_HEIGHT = 74).
+SUMMARY_ROW_HEIGHT = 28
 
 
 def roles_of(channels, col):
@@ -158,7 +165,7 @@ class ChannelSummary(QWidget):
             # can be read without a legend to cross-reference
             prefixes[col - 1] = " + ".join(ROLE_NAMES[r] for r in carried)
         self.stack = ColumnStack(fs, columns=[c - 1 for c in cols],
-                                 row_height=SUMMARY_ROW_HEIGHT)
+                                 row_height=SUMMARY_ROW_HEIGHT, sparkline=True)
         self.stack.build(matrix, names or [], roles=roles, prefixes=prefixes)
         # the graph headers ARE the rows now, so they carry the settings-path tooltips the
         # deleted fields used to hold — a column with two roles names both
