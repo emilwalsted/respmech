@@ -796,26 +796,40 @@ class _EmgNoiseMixin:
         return self._apply_noise_reference(t0, t1)
 
     def _open_noise_profile_dialog(self):
-        """Open the modal noise-profile picker over the current file's raw EMG channels;
-        on accept, apply the marked span as the shared noise reference."""
+        """Open the modal noise-profile picker over the current file's EMG channels —
+        the ECG-REDUCED ones when 'Remove ECG' is on (D08, UI-overhaul), because that is
+        what the noise profile is actually built from (core/pipeline.py's reference clip
+        comes from the same ECG-cleaned matrix). Showing the raw signal instead put the
+        picker's own heartbeats in the way of a criterion ('quiet, EMG-free') that cannot
+        be met in raw data at all — the intuition it built ('avoid the spikes') was about
+        the wrong signal. On accept, apply the marked span as the shared noise reference."""
         path = self._current_file()
         if not path:
             return
         from respmech.ui.noise_profile_dialog import NoiseProfileDialog
-        from respmech.ui.workers import stage_raw_emg
+        from respmech.ui.workers import stage_ecg_reduction
         try:
-            data = stage_raw_emg(self.state.settings, path)
+            data = stage_ecg_reduction(self.state.settings, path)
         except Exception:                            # noqa: BLE001 — copyable status
             self._set_status(f"Could not load EMG for the noise picker — {short_error(traceback.format_exc())}")
             return
-        if not data["raw"]:
+        if not data.get("processed"):
             self._set_status("This file has no EMG channels to pick a noise profile from.")
             return
         from respmech.ui.noise_profile_dialog import EXPIRATION
         n = self.state.settings.processing.emg.noise
-        dlg = NoiseProfileDialog(data["raw"], data["t"], data["fs"], data["cols"],
+        # stage_ecg_reduction falls back to the RAW channels whenever detection/removal
+        # raises (see its docstring) and reports NO peaks, regardless of the remove_ecg
+        # SETTING it echoes back as ecg_applied — so a failed removal must tell the dialog
+        # 'off' too, or the hint confidently claims heartbeats are gone from a signal that
+        # still has them (found in review: the exact bug this ticket exists to fix,
+        # reappearing on the error path _ecg.py already guards against — see its own
+        # ecg_error handling for the same reasoning).
+        ecg_applied = bool(data.get("ecg_applied")) and not data.get("ecg_error")
+        dlg = NoiseProfileDialog(data["processed"], data["t"], data["fs"], data["cols"],
                                  parent=self, file_name=self._selected_filename(),
-                                 flow=data.get("flow"), reference_file=n.reference_file or "")
+                                 flow=data.get("flow"), reference_file=n.reference_file or "",
+                                 peak_times=data.get("peaks"), ecg_applied=ecg_applied)
         dlg.use_expiration.setChecked(bool(n.use_expiration or not n.reference_intervals))
         # Seed the picker with the reference already saved for this test (D07), so a user
         # who opens the dialog to CHECK what is set — the app's own declared workflow of
