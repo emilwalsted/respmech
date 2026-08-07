@@ -82,7 +82,18 @@ NAVNE = [
 
 
 def kør(args, **kw):
-    return subprocess.run(args, cwd=ROOT, capture_output=True, text=True, timeout=120, **kw)
+    # git's own output (commit messages, diffs) is always UTF-8, regardless of the
+    # process's locale. Without an explicit encoding, text=True decodes with
+    # locale.getpreferredencoding(), which on Windows CI runners defaults to cp1252 —
+    # not UTF-8. A commit containing any of the typographic characters this project's
+    # history is full of (·, –, —, ›, →) then crashes with an uncaught
+    # UnicodeDecodeError, which is a real, uncaught exit code 1 — even though this tool
+    # is meant to be an informational, --warnings-only step that must never fail a
+    # branch (measured: reproduced the exact crash by forcing a non-UTF-8 default
+    # locale). Decode as UTF-8 unconditionally, with a lossy fallback so a genuinely
+    # malformed byte still can't crash a check whose entire job is printing a warning.
+    return subprocess.run(args, cwd=ROOT, capture_output=True, text=True, timeout=120,
+                          encoding='utf-8', errors='replace', **kw)
 
 
 def fejl(besked, kode=2):
