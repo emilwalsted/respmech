@@ -111,9 +111,30 @@ class ChannelSetupDialog(QDialog):
     dropdown at the top switches which file's raw data is shown; the first file is the
     default. Role assignments are per column and persist across file switches. ``initial``
     pre-selects the dropdowns. After ``exec()``, ``selected_mapping()`` returns
-    {'flow': col1based or None, ..., 'emg': [cols], 'entropy': [cols]}."""
+    {'flow': col1based or None, ..., 'emg': [cols], 'entropy': [cols]}.
 
-    def __init__(self, files, fs, initial=None, loader=None, parent=None, excluded=None):
+    ``integrate_from_flow`` (ticket D02) seeds the "No volume channel — derive volume by
+    integrating flow" checkbox from the caller's current
+    ``processing.volume.integrate_from_flow`` — read back after ``exec()`` via
+    :meth:`integrate_from_flow`, next to :meth:`selected_mapping`, so the caller decides
+    when and where to write it into settings (it is not part of the mapping dict: Volume
+    is the one required-in-spirit role a batch can satisfy WITHOUT a column). Volume is
+    deliberately absent from ``column_stack.REQUIRED`` — a flow-only rig with no separate
+    volume channel is a supported setup (see the README), not missing data — so the OK
+    gate below is satisfied by EITHER a Volume column or this checkbox, never both at
+    once required. Auto-ticked at open when nothing has claimed the Volume role yet (no
+    column, and the caller's own setting was already off): the exact state an unedited
+    flow-only rig starts in, so the person with that rig does not have to go looking for
+    the one control that unblocks OK. The checkbox and a real Volume column are kept
+    mutually exclusive in BOTH directions — assigning Volume to a column un-ticks the box
+    (``_on_role_changed``), and ticking the box clears any column still carrying Volume
+    (``_on_volume_from_flow_toggled``) — because the core loader (``core/io/loaders.py``)
+    gives ``integrate_from_flow`` priority over an assigned column when both are set, so
+    leaving both on would silently ignore whichever the user set second, the exact
+    silent-wrongness this ticket exists to close."""
+
+    def __init__(self, files, fs, initial=None, loader=None, parent=None, excluded=None,
+                integrate_from_flow=False):
         super().__init__(parent)
         self.setModal(True)
         # Opening size, clamped to the screen in showEvent. The HEIGHT is content-derived
@@ -159,6 +180,7 @@ class ChannelSetupDialog(QDialog):
 
         initial = initial or {}
         preselect = self._roles_from_mapping(initial)      # column index -> role key
+        has_volume_col = "volume" in preselect.values()
 
         v = QVBoxLayout(self)
         v.setContentsMargins(18, 14, 18, 12)
@@ -185,6 +207,24 @@ class ChannelSetupDialog(QDialog):
                       "Assignments are kept when you switch files.")
         hint.setProperty("status", "muted"); hint.setWordWrap(True)
         v.addWidget(hint)
+
+        # ticket D02: a rig with no separate volume channel (README-supported) still has
+        # to reach OK somehow — see the class docstring for the priority/auto-uncheck
+        # reasoning. Auto-ticked when nothing else has claimed Volume yet AND the caller's
+        # own setting was already off, so an in-progress "derive from flow" choice from a
+        # reopened analysis is never silently flipped back off just because this dialog
+        # was opened again.
+        self._volume_from_flow = QCheckBox(
+            "No volume channel — derive volume by integrating flow")
+        self._volume_from_flow.setToolTip(
+            "Skip assigning a Volume column and compute it instead by integrating the "
+            "Flow signal — the same 'Calculate volume from flow' setting also on Preview "
+            "& QC ▸ Mechanics ▸ Advanced… ▸ Volume. Use this for a rig that records flow "
+            "but not a separate, integrated volume channel.")
+        self._volume_from_flow.setChecked(bool(integrate_from_flow) or not has_volume_col)
+        self._volume_from_flow.toggled.connect(self._on_volume_from_flow_toggled)
+        v.addWidget(self._volume_from_flow)
+
         nfiles = len(self._files)
         banner_text = (f"This mapping is applied to all {nfiles} file"
                       f"{'s' if nfiles != 1 else ''} in the batch.")
@@ -421,27 +461,78 @@ class ChannelSetupDialog(QDialog):
                     combo.setCurrentIndex(0)        # (unused)
                     combo.blockSignals(False)
                     self._recolor(j)
+        # ticket D02: a real Volume column now exists, so a still-ticked "derive from
+        # flow" checkbox would silently win over it at run time (core/io/loaders.py gives
+        # integrate_from_flow priority over an assigned column) — the exact kind of
+        # silent-wrongness this ticket closes for the OPPOSITE case. Only fires on a
+        # genuine user edit: the initial preselect sets the combos before this signal is
+        # connected, so opening an already-"derive from flow" analysis never flips it.
+        if role == "volume" and self._volume_from_flow.isChecked():
+            self._volume_from_flow.setChecked(False)
         self._recolor(col_index)
         self._refresh_info()
 
     def _recolor(self, col_index):
         self._stack.set_role(col_index, self._display_role(col_index))
 
+    def _on_volume_from_flow_toggled(self, checked):
+        """The mutual-exclusion guard between the checkbox and a real Volume column, in
+        the OTHER direction from ``_on_role_changed`` above (found in self-review: the
+        original implementation only guarded column-then-checkbox, not
+        checkbox-after-column). Without this, assigning a real Volume column (which
+        un-ticks the box, as designed) and then manually RE-ticking it afterwards left
+        both set with no warning — ``_refresh_info`` even suppresses the 'derived from
+        flow' note in that state, since a column IS present, so the dialog would show
+        a plain 'Ready' with no sign that the core loader (``core/io/loaders.py``) is
+        about to silently ignore the column the user just picked (it gives
+        ``integrate_from_flow`` priority whenever both are set). Ticking the box now
+        clears any column still carrying the Volume role, symmetric to the reverse case."""
+        if checked:
+            for i in range(self._ncols):
+                if self._role_of(i) == "volume":
+                    combo = self._combos[i]
+                    combo.blockSignals(True)
+                    combo.setCurrentIndex(0)            # (unused)
+                    combo.blockSignals(False)
+                    self._recolor(i)
+        self._refresh_info()
+
     def _missing_required(self):
         """Required single roles (flow/poes/pgas/pdi) not yet assigned to any column."""
         present = {self._role_of(i) for i in range(self._ncols)}
         return [r for r in _REQUIRED if r not in present]
 
+    def _volume_assigned(self):
+        """True once some column carries the Volume role — as distinct from Volume being
+        SATISFIED, which the checkbox can also do (see ``_refresh_info``)."""
+        return any(self._role_of(i) == "volume" for i in range(self._ncols))
+
+    def integrate_from_flow(self) -> bool:
+        """The "derive volume from flow" checkbox's current state — read by the caller
+        after ``exec()`` accepts, next to :meth:`selected_mapping`, and written into
+        ``processing.volume.integrate_from_flow`` (not part of the mapping dict: this is
+        a processing setting, not a channel column)."""
+        return self._volume_from_flow.isChecked()
+
     def _refresh_info(self):
-        """Show progress, and gate OK on the required roles being assigned — so a partial
-        mapping can never silently leave a required channel at a stale/wrong column."""
+        """Show progress, and gate OK on the required roles being assigned, AND Volume
+        being satisfied — a column OR the "derive from flow" checkbox, never both required
+        at once (ticket D02: a flow-only rig with no separate volume channel is a
+        supported setup, not missing data) — so a partial mapping can never silently leave
+        a required channel at a stale/wrong column, and OK can never be reached with
+        neither volume source chosen."""
         missing = self._missing_required()
+        volume_ok = self._volume_assigned() or self._volume_from_flow.isChecked()
         if missing:
             names = ", ".join(_REQUIRED_LABELS[r] for r in missing)
             text = f"Assign {names} to continue"
+        elif not volume_ok:
+            text = "Assign Volume, or tick 'derive from flow', to continue"
         else:
             assigned = sum(1 for i in range(self._ncols) if self._display_role(i))
             text = f"Ready — {assigned} column{'s' if assigned != 1 else ''} assigned"
+            if self._volume_from_flow.isChecked() and not self._volume_assigned():
+                text += "  ·  volume derived from flow"
         # A role kept on a column that displays a different one would otherwise be invisible.
         # Say so in BOTH branches: while a required role is missing is exactly when the user
         # is still editing and might act on it.
@@ -449,7 +540,7 @@ class ChannelSetupDialog(QDialog):
             text += f"  ·  {note}"
         self.info.setText(text)
         if getattr(self, "_ok_btn", None) is not None:
-            self._ok_btn.setEnabled(not missing)
+            self._ok_btn.setEnabled(not missing and volume_ok)
 
     def _kept_notes(self):
         """Human phrases for everything selected_mapping will re-emit but cannot show."""

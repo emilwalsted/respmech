@@ -332,10 +332,11 @@ class _StubChannelDialog:
     """Stand-in for the real (exec-blocking) ChannelSetupDialog."""
     calls = 0
 
-    def __init__(self, *a, accept=False, mapping=None, **k):
+    def __init__(self, *a, accept=False, mapping=None, integrate_from_flow=False, **k):
         self._accept = accept
         self._mapping = mapping or {"flow": 5, "volume": 6, "poes": 7, "pgas": 8,
                                     "pdi": 9, "emg": [2, 3, 4], "entropy": []}
+        self._integrate_from_flow = integrate_from_flow
 
     def exec(self):
         from PySide6.QtWidgets import QDialog
@@ -344,6 +345,9 @@ class _StubChannelDialog:
 
     def selected_mapping(self):
         return dict(self._mapping)
+
+    def integrate_from_flow(self):
+        return self._integrate_from_flow
 
 
 def test_channel_modal_auto_opens_exactly_once_after_input_matches_files(qapp, monkeypatch):

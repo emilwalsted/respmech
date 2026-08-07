@@ -467,6 +467,131 @@ def test_dialog_ok_is_gated_on_the_required_roles(qapp):
     assert not dlg._ok_btn.isEnabled()
 
 
+# --------------------------------------------------------------------------- #
+# volume-from-flow checkbox (ticket D02)
+# --------------------------------------------------------------------------- #
+def _assign_required(dlg):
+    _set_role(dlg, 4, "flow"); _set_role(dlg, 6, "poes")
+    _set_role(dlg, 7, "pgas"); _set_role(dlg, 8, "pdi")
+
+
+def test_volume_checkbox_is_auto_suggested_when_nothing_claims_the_role(qapp):
+    """A flow-only rig — the exact state this ticket is about — starts with no Volume
+    column and no prior setting, so the checkbox should already be ticked, not merely
+    available, the moment the dialog opens."""
+    dlg = _dialog()
+    assert dlg._volume_from_flow.isChecked()
+
+
+def test_volume_checkbox_is_not_suggested_when_a_column_already_carries_it(qapp):
+    dlg = _dialog(initial={"flow": 5, "volume": 6, "poes": 7, "pgas": 8, "pdi": 9})
+    assert not dlg._volume_from_flow.isChecked()
+
+
+def test_volume_checkbox_seeded_true_is_kept_even_with_a_volume_column(qapp):
+    """A saved analysis can legally carry integrate_from_flow=True alongside a leftover
+    Volume column value (the core loader ignores the column in that case) — the checkbox
+    must reflect the caller's actual setting, not silently override it because a column
+    number also happens to be present."""
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+    dlg = ChannelSetupDialog(_files(), 1000,
+                             initial={"flow": 5, "volume": 6, "poes": 7, "pgas": 8, "pdi": 9},
+                             loader=_loader(), integrate_from_flow=True)
+    assert dlg._volume_from_flow.isChecked()
+
+
+def test_ok_is_gated_on_volume_or_the_checkbox_not_both(qapp):
+    dlg = _dialog()
+    _assign_required(dlg)
+    assert dlg._ok_btn.isEnabled()                    # checkbox auto-suggested -> already ok
+    dlg._volume_from_flow.setChecked(False)
+    assert not dlg._ok_btn.isEnabled()
+    assert "derive from flow" in dlg.info.text()
+    dlg._volume_from_flow.setChecked(True)
+    assert dlg._ok_btn.isEnabled()
+    _set_role(dlg, 5, "volume")                        # a real column also satisfies it...
+    assert dlg._ok_btn.isEnabled()
+    assert not dlg._volume_from_flow.isChecked()        # ...and un-ticks the checkbox (below)
+
+
+def test_assigning_a_volume_column_unchecks_the_derive_from_flow_box(qapp):
+    """Ticket D02: the core loader gives integrate_from_flow priority over an assigned
+    column when both are set (core/io/loaders.py) — leaving the checkbox ticked after the
+    user picks a real Volume column would silently ignore the column they just chose, so
+    the dialog must clear it for them the moment a column takes the role."""
+    dlg = _dialog()
+    assert dlg._volume_from_flow.isChecked()           # auto-suggested (no column yet)
+    _set_role(dlg, 5, "volume")
+    assert not dlg._volume_from_flow.isChecked()
+
+
+def test_reopening_an_already_derived_analysis_does_not_uncheck_on_open(qapp):
+    """The auto-uncheck above must only fire on a genuine USER edit — the initial preselect
+    of an already-saved 'derive from flow' analysis (no Volume column, box already ticked)
+    must not be mistaken for that same edit and cleared right back off."""
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+    dlg = ChannelSetupDialog(_files(), 1000, initial={}, loader=_loader(),
+                             integrate_from_flow=True)
+    assert dlg._volume_from_flow.isChecked()
+
+
+def test_reticking_the_checkbox_after_a_column_assignment_clears_the_column(qapp):
+    """Self-review finding: the guard above only covered column-THEN-checkbox. The reverse
+    order — assign a real Volume column (which un-ticks the box, as designed), then
+    manually RE-tick the box afterwards — used to leave BOTH set with no warning at all
+    (_refresh_info even suppresses the 'derived from flow' note once a column is present),
+    so OK would silently commit a column the core loader was about to ignore anyway
+    (core/io/loaders.py gives integrate_from_flow priority). Ticking the box must now
+    clear the column symmetrically, the same way assigning a column clears the box."""
+    dlg = _dialog()
+    _assign_required(dlg)
+    _set_role(dlg, 5, "volume")
+    assert dlg._role_of(5) == "volume" and not dlg._volume_from_flow.isChecked()
+    dlg._volume_from_flow.setChecked(True)
+    assert dlg._role_of(5) == ""                       # the column was cleared, not left dual-set
+    assert dlg.selected_mapping()["volume"] is None
+    assert "volume derived from flow" in dlg.info.text()   # the note is no longer suppressed
+
+
+def test_both_volume_sources_set_at_once_still_enables_ok(qapp):
+    """The OR gate itself, pinned directly rather than only inferred from the auto-uncheck
+    tests: with the mutual-exclusion guards in place this combination cannot normally
+    arise through the UI, but _refresh_info's own condition (column OR checkbox) must not
+    regress into an AND if either guard above is ever weakened."""
+    dlg = _dialog()
+    _assign_required(dlg)
+    dlg._volume_from_flow.setChecked(False)
+    _set_role(dlg, 5, "volume")                          # column assigned, checkbox already off
+    dlg._volume_from_flow.blockSignals(True)              # bypass the mutual-exclusion guard,
+    dlg._volume_from_flow.setChecked(True)                # to test _refresh_info's OR in isolation
+    dlg._volume_from_flow.blockSignals(False)
+    dlg._refresh_info()
+    assert dlg._role_of(5) == "volume" and dlg._volume_from_flow.isChecked()   # both true here
+    assert dlg._ok_btn.isEnabled()
+
+
+def test_switching_files_does_not_disturb_the_checkbox(qapp):
+    """The checkbox is a per-dialog processing setting, not per-file data — switching which
+    file's columns are previewed (_on_file_changed only touches the matrix/stack) must
+    never reset or flip it."""
+    files = _files()
+    assert len(files) >= 2
+    dlg = _dialog(files=files)
+    dlg._volume_from_flow.setChecked(False)
+    dlg.file_combo.setCurrentIndex(1)
+    assert not dlg._volume_from_flow.isChecked()
+    dlg._volume_from_flow.setChecked(True)
+    dlg.file_combo.setCurrentIndex(0)
+    assert dlg._volume_from_flow.isChecked()
+
+
+def test_info_text_names_volume_derived_from_flow_when_checked(qapp):
+    dlg = _dialog()
+    _assign_required(dlg)
+    assert dlg._volume_from_flow.isChecked()
+    assert "Ready" in dlg.info.text() and "volume derived from flow" in dlg.info.text()
+
+
 def test_dialog_reassigning_a_single_role_recolors_both_plots(qapp):
     from respmech.ui.channel_setup_dialog import _role_color
     dlg = _dialog()
@@ -495,14 +620,21 @@ class _StubDialog:
     _MAP = {"flow": 5, "volume": 6, "poes": 7, "pgas": 8, "pdi": 9,
             "emg": [2, 3, 4], "entropy": [10, 11, 12]}
 
-    def __init__(self, *a, accept=True, **k):
+    def __init__(self, *a, accept=True, integrate_from_flow=False, **k):
         self._accept = accept
+        # ticket D02: the real dialog's checkbox state, read back by _open_channel_setup
+        # via the SAME method name — a stub that did not implement this would raise
+        # AttributeError the moment that call site started reading it, not silently pass.
+        self._integrate_from_flow = integrate_from_flow
 
     def exec(self):
         return QDialog.Accepted if self._accept else QDialog.Rejected
 
     def selected_mapping(self):
         return dict(self._MAP)
+
+    def integrate_from_flow(self):
+        return self._integrate_from_flow
 
 
 def _screen_pointed_at_input(qapp):
@@ -526,6 +658,78 @@ def test_open_channel_setup_applies_mapping_on_ok(qapp, monkeypatch):
     assert ch.emg == [2, 3, 4] and ch.entropy == [10, 11, 12]
     # and it reached the readout the user actually sees
     assert any(t.startswith("Flow signal  ·  Column 5") for t in sc.channel_summary.texts())
+    win.close()
+
+
+def test_open_channel_setup_writes_integrate_from_flow_from_the_dialog(qapp, monkeypatch):
+    """Ticket D02: the checkbox lives on the dialog, not in selected_mapping()'s dict — the
+    caller must read it back separately and write it into
+    processing.volume.integrate_from_flow, alongside (not instead of) applying the channel
+    mapping, so a flow-only rig's choice actually reaches settings on OK."""
+    import respmech.ui.channel_setup_dialog as csd
+    monkeypatch.setattr(csd, "ChannelSetupDialog",
+                        lambda *a, integrate_from_flow=False, **k:
+                            _StubDialog(accept=True, integrate_from_flow=True))
+    win, sc = _screen_pointed_at_input(qapp)
+    assert sc.state.settings.processing.volume.integrate_from_flow is False
+    assert sc._open_channel_setup(initial={}) is True
+    assert sc.state.settings.processing.volume.integrate_from_flow is True
+    win.close()
+
+
+def test_flow_only_rig_reaches_all_ok_and_can_save_via_the_real_dialog(qapp, monkeypatch):
+    """Ticket D02's acceptance scenario, driven through the REAL dialog's own gating logic
+    (not a stub): Flow/Poes/Pgas/Pdi assigned, no Volume channel, the new checkbox
+    auto-suggested and left ticked — Setup must reach a fully valid, saveable state in the
+    SAME session, with no need to open a different analysis first to unblock it (the only
+    workaround that existed before this ticket)."""
+    import respmech.ui.channel_setup_dialog as csd
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.in_folder.setText(INPUT); sc.in_files.setText("synth_case_*.csv")
+    sc.out_folder.setText(INPUT)                          # can_save() only needs settings validity
+    sc.samp_freq.setValue(1000)
+    sc._on_inputs_changed()
+
+    real_cls = csd.ChannelSetupDialog
+
+    def _build(*a, **k):
+        dlg = real_cls(*a, **k)
+        _set_role(dlg, 4, "flow"); _set_role(dlg, 6, "poes")
+        _set_role(dlg, 7, "pgas"); _set_role(dlg, 8, "pdi")
+        assert dlg._volume_from_flow.isChecked()          # auto-suggested: no volume column
+        assert dlg._ok_btn.isEnabled()
+        dlg.exec = lambda: QDialog.Accepted               # skip the real (blocking) modal loop
+        return dlg
+    monkeypatch.setattr(csd, "ChannelSetupDialog", _build)
+
+    assert sc._open_channel_setup(initial={}) is True
+    assert sc.state.settings.processing.volume.integrate_from_flow is True
+    assert sc.state.settings.input.channels.volume is None
+    assert sc._all_ok() is True
+    assert sc.can_save() is True
+    assert win.tabs.isTabEnabled(win._i_preview)
+    win.run_screen.refresh_actions()
+    assert win.run_screen.btn_run.isEnabled()
+    win.close()
+
+
+def test_open_channel_setup_passes_the_current_setting_into_the_dialog(qapp, monkeypatch):
+    """The dialog's checkbox has to be SEEDED from the current setting too, not just
+    written back on OK, so reopening an analysis that already derives volume from flow
+    shows the checkbox already ticked instead of asking the user to re-discover it."""
+    import respmech.ui.channel_setup_dialog as csd
+    seen = {}
+
+    def _capture(*a, integrate_from_flow=False, **k):
+        seen["value"] = integrate_from_flow
+        return _StubDialog(accept=False)                # cancel -> nothing else to unwind
+    monkeypatch.setattr(csd, "ChannelSetupDialog", _capture)
+    win, sc = _screen_pointed_at_input(qapp)
+    sc.state.settings.processing.volume.integrate_from_flow = True
+    sc._open_channel_setup(initial={})
+    assert seen["value"] is True
     win.close()
 
 
@@ -804,7 +1008,10 @@ def test_apply_channel_mapping_writes_the_model_and_the_readout(qapp):
     # plain list, which is the point — the mapping shows the moment it exists
     rows = sc.channel_summary.texts()
     assert "Flow signal: Column #3" in rows
-    assert not any(r.startswith("Volume") for r in rows)
+    # ticket D02: Volume is the one role the summary always names, even unassigned — a
+    # flow-only rig is a supported setup, not something the readout should stay silent
+    # about the way it stays silent about a genuinely-not-relevant role.
+    assert "Volume: not assigned" in rows
     assert "assigned" in sc.status.text().lower()
     win.close()
 
@@ -892,7 +1099,8 @@ def test_settings_screen_passes_manifest_outliers_to_the_dialog(qapp, monkeypatc
 
     seen = {}
 
-    def fake_dialog(files, fs, initial, loader=None, parent=None, excluded=None):
+    def fake_dialog(files, fs, initial, loader=None, parent=None, excluded=None,
+                    integrate_from_flow=False):
         seen["excluded"] = excluded
         raise ValueError("stop before actually opening a modal")
 
