@@ -18,6 +18,16 @@ double-click resets it — restoring the marked region its own leading click cle
 
 The selection state (``_set_selection`` / ``_clear_selection`` / ``_maybe_warn`` /
 ``selected_region``) is factored out of the mouse handling so it is testable headless.
+
+Opening the picker on a test that already has a saved reference seeds it via
+``_seed_reference`` (D07, UI-overhaul) — the caller resolves the reference against the
+CURRENT (possibly re-opened) settings and calls it after construction; the dialog itself
+never reads settings. That makes "OK" without dragging anything a valid, no-op accept,
+instead of the picker opening empty and forcing a fresh drag to see what was already
+saved. When ``reference_file`` names a file other than the one the picker was opened on,
+a persistent banner explains that accepting moves the WHOLE test's reference to this
+file, and the accept button is relabelled "Replace noise reference" so the click
+describes its own effect.
 """
 from __future__ import annotations
 
@@ -49,7 +59,13 @@ _GLW_MARGIN = 10                       # GraphicsLayoutWidget's own margin aroun
 #: ~85 px of actual trace.)
 _ROW_MIN_H = 120
 _REGION_BRUSH = (255, 152, 0, 60)      # brand orange, semi-transparent
-_ACCENT = (255, 152, 0)
+#: The one accent this picker uses for "a marked noise reference", unthemed (it reads the
+#: same on light and dark plot grounds). Public: the Detail-plot indicator that mirrors the
+#: saved reference (preview_screen's EMG tab) imports this so the two never drift apart —
+#: before D07 that indicator was painted the SAME hue as the breathing shading it sits
+#: inside (theme.py's old noise_region token), which made it invisible in practice.
+NOISE_ACCENT = (255, 152, 0)
+_ACCENT = NOISE_ACCENT
 
 
 def _axis_width():
@@ -76,7 +92,8 @@ def _plot_pal():
 class NoiseProfileDialog(QDialog):
     """Pick a rest span across the raw EMG channels to use as the noise reference."""
 
-    def __init__(self, raw, t, fs, cols, parent=None, file_name="", flow=None):
+    def __init__(self, raw, t, fs, cols, parent=None, file_name="", flow=None,
+                reference_file=""):
         super().__init__(parent)
         self.setWindowTitle("Set noise profile" + (f" — {file_name}" if file_name else ""))
         self.setModal(True)
@@ -85,6 +102,12 @@ class NoiseProfileDialog(QDialog):
         self._fs = fs
         self._flow = np.asarray(flow, dtype=float) if flow is not None else None
         self._selection = None             # (t0, t1) in seconds, or None
+        # the file the TEST's shared reference currently lives on (may differ from the
+        # file this picker was opened on, or be "" if no reference is set yet) — drives
+        # the persistent cross-file warning below, never touched again after construction
+        self._reference_file = reference_file or ""
+        self._mismatch = bool(self._reference_file and file_name
+                              and self._reference_file != file_name)
         self._dragging = False
         self._moved = False                # did the pointer move far enough to count as a drag?
         self._press_x = None
@@ -102,6 +125,25 @@ class NoiseProfileDialog(QDialog):
                       "Use the bar below the plots to move through the recording when zoomed in.")
         hint.setProperty("status", "muted"); hint.setWordWrap(True)
         v.addWidget(hint)
+
+        # Persistent, not tied to the drag/selection state below (self.warn IS): the test
+        # has exactly one shared reference regardless of which file is open, and accepting
+        # here always moves it to THIS file — the user needs to know that before they ever
+        # touch the plots, not only after a drag. First shown widget, so it cannot be missed.
+        self.file_warn = QLabel("")
+        self.file_warn.setObjectName("noiseFileWarn")
+        self.file_warn.setWordWrap(True)
+        self.file_warn.setVisible(self._mismatch)
+        _fwarn = (_theme.active_theme().get("st_warn_fg", "#8A5A12")
+                 if _theme is not None else "#8A5A12")
+        self.file_warn.setStyleSheet("#noiseFileWarn { color: %s; font-weight: 600; }" % _fwarn)
+        if self._mismatch:
+            self.file_warn.setText(
+                f"This test's noise reference is currently {self._reference_file}. Setting "
+                f"it here moves the whole test's reference to {file_name} — the profile is "
+                "still built once, from this one span, and applied identically to every "
+                "file in the test.")
+        v.addWidget(self.file_warn)
 
         pal = _plot_pal()
         trace_pen = pal.get("noise_trace", (90, 150, 200))
@@ -213,7 +255,11 @@ class NoiseProfileDialog(QDialog):
         self.info = QLabel(""); self.info.setProperty("status", "muted")
         row.addWidget(self.info, 1)
         self.btn_cancel = QPushButton("Cancel"); self.btn_cancel.clicked.connect(self.reject)
-        self.btn_ok = QPushButton("Set noise profile"); self.btn_ok.setEnabled(False)
+        # Relabelled when accepting would move the reference off another file (see
+        # file_warn above): the click then describes what it actually does.
+        self.btn_ok = QPushButton("Replace noise reference" if self._mismatch
+                                  else "Set noise profile")
+        self.btn_ok.setEnabled(False)
         self.btn_ok.clicked.connect(self.accept)
         # Enter commits, Esc cancels. Without this Qt promotes Cancel (added first) as the
         # default and Enter throws away the marked region. The accepting button starts
@@ -407,6 +453,19 @@ class NoiseProfileDialog(QDialog):
         self.btn_ok.setEnabled(False)
         self.info.setText("")
         self.warn.setVisible(False)
+
+    def _seed_reference(self, t0, t1):
+        """Show the reference already saved for this test (D07, UI-overhaul): shade it via
+        the normal selection path — so it behaves exactly like a fresh drag, right down to
+        the width warning — then say plainly that this is the CURRENT reference, not a new
+        pick, so accepting without touching anything is understood as "keep it". The
+        caller resolves ``(t0, t1)`` against whatever is current in settings; this method
+        never reads settings itself. Any later drag calls ``_set_selection`` directly and
+        overwrites this wording with the ordinary "Rest region …" text, which is correct:
+        at that point it IS a new pick, not the saved one."""
+        self._set_selection(t0, t1)
+        where = self._reference_file or "the current file"
+        self.info.setText(f"Current reference: {where}, {t0:.3f}–{t1:.3f} s")
 
     def _maybe_warn(self, width):
         if width > _WARN_SECONDS:

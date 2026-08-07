@@ -13,6 +13,8 @@ signal quite happily) but a scientific one. Noise reduction runs on whatever the
 produced and its reference clip is ECG-cleaned, so with the heartbeat still present the
 profile models a large periodic artefact as steady background noise.
 """
+import pytest
+
 from respmech.core.settings import Settings
 from respmech.ui.state import AppState
 
@@ -241,4 +243,143 @@ def test_the_noise_enable_checkbox_still_waits_for_ecg_removal(qapp, tmp_path):
     pv = _preview(qapp, tmp_path, ecg=False)
     assert not pv.noise_enabled.isEnabled()
     assert NEEDS_ECG_HINT in pv.noise_enabled.toolTip()
+    pv.shutdown()
+
+
+# -- D07 (UI-overhaul): the Detail plot's noise-reference band tells the truth ------
+# Regression: _ensure_noise_region seeded the band ONCE, at construction, from whatever
+# settings existed then (0.0-1.0 for a fresh AppState) and never moved it again except
+# through an interactive "Set noise profile" approval. Opening or loading a saved
+# analysis — the app's own declared workflow — left the band pointing at the first
+# second of the recording regardless of where the real reference was.
+
+def test_construction_does_not_show_another_files_reference(qapp, tmp_path):
+    """Regression found in review of this ticket: PreviewScreen.__init__ used to call the
+    OLD unconditional _ensure_noise_region() right after _load_noise_params(), which
+    created/showed the band from reference_intervals[0] regardless of which file
+    refresh_files() (later in the same constructor) was about to auto-select — a fresh
+    construction could paint file B's span for one frame while file A was quietly
+    adopted as the shown file, before the async detail render ever corrected it."""
+    from respmech.ui.screens.preview_screen import PreviewScreen
+    s = synth_settings(str(tmp_path), noise=True, data_out=_OUT)
+    s.processing.emg.noise.reference_file = "synth_case_B.csv"   # NOT the auto-selected file
+    pv = PreviewScreen(AppState(s))
+    assert pv.file_rail.current_filename() == "synth_case_A.csv", "test assumes A is auto-selected"
+    assert pv._noise_region is not None, "a malformed/mismatched reference must not abort construction"
+    assert pv._noise_region.isVisible() is False, "showed file B's reference while A was on screen"
+    pv.shutdown()
+
+
+def test_the_band_matches_the_saved_reference_on_its_own_file(qapp, tmp_path):
+    from respmech.ui.screens.preview_screen import PreviewScreen
+    s = synth_settings(str(tmp_path), noise=True, data_out=_OUT)   # ref: synth_case_A.csv, [1.0, 5.0]
+    pv = PreviewScreen(AppState(s))
+    pv._refresh_files()
+    pv.file_rail.select_filename("synth_case_A.csv")
+    pv._load_noise_params()
+    assert pv._noise_region is not None
+    assert pv._noise_region.isVisible() is True
+    lo, hi = pv._noise_region.getRegion()
+    assert (lo, hi) == pytest.approx((1.0, 5.0))
+    assert pv._noise_label is not None and pv._noise_label.isVisible() is True
+    pv.shutdown()
+
+
+def test_opening_a_saved_analysis_refreshes_the_band_not_only_at_construction(qapp, tmp_path):
+    """The exact bug: a fresh AppState seeds the band at 0.0-1.0 in the constructor: a
+    later sync_from_settings — how a saved analysis actually arrives — must move it."""
+    from respmech.ui.screens.preview_screen import PreviewScreen
+    s = synth_settings(str(tmp_path), data_out=_OUT)   # noise=False here -> no reference yet
+    pv = PreviewScreen(AppState(s))
+    pv._refresh_files()
+    pv.file_rail.select_filename("synth_case_A.csv")
+    n = pv.state.settings.processing.emg.noise
+    n.enabled = True
+    n.reference_file = "synth_case_A.csv"
+    n.reference_intervals = [[2.5, 6.5]]
+    n.use_expiration = False
+    pv.sync_from_settings()                           # the real path a file-open takes
+    assert pv._noise_region.isVisible() is True
+    assert pv._noise_region.getRegion() == pytest.approx((2.5, 6.5))
+    pv.shutdown()
+
+
+def test_the_band_hides_for_every_expiration(qapp, tmp_path):
+    """No single span exists to point at, so showing the old one would misrepresent it."""
+    from respmech.ui.screens.preview_screen import PreviewScreen
+    s = synth_settings(str(tmp_path), noise=True, data_out=_OUT)
+    pv = PreviewScreen(AppState(s))
+    pv._refresh_files()
+    pv.file_rail.select_filename("synth_case_A.csv")
+    pv._load_noise_params()
+    assert pv._noise_region.isVisible() is True         # sanity: shown before the switch
+    n = pv.state.settings.processing.emg.noise
+    n.use_expiration, n.reference_intervals = True, []
+    pv._load_noise_params()
+    assert pv._noise_region.isVisible() is False
+    assert pv._noise_label.isVisible() is False
+    pv.shutdown()
+
+
+def test_the_band_hides_when_the_shown_file_is_not_the_reference_file(qapp, tmp_path):
+    """The test's one shared reference was built from a DIFFERENT recording — this file
+    has no interval of its own to shade, so showing synth_case_A.csv's span while
+    synth_case_B.csv is on screen would claim a reference this file does not have."""
+    from respmech.ui.screens.preview_screen import PreviewScreen
+    s = synth_settings(str(tmp_path), noise=True, data_out=_OUT)   # ref: synth_case_A.csv
+    pv = PreviewScreen(AppState(s))
+    pv._refresh_files()
+    pv.file_rail.select_filename("synth_case_A.csv")
+    pv._load_noise_params()
+    assert pv._noise_region.isVisible() is True
+    pv.file_rail.select_filename("synth_case_B.csv")
+    pv._load_noise_params()
+    assert pv._noise_region.isVisible() is False
+    assert pv._noise_label.isVisible() is False
+    # ...and switching back shows it again — this is about the CURRENT file, not a
+    # one-way latch
+    pv.file_rail.select_filename("synth_case_A.csv")
+    pv._load_noise_params()
+    assert pv._noise_region.isVisible() is True
+    pv.shutdown()
+
+
+def test_accepting_the_picker_on_a_different_file_moves_and_shows_the_band(qapp, tmp_path):
+    """_apply_noise_reference's own docstring says it 'reflects the choice on the detail
+    plot' — pin that down: after accepting on a NEW file, the band shows THAT file's span,
+    not the old file's, and the old file no longer shows one at all."""
+    from respmech.ui.screens.preview_screen import PreviewScreen
+    s = synth_settings(str(tmp_path), noise=True, data_out=_OUT)   # ref: synth_case_A.csv, [1.0, 5.0]
+    pv = PreviewScreen(AppState(s))
+    pv._refresh_files()
+    pv.file_rail.select_filename("synth_case_B.csv")
+    pv._load_noise_params()
+    assert pv._noise_region.isVisible() is False        # B has no reference of its own yet
+    pv._apply_noise_reference(3.0, 7.0)
+    assert pv._noise_region.isVisible() is True
+    assert pv._noise_region.getRegion() == pytest.approx((3.0, 7.0))
+    n = pv.state.settings.processing.emg.noise
+    assert n.reference_file == "synth_case_B.csv"
+    pv.file_rail.select_filename("synth_case_A.csv")    # the file the OLD reference lived on
+    pv._load_noise_params()
+    assert pv._noise_region.isVisible() is False, "still showing the reference it just lost"
+    pv.shutdown()
+
+
+def test_clearing_panels_reattaches_the_label_not_only_the_region(qapp, tmp_path):
+    """Regression (secondary finding in review of this ticket): _clear_all_panels and
+    _clear_file_panels called the OLD _ensure_noise_region() right after emg_plots.clear()
+    wiped both the region AND the label — re-attaching only the region left a shaded band
+    with no 'noise reference' caption until the next render happened to run."""
+    from respmech.ui.screens.preview_screen import PreviewScreen
+    s = synth_settings(str(tmp_path), noise=True, data_out=_OUT)   # ref: synth_case_A.csv, [1.0, 5.0]
+    pv = PreviewScreen(AppState(s))
+    pv._refresh_files()
+    pv.file_rail.select_filename("synth_case_A.csv")
+    pv._load_noise_params()
+    assert pv._noise_region.isVisible() is True
+    pv._clear_all_panels()
+    assert pv._noise_region.isVisible() is True, "clearing lost the band for the still-current file"
+    assert pv._noise_label is not None and pv._noise_label.isVisible() is True, \
+        "region re-attached but its caption was not"
     pv.shutdown()

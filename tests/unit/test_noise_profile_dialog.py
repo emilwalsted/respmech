@@ -223,3 +223,90 @@ def test_marking_a_span_while_expiration_is_chosen_is_not_possible(qapp):
     dlg = NoiseProfileDialog(raw, t, fs, cols)
     dlg.use_expiration.setChecked(True)
     assert not dlg.glw.isEnabled()
+
+
+# -- D07 (UI-overhaul): the picker shows the reference already in force -------------
+# Regression: _open_noise_profile_dialog never called _set_selection with the saved
+# reference, so re-opening the picker on a re-visited analysis showed an empty picker —
+# a marked span could be inspected, confirmed, or fine-tuned only by dragging a brand
+# new one over it, i.e. by overwriting it to look at it.
+
+def test_seeding_shows_the_existing_reference_and_enables_ok(qapp):
+    from respmech.ui.noise_profile_dialog import NoiseProfileDialog
+    raw, t, fs, cols = _data(n=3000)
+    dlg = NoiseProfileDialog(raw, t, fs, cols, file_name="synth_case_B.csv",
+                             reference_file="synth_case_B.csv")
+    assert dlg.selected_region() is None                   # nothing seeded until asked
+    dlg._seed_reference(12.00, 12.80)
+    assert dlg.selected_region() == (12.00, 12.80)
+    assert dlg.btn_ok.isEnabled() is True                   # "keep as is" is a valid accept
+    assert all(r.isVisible() for r in dlg._regions)
+    assert "Current reference" in dlg.info.text()
+    assert "synth_case_B.csv" in dlg.info.text()
+    assert "12.00" in dlg.info.text() and "12.80" in dlg.info.text()
+    dlg.deleteLater()
+
+
+def test_a_fresh_drag_after_seeding_replaces_the_seeded_wording(qapp):
+    """Once the user actually marks something new, the info line must read as a NEW pick,
+    not still claim to describe the saved reference."""
+    from respmech.ui.noise_profile_dialog import NoiseProfileDialog
+    raw, t, fs, cols = _data(n=3000)
+    dlg = NoiseProfileDialog(raw, t, fs, cols, file_name="synth_case_A.csv",
+                             reference_file="synth_case_A.csv")
+    dlg._seed_reference(1.0, 2.0)
+    assert "Current reference" in dlg.info.text()
+    dlg._set_selection(3.0, 4.0)                            # a real drag would call this
+    assert dlg.selected_region() == (3.0, 4.0)
+    assert "Current reference" not in dlg.info.text()
+    assert "Rest region" in dlg.info.text()
+    dlg.deleteLater()
+
+
+def test_seeding_does_not_affect_the_whole_expiration_option(qapp):
+    """'every expiration' must keep behaving exactly as before seeding was added."""
+    from respmech.ui.noise_profile_dialog import EXPIRATION, NoiseProfileDialog
+    raw, t, fs, cols = _data()
+    dlg = NoiseProfileDialog(raw, t, fs, cols, file_name="synth_case_A.csv",
+                             reference_file="synth_case_A.csv")
+    dlg.use_expiration.setChecked(True)
+    assert dlg.selected_region() is EXPIRATION
+    assert dlg.btn_ok.isEnabled()
+    assert not dlg.glw.isEnabled()
+    dlg.deleteLater()
+
+
+def test_a_different_reference_file_warns_and_relabels_ok(qapp):
+    """Accepting here would move the WHOLE test's reference to the file the picker is
+    open on — a fact that used to live only in the status bar, overwritten by the very
+    autorun the acceptance triggers a moment later."""
+    from respmech.ui.noise_profile_dialog import NoiseProfileDialog
+    raw, t, fs, cols = _data()
+    dlg = NoiseProfileDialog(raw, t, fs, cols, file_name="synth_case_B.csv",
+                             reference_file="synth_case_A.csv")
+    assert dlg.file_warn.isHidden() is False              # not shown -> isVisible() needs a real window
+    assert "synth_case_A.csv" in dlg.file_warn.text()
+    assert "synth_case_B.csv" in dlg.file_warn.text()
+    assert dlg.btn_ok.text() == "Replace noise reference"
+    dlg.deleteLater()
+
+
+def test_the_same_reference_file_shows_no_warning(qapp):
+    from respmech.ui.noise_profile_dialog import NoiseProfileDialog
+    raw, t, fs, cols = _data()
+    dlg = NoiseProfileDialog(raw, t, fs, cols, file_name="synth_case_A.csv",
+                             reference_file="synth_case_A.csv")
+    assert dlg.file_warn.isHidden() is True
+    assert dlg.btn_ok.text() == "Set noise profile"
+    dlg.deleteLater()
+
+
+def test_no_reference_yet_shows_no_warning(qapp):
+    """Nothing to 'replace' on a test's first-ever reference — the default text/behaviour
+    must be unchanged from before D07."""
+    from respmech.ui.noise_profile_dialog import NoiseProfileDialog
+    raw, t, fs, cols = _data()
+    dlg = NoiseProfileDialog(raw, t, fs, cols, file_name="synth_case_A.csv", reference_file="")
+    assert dlg.file_warn.isHidden() is True
+    assert dlg.btn_ok.text() == "Set noise profile"
+    dlg.deleteLater()
