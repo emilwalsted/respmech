@@ -839,10 +839,17 @@ class _EmgNoiseMixin:
     def _on_emg_all_result(self, data):
         self._emg_all = data
         self._render_emg_result()
-        if data.get("noise_applied"):
+        # ecg_applied and noise_applied are independent switches (either can be on with the
+        # other off) — composed here rather than hard-coded, so this label cannot claim
+        # "(ECG + noise)" while ECG removal is actually off (it did, before this fix: the
+        # noise_applied branch never checked ecg_applied at all).
+        ecg, noise = bool(data.get("ecg_applied")), bool(data.get("noise_applied"))
+        if ecg and noise:
             applied = "conditioned (ECG + noise)"
-        elif data.get("ecg_applied"):
+        elif ecg:
             applied = "ECG-removed"
+        elif noise:
+            applied = "noise-reduced"
         else:
             applied = "raw"
         notes = []

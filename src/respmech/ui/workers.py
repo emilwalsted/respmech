@@ -502,6 +502,9 @@ def stage_ecg_reduction(settings: Settings, file_path: str, cancel_check=None) -
         ecg_error = None
         peaks = np.array([], dtype=float)
         processed = [emg[:, i].astype(float) for i in range(nch)]
+        # None (not NaN) while removal is off: there is nothing to suppress, so the tab
+        # must show no number at all, distinct from "computed but degenerate" (NaN).
+        suppression = None
         try:
             if remove:                                     # detect + subtract (the real pipeline)
                 proc, _w, peak_times = emglib.remove_ecg(
@@ -515,6 +518,14 @@ def stage_ecg_reduction(settings: Settings, file_path: str, cancel_check=None) -
                     proc = proc[:, None]
                 processed = [proc[:, i].astype(float) for i in range(proc.shape[1])]
                 peaks = np.asarray(peak_times, dtype=float)
+                # Same peak-window-RMS suppression core.pipeline._ecg_remove reports (and
+                # writers.py persists to run-report.txt) — computed here too, on the SAME
+                # helper, so the tuning surface has a number to judge "Min height"/"Min
+                # gap" by before a real run ever happens.
+                peaks_samp = (peaks * fs).astype(int)
+                before = emglib.peak_window_rms(emg[:, detect].astype(float), peaks_samp, fs)
+                after = emglib.peak_window_rms(proc[:, detect].astype(float), peaks_samp, fs)
+                suppression = (1.0 - after / before) if (before and before == before) else float("nan")
             else:                                          # detect ONLY (cheap); processed == raw
                 from scipy import signal as _sig
                 pk, _props = _sig.find_peaks(
@@ -526,10 +537,12 @@ def stage_ecg_reduction(settings: Settings, file_path: str, cancel_check=None) -
             raise
         except Exception:                                  # noqa: BLE001 — bad params -> raw + no capture
             ecg_error = traceback.format_exc()
+            suppression = None
         return {"t": t, "fs": fs, "cols": cols, "detect": detect,
                 "detect_col": cols[detect] if detect < len(cols) else detect + 1,
                 "raw_capture": emg[:, detect].astype(float), "processed": processed,
-                "peaks": peaks, "flow": flow_full, "ecg_applied": remove, "ecg_error": ecg_error}
+                "peaks": peaks, "flow": flow_full, "ecg_applied": remove, "ecg_error": ecg_error,
+                "suppression": suppression}
 
     got = _pc.cached(_pc.ECG_REDUCTION, _pc.ecg_matrix_key(settings, file_path), _compute)
     # Copy on return, the same contract _load_and_condition documents: this dict is a SHARED

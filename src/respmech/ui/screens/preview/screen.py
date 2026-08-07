@@ -762,6 +762,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._forget_campbell()      # the export must not resurrect a cleared diagram
         self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []
         self._set_ecg_capture_title()   # drop the previous file's R-peak count/state
+        self._set_ecg_processed_title()  # and the previous file's ON/OFF + suppression verdict
         self.emg_raw_plots.clear()
         self.emg_plots.clear()
         self._set_trace_key([])       # the legend this replaced was emptied by plots.clear()
@@ -797,6 +798,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._forget_campbell()      # the export must not resurrect a cleared diagram
         self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []
         self._set_ecg_capture_title()   # drop the previous analysis' R-peak count/state
+        self._set_ecg_processed_title()  # and the previous analysis' ON/OFF + suppression verdict
         self.emg_raw_plots.clear()
         self.emg_plots.clear()
         self._set_trace_key([])       # the legend this replaced was emptied by plots.clear()
