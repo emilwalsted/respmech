@@ -199,9 +199,10 @@ def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=N
     settings_fs = getattr(settings.input.format, "sampling_frequency", None)
     # the decimal separator changes how peek_columns/probe_sampling_frequency PARSE a .csv
     # (and how probe_sampling_frequency parses numbers for .txt too) — folded into the cache
-    # key so a decimal-separator edit (auto-detected by _probe_and_apply_file_settings, or
-    # set by hand) can never serve a value probed under the OLD separator back out of a
-    # cache that is otherwise keyed purely on file identity.
+    # key so a decimal-separator edit (auto-detected by SettingsScreen._detect_decimal, or
+    # set by hand via the Decimal separator picker — ticket D03) can never serve a value
+    # probed under the OLD separator back out of a cache that is otherwise keyed purely on
+    # file identity.
     decimal = getattr(settings.input.format, "decimal", ".") or "."
 
     effective_mask, narrowed_from, dropped = narrow_mask(folder, mask)

@@ -129,6 +129,18 @@ class SettingsScreen(QWidget):
         self.matlab_variant.addItem("MATLAB (Unix/Mac)", "mac")
         self._row(f, "MATLAB file variant", self.matlab_variant, "input.format.matlab_variant",
                   "Variant/byte-order for .mat input files (ignored for CSV/Excel/text).")
+        # Ticket D03: the manual override for CSV/text decimal separator. _detect_decimal
+        # seeds this from the data when the channel picker opens; this is here for the
+        # cases the guess gets wrong (or is ambiguous and keeps whatever was already set).
+        self.decimal_sep = QComboBox()
+        self.decimal_sep.setProperty("formField", "wide")
+        self.decimal_sep.addItem("Point (.)", ".")
+        self.decimal_sep.addItem("Comma (,)", ",")
+        self._row(f, "Decimal separator", self.decimal_sep, "input.format.decimal",
+                  "Decimal separator used in your CSV/text files (e.g. 0.5 vs 0,5). European "
+                  "exports are often comma-decimal with columns separated by a semicolon "
+                  "instead of a comma. Auto-detected when you assign channels from data; "
+                  "override here if the guess is wrong. Ignored for Excel/MATLAB input.")
         # Kept so _update_format_readout can hide/show the read-out ROW (not just clear its
         # text) when there is nothing to say yet — see there.
         self._input_form = f
@@ -502,6 +514,8 @@ class SettingsScreen(QWidget):
             self.ent_tol.setValue(s.processing.entropy.tolerance)
             _mi = self.matlab_variant.findData(s.input.format.matlab_variant)
             self.matlab_variant.setCurrentIndex(_mi if _mi >= 0 else 0)
+            _di = self.decimal_sep.findData(s.input.format.decimal or ".")
+            self.decimal_sep.setCurrentIndex(_di if _di >= 0 else 0)
             # Mechanics, EMG conditioning, noise reduction and the gated peak are all
             # PREVIEW-OWNED now (their controls live on the Preview sub-tabs and their
             # Advanced… modals, writing the model directly); Setup neither fills nor reads
@@ -546,6 +560,7 @@ class SettingsScreen(QWidget):
         s.processing.entropy.epochs = self.ent_epochs.value()
         s.processing.entropy.tolerance = self.ent_tol.value()
         s.input.format.matlab_variant = self.matlab_variant.currentData()
+        s.input.format.decimal = self.decimal_sep.currentData()
         if self.on_settings_changed:
             self.on_settings_changed()
         return s
@@ -656,6 +671,7 @@ class SettingsScreen(QWidget):
         self.samp_freq.valueChanged.connect(self._on_sampling_frequency_changed)
         self.ent_tol.valueChanged.connect(self._on_field_changed)
         self.matlab_variant.currentIndexChanged.connect(self._on_field_changed)
+        self.decimal_sep.currentIndexChanged.connect(self._on_field_changed)
         for chk in (self.save_average, self.save_bbb, self.save_processed,
                     self.include_ignored, self.save_pv_avg, self.save_pv_ind, self.save_raw_fig,
                     self.save_trimmed_fig, self.save_drift_fig, self.save_emg_fig):
@@ -1132,6 +1148,26 @@ class SettingsScreen(QWidget):
         if not files:
             self._set_status("No valid data files found to assign channels — set them in the Channels card.")
             return False
+        # Ticket D03: detect the decimal separator BEFORE the picker reads any data, not
+        # only after OK as before — a semicolon-delimited, comma-decimal CSV read every
+        # column as NaN under the wrong guess, which meant OK could never be reached and
+        # the detection that used to live there was unreachable for exactly the file it
+        # was meant to fix. Re-probe the valid-file set afterwards: a decimal change can
+        # change which files even parse as data (see _valid_input_files/probe_data_columns).
+        # ``decimal_detected`` is remembered so a successful OK can still tell the user what
+        # was auto-detected (self-review finding: silently changing the setting with no
+        # confirmation anywhere was a real loss of transparency the old .txt-only message
+        # used to provide).
+        decimal_detected = self._detect_decimal(files)
+        if decimal_detected:
+            files = self._valid_input_files()
+            if not files:
+                dec = self.state.settings.input.format.decimal
+                self._set_status(
+                    "No valid data files found to assign channels — the decimal separator "
+                    f"was just auto-detected as '{dec}'; override it on the Input card if "
+                    "that guess is wrong.")
+                return False
         from respmech.ui.channel_setup_dialog import ChannelSetupDialog, NoReadableFileError
         from respmech.ui.workers import load_raw_matrix
         s = self.state.settings
@@ -1172,6 +1208,9 @@ class SettingsScreen(QWidget):
         # instant it takes to reach the next line.
         s.processing.volume.integrate_from_flow = dlg.integrate_from_flow()
         fmt_note = self._probe_and_apply_file_settings(files)
+        if decimal_detected:                    # surface the auto-detected decimal too (D03)
+            dec_note = f"decimal '{s.input.format.decimal}'"
+            fmt_note = f"{dec_note}, {fmt_note}" if fmt_note else dec_note
         self._apply_channel_mapping(dlg.selected_mapping(), fmt_note=fmt_note)
         return True
 
@@ -1197,25 +1236,56 @@ class SettingsScreen(QWidget):
         finally:
             self._loading = prev
 
-    def _probe_and_apply_file_settings(self, files):
-        """On channel-setup OK, intelligently read the actual data to fill format fields the
-        user would otherwise set by hand: the decimal separator (for .txt) and the sampling
-        frequency (from the time column). The file mask is kept single-pattern separately by
-        _normalize_mask. Returns a short human summary of what was set."""
+    def _detect_decimal(self, files):
+        """Detect the decimal separator from the reference file — called from
+        _open_channel_setup BEFORE the picker builds/reads anything (ticket D03). The
+        previous call site (inside _probe_and_apply_file_settings, on channel-setup OK)
+        was unreachable for exactly the file it needed to fix: a semicolon-delimited,
+        comma-decimal CSV parses as one mostly-NaN column under the wrong guess, so the
+        picker's OK button never became available and the flow could never reach the
+        detection. Only .csv/.txt carry a meaningful decimal setting (see
+        core.io.loaders — .xlsx/.mat are parsed natively, without one).
+
+        Keeps detect_decimal's own fallback contract: passing the CURRENT setting means a
+        doubtful file leaves it untouched, so moving the call earlier cannot make a guess
+        overwrite an explicit choice (this picker or a loaded analysis) that the data
+        itself does not clearly contradict. Returns True iff the setting changed, so the
+        caller knows whether the just-computed valid-file set needs recomputing (a decimal
+        change can change which files parse as data at all)."""
         import os as _os
-        from respmech.ui.workers import (detect_decimal, detect_sampling_frequency,
-                                         load_raw_matrix)
+        if not files or _os.path.splitext(files[0])[1].lower() not in (".csv", ".txt"):
+            return False
+        from respmech.ui.workers import detect_decimal
+        current = self.state.settings.input.format.decimal
+        dec = detect_decimal(files[0], current)
+        if dec == current:
+            return False
+        self.state.settings.input.format.decimal = dec
+        prev, self._loading = self._loading, True
+        try:
+            idx = self.decimal_sep.findData(dec)
+            if idx >= 0:
+                self.decimal_sep.setCurrentIndex(idx)
+            self._sync_widgets()
+        finally:
+            self._loading = prev
+        self._update_format_readout()      # the read-out's delimiter label depends on this too
+        return True
+
+    def _probe_and_apply_file_settings(self, files):
+        """On channel-setup OK, read the actual data to fill the sampling frequency (from
+        the time column) — the user would otherwise set it by hand. The decimal separator
+        is detected earlier now, in _open_channel_setup via _detect_decimal, before the
+        picker reads anything (ticket D03) — see that method's docstring for why it moved.
+        The file mask is kept single-pattern separately by _normalize_mask. Returns a short
+        human summary of what was set."""
+        from respmech.ui.workers import detect_sampling_frequency, load_raw_matrix
         if not files:
             return ""
         ref = files[0]
-        ext = _os.path.splitext(ref)[1].lower()
         parts = []
         prev, self._loading = self._loading, True
         try:
-            if ext == ".txt":                        # decimal is the only format field the loader honours
-                dec = detect_decimal(ref, self.state.settings.input.format.decimal)
-                self.state.settings.input.format.decimal = dec
-                parts.append(f"decimal '{dec}'")
             try:                                     # sampling frequency from the (col 0) time axis
                 matrix, _names = load_raw_matrix(self.state.settings, ref)
                 fs = detect_sampling_frequency(matrix[:, 0]) if matrix.shape[1] else None
