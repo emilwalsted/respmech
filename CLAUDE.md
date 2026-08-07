@@ -26,6 +26,41 @@ CLI (`respmech run/validate/migrate`). Settings are declarative **TOML**.
 - CI: `.github/workflows/ci.yml` (GUI smoke on win/mac + numerical golden on
   ubuntu), runs on every branch.
 
+### CI showing red does not always mean a test failed (found 07-08-2026)
+
+Two independent, unrelated defects made CI look permanently red on a branch fed by
+rapid successive pushes (`ui-overhaul` under chained ticket dispatch), while every
+individual test passed. Both are fixed, but the diagnostic habit is the lasting lesson:
+if local reproduction of every CI step is 100% green, look at the *workflow
+infrastructure* next, not just the tests.
+
+1. **`tools/check_changelog.py` crashed on Windows' cp1252 default locale.** Its
+   `kør()` helper called `subprocess.run(..., text=True)` with no explicit `encoding=`,
+   so it decoded git's (always-UTF-8) output using the process's locale-preferred
+   encoding — UTF-8 on Linux/macOS, but **cp1252 on Windows**. Any commit whose diff or
+   subject contained one of the typographic characters this project's history is full
+   of (`·`, `–`, `—`, `›`, `→`) crashed with an uncaught `UnicodeDecodeError`, exit code
+   1 — despite the CI step being commented "informational... must not fail a branch"
+   with no `continue-on-error`. Measured: 4 of 35 commits in one range already crashed
+   cp1252 decoding of their own diff. Fixed by decoding with explicit
+   `encoding='utf-8', errors='replace'`; also added `continue-on-error: true` to the
+   step as a second layer, matching what its own comment already promised. If you add
+   another tool that shells out to `git` and reads its output as text, give the
+   `subprocess.run` call an explicit `encoding='utf-8'` — never rely on the platform
+   default.
+2. **The concurrency group was keyed by `github.ref` alone**, shared by every push to
+   the same branch, so a later push could cancel an earlier, unrelated commit's
+   still-running check (4-way Windows/macOS matrix + full unit suite) before it
+   reported anything — a real but secondary contributor, since ticket-driven commits
+   have landed as close as 20-44 minutes apart. Fixed by keying push-triggered runs on
+   `github.sha` (unique per commit) instead, while PR-triggered runs still key by PR
+   number (where cancelling a stale review of an old head is the intended behaviour):
+   `group: ci-${{ github.event.pull_request.number || github.sha }}`.
+
+Both fixes are on `master` and were merged forward into `ui-overhaul`. Regression
+tests: `tests/unit/test_check_changelog.py::test_a_non_utf8_default_locale_does_not_crash_the_tool`,
+`tests/unit/test_ci_workflow_concurrency.py`.
+
 ## Dev environment — check which interpreter you are actually running
 
 `respmech-gui` is a console script, and on a machine with more than one environment it may
