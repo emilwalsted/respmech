@@ -25,6 +25,7 @@ worksheet cases assert that a weak match is *reported as weak* rather than silen
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -59,7 +60,7 @@ def _commit(repo: Path, path: str, body: str, subject: str) -> None:
     _git(repo, "commit", "-m", subject)
 
 
-def _run(repo: Path, *extra: str):
+def _run(repo: Path, *extra: str, env: dict | None = None):
     """Run the tool against a scratch repo. Returns (exit code, output)."""
     # The tool locates CHANGELOG.md relative to its own file, so it is copied into
     # the scratch repo rather than pointed at it: that keeps the test honest about
@@ -72,6 +73,7 @@ def _run(repo: Path, *extra: str):
         cwd=repo,
         capture_output=True,
         text=True,
+        env=env,
     )
     return p.returncode, p.stdout + p.stderr
 
@@ -303,3 +305,48 @@ def test_a_real_change_riding_along_with_the_version_still_counts(repo: Path) ->
     assert code == 1, out
     assert "UDEN SPOR" in out
     assert "Release v1.1.0" in out
+
+
+def test_a_non_utf8_default_locale_does_not_crash_the_tool(repo: Path) -> None:
+    """The 'Changelog coverage' CI step is commented as informational and must never
+    fail a branch, but it can: kør() decoded git's subprocess output with
+    ``subprocess.run(..., text=True)`` and no explicit ``encoding=``, which falls back to
+    the PROCESS's locale-preferred encoding. Windows CI runners default to cp1252, not
+    UTF-8, and git's own output (commit messages, diffs) is UTF-8 — so a diff containing
+    any of the typographic characters this project's commit history is full of (·, –, —,
+    ›) can crash with an uncaught UnicodeDecodeError, which is a real, uncaught process
+    exit code 1, not a warning. There is no `continue-on-error` on that CI step, so the
+    crash fails the whole job before the unit suite even starts.
+
+    Windows' cp1252 default is not reproducible in this sandbox (Python 3.11's UTF-8 mode
+    coerces even ``LC_ALL=C`` to UTF-8 here), but forcing ``PYTHONUTF8=0`` together with a
+    C locale reliably drives ``locale.getpreferredencoding()`` down to plain ASCII, which
+    is just as fatal to any non-ASCII byte in git's output — the same bug class, the
+    closest thing to Windows' cp1252 this environment can produce.
+    """
+    _commit(
+        repo,
+        "src/respmech/ui/mechanics.py",
+        'label = "→ retry"\n',  # U+2192 RIGHTWARDS ARROW: real char from this project's UI text
+        "Add a retry affordance (→) to the mechanics screen",
+    )
+    _changelog(repo, "- Something else entirely, not mentioning the retry affordance\n")
+    env = dict(os.environ)
+    # PYTHONIOENCODING mirrors ci.yml's job-level env (set there for pytest's own
+    # output): it forces THIS SCRIPT's stdout/stderr to UTF-8, but does nothing for
+    # subprocess.run()'s internal decoding of the child `git` process's output — that
+    # still falls back to locale.getpreferredencoding(), which is what PYTHONUTF8=0 +
+    # a C locale drives down to ASCII here. Keeping PYTHONIOENCODING set isolates the
+    # exact real-world condition: CI's own print()s are safe, only kør()'s decoding
+    # of git's output was not.
+    env.update(
+        PYTHONUTF8="0", PYTHONCOERCECLOCALE="0", LC_ALL="C", LANG="C",
+        PYTHONIOENCODING="utf-8",
+    )
+    code, out = _run(repo, "--warnings-only", env=env)
+    assert code == 0, (
+        "check_changelog.py crashed under a non-UTF-8 default locale instead of printing "
+        "its usual (informational, --warnings-only) worksheet. This reproduces the real "
+        "failure on Windows CI runners (cp1252 default), where this step is meant to "
+        "NEVER fail the branch:\n" + out
+    )
