@@ -27,7 +27,7 @@ from respmech.ui.help_text import tooltip as _help_tip
 from respmech.ui import plot_perf
 from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
 from respmech.ui import wheel as _wheel
-from respmech.ui.flow_layout import (FlowLayout, cluster as _cluster,
+from respmech.ui.flow_layout import (ElidingLabel, FlowLayout, cluster as _cluster,
                                      install_flow as _install_flow)
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
@@ -53,6 +53,52 @@ _ECG_CAPTURE_TITLE = "Raw capture channel — detected R-peaks (▼)"
 #: as "the removal is broken" rather than "the removal is off".
 _ECG_PROCESSED_TITLE_ON = "ECG-processed EMG channels"
 _ECG_PROCESSED_TITLE_OFF = "EMG channels — removal is OFF (capture preview)"
+
+
+class _BlankableDoubleSpinBox(QDoubleSpinBox):
+    """A QDoubleSpinBox that can show an em dash instead of its number without ever
+    touching ``value()`` — used for the ECG strip's Min height / Min gap fields while
+    'Auto (whole batch)' governs them at run time (see :meth:`PreviewScreen._update_actions`
+    gating in screen.py, which calls :meth:`set_blanked` alongside ``setEnabled``).
+
+    ``AdvancedDialog``'s ``Field`` already has a similar-looking "shown at the minimum"
+    caption (``setSpecialValueText`` tied to ``self.lo``), but that one is a deliberate
+    ENCODING: the minimum stands for "unset" and IS the value staged back on OK. Here the
+    real number the model holds must keep flowing through ``valueChanged`` unchanged the
+    whole time the field is blanked — a run overwrites these settings from the reference
+    file, not from whatever this widget happens to display — so reusing that mechanism
+    would risk clobbering ``processing.emg.ecg_min_height``/``ecg_min_distance_s`` with
+    the widget's minimum the moment the checkbox is ticked. Overriding the TEXT instead of
+    the VALUE keeps the two fully independent: no signal ever fires because of blanking."""
+
+    _BLANK = "—"          # em dash
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._blanked = False
+
+    def set_blanked(self, blanked):
+        blanked = bool(blanked)
+        if blanked == self._blanked:
+            return
+        self._blanked = blanked
+        # Nothing else repaints the line edit just because the flag changed.
+        le = self.lineEdit()
+        if le is not None:
+            le.setText(self.textFromValue(self.value()))
+
+    def textFromValue(self, value):                            # noqa: N802 - Qt API
+        if self._blanked:
+            return self._BLANK
+        return super().textFromValue(value)
+
+    def valueFromText(self, text):                              # noqa: N802 - Qt API
+        # The widget is always disabled while blanked (screen.py's _update_actions), so a
+        # user can never actually type here — stay defensive anyway and never parse the
+        # placeholder itself as a number.
+        if self._blanked and text.strip() == self._BLANK:
+            return self.value()
+        return super().valueFromText(text)
 
 
 class _EcgMixin:
@@ -92,11 +138,15 @@ class _EcgMixin:
             "heart rate diverges from the reference can have real beats missed without "
             "the run failing — check run-report.txt after a run for a per-file warning."))
         self.ecg_auto_batch.toggled.connect(self._on_ecg_param_changed)
-        self.ecg_min_height = QDoubleSpinBox()
+        # _BlankableDoubleSpinBox, not a plain QDoubleSpinBox: these two stay on the strip
+        # (unlike Min width/Window below) while 'Auto (whole batch)' is on, so they are the
+        # ones a user can still read stale numbers off — see _update_actions' set_blanked
+        # calls in screen.py.
+        self.ecg_min_height = _BlankableDoubleSpinBox()
         self.ecg_min_height.setRange(0.0, 1_000_000.0); self.ecg_min_height.setDecimals(6); self.ecg_min_height.setSingleStep(0.0001)
         self.ecg_min_height.setToolTip(_help_tip("processing.emg.ecg_min_height",
                                        "Minimum height of an R-wave peak (in signal units) on the capture channel."))
-        self.ecg_min_distance = QDoubleSpinBox()
+        self.ecg_min_distance = _BlankableDoubleSpinBox()
         self.ecg_min_distance.setRange(0.05, 2.0); self.ecg_min_distance.setSingleStep(0.05); self.ecg_min_distance.setDecimals(3); self.ecg_min_distance.setSuffix(" s")
         self.ecg_min_distance.setToolTip(_help_tip("processing.emg.ecg_min_distance_s",
                                          "Minimum time between heartbeats (the refractory gap)."))
@@ -156,6 +206,17 @@ class _EcgMixin:
         strip.addWidget(self.ecg_opts)
         strip.addWidget(self.btn_ecg_advanced); strip.addWidget(self.btn_ecg_autosuggest)
         v.addLayout(strip)
+
+        # A persistent one-line caption for 'Auto (whole batch)' — same remedy as
+        # _mechanics.py's mech_caption: it used to live only in the transient status bar,
+        # where an EMG/noise job finishing a moment later silently erased the one sentence
+        # that explained the capture/processed panels below are still showing stale,
+        # manually-tuned values rather than what the run will actually use. Kept current by
+        # _set_ecg_caption, called from screen.py's _update_actions alongside the
+        # enable/blank gating for the same widgets.
+        self.ecg_caption = ElidingLabel("")
+        self.ecg_caption.setProperty("status", "muted")
+        v.addWidget(self.ecg_caption)
 
         _bg = _plot_pal()["bg"]
         self.ecg_capture_plot = pg.PlotWidget(); self.ecg_capture_plot.setBackground(_bg)
@@ -244,6 +305,28 @@ class _EcgMixin:
                 self.ecg_capture_channel.setCurrentIndex(max(0, min(int(e.detect_channel), len(cols) - 1)))
         finally:
             self._loading_ecg = False
+
+    def _set_ecg_caption(self, auto_batch_on):
+        """Keep the ECG strip's persistent caption (self.ecg_caption) honest about what
+        'Auto (whole batch)' actually does — see it being added in _build_ecg_tab. Called
+        from screen.py's _update_actions, right alongside the enable/blank gating for the
+        same fields, so the two can never fall out of step.
+
+        Empty (nothing shown) when auto-batch is off — the strip's fields speak for
+        themselves then. Names the reference file (or says which file stands in for it)
+        so 'these numbers are stale' comes with 'and here is where the real ones will come
+        from', not just a warning."""
+        if not auto_batch_on:
+            self.ecg_caption.setFullText("")
+            return
+        ref = self.state.settings.processing.emg.ecg_reference_file
+        source = f"'{ref}'" if ref else "the batch's first matched file"
+        self.ecg_caption.setFullText(
+            f"Auto (whole batch) is on: detector parameters are found automatically at "
+            f"run time from {source} and applied to every file. The capture channel, min "
+            f"height and min gap above still show the last manual/Auto-suggest values, "
+            f"not what the run will use — see run-report.txt afterwards for the per-file "
+            f"result.")
 
     def _announce_ecg_auto_repair(self):
         """Tell the user that an impossible ECG combination was corrected on load.

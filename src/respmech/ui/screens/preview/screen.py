@@ -679,10 +679,23 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # Auto-suggest writes the same 5 fields the batch auto-detect will overwrite anyway,
         # so it is gated alongside them — otherwise a click looks like it did something (a
         # success status, updated widgets, a re-rendered preview) that a real run discards.
+        # Blank BEFORE enabling (going off) / BEFORE disabling has no such ordering need going
+        # on, but doing it first either way means the two remaining strip fields (capture
+        # channel, being a combo, is left showing its stale index) are never simultaneously
+        # enabled and still showing the placeholder — no event-loop turn happens between
+        # these two loops today, so it is not an observable state either way, but there is no
+        # reason to leave that ordering to chance for whoever edits this next.
+        for w in (self.ecg_min_height, self.ecg_min_distance):
+            w.set_blanked(auto_batch_on)
         for w in (self.ecg_capture_channel, self.ecg_min_height, self.ecg_min_distance,
                   self.btn_ecg_advanced, self.btn_ecg_autosuggest):
             w.setEnabled(not auto_batch_on)
             w.setToolTip(AUTO_BATCH_HINT if auto_batch_on else self._ecg_auto_gated_base_tooltips[w])
+        # A PERSISTENT caption, not the status line below: this used to be a _set_status
+        # call in the branch that has since been removed here, and an EMG or noise job
+        # finishing a moment later silently overwrote it — the same failure this ticket's
+        # sibling fixed for the ECG panel titles (_set_ecg_capture_title/_processed_title).
+        self._set_ecg_caption(auto_batch_on)
         if not status:
             return
         if has_emg and noise_on and not ecg_on:
@@ -690,11 +703,6 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         elif noise_on and not ref:
             self._set_status("Noise reduction is on — click 'Set noise profile' to mark a "
                              "rest span in this file.")
-        elif ecg_on and auto_batch_on:
-            self._set_status("'Auto (whole batch)' is on — this preview still shows the last "
-                             "manual/Auto-suggest settings; the real run auto-detects its own "
-                             "parameters from the reference file for every file, and reports "
-                             "the per-file result in run-report.txt.")
         elif has_file and not ok:
             self._set_status(f"Settings incomplete: {why}")
 

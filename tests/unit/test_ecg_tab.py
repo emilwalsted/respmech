@@ -103,6 +103,60 @@ def test_ecg_auto_batch_greys_out_the_fields_it_overrides(qapp, tmp_path):
     assert all(w.isEnabled() for w in manual)                    # back off -> editable again
 
 
+def test_ecg_auto_batch_blanks_the_stale_numeric_fields(qapp, tmp_path):
+    """Ticket 20260804-0923: greyed out is not enough — the min height/min gap fields kept
+    showing the last manual/Auto-suggest numbers even though a real run ignores them
+    entirely and auto-detects its own from the reference file. They must show a dash
+    while auto-batch governs them, and the REAL number again the moment it is unticked —
+    without the underlying setting ever changing because of the display switch."""
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    s.processing.emg.ecg_min_height = 0.2309
+    s.processing.emg.ecg_min_distance_s = 0.405        # 3 decimals — the field's own precision
+    pv = _win(s).preview_screen
+    fields = (pv.ecg_min_height, pv.ecg_min_distance)
+    for w in fields:
+        assert w.lineEdit().text() != "—"
+    pv.ecg_auto_batch.setChecked(True)
+    for w in fields:
+        assert w.lineEdit().text() == "—"
+    # blanking is display-only: the model must still hold the real numbers
+    assert abs(s.processing.emg.ecg_min_height - 0.2309) < 1e-9
+    assert abs(s.processing.emg.ecg_min_distance_s - 0.405) < 1e-9
+    pv.ecg_auto_batch.setChecked(False)
+    for w in fields:
+        assert w.lineEdit().text() != "—"
+    assert abs(pv.ecg_min_height.value() - 0.2309) < 1e-9
+    assert abs(pv.ecg_min_distance.value() - 0.405) < 1e-9
+
+
+def test_ecg_auto_batch_caption_survives_a_later_status_overwrite(qapp, tmp_path):
+    """The one sentence explaining 'these values are stale, the run auto-detects its own'
+    used to live only in the shared status line, where an EMG or noise job finishing a
+    moment later silently erased it. It must now live in the ECG strip's own persistent
+    caption instead, which nothing else on the tab can overwrite."""
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    pv = _win(s).preview_screen
+    assert pv.ecg_caption.fullText() == ""                       # nothing to say yet
+    pv.ecg_auto_batch.setChecked(True)
+    caption = pv.ecg_caption.fullText()
+    assert "Auto (whole batch)" in caption
+    assert "first matched file" in caption                       # no reference file set
+    # simulate an EMG/noise job finishing a moment later and overwriting the status line
+    pv._set_status("EMG result: conditioned (ECG + noise).")
+    assert pv.ecg_caption.fullText() == caption                  # untouched
+    assert pv.status.text() != caption
+    pv.ecg_auto_batch.setChecked(False)
+    assert pv.ecg_caption.fullText() == ""                       # cleared once auto is off
+
+
+def test_ecg_auto_batch_caption_names_the_reference_file(qapp, tmp_path):
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    s.processing.emg.ecg_reference_file = "S03.csv"
+    pv = _win(s).preview_screen
+    pv.ecg_auto_batch.setChecked(True)
+    assert "'S03.csv'" in pv.ecg_caption.fullText()
+
+
 def test_ecg_auto_batch_disabled_without_remove_ecg(qapp, tmp_path):
     # Mirrors Settings.validate()'s requirement: auto-detect needs Remove ECG on, so the
     # checkbox that would enable it is itself disabled until Remove ECG is ticked.
@@ -129,6 +183,12 @@ def test_unchecking_remove_ecg_clears_stuck_auto_batch(qapp, tmp_path):
     assert s.processing.emg.ecg_auto_detect is False         # cleared, not left stuck
     assert pv.ecg_auto_batch.isChecked() is False             # widget reflects the clear
     s.validate()                                              # the resulting settings are valid
+    # ticket 20260804-0923: the forced uncheck must also un-blank the fields and clear the
+    # caption — a stuck-open dash or a stale "Auto (whole batch) is on" sentence here would
+    # be its own, quieter version of the bug this ticket fixes.
+    assert pv.ecg_min_height.lineEdit().text() != "—"
+    assert pv.ecg_min_distance.lineEdit().text() != "—"
+    assert pv.ecg_caption.fullText() == ""
 
 
 def test_ecg_auto_batch_also_gates_autosuggest(qapp, tmp_path):
