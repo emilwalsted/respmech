@@ -46,6 +46,14 @@ from ._plot_helpers import _pen, _plot_pal
 #: rather than one that only ever lived a few seconds in the shared status bar.
 _ECG_CAPTURE_TITLE = "Raw capture channel — detected R-peaks (▼)"
 
+#: the processed-stack panel's two base titles. Which one is current depends on
+#: settings.processing.emg.remove_ecg (mirrored into data["ecg_applied"]), never a fixed
+#: string: with removal OFF this panel shows the RAW channels (see stage_ecg_reduction's
+#: docstring), and a title that still says "ECG-processed" over R-takker in full swing reads
+#: as "the removal is broken" rather than "the removal is off".
+_ECG_PROCESSED_TITLE_ON = "ECG-processed EMG channels"
+_ECG_PROCESSED_TITLE_OFF = "EMG channels — removal is OFF (capture preview)"
+
 
 class _EcgMixin:
 
@@ -165,7 +173,10 @@ class _EcgMixin:
         # its title current with the detection result — see _ECG_CAPTURE_TITLE below.
         self._ecg_capture_box = self._titled(_ECG_CAPTURE_TITLE, self.ecg_capture_plot)
         split.addWidget(self._ecg_capture_box)
-        split.addWidget(self._titled("ECG-processed EMG channels", self.ecg_processed_plots))
+        # kept as an attribute too (like _ecg_capture_box above) so _on_ecg_result can keep
+        # this title honest about whether removal is actually on — see _ECG_PROCESSED_TITLE_*.
+        self._ecg_processed_box = self._titled(_ECG_PROCESSED_TITLE_ON, self.ecg_processed_plots)
+        split.addWidget(self._ecg_processed_box)
         split.setStretchFactor(0, 1); split.setStretchFactor(1, 3)
         v.addWidget(split, 1)
         return w
@@ -382,16 +393,31 @@ class _EcgMixin:
 
         npk = int(np.asarray(peaks).size)
         col = data.get("detect_col", "?")
-        state = "ECG removed" if data.get("ecg_applied") else "capture preview (removal is OFF for the run)"
+        applied = bool(data.get("ecg_applied"))
+        state = "ECG removed" if applied else "capture preview (removal is OFF for the run)"
+        # Only meaningful when removal actually ran: stage_ecg_reduction returns None (not
+        # NaN) while removal is off, and NaN when it ran but could not be computed (e.g. no
+        # peaks) — both are "nothing to show", so guard on == self first (NaN != NaN).
+        supp = data.get("suppression")
+        supp_txt = ""
+        if applied and supp is not None and supp == supp:
+            supp_txt = f" · suppression {supp:.0%}"
+        base_title = _ECG_PROCESSED_TITLE_ON if applied else _ECG_PROCESSED_TITLE_OFF
         if data.get("ecg_error"):
             self._set_status(f"ECG reduction — capture on col {col}: {short_error(data['ecg_error'])}")
             self._set_ecg_capture_title(f"{_ECG_CAPTURE_TITLE}  ·  detection failed — "
                                         f"{short_error(data['ecg_error'])}")
+            # stage_ecg_reduction falls back to the RAW channels whenever detection/removal
+            # raises (see its docstring), regardless of the remove_ecg SETTING — so the
+            # error title must say OFF too, or it repeats the exact bug this ticket exists
+            # to fix: "ECG-processed" over a stack that is, right now, unprocessed.
+            self._set_ecg_processed_title(f"{_ECG_PROCESSED_TITLE_OFF}  ·  detection failed")
         else:
-            self._set_status(f"ECG reduction — capture on col {col}: {npk} R-peaks · {state}.")
+            self._set_status(f"ECG reduction — capture on col {col}: {npk} R-peaks · {state}{supp_txt}.")
             self._set_ecg_capture_title(
                 f"{_ECG_CAPTURE_TITLE}  ·  {npk} R-peak{'s' if npk != 1 else ''} "
                 f"on col {col} · {state}")
+            self._set_ecg_processed_title(f"{base_title}{supp_txt}")
 
     def _set_ecg_capture_title(self, text=None):
         """Keep the ECG capture panel's own header naming the live detection result — a
@@ -401,3 +427,25 @@ class _EcgMixin:
         label = getattr(self._ecg_capture_box, "_title_label", None)
         if label is not None:
             label.setFullText(text if text is not None else _ECG_CAPTURE_TITLE)
+
+    def _set_ecg_processed_title(self, text=None):
+        """Keep the processed-stack panel's header naming whether removal is actually on —
+        the same persistent-verdict treatment as :meth:`_set_ecg_capture_title`. ``text=None``
+        (or omitted) resets it to the CURRENT ``remove_ecg`` setting's base title, used when
+        the panel is blanked for a file switch (see screen.py's _clear_*_panels); the next
+        ``_on_ecg_result`` corrects it (with a suppression figure, if any) once a real result
+        is in. Unlike the capture panel's neutral base text, the processed panel's ON title is
+        itself a claim ("ECG-processed"), so — unlike :meth:`_set_ecg_capture_title` — the
+        reset must not hard-code ON: with removal off, a blanked panel that still says
+        "ECG-processed" is the same misleading verdict this ticket exists to fix, just shown
+        a beat early, and the settings-incomplete gate in screen.py's ``_schedule`` can leave
+        a cleared panel sitting on this default for a while (no ``_on_ecg_result`` fires while
+        gated)."""
+        label = getattr(self._ecg_processed_box, "_title_label", None)
+        if label is None:
+            return
+        if text is not None:
+            label.setFullText(text)
+            return
+        applied = bool(self.state.settings.processing.emg.remove_ecg)
+        label.setFullText(_ECG_PROCESSED_TITLE_ON if applied else _ECG_PROCESSED_TITLE_OFF)

@@ -89,3 +89,64 @@ def test_pipeline_reports_ecg_suppression(import_ok, tmp_path):
     fr = res.ok_files["synth_case_A.csv"]
     assert fr.ecg is not None
     assert "n_peaks" in fr.ecg and "suppression" in fr.ecg
+
+
+def test_stage_ecg_reduction_reports_suppression_matching_the_pipeline(tmp_path):
+    """The 'EMG - ECG reduction' tab (ui.workers.stage_ecg_reduction) is a live TUNING
+    surface, but until ticket 20260804-0922 it never computed the peak-window-RMS
+    suppression core.pipeline._ecg_remove reports for a real run — so 'Min height'/'Min
+    gap' were dialled in on nothing but eyeballing the traces. It must now report a
+    positive suppression, on a syntetic signal with known R-peaks, of the same order of
+    magnitude as the pipeline computes on the identically-loaded raw matrix, using the
+    SAME core.emg.peak_window_rms helper (no new variant, no golden-affecting change)."""
+    import pandas as pd
+    from respmech.settingsio.migrate import migrate_dict
+    from respmech.core._legacy_ns import to_legacy_ns
+    from respmech.core.io.loaders import load
+    from respmech.core.pipeline import _ecg_remove
+    from respmech.ui.workers import stage_ecg_reduction
+
+    emg, _true_peaks, fs = _make_signal(seed=7)         # same synthetic ECG-on-EMG builder
+    n = emg.shape[0]
+    t = np.arange(n) / fs
+    path = tmp_path / "ecg_contaminated.csv"
+    zeros = np.zeros(n)
+    pd.DataFrame({"time": t, "c2": emg[:, 0], "c3": emg[:, 1], "c4": emg[:, 2],
+                 "flow": zeros, "volume": zeros,
+                 "poes": zeros, "pgas": zeros, "pdi": zeros}).to_csv(path, index=False)
+
+    legacy = {"input": {"inputfolder": str(tmp_path), "files": path.name,
+                        "format": {"samplingfrequency": fs},
+                        "data": {"column_poes": 7, "column_pgas": 8, "column_pdi": 9,
+                                 "column_volume": 6, "column_flow": 5, "columns_emg": [2, 3, 4]}},
+              "processing": {"mechanics": {"breathseparationbuffer": 200, "separateby": "flow",
+                                           "avgresamplingobs": 300},
+                             "emg": {"remove_ecg": True, "column_detect": 0,
+                                     "minheight": 0.2, "mindistance": 0.5, "minwidth": 0.001,
+                                     "windowsize": 0.4}},
+              "output": {"outputfolder": str(tmp_path), "data": {}}}
+    s, _ = migrate_dict(legacy)
+    s.input.folder = str(tmp_path)
+
+    data = stage_ecg_reduction(s, str(path))
+    assert data["ecg_applied"] is True
+    supp = data["suppression"]
+    assert supp is not None and supp == supp            # not None, not NaN
+    assert supp > 0.3                                    # meaningfully reduced (test_ecg_removal_* threshold)
+
+    # Cross-check against what a REAL run computes, on the identically-loaded raw matrix,
+    # via the same helper the ticket requires (core.emg.peak_window_rms, no new variant).
+    ls = to_legacy_ns(s)
+    _flow, _v, _p, _g, _d, _e, raw_emg = load(str(path), ls)
+    _emgcols, diag = _ecg_remove(ls, raw_emg)
+    assert diag is not None
+    assert abs(supp - diag["suppression"]) < 0.05        # same order of magnitude, same detector
+
+    # Removal OFF: nothing to suppress, so no number at all (None, not NaN) -- distinct
+    # from "computed but degenerate", which stays NaN.
+    s_off, _ = migrate_dict({**legacy, "processing": {**legacy["processing"],
+                             "emg": {**legacy["processing"]["emg"], "remove_ecg": False}}})
+    s_off.input.folder = str(tmp_path)
+    data_off = stage_ecg_reduction(s_off, str(path))
+    assert data_off["ecg_applied"] is False
+    assert data_off["suppression"] is None

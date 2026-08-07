@@ -217,3 +217,103 @@ def test_a_consistent_analysis_is_left_alone(qapp, tmp_path):
     assert s.processing.emg.ecg_auto_detect is True
     assert pv.ecg_auto_batch.isChecked() is True
     assert pv._ecg_auto_repaired is False
+
+
+def test_the_processed_panel_title_reflects_whether_removal_is_actually_on(qapp, tmp_path):
+    """Ticket 20260804-0922: the panel over the processed EMG stack used to say
+    'ECG-processed EMG channels' even with Remove ECG off, while it showed the RAW
+    channels underneath (R-takker in full swing) -- reading as 'the removal is broken'
+    rather than 'the removal is off'. It must now name which is true, and carry the
+    peak-window-RMS suppression when removal is actually on. Asserted on fullText()
+    (the ElidingLabel's untruncated string), never a rendered/elided text()."""
+    from respmech.ui.screens.preview._ecg import _ECG_PROCESSED_TITLE_ON, _ECG_PROCESSED_TITLE_OFF
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    pv = _win(s).preview_screen
+    n, fs = 4000, 2000
+    t = np.arange(n) / fs
+    base = {"t": t, "fs": fs, "cols": [2, 3, 4], "detect": 1, "detect_col": 3,
+            "raw_capture": np.sin(t), "processed": [np.sin(t), np.cos(t), np.sin(2 * t)],
+            "peaks": np.array([0.5, 1.0, 1.5, 2.0]), "flow": np.sin(2 * np.pi * 0.3 * t),
+            "ecg_error": None}
+
+    pv._on_ecg_result({**base, "ecg_applied": True, "suppression": 0.78})
+    title_on = pv._ecg_processed_box._title_label.fullText()
+    assert title_on.startswith(_ECG_PROCESSED_TITLE_ON)
+    assert "78%" in title_on                    # the suppression number reaches the title band
+    assert "78%" in pv.status.text()             # ...and the status line
+
+    pv._on_ecg_result({**base, "ecg_applied": False, "suppression": None})
+    title_off = pv._ecg_processed_box._title_label.fullText()
+    assert title_off == _ECG_PROCESSED_TITLE_OFF
+    assert "%" not in title_off                  # nothing was suppressed -- no number to show
+    assert "ECG-processed" not in title_off      # must not claim removal happened
+    assert "%" not in pv.status.text()
+
+    # Blanking the panel (file switch) resets it to the CURRENT remove_ecg setting's base
+    # title (here: ON, since the settings object has remove_ecg=True) -- see the sibling
+    # test below for the off-setting case. The next _on_ecg_result corrects it either way.
+    pv._set_ecg_processed_title()
+    assert pv._ecg_processed_box._title_label.fullText() == _ECG_PROCESSED_TITLE_ON
+
+
+def test_the_processed_panel_title_reset_reflects_the_current_setting_not_a_hardcoded_on(qapp, tmp_path):
+    """Ticket 20260804-0922 follow-up (self-review finding): the capture panel's reset
+    text is neutral ("Raw capture channel..."), but the processed panel's ON title is
+    itself a claim -- so a reset that always hard-codes ON would show "ECG-processed EMG
+    channels" on a freshly blanked panel even when remove_ecg is off, exactly the
+    misleading verdict this ticket exists to fix, just a beat early (e.g. while the
+    settings-incomplete gate in screen.py keeps _on_ecg_result from firing at all)."""
+    from respmech.ui.screens.preview._ecg import _ECG_PROCESSED_TITLE_ON, _ECG_PROCESSED_TITLE_OFF
+    s = synth_settings(str(tmp_path), remove_ecg=False, data_out=_DATA_OUT)
+    pv = _win(s).preview_screen
+    pv._set_ecg_processed_title()
+    assert pv._ecg_processed_box._title_label.fullText() == _ECG_PROCESSED_TITLE_OFF
+
+    s.processing.emg.remove_ecg = True
+    pv._set_ecg_processed_title()
+    assert pv._ecg_processed_box._title_label.fullText() == _ECG_PROCESSED_TITLE_ON
+
+
+def test_a_failed_detection_never_claims_ecg_processed_over_the_raw_fallback(qapp, tmp_path):
+    """Ticket 20260804-0922 follow-up (self-review finding): stage_ecg_reduction falls
+    back to the RAW channels whenever detection/removal raises, regardless of the
+    remove_ecg setting (data['ecg_applied'] stays True). The error-branch title must
+    therefore say OFF, or it reproduces the exact bug this ticket exists to fix --
+    'ECG-processed' printed over a stack that is, right now, unprocessed."""
+    from respmech.ui.screens.preview._ecg import _ECG_PROCESSED_TITLE_OFF
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    pv = _win(s).preview_screen
+    n, fs = 2000, 2000
+    t = np.arange(n) / fs
+    data = {"t": t, "fs": fs, "cols": [2, 3, 4], "detect": 1, "detect_col": 3,
+            "raw_capture": np.sin(t), "processed": [np.sin(t), np.cos(t), np.sin(2 * t)],
+            "peaks": np.array([]), "flow": np.sin(2 * np.pi * 0.3 * t),
+            "ecg_applied": True, "ecg_error": "boom", "suppression": None}
+    pv._on_ecg_result(data)
+    title = pv._ecg_processed_box._title_label.fullText()
+    assert title.startswith(_ECG_PROCESSED_TITLE_OFF)
+    assert "ECG-processed" not in title
+
+
+def test_emg_all_result_label_composes_ecg_and_noise_independently(qapp, tmp_path):
+    """Ticket 20260804-0922: the EMG result status line hard-coded '(ECG + noise)'
+    whenever noise_applied was true, regardless of whether ECG removal actually ran, so
+    turning ECG removal off while noise reduction stayed on kept claiming ECG removal
+    had happened. All four combinations must be named independently and correctly."""
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    pv = _win(s).preview_screen
+    n, fs = 200, 1000
+    t = np.arange(n) / fs
+    base = {"t": t, "fs": fs, "cols": [2, 3, 4],
+            "raw": [np.zeros(n)] * 3, "conditioned": [np.zeros(n)] * 3,
+            "flow": np.zeros(n), "ecg_error": None, "noise_error": None}
+
+    cases = [
+        (True, True, "conditioned (ECG + noise)"),
+        (True, False, "ECG-removed"),
+        (False, True, "noise-reduced"),
+        (False, False, "raw"),
+    ]
+    for ecg_applied, noise_applied, expected in cases:
+        pv._on_emg_all_result({**base, "ecg_applied": ecg_applied, "noise_applied": noise_applied})
+        assert f"EMG result: {expected}." in pv.status.text(), (ecg_applied, noise_applied, pv.status.text())
