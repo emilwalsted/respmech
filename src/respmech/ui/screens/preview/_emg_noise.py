@@ -61,6 +61,19 @@ NEEDS_ECG_GATE_HINT = ("Turn on 'Remove ECG' first: the gate is built from the h
 #: that only ever lived a few seconds in the shared status bar.
 _FIDELITY_TITLE = "Noise fidelity frontier (1 = untouched)"
 
+#: appended to the fidelity panel's tooltip (never to the visible, elided title — see
+#: ElidingLabel) so the definition is one hover away wherever the panel's header is used.
+#: The band and the "values above 1 are routine" note answer the question nothing on this
+#: tab otherwise answers (D04, UI-overhaul); the parenthetical names the Advanced field this
+#: mirrors, in its own wording, so the two never have to be kept in sync by hand.
+_FIDELITY_TOOLTIP_SUFFIX = (
+    "\n\nFidelity is the fraction of a channel's inspiratory EMG power, in the 20–250 Hz "
+    "band shaded on the Detail PSD panel, that survives noise removal (1.0 = untouched). "
+    "Values a little above 1 are routine, not a defect: the spectral gate masks magnitude and "
+    "phase separately, so the reconstruction can hold slightly more in-band power than the "
+    "original did. The dotted line marks the fidelity target from Advanced → "
+    "“Fidelity target (Keep ≥)”.")
+
 
 class _EmgNoiseMixin:
 
@@ -232,6 +245,9 @@ class _EmgNoiseMixin:
             self._emg_raw_scroll, extra=[self.emg_raw_plots.viewport()])
         bottom.addWidget(self._titled("Raw EMG channels", self._emg_raw_scroll))
         self._fidelity_panel = self._titled(_FIDELITY_TITLE, self.fidelity_canvas)
+        # set once here too (not only in _set_fidelity_panel_title) so the explanation is
+        # available before any file has been run and produced a report to reset the title
+        self._fidelity_panel._title_label.setToolTip(_FIDELITY_TITLE + _FIDELITY_TOOLTIP_SUFFIX)
         bottom.addWidget(self._fidelity_panel)
         self._psd_panel = self._titled("Detail PSD", self.emg_psd_canvas)
         bottom.addWidget(self._psd_panel)
@@ -885,6 +901,23 @@ class _EmgNoiseMixin:
                 lbl = f"EMG col {emg_cols[ch]}" if ch < len(emg_cols) else f"EMG ch {ch + 1}"
                 ax.plot(props, [frontier[p][ch] for p in props], marker="o", ms=3, label=lbl)
             ax.axhline(target, color=pal["mpl_target"], ls=":", lw=1)
+            # Named IN THE PLOT, not the legend: the legend already carries one entry per EMG
+            # channel (unbounded — this same file's _build_emg_tab has measured a real
+            # 12-channel case) plus "chosen = …", and _fit_compact_figure sheds the WHOLE
+            # legend first when the panel is short — one more entry would be the first thing
+            # to disappear exactly when the panel is tightest for room.
+            # Anchored to whichever edge "chosen" is NOT near: select_prop_decrease sweeps
+            # upward and keeps the highest prop_decrease that still clears the target, so a
+            # right-edge chosen (an easy target, aggressively suppressed) is a common outcome,
+            # not a rare one — anchoring the target label at a fixed right edge would then
+            # collide with the "chosen" line and its own axvline most of the time.
+            target_x, target_ha = 0.99, "right"
+            if chosen is not None and len(props) > 1 and props[-1] != props[0]:
+                chosen_frac = (chosen - props[0]) / (props[-1] - props[0])
+                if chosen_frac > 0.75:
+                    target_x, target_ha = 0.02, "left"
+            ax.text(target_x, target, f"target {target:.2f}", transform=ax.get_yaxis_transform(),
+                    ha=target_ha, va="bottom", fontsize=7, color=pal["mpl_target"], clip_on=False)
             if chosen is not None:
                 ax.axvline(chosen, color=pal["mpl_error"], ls="--", lw=1.2, label=f"chosen = {chosen}")
             # Longest wording that fits; the panel sits in a splitter, so the room changes.
@@ -899,7 +932,30 @@ class _EmgNoiseMixin:
             # panel), so a wordy one overflows. The panel header carries the title and the
             # "1 = untouched" scale hint horizontally, where there is room for them.
             ax.set_ylabel("Fidelity retained")
-            ax.set_ylim(0, 1.02)
+            # core.noise.fidelity() is an UNBOUNDED ratio (in-band inspiratory power after
+            # noise removal, divided by before): NoiseProfile.apply masks magnitude and the
+            # imaginary part separately, so the reconstruction routinely holds MORE in-band
+            # power than the original — measured 1.281-1.340 across all 30 points of the
+            # bundled sample data's frontier. A fixed (0, 1.02) clamp drew every one of those
+            # points above the top of the axes: no visible curves at all, which reads as total
+            # signal loss rather than the routine over-1 case it actually is. Derive the
+            # ceiling from what is actually being drawn (and the target line) instead of
+            # assuming the data always sits under 1.
+            all_vals = [v for fids in frontier.values() for v in fids]
+            # Guarded, not assumed non-empty: nothing today calls this with a channel-less
+            # frontier (screen.py only requests the noise job with EMG channels selected,
+            # and stage_noise_fidelity itself requires them), but max() on an empty sequence
+            # is a hard crash, and this function has no other reason to depend on that.
+            # target's own margin is wider than the data's (1.08 vs 1.05): it also has to
+            # leave room for the "target 0.XX" text sitting just above its line, at the
+            # smallest panel height this figure ever gets (PLOT_DIAG_MIN_HEIGHT).
+            hi = max(1.02, target * 1.08, 1.05 * max(all_vals) if all_vals else 0.0)
+            ax.set_ylim(0, hi)
+            if hi > 1.05:
+                # Only worth a reference line once the axis genuinely extends past
+                # "untouched" — on the normal (0, 1.02) axis it would sit indistinguishably
+                # close to the top tick and just add clutter.
+                ax.axhline(1.0, color=pal["mpl_zeroline"], lw=0.8, zorder=0)
         _fit_compact_figure(self.fidelity_canvas, ax,
                             legend_kw={"fontsize": 7} if frontier else None,
                             xlabel_variants=xlabels if frontier else None)
@@ -917,9 +973,13 @@ class _EmgNoiseMixin:
             return
         if chosen is None:
             label.setFullText(_FIDELITY_TITLE)
-            return
-        label.setFullText(f"{_FIDELITY_TITLE}  ·  prop {chosen} · worst-channel fidelity "
-                          f"{worst:.2f} (target {target:.2f})")
+        else:
+            label.setFullText(f"{_FIDELITY_TITLE}  ·  prop {chosen} · worst-channel fidelity "
+                              f"{worst:.2f} (target {target:.2f})")
+        # setFullText() just reset the tooltip to the (possibly elided) visible title alone —
+        # append the definition every time, so it survives every verdict update rather than
+        # only surviving until the first one.
+        label.setToolTip(label.toolTip() + _FIDELITY_TOOLTIP_SUFFIX)
 
     def render_noise_report(self, result):
         """Draw the fidelity frontier + status from a full batch result (with ECG
