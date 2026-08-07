@@ -818,17 +818,35 @@ def probe_sampling_frequency(settings: Settings, file_path: str):
 
 
 def detect_decimal(file_path: str, fallback: str = ".") -> str:
-    """Best-effort decimal-separator detection for a tab-delimited .txt file. Defaults to
-    '.' and only switches to ',' when '.' genuinely fails to parse the numbers (a comma-
-    decimal European export reads mostly as NaN under '.') AND ',' is clearly better — so a
-    US file with occasional comma-THOUSANDS integers ('1,024'), which '.' still parses fine
-    on most cells, is not mis-detected as comma-decimal. Returns ``fallback`` on doubt."""
+    """Best-effort decimal-separator detection for a .csv or tab-delimited .txt file.
+    Defaults to '.' and only switches to ',' when '.' genuinely fails to parse the numbers
+    (a comma-decimal European export reads mostly as NaN under '.') AND ',' is clearly
+    better — so a US file with occasional comma-THOUSANDS integers ('1,024'), which '.'
+    still parses fine on most cells, is not mis-detected as comma-decimal. Returns
+    ``fallback`` on doubt (see the caller's own fallback contract, e.g.
+    ``ui.screens.settings_screen.SettingsScreen._detect_decimal``, which passes the
+    CURRENT setting so a doubtful file never overwrites an explicit or loaded-analysis
+    choice).
+
+    Ticket D03: for a .csv, each decimal candidate is read with the DELIMITER it
+    implies — ';' for a comma decimal, ',' for a point decimal, the same pairing the
+    loader itself uses (``core.io.loaders._read_table`` / this module's
+    ``load_raw_matrix``/``probe_data_columns``) — so the two interpretations are compared
+    on equal footing instead of both parsed with the SAME separator. A semicolon-delimited,
+    comma-decimal export used to fail both candidates identically that way (every field
+    read as one mostly-NaN column regardless of which decimal was tried), so the function
+    always fell back and could never actually detect a European CSV. .txt is unchanged:
+    always tab-delimited for both candidates."""
+    import os
+
     import pandas as pd  # noqa: PLC0415
 
+    ext = os.path.splitext(file_path)[1].lower()
     frac = {}
     for dec in (".", ","):
+        sep = "\t" if ext == ".txt" else (";" if dec == "," else ",")
         try:
-            df = pd.read_csv(file_path, sep="\t", decimal=dec, nrows=300)
+            df = pd.read_csv(file_path, sep=sep, decimal=dec, nrows=300)
             num = df.apply(pd.to_numeric, errors="coerce")
             total = int(num.size) or 1
             frac[dec] = int(num.notna().to_numpy().sum()) / total

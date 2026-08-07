@@ -162,6 +162,22 @@ def test_advanced_panel_roundtrips_toml_only_knobs(qapp, tmp_path):
     assert out2.input.format.matlab_variant == "mac"
     win.close()
 
+
+def test_decimal_separator_picker_reflects_and_writes_the_model(qapp, tmp_path):
+    """Ticket D03: the manual override for CSV/text decimal separator, next to MATLAB file
+    variant on the Input card. Like matlab_variant, it is Setup-owned and bound: from_state
+    seeds it, to_state writes it back, and it round-trips through a loaded analysis."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    s.input.format.decimal = ","
+    win = MainWindow(AppState(s)); sc = win.settings_screen
+    assert sc.decimal_sep.currentData() == ","          # from_state seeded it from the model
+    sc.decimal_sep.setCurrentIndex(sc.decimal_sep.findData("."))
+    out = sc.to_state()
+    assert out.input.format.decimal == "."              # to_state wrote the manual override back
+    win.close()
+
+
 def test_form_fields_are_bounded_not_full_width(qapp, tmp_path):
     """Fusion's QFormLayout grows every uncapped field to the whole form width, so these
     combos/text areas stretched the entire window (1433px at a 1700px window) while their
@@ -183,7 +199,7 @@ def test_form_fields_are_bounded_not_full_width(qapp, tmp_path):
     win.resize(1700, 950); win.show(); qapp.processEvents()
 
     capped = {sc.in_files: "compact",
-              sc.matlab_variant: "wide", sc.group_regex: "wide"}
+              sc.matlab_variant: "wide", sc.decimal_sep: "wide", sc.group_regex: "wide"}
     for w, kind in capped.items():
         assert w.property("formField") == kind, f"{w} lost its {kind} cap"
         assert w.width() < win.width() / 3, f"{w} stretched full width ({w.width()})"

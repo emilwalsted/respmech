@@ -871,7 +871,11 @@ def test_detect_decimal(qapp, tmp_path):
     assert detect_decimal(str(tmp_path / "us.txt")) == "."
 
 
-def test_probe_narrows_multi_mask_and_detects_decimal(qapp, tmp_path):
+def test_detect_and_apply_decimal_narrows_multi_mask(qapp, tmp_path):
+    """Ticket D03: decimal detection moved from _probe_and_apply_file_settings (on OK) to
+    _detect_decimal (before the picker builds) — see that method's docstring. This is the
+    .txt case _probe_and_apply_file_settings used to cover; _detect_decimal must reach the
+    same result from the same call site the picker itself uses (_valid_input_files)."""
     from respmech.ui.main_window import MainWindow
     for name in ("r1.txt", "r2.txt"):                # tab-separated, comma-decimal, 5 cols
         (tmp_path / name).write_text("t\tf\tp\tg\td\n0\t1,0\t2,0\t3,0\t4,0\n0,1\t1,1\t2,1\t3,1\t4,1\n")
@@ -886,9 +890,10 @@ def test_probe_narrows_multi_mask_and_detects_decimal(qapp, tmp_path):
     sc._channel_modal_done = True
     sc.in_folder.setText(str(tmp_path)); sc.samp_freq.setValue(1000); sc._on_inputs_changed()
     assert sc.state.settings.input.files == "*.txt"          # multi-mask narrowed on input change
-    note = sc._probe_and_apply_file_settings(sc._valid_input_files())
+    assert sc.state.settings.input.format.decimal == "."     # not yet detected
+    assert sc._detect_decimal(sc._valid_input_files()) is True
     assert sc.state.settings.input.format.decimal == ","     # comma decimal auto-detected
-    assert "decimal" in note                                 # probe reports the detected format
+    assert sc.decimal_sep.currentData() == ","                # the new picker follows the model
     win.close()
 
 
@@ -898,6 +903,38 @@ def test_detect_decimal_ignores_thousands_separators(qapp, tmp_path):
     (tmp_path / "eu.txt").write_text("a\tb\n1,5\t2,7\n3,1\t4,9\n12,34\t5,6\n")
     assert detect_decimal(str(tmp_path / "us.txt")) == "."   # comma-thousands, not comma-decimal
     assert detect_decimal(str(tmp_path / "eu.txt")) == ","   # genuine comma-decimal
+
+
+def test_detect_decimal_handles_semicolon_csv(qapp, tmp_path):
+    """Ticket D03: a semicolon-separated, comma-decimal CSV — European instrument exports
+    pair the two, and (like a raw LabChart export) carry no header row: this is what makes
+    the ticket's own bug report describe column names that are 'fragments of the first
+    data row' — pandas reads that row as a header regardless. Before this ticket,
+    detect_decimal always parsed BOTH candidates with the SAME separator, so a semicolon
+    file failed identically under '.' and ',' and the function could never tell them apart;
+    each candidate must be read with the delimiter IT implies (';' for a comma decimal, ','
+    for a point decimal — the same pairing the loader itself uses)."""
+    from respmech.ui.workers import detect_decimal
+    eu = tmp_path / "eu.csv"
+    eu.write_text("0,0000;1,5000;2,7000\n0,0010;3,1000;4,9000\n"
+                  "0,0020;5,2000;6,3000\n0,0030;7,1000;8,2000\n")
+    us = tmp_path / "us.csv"
+    us.write_text("0.0000,1.5000,2.7000\n0.0010,3.1000,4.9000\n"
+                  "0.0020,5.2000,6.3000\n0.0030,7.1000,8.2000\n")
+    assert detect_decimal(str(eu)) == ","
+    assert detect_decimal(str(us)) == "."
+
+
+def test_detect_decimal_csv_does_not_overwrite_when_ambiguous(qapp, tmp_path):
+    """The fallback contract (return the CURRENT value on doubt) is what lets the call site
+    move earlier without a guess clobbering an explicit or loaded-analysis decimal: a plain
+    point-decimal, comma-separated CSV must be read as '.' outright, regardless of what the
+    caller passes as fallback — '.' parses it almost perfectly, so it is trusted, not
+    merely defaulted to."""
+    from respmech.ui.workers import detect_decimal
+    us = tmp_path / "us.csv"
+    us.write_text("0.000,1,2,3,4\n0.001,1,2,3,4\n0.002,1,2,3,4\n0.003,1,2,3,4\n")
+    assert detect_decimal(str(us), fallback=",") == "."
 
 
 def test_detect_sampling_frequency(qapp):
@@ -951,17 +988,98 @@ def test_probe_detects_sampling_frequency_from_the_time_column(qapp, tmp_path):
     win.close()
 
 
-def test_probe_leaves_csv_decimal_untouched(qapp, tmp_path):
+def test_probe_and_apply_file_settings_never_touches_decimal(qapp, tmp_path):
+    """Ticket D03: _probe_and_apply_file_settings handles the sampling frequency ONLY now —
+    decimal detection moved to _detect_decimal, called earlier from _open_channel_setup.
+    Calling this method alone must leave the decimal exactly as it was, for ANY extension
+    (not just .csv, which is the case this ticket actually changed)."""
     from respmech.ui.main_window import MainWindow
     (tmp_path / "r.csv").write_text("t,f,p,g,d\n0,1,2,3,4\n1,1,2,3,4\n")
     win = MainWindow(AppState()); sc = win.settings_screen
     sc.enter_new_mode()
-    sc._channel_modal_done = True   # disarm the guided auto-open modal (see test_probe_narrows…)
+    sc._channel_modal_done = True   # disarm the guided auto-open modal (see test_detect_and_apply…)
     sc.in_folder.setText(str(tmp_path)); sc.samp_freq.setValue(1000); sc._on_inputs_changed()
     assert sc.state.settings.input.files == "*.csv"
     before = sc.state.settings.input.format.decimal
     sc._probe_and_apply_file_settings(sc._valid_input_files())
-    assert sc.state.settings.input.format.decimal == before   # decimal is a .txt-only concern
+    assert sc.state.settings.input.format.decimal == before
+    win.close()
+
+
+def _write_eu_csv(path, ncols=7, nrows=30, fs=1000.0):
+    """Ticket D03's own reproduction: NO header row (a raw instrument export — the ticket's
+    bug report names column headers that are 'fragments of the first DATA row', which only
+    happens when there is no real header for pandas to read instead), ';'-separated
+    columns, ','-decimal floats, column 0 a real time axis. Same shape convention as
+    _helpers.write_delim otherwise."""
+    dt = 1.0 / fs
+    lines = []
+    for i in range(nrows):
+        row = [f"{i * dt:.4f}"] + [f"{(i + j) / 10:.4f}" for j in range(2, ncols + 1)]
+        lines.append(";".join(row).replace(".", ","))
+    with open(path, "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
+def test_open_channel_setup_detects_decimal_before_the_dialog_reads_data(qapp, tmp_path):
+    """Ticket D03's acceptance scenario for the format read-out: before detection the
+    read-out (B01's manifest) misreads the file exactly as the ticket describes (8 columns
+    from splitting the wrong way); _detect_decimal — called from _open_channel_setup,
+    BEFORE the dialog is built — must correct the setting and the read-out must then name
+    the real shape (7 columns, semicolon-separated)."""
+    from respmech.ui.main_window import MainWindow
+    _write_eu_csv(tmp_path / "s01.csv")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
+    sc.samp_freq.setValue(1000); sc._on_inputs_changed()
+    assert sc.state.settings.input.format.decimal == "."      # not yet detected
+    assert "8 columns" in sc.format_readout.text()             # misread under the wrong guess
+    files = sc._valid_input_files()
+    assert sc._detect_decimal(files) is True
+    assert sc.state.settings.input.format.decimal == ","
+    assert sc.decimal_sep.currentData() == ","                 # the picker follows the model
+    assert "7 columns" in sc.format_readout.text()
+    assert "semicolon-separated" in sc.format_readout.text()
+    win.close()
+
+
+def test_semicolon_csv_reaches_ok_via_the_real_dialog(qapp, monkeypatch, tmp_path):
+    """The end-to-end regression this ticket exists to fix: a user pointed at a genuine
+    European CSV must reach a usable channel picker on the FIRST attempt — real, non-NaN
+    data to plot and OK reachable — with no need to set the decimal separator by hand
+    first, driven through the REAL dialog's own gating logic, not a stub."""
+    import numpy as np
+    import respmech.ui.channel_setup_dialog as csd
+    from respmech.ui.main_window import MainWindow
+    for n in ("s01", "s02"):
+        _write_eu_csv(tmp_path / f"{n}.csv")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
+    sc.out_folder.setText(str(tmp_path))
+    sc.samp_freq.setValue(1000)
+    sc._on_inputs_changed()
+
+    real_cls = csd.ChannelSetupDialog
+
+    def _build(*a, **k):
+        dlg = real_cls(*a, **k)
+        matrix, _names = dlg._cache[dlg._files[dlg._file_idx]]
+        # the bug this ticket fixes: every column read as all-NaN under the wrong decimal
+        assert not np.isnan(matrix).all(axis=0).any()
+        _set_role(dlg, 1, "flow"); _set_role(dlg, 2, "poes")
+        _set_role(dlg, 3, "pgas"); _set_role(dlg, 4, "pdi")
+        assert dlg._ok_btn.isEnabled()
+        dlg.exec = lambda: QDialog.Accepted               # skip the real (blocking) modal loop
+        return dlg
+    monkeypatch.setattr(csd, "ChannelSetupDialog", _build)
+
+    assert sc._open_channel_setup(initial={}) is True
+    assert sc.state.settings.input.format.decimal == ","
+    ch = sc.state.settings.input.channels
+    assert (ch.flow, ch.poes, ch.pgas, ch.pdi) == (2, 3, 4, 5)
+    # self-review finding: a silently auto-detected decimal must still be told to the user
+    # somewhere — the status line is where every other auto-detected file setting surfaces.
+    assert "decimal ','" in sc.status.text()
     win.close()
 
 
