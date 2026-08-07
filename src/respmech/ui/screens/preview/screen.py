@@ -143,6 +143,8 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._mech_unpin = lambda: None   # detaches the mechanics label-pin slot
         # draggable noise-selection region (feature B)
         self._noise_region = None
+        self._noise_label = None          # 'noise reference' caption at the band's left edge
+        self._noise_label_unpin = lambda: None   # detaches the label's top-of-view pin (D07)
         # staged all-channel EMG (result view)
         self._emg_all = None
         self.result_checks = []          # list of (col:int, QCheckBox)
@@ -317,10 +319,12 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
 
         self._refresh_emg_channels()
         self._refresh_ecg_channels()
-        self._load_noise_params()
-        self._load_ecg_params()
-        self._ensure_noise_region()
-        self._update_emg_tab_visibility()
+        self._load_noise_params()            # this already refreshes the band (D07) — no
+        self._load_ecg_params()               # file is selected yet here, so it stays hidden;
+        self._update_emg_tab_visibility()     # the OLD unconditional _ensure_noise_region()
+        # call that used to sit here bypassed that and always showed reference_intervals[0]
+        # regardless of which file refresh_files() (below) was about to select — found in
+        # review: a fresh construction could paint the wrong file's span for one frame.
         # If loading repaired a stuck auto-detect, say so rather than quietly changing what
         # the file asked for. Deferred to the event loop because the status label and the
         # dirty marker both belong to a window that is still being constructed here.
@@ -780,7 +784,12 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             self._set_fidelity_panel_title(None)   # test-wide result is being recomputed too
             self._noise_has_result = False
         self._reset_breath_state()   # clears _bov/_breaths/_emg_all/result plot/_previewed_file/mech_caption
-        self._ensure_noise_region()  # re-attach the rest-region selector to the cleared detail plot
+        # emg_plots.clear() above dropped the region AND the label (D07) — re-attach both
+        # and recompute visibility against the file this switch just landed on, rather
+        # than blindly re-showing whatever span was last set (found in review: the old
+        # _ensure_noise_region() call here could repaint a stale/mismatched band in the
+        # window before the async detail render corrects it).
+        self._refresh_noise_reference_band()
         self._reset_qc_overview()    # neutral chip + disabled 'Process & write' (B02)
         panels = [p for k in _FILE_KINDS for p in _PANELS[k]]
         if include_noise:
@@ -815,7 +824,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._set_fidelity_panel_title(None)
         self._noise_has_result = False
         self._reset_breath_state()   # clears _bov/_breaths/_emg_all/result plot/_previewed_file
-        self._ensure_noise_region()  # re-attach the rest-region selector to the cleared detail plot
+        self._refresh_noise_reference_band()   # re-attach + recompute (see _clear_file_panels, D07)
         self._reset_qc_overview()    # neutral chip + disabled 'Process & write' (B02)
         self._clear_panel_overlays(*self._overlays)   # dismiss stale spinners / error cards
 

@@ -25,6 +25,7 @@ from matplotlib.figure import Figure
 from respmech.core.settings import ExcludeEntry
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
+from respmech.ui.noise_profile_dialog import NOISE_ACCENT
 from respmech.ui import plot_perf
 from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
 from respmech.ui import wheel as _wheel
@@ -550,6 +551,15 @@ class _EmgNoiseMixin:
         finally:
             self._loading_noise = False
         self._refresh_noise_readout()
+        # Called from both the constructor and every sync_from_settings (D07, UI-overhaul):
+        # one fix here covers "opened a fresh AppState" and "opened/loaded a saved
+        # analysis" alike. Before this the Detail plot's reference band was seeded ONCE at
+        # construction from whatever settings existed then — an empty AppState's default
+        # 0.0-1.0 — and never moved again except through an interactive "Set noise profile"
+        # approval, so every session that OPENS a saved reference (the app's own declared
+        # workflow: set up once, revisit for many subjects) saw a band pointing at the
+        # first second of the recording regardless of where the reference actually was.
+        self._refresh_noise_reference_band()
 
     def _refresh_noise_readout(self):
         """What reference the picker chose, beside the enable toggle. 'Not set' is a real
@@ -644,13 +654,86 @@ class _EmgNoiseMixin:
             except Exception:                        # noqa: BLE001 — any bad shape -> cosmetic default
                 t0, t1 = 0.0, 1.0
             # a read-only indicator of the current noise reference span; selection now
-            # happens in the 'Set noise profile' modal, so this no longer needs dragging
-            reg = pg.LinearRegionItem(values=(t0, t1), movable=False,
-                                      brush=pg.mkBrush(*_plot_pal()["noise_region"]))
+            # happens in the 'Set noise profile' modal, so this no longer needs dragging.
+            # Brand orange (NOISE_ACCENT, shared with the picker dialog) + a dashed outline
+            # and a low fill, not theme.py's old noise_region blue: that token was the SAME
+            # hue as breath_incl_brush (only the alpha differed), so a marked rest span
+            # painted no differently from the inspiratory shading it sits inside (D07).
+            reg = pg.LinearRegionItem(
+                values=(t0, t1), movable=False,
+                brush=pg.mkBrush(*NOISE_ACCENT, 40),
+                pen=pg.mkPen(NOISE_ACCENT, width=1.5, style=Qt.DashLine))
             reg.setZValue(10)
             self._noise_region = reg
         if reg.scene() is None:
             self.emg_plots.addItem(reg)
+
+    def _ensure_noise_label(self):
+        """The small 'noise reference' caption at the band's left edge (D07) — without a
+        label the dashed band alone doesn't say what it is, and it sits over a channel
+        whose own y-axis title is 'EMG (a.u.)', not 'noise'."""
+        lbl = self._noise_label
+        if lbl is None:
+            lbl = pg.TextItem("noise reference", color=pg.mkColor(*NOISE_ACCENT), anchor=(0, 1))
+            f = QFont(); f.setPointSizeF(9.0)
+            lbl.setFont(f)
+            lbl.textItem.document().setDocumentMargin(0)
+            self._noise_label = lbl
+        if lbl.scene() is None:
+            # ignoreBounds: a view-pinned item that still fed childrenBounds would
+            # re-inflate every autorange pass, same reasoning as the breath labels.
+            self.emg_plots.addItem(lbl, ignoreBounds=True)
+        return lbl
+
+    def _refresh_noise_reference_band(self):
+        """Make the Detail plot's shaded band say what it actually is: this test's saved
+        noise reference, on the file it was taken from — or nothing, when that would be
+        misleading. Read from settings + the currently displayed file, so calling this
+        after ANY change to either (a new file, a loaded analysis, an accepted picker
+        selection, a switch to 'every expiration') is always correct; nothing here needs
+        the caller to know which of those happened (D07, UI-overhaul).
+
+        Hidden, not shown at a stale span, whenever there is no interval to point at in
+        THIS file: 'every expiration' has no single span, and a file other than
+        n.reference_file has no reference of its own — the test's one shared profile was
+        built from a different recording entirely."""
+        # Drop the previous pin FIRST, same discipline _draw_breath_overlays uses via
+        # _mech_unpin: the label is a REUSED widget (not recreated per render), so without
+        # this every render would leave its own sigYRangeChanged connection live on top of
+        # the last one — each individually harmless (idempotent setPos), but accumulating
+        # forever on a screen the user leaves open for a whole session.
+        self._noise_label_unpin()
+        self._noise_label_unpin = lambda: None
+        # The item is ensured UNCONDITIONALLY, before the visibility decision below, so it
+        # always exists (a malformed reference_intervals must not abort construction —
+        # _ensure_noise_region's own try/except falls back to a cosmetic default) even
+        # while hidden. Found in review: this used to be created only on the show=True
+        # path, so a fresh PreviewScreen (no file selected yet) or a re-attach after
+        # emg_plots.clear() left it None rather than merely invisible.
+        self._ensure_noise_region()
+        n = self.state.settings.processing.emg.noise
+        shown = self._selected_filename()
+        ivals = n.reference_intervals
+        show = bool(shown and not n.use_expiration and ivals and shown == (n.reference_file or ""))
+        t0 = t1 = None
+        if show:
+            try:
+                t0, t1 = float(ivals[0][0]), float(ivals[0][1])
+            except Exception:                        # noqa: BLE001 — malformed shape -> nothing to show
+                show = False
+        if not show:
+            self._noise_region.setVisible(False)
+            if self._noise_label is not None:
+                self._noise_label.setVisible(False)
+            return
+        self._noise_region.setRegion((t0, t1))
+        self._noise_region.setVisible(True)
+        lbl = self._ensure_noise_label()
+        lbl.setPos(t0, lbl.pos().y())
+        lbl.setVisible(True)
+        # pinned to the top of the CURRENT view, same mechanism the breath-number labels
+        # use, so it survives a y-zoom/pan on the Detail plot instead of drifting off
+        self._noise_label_unpin = self._pin_breath_labels(self.emg_plots.getPlotItem(), {"noise_ref": lbl})
 
     def _apply_noise_expiration(self):
         """Define the shared noise reference as every expiration of the current file, the
@@ -667,6 +750,7 @@ class _EmgNoiseMixin:
         n.use_expiration = True
         self.noise_reference_changed.emit(name, [], True)
         self._refresh_noise_readout()
+        self._refresh_noise_reference_band()          # no single span any more -> hide it
         self._set_status(f"Noise profile ← {name}, built from every expiration. "
                          "Enable 'Reduce EMG noise' to apply it.")
         self._update_actions()
@@ -692,13 +776,9 @@ class _EmgNoiseMixin:
         fs = self.state.settings.input.format.sampling_frequency or 0
         span = int(round((t1 - t0) * fs))
         nframes = 1 + max(0, span - n.win_length) // max(1, n.hop_length)
-        self._ensure_noise_region()                  # reflect the choice on the detail plot
-        try:
-            self._noise_region.setRegion((t0, t1))
-        except Exception:                            # noqa: BLE001 — indicator is cosmetic
-            pass
         self.noise_reference_changed.emit(name, [[t0, t1]], False)
         self._refresh_noise_readout()
+        self._refresh_noise_reference_band()          # reflect the choice on the detail plot
         self._set_status(
             f"Noise profile ← {name} [{t0:.2f}–{t1:.2f} s]: {span} samples ≈ {nframes} STFT frames "
             + ("(good)" if nframes >= 8 else "(short — pick a longer rest span)")
@@ -732,11 +812,24 @@ class _EmgNoiseMixin:
             self._set_status("This file has no EMG channels to pick a noise profile from.")
             return
         from respmech.ui.noise_profile_dialog import EXPIRATION
+        n = self.state.settings.processing.emg.noise
         dlg = NoiseProfileDialog(data["raw"], data["t"], data["fs"], data["cols"],
                                  parent=self, file_name=self._selected_filename(),
-                                 flow=data.get("flow"))
-        n = self.state.settings.processing.emg.noise
+                                 flow=data.get("flow"), reference_file=n.reference_file or "")
         dlg.use_expiration.setChecked(bool(n.use_expiration or not n.reference_intervals))
+        # Seed the picker with the reference already saved for this test (D07), so a user
+        # who opens the dialog to CHECK what is set — the app's own declared workflow of
+        # setting up once and revisiting for many subjects — sees it shaded and can accept
+        # as a no-op, instead of an empty picker that only shows something once you drag a
+        # new one over it. Skipped for 'every expiration': that mode has no single span to
+        # shade, and setChecked(True) above already gives it its own unaffected behaviour.
+        if not n.use_expiration and n.reference_intervals:
+            try:
+                t0, t1 = float(n.reference_intervals[0][0]), float(n.reference_intervals[0][1])
+            except Exception:                        # noqa: BLE001 — malformed shape -> nothing to seed
+                pass
+            else:
+                dlg._seed_reference(t0, t1)
         if dlg.exec() == QDialog.Accepted:
             sel = dlg.selected_region()
             if sel is EXPIRATION:
@@ -796,7 +889,7 @@ class _EmgNoiseMixin:
         stages.append(("RMS envelope", pal["channels"]["poes"]))
         self._set_trace_key(stages)
         self._limit_x(self.emg_plots.getPlotItem(), t)
-        self._ensure_noise_region()
+        self._refresh_noise_reference_band()          # emg_plots.clear() above dropped it
         self._detail_label_y = self._safe_top(
             np.asarray(data["raw"]), np.asarray(data["ecg"]),
             np.asarray(data["noise"]) if data.get("noise_applied") else None)
