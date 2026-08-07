@@ -1145,7 +1145,8 @@ class SettingsScreen(QWidget):
                    if self._manifest is not None else [])
         try:
             dlg = ChannelSetupDialog(files, fs, initial, loader=lambda p: load_raw_matrix(s, p),
-                                     parent=self, excluded=excluded)
+                                     parent=self, excluded=excluded,
+                                     integrate_from_flow=s.processing.volume.integrate_from_flow)
         except NoReadableFileError as exc:
             # ticket D01: the dialog already diagnosed WHY none of its files could be read
             # (see _no_files_readable_message) — show that diagnosis as the message, not a
@@ -1164,6 +1165,12 @@ class SettingsScreen(QWidget):
             return False
         if dlg.exec() != QDialog.Accepted:
             return False
+        # Written BEFORE _apply_channel_mapping (ticket D02) so the reactive re-validation
+        # that mapping triggers already sees the up-to-date value — otherwise a flow-only
+        # rig's OK would apply the channel columns first and transiently re-validate
+        # against the OLD (unset) integrate_from_flow, showing a blocker for the one
+        # instant it takes to reach the next line.
+        s.processing.volume.integrate_from_flow = dlg.integrate_from_flow()
         fmt_note = self._probe_and_apply_file_settings(files)
         self._apply_channel_mapping(dlg.selected_mapping(), fmt_note=fmt_note)
         return True
@@ -1657,7 +1664,8 @@ class SettingsScreen(QWidget):
         try:
             self.state.settings.validate()
         except SettingsError as e:
-            return str(e)
+            from respmech.ui.validation import friendly_settings_error
+            return friendly_settings_error(e)
         except Exception:                       # noqa: BLE001 — an unexpected fault is not savable
             return short_error(traceback.format_exc())
         return None
@@ -1829,7 +1837,8 @@ class SettingsScreen(QWidget):
         try:
             self.state.settings.validate()
         except SettingsError as e:
-            return f"Invalid: {e}"
+            from respmech.ui.validation import friendly_settings_error
+            return f"Invalid: {friendly_settings_error(e)}"
         except Exception:                       # noqa: BLE001 — never let a fault break typing
             return f"Could not validate: {short_error(traceback.format_exc())}"
         # path checks (the core validate() is filesystem-agnostic)

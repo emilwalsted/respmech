@@ -31,9 +31,18 @@ def _matrix(n=200, cols=12):
 def test_only_assigned_roles_get_a_row(qapp):
     ch = _channels(flow=5, poes=7, pgas=8, pdi=9)      # no volume, no emg, no entropy
     texts = ChannelSummary().show_mapping(ch).texts()
-    assert len(texts) == 4
+    assert not any("EMG" in t or "Entropy" in t for t in texts)
+
+
+def test_unassigned_volume_still_gets_a_row_naming_the_state(qapp):
+    """Ticket D02: Volume is the one role the summary never stays silent about, because a
+    flow-only rig with no volume channel is a supported setup, not an omission — unlike
+    EMG/entropy (genuinely absent above) the readout must say so rather than say nothing."""
+    ch = _channels(flow=5, poes=7, pgas=8, pdi=9)      # no volume, no emg, no entropy
+    texts = ChannelSummary().show_mapping(ch).texts()
+    assert len(texts) == 5
     assert texts[0] == "Flow signal: Column #5"
-    assert not any("Volume" in t or "EMG" in t or "Entropy" in t for t in texts)
+    assert "Volume: not assigned" in texts
 
 
 def test_rows_read_in_analysis_order(qapp):
@@ -68,6 +77,16 @@ def test_derived_volume_says_so_instead_of_naming_an_ignored_column(qapp):
     assert describe(ch, "volume", integrate_from_flow=False) == "Volume: Column #6"
 
 
+def test_neither_volume_source_says_not_assigned_instead_of_nothing(qapp):
+    """Ticket D02: unlike every other role, Volume never returns None from describe() —
+    a flow-only rig is supported, so the summary must be able to say "not assigned" the
+    way the other roles quietly disappear instead."""
+    ch = _channels(flow=5)                             # no volume column, no integration
+    assert describe(ch, "volume", integrate_from_flow=False) == "Volume: not assigned"
+    assert describe(ch, "flow", integrate_from_flow=False) is not None
+    assert describe(ch, "poes", integrate_from_flow=False) is None      # unaffected role
+
+
 def test_a_column_carrying_two_roles_is_drawn_once_and_names_both(qapp):
     """Entropy is non-exclusive, so column 5 can be both the flow signal and an entropy
     channel. One trace, one header, both roles named."""
@@ -82,12 +101,38 @@ def test_a_column_carrying_two_roles_is_drawn_once_and_names_both(qapp):
 
 def test_there_is_no_separate_legend(qapp):
     """Each graph names itself, so a list above repeating the same facts would only be a
-    second place to keep in sync."""
-    ch = _channels(flow=5, poes=7)
+    second place to keep in sync. Volume is assigned here (unlike most fixtures in this
+    file) specifically so the ticket D02 trailing note below does not fire — that note is
+    the ONE deliberate exception, covered on its own by the tests below, not this one."""
+    ch = _channels(flow=5, volume=6, poes=7)
     m, names = _matrix()
     su = ChannelSummary().show_mapping(ch, matrix=m, names=names)
     assert su.rows == su.stack.headers
     assert not any(t.startswith("Flow signal:") for t in su.texts())
+
+
+def test_unassigned_volume_gets_a_trailing_note_beside_the_graphs(qapp):
+    """Ticket D02: the graphs can only draw a column, and Volume may have none — a label
+    is appended after the stack instead, the one deliberate exception to 'every row is a
+    graph header' that test_there_is_no_separate_legend otherwise enforces."""
+    ch = _channels(flow=5, poes=7)                     # no volume column, no integration
+    m, names = _matrix()
+    su = ChannelSummary().show_mapping(ch, matrix=m, names=names)
+    assert len(su.rows) == len(su.stack.headers) + 1
+    assert su.rows[-1] not in su.stack.headers
+    assert su.texts()[-1] == "Volume: not assigned"
+
+
+def test_derived_volume_gets_a_trailing_note_and_no_misleading_column_tag(qapp):
+    """Ticket D02: with 'derive from flow' on, an assigned Volume column is ignored by the
+    core loader at run time — the column's own graph row must not still say 'Volume' (it
+    would claim a signal is being read that is not), and the trailing note must say the
+    volume is derived from flow instead of naming the ignored column."""
+    ch = _channels(flow=5, volume=6, poes=7)
+    m, names = _matrix()
+    su = ChannelSummary().show_mapping(ch, matrix=m, names=names, integrate_from_flow=True)
+    assert not any("Volume" in h.text() for h in su.stack.headers)
+    assert su.texts()[-1] == "Volume: derived from flow"
 
 
 def test_a_two_role_header_carries_both_settings_paths(qapp):
@@ -118,7 +163,7 @@ def test_rebuilding_replaces_rather_than_accumulates(qapp):
     su = ChannelSummary()
     su.show_mapping(_channels(flow=5, poes=7))
     su.show_mapping(_channels(flow=5))
-    assert su.texts() == ["Flow signal: Column #5"]
+    assert su.texts() == ["Flow signal: Column #5", "Volume: not assigned"]
     su.show_mapping(_channels())
     assert su.texts() == []
 

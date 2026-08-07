@@ -73,13 +73,22 @@ def roles_of(channels, col):
 
 
 def describe(channels, role, integrate_from_flow=False):
-    """The one-line readout for a role, or None when it has no column.
+    """The one-line readout for a role, or None when it has no column — EXCEPT Volume
+    (ticket D02), which always returns a sentence, because a flow-only rig with no volume
+    channel is a supported setup (see the README), not an omission the summary should stay
+    silent about like it does for the other, genuinely-not-relevant-yet roles.
 
-    Volume is the exception worth spelling out: with 'Calculate volume from flow' on, the
-    column is ignored, and silently showing a column number that nothing reads is exactly
-    the kind of quiet wrongness the summary exists to prevent."""
-    if role == "volume" and integrate_from_flow:
-        return "Volume: derived from flow"
+    'Calculate volume from flow' on: the column, if any, is ignored, and silently showing
+    a column number that nothing reads is exactly the kind of quiet wrongness the summary
+    exists to prevent — checked FIRST so it also wins over a stale, still-assigned column
+    left over from before the checkbox was ticked."""
+    if role == "volume":
+        if integrate_from_flow:
+            return "Volume: derived from flow"
+        value = getattr(channels, "volume", None)
+        if not value:
+            return "Volume: not assigned"
+        return f"{ROLE_NAMES['volume']}: Column #{value}"
     value = getattr(channels, role, None)
     if role in ("emg", "entropy"):
         cols = list(value or [])
@@ -156,9 +165,20 @@ class ChannelSummary(QWidget):
                 self.rows.append(lab)
             return self
 
+        def _carried(col):
+            carried = roles_of(channels, col)
+            # ticket D02: with 'derive from flow' on, an assigned Volume column (stale, or
+            # kept for later) is IGNORED by the core loader — tagging its column "Volume"
+            # here would claim the column is read when it is not, the same silent
+            # wrongness describe() avoids above. The trailing "derived from flow" row
+            # added below carries the fact instead.
+            if integrate_from_flow and "volume" in carried:
+                carried = [r for r in carried if r != "volume"]
+            return carried
+
         roles, prefixes = {}, {}
         for col in cols:
-            carried = roles_of(channels, col)
+            carried = _carried(col)
             # the trace takes the exclusive role's colour; entropy-only columns take entropy's
             roles[col - 1] = carried[0] if carried else ""
             # ...and the header names what the column IS, ahead of where it sits, so a graph
@@ -170,11 +190,22 @@ class ChannelSummary(QWidget):
         # the graph headers ARE the rows now, so they carry the settings-path tooltips the
         # deleted fields used to hold — a column with two roles names both
         for col, head in zip(cols, self.stack.headers):
-            carried = roles_of(channels, col)
+            carried = _carried(col)
             if carried:
                 head.setToolTip("<br><br>".join(_tip(*ROLE_HELP[r]) for r in carried))
             self.rows.append(head)
         self._box.addWidget(self.stack)
+        # ticket D02: Volume has no column of its own to draw here whenever it is either
+        # unassigned or being derived from flow — a trailing label names it either way,
+        # matching describe()'s no-matrix listing above instead of silently omitting the
+        # one role the graphs cannot represent.
+        if integrate_from_flow or not getattr(channels, "volume", None):
+            text = describe(channels, "volume", integrate_from_flow)
+            lab = QLabel(text)
+            lab.setToolTip(_tip(*ROLE_HELP["volume"]))
+            lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            self._box.addWidget(lab)
+            self.rows.append(lab)
         return self
 
     def texts(self):

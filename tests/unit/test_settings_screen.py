@@ -753,6 +753,26 @@ def test_qc_strip_is_muted_not_green_when_nothing_matches(qapp, tmp_path):
     win.close()
 
 
+def test_qc_strip_never_says_no_warnings_while_a_hard_blocker_stands(qapp, tmp_path):
+    """Ticket D02 acceptance: an unset Volume channel (no 'derive from flow') is a HARD
+    blocker (ui.validation.blockers) — the QC strip must show it as an error, never fall
+    through to the green 'Ready to run — no warnings.' verdict while _all_ok() is False.
+    This is the exact contradiction ticket D02's point 4 exists to rule out."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(INPUT); sc.in_files.setText("synth_case_*.csv")
+    sc.samp_freq.setValue(1000); sc.out_folder.setText(str(tmp_path))
+    sc._on_inputs_changed()
+    _assign(sc, flow=5, poes=7, pgas=8, pdi=9)          # every required role EXCEPT volume
+    assert sc.state.settings.input.channels.volume is None
+    assert sc.state.settings.processing.volume.integrate_from_flow is False
+    assert sc._all_ok() is False
+    assert sc.qc.property("status") == "error"
+    assert "no warnings" not in sc.qc.text().lower()
+    assert "volume" in sc.qc.text().lower()
+    win.close()
+
+
 def test_qc_strip_flags_unreadable_data_and_names_the_decimal_separator(qapp, tmp_path):
     """Acceptance (ticket B07), written before the fix per the ticket's own test
     discipline: a folder of semicolon-separated CSVs read under the default comma-decimal
