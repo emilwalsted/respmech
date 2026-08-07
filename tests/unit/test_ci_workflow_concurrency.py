@@ -49,10 +49,20 @@ def test_ci_workflow_concurrency_group_is_not_shared_by_every_push_to_a_branch()
         "guards the group KEY; re-check whether the new value still needs a per-commit "
         "group."
     )
-    assert "github.sha" in group_expr, (
-        f"CI's concurrency group is {group_expr!r}, which does not vary per commit "
-        "(no github.sha). A later push to the same branch would then cancel an EARLIER, "
-        "unrelated commit's still-running check before it can report a result — this is "
-        "exactly what made ui-overhaul's CI look permanently red under chained ticket "
-        "pushes. Push-triggered runs must be keyed by something that differs per commit."
+    # Not just "does github.sha appear somewhere": require the actual fallback shape,
+    # PR number falling through to the commit SHA, in that order. A group like
+    # 'ci-${{ github.sha }}' alone would satisfy a looser "contains github.sha" check
+    # while silently dropping the PR-number branch, which is what makes a stale push to
+    # an open PR get cancelled by its own successor (the one case cancel-in-progress is
+    # FOR). Both operands must be present, joined by '||', PR number first.
+    assert re.search(
+        r"github\.event\.pull_request\.number\s*\|\|\s*github\.sha", group_expr
+    ), (
+        f"CI's concurrency group is {group_expr!r}. It must fall back from "
+        "github.event.pull_request.number to github.sha (in that order), not just "
+        "contain github.sha somewhere. Without the PR-number branch, a later push to an "
+        "open PR would stop cancelling its own stale review run. Without github.sha as "
+        "the push-event key, a later push to a branch would cancel an EARLIER, unrelated "
+        "commit's still-running check before it can report a result — exactly what made "
+        "ui-overhaul's CI look permanently red under chained ticket pushes."
     )
