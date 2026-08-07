@@ -13,7 +13,16 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # Keyed by github.ref alone, EVERY push to the same branch shared one group, so a
+  # second commit cancelled the first commit's still-running check (Windows GUI-smoke +
+  # full unit suite) before it could report anything. On a branch fed by chained ticket
+  # dispatch — commits sometimes under 30 minutes apart, matrix jobs plausibly slower
+  # than that — this meant almost no push ever got a completed, genuinely green run: CI
+  # looked permanently red without any code or test actually being broken. Key push runs
+  # by commit SHA (unique per commit, never cancelled by a later one); PR runs still key
+  # by PR number, where cancelling a stale review of an old head is the intended use of
+  # cancel-in-progress.
+  group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 defaults:
