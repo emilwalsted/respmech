@@ -6,6 +6,7 @@ directly, which is what must be testable without a display.
 """
 import os
 
+import numpy as np
 import pytest
 
 
@@ -698,6 +699,110 @@ def test_set_noise_profile_dialog_cancel_leaves_settings(qapp, tmp_path, monkeyp
     monkeypatch.setattr(npd, "NoiseProfileDialog", _FakeDialog)
     pv._open_noise_profile_dialog()
     assert s.processing.emg.noise.reference_file == before   # Cancel changed nothing
+    win.close()
+
+
+# -- D08 (UI-overhaul): the picker shows the signal the profile is actually built from --
+# Regression: the picker used to be fed stage_raw_emg's RAW channels regardless of ECG
+# removal, while core/pipeline.py builds the noise reference from the ECG-REDUCED matrix
+# — so the picker's "quiet (EMG-free)" criterion could not be met in what it displayed.
+
+def _capture_dialog_call(monkeypatch, pv):
+    """Stub NoiseProfileDialog and return the kwargs _open_noise_profile_dialog passed it,
+    without a real modal ever opening (exec() rejects immediately)."""
+    from PySide6.QtWidgets import QCheckBox, QDialog
+    from respmech.ui import noise_profile_dialog as npd
+    captured = {}
+
+    class _FakeDialog:
+        def __init__(self, *args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            self.use_expiration = QCheckBox()
+
+        def exec(self):
+            return QDialog.Rejected
+
+        def selected_region(self):
+            return None
+
+    monkeypatch.setattr(npd, "NoiseProfileDialog", _FakeDialog)
+    pv._open_noise_profile_dialog()
+    return captured
+
+
+def test_the_picker_is_fed_the_ecg_reduced_channels_when_removal_is_on(qapp, tmp_path, monkeypatch):
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_ecg_reduction
+    s = _settings(str(tmp_path))                          # remove_ecg=True
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
+
+    captured = _capture_dialog_call(monkeypatch, pv)
+    expected = stage_ecg_reduction(s, os.path.join(INPUT, "synth_case_A.csv"))
+    got_channels = captured["args"][0]
+    assert len(got_channels) == len(expected["processed"])
+    for got, exp in zip(got_channels, expected["processed"]):
+        assert np.allclose(got, exp)
+    # NOT the raw signal (removal is on, so processed != raw for a real ECG-bearing file)
+    from respmech.ui.workers import stage_raw_emg
+    raw = stage_raw_emg(s, os.path.join(INPUT, "synth_case_A.csv"))["raw"]
+    assert not all(np.allclose(got, r) for got, r in zip(got_channels, raw)), \
+        "picker shows the raw signal even with ECG removal on"
+    assert captured["kwargs"]["ecg_applied"] is True
+    assert len(captured["kwargs"]["peak_times"]) == len(expected["peaks"])
+    win.close()
+
+
+def test_the_picker_channels_match_raw_when_removal_is_off(qapp, tmp_path, monkeypatch):
+    """'processed' equals 'raw' when removal is off (stage_ecg_reduction's own contract) —
+    pin that this is what actually reaches the picker, so the off-state is unaffected."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_raw_emg
+    s = _settings(str(tmp_path))
+    s.processing.emg.remove_ecg = False
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
+
+    captured = _capture_dialog_call(monkeypatch, pv)
+    raw = stage_raw_emg(s, os.path.join(INPUT, "synth_case_A.csv"))["raw"]
+    got_channels = captured["args"][0]
+    assert len(got_channels) == len(raw)
+    for got, r in zip(got_channels, raw):
+        assert np.allclose(got, r)
+    assert captured["kwargs"]["ecg_applied"] is False
+    win.close()
+
+
+def test_a_failed_removal_does_not_claim_heartbeats_are_gone_from_the_picker(qapp, tmp_path, monkeypatch):
+    """Regression found in review of this ticket: stage_ecg_reduction falls back to the
+    RAW channels and reports no peaks whenever detection/removal raises, but still echoes
+    back ecg_applied=True (the SETTING, not whether it actually ran) — see _ecg.py's own
+    ecg_error handling for the same quirk. Without accounting for it here, a failed
+    removal would show the picker the raw, heartbeat-laden signal while its hint
+    confidently claimed the heartbeats were already removed: the exact bug D08 exists
+    to fix, reappearing on the error path."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui import workers as wk
+    s = _settings(str(tmp_path))                          # remove_ecg=True
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
+
+    def _fake_ecg_reduction(*_a, **_k):
+        n, fs = 200, 1000
+        t = np.arange(n) / fs
+        return {"t": t, "fs": fs, "cols": [2, 3, 4], "detect": 1, "detect_col": 3,
+                "raw_capture": np.zeros(n), "processed": [np.zeros(n)] * 3,
+                "peaks": np.array([]), "flow": np.zeros(n),
+                "ecg_applied": True, "ecg_error": "boom", "suppression": None}
+
+    monkeypatch.setattr(wk, "stage_ecg_reduction", _fake_ecg_reduction)
+    captured = _capture_dialog_call(monkeypatch, pv)
+    assert captured["kwargs"]["ecg_applied"] is False, \
+        "picker would claim heartbeats removed on a fallback-to-raw signal"
     win.close()
 
 

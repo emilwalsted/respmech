@@ -310,3 +310,51 @@ def test_no_reference_yet_shows_no_warning(qapp):
     assert dlg.file_warn.isHidden() is True
     assert dlg.btn_ok.text() == "Set noise profile"
     dlg.deleteLater()
+
+
+# -- D08 (UI-overhaul): the picker's hint matches the signal it actually shows -----
+# Regression: the hint asked the user to find a "quiet (EMG-free)" span while the
+# picker was fed RAW EMG, which on real data is dominated by heartbeats the profile is
+# never built from (it is built from the ECG-reduced matrix). The caller now resolves
+# which signal to pass and whether ECG removal ran; the dialog just reflects that.
+
+def _capture_items(plot_item):
+    from respmech.ui.plot_overlays import _CAPTURE_Z as z
+    return [it for it in plot_item.listDataItems() if it.zValue() in (z, z + 1)]
+
+
+def test_ecg_applied_hint_says_heartbeats_are_removed(qapp):
+    from respmech.ui.noise_profile_dialog import NoiseProfileDialog
+    raw, t, fs, cols = _data()
+    dlg = NoiseProfileDialog(raw, t, fs, cols, ecg_applied=True)
+    assert "already been removed" in dlg.hint.text()
+    assert "quiet (EMG-free)" not in dlg.hint.text()
+    dlg.deleteLater()
+
+
+def test_ecg_not_applied_hint_says_heartbeats_remain(qapp):
+    from respmech.ui.noise_profile_dialog import NoiseProfileDialog
+    raw, t, fs, cols = _data()
+    dlg = NoiseProfileDialog(raw, t, fs, cols, ecg_applied=False)
+    assert "still in this signal" in dlg.hint.text()
+    assert "already been removed" not in dlg.hint.text()
+    dlg.deleteLater()
+
+
+def test_peak_times_draw_capture_markers_on_every_channel(qapp):
+    from respmech.ui.noise_profile_dialog import NoiseProfileDialog
+    raw, t, fs, cols = _data(nch=3)
+    dlg = NoiseProfileDialog(raw, t, fs, cols, peak_times=[0.2, 0.5, 0.8])
+    assert dlg._plots and all(len(_capture_items(p)) == 2 for p in dlg._plots), \
+        "expected a line + a ▼ marker item on every channel"
+    dlg.deleteLater()
+
+
+def test_no_peak_times_draws_no_markers(qapp):
+    """Backward-compatible default: a caller that does not pass peak_times (or an
+    accepted-but-peakless capture) gets the picker exactly as before D08."""
+    from respmech.ui.noise_profile_dialog import NoiseProfileDialog
+    raw, t, fs, cols = _data(nch=3)
+    dlg = NoiseProfileDialog(raw, t, fs, cols)
+    assert all(_capture_items(p) == [] for p in dlg._plots)
+    dlg.deleteLater()

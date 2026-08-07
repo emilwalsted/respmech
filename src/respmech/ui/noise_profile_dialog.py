@@ -1,12 +1,17 @@
 """Modal noise-profile picker.
 
-Shows the raw EMG channels stacked on a shared time axis. Hovering draws a vertical
-crosshair on every channel and a cursor-following label with the time (3 dp). A
-click-drag marks a rest region — shaded on every channel — and the label then shows
-the region's duration (Δt). A region wider than 0.5 s warns that a larger noise
-profile can slow processing markedly. The selection persists until a new drag or a
-plain click clears it. "Set noise profile" (enabled only once a region is marked)
-accepts the dialog; "Cancel" rejects it without touching the settings.
+Shows the EMG channels the noise profile is actually built from — the ECG-reduced
+matrix when "Remove ECG" is on, or the raw channels when it is off (D08, UI-overhaul:
+the caller resolves this via ``workers.stage_ecg_reduction``, never here) — stacked on
+a shared time axis. R-peak markers (``peak_times``) are drawn on every channel when
+ECG removal found any, the same ▼ the ECG tab uses, so a residual heartbeat reads as
+cardiac rather than muscle activity. Hovering draws a vertical crosshair on every
+channel and a cursor-following label with the time (3 dp). A click-drag marks a rest
+region — shaded on every channel — and the label then shows the region's duration
+(Δt). A region wider than 0.5 s warns that a larger noise profile can slow processing
+markedly. The selection persists until a new drag or a plain click clears it. "Set
+noise profile" (enabled only once a region is marked) accepts the dialog; "Cancel"
+rejects it without touching the settings.
 
 The reference can also be defined as "every expiration" rather than a marked span — the two
 are alternatives in the core, so they are offered as one choice here instead of a checkbox
@@ -39,7 +44,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFrame, QHBoxLa
 import pyqtgraph as pg
 
 from respmech.ui.flow_layout import ElidingCheckBox
-from respmech.ui.plot_overlays import add_flow_background
+from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
 
 try:
     from respmech.ui import theme as _theme
@@ -93,7 +98,7 @@ class NoiseProfileDialog(QDialog):
     """Pick a rest span across the raw EMG channels to use as the noise reference."""
 
     def __init__(self, raw, t, fs, cols, parent=None, file_name="", flow=None,
-                reference_file=""):
+                reference_file="", peak_times=None, ecg_applied=True):
         super().__init__(parent)
         self.setWindowTitle("Set noise profile" + (f" — {file_name}" if file_name else ""))
         self.setModal(True)
@@ -101,6 +106,13 @@ class NoiseProfileDialog(QDialog):
         self._t = np.asarray(t, dtype=float)
         self._fs = fs
         self._flow = np.asarray(flow, dtype=float) if flow is not None else None
+        # R-peak times (s), same axis as _t — the caller passes stage_ecg_reduction's
+        # 'peaks', which are populated whether or not removal is ON (D08): even with
+        # removal off, the reference channel's peaks are still detected (cheaply) so the
+        # markers can say "these are heartbeats" instead of leaving them unlabelled.
+        self._peak_times = (np.asarray(peak_times, dtype=float)
+                            if peak_times is not None else np.array([], dtype=float))
+        self._ecg_applied = bool(ecg_applied)
         self._selection = None             # (t0, t1) in seconds, or None
         # the file the TEST's shared reference currently lives on (may differ from the
         # file this picker was opened on, or be "" if no reference is set yet) — drives
@@ -119,12 +131,25 @@ class NoiseProfileDialog(QDialog):
                                            # must refuse to answer the other's update
 
         v = QVBoxLayout(self)
-        hint = QLabel("Hover to read the time; click-drag over a quiet (EMG-free) span to "
-                      "mark the rest region on all channels. Click once to clear it. "
-                      "Scroll to zoom the time axis (all channels together); double-click to reset. "
-                      "Use the bar below the plots to move through the recording when zoomed in.")
-        hint.setProperty("status", "muted"); hint.setWordWrap(True)
-        v.addWidget(hint)
+        # Asks for what the criterion can actually mean on real data (D08): "quiet
+        # (EMG-free)" sent users hunting for a gap between heartbeat spikes that are not
+        # even in the signal the profile is built from when ECG removal is on. Says
+        # plainly, when it is OFF, that the heartbeats are still there — in this signal
+        # AND in the profile it builds — rather than leaving that to be discovered later.
+        _rest_hint = ("click-drag over a span where the diaphragm is at rest, typically "
+                     "late in expiration, to mark the rest region on all channels")
+        if self._ecg_applied:
+            _ecg_hint = ("Heartbeats are marked ▼ and have already been removed from "
+                         "this signal.")
+        else:
+            _ecg_hint = ("'Remove ECG' is off, so heartbeats (marked ▼ where found) are "
+                         "still in this signal, and will still be in the profile it builds.")
+        self.hint = QLabel(f"Hover to read the time; {_rest_hint}. {_ecg_hint} Click once "
+                          "to clear the selection. Scroll to zoom the time axis (all "
+                          "channels together); double-click to reset. Use the bar below "
+                          "the plots to move through the recording when zoomed in.")
+        self.hint.setProperty("status", "muted"); self.hint.setWordWrap(True)
+        v.addWidget(self.hint)
 
         # Persistent, not tied to the drag/selection state below (self.warn IS): the test
         # has exactly one shared reference regardless of which file is open, and accepting
@@ -176,6 +201,7 @@ class NoiseProfileDialog(QDialog):
                 _theme.align_left_axis(p)          # keep the stacked channels x-aligned
             p.plot(self._t[:len(y)], np.asarray(y, dtype=float), pen=pg.mkPen(trace_pen))
             add_flow_background(p, self._t, self._flow, pal)   # discrete respiration reference, behind
+            add_ecg_capture_markers(p, self._peak_times, pal)  # same ▼ the ECG tab uses (D08)
             if i == n - 1:
                 p.setLabel("bottom", "Time (s)")
             vb = p.getViewBox()
