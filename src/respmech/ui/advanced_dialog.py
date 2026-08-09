@@ -14,7 +14,7 @@ would have to invent one.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QEventLoop, QSize, Qt, QTimer
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFrame,
                                QHBoxLayout, QPlainTextEdit, QPushButton,
                                QScrollArea, QSpinBox, QVBoxLayout, QWidget)
@@ -141,22 +141,42 @@ class AdvancedDialog(QDialog):
 
     ``derived`` is an optional callable taking the staged values and returning a line of
     text, recomputed on every edit — for a coupling the numbers alone do not show, such as
-    an STFT window whose meaning in milliseconds depends on the sampling rate.
+    an STFT window whose meaning in milliseconds depends on the sampling rate. Pass
+    ``derived_debounce_ms`` when that computation is not trivial arithmetic (e.g. a
+    scipy-based search) so it does not run on every keystroke.
 
     The three things OUTSIDE the scroll area — the intro, the derived hint and the button
     row — are outside it on purpose. Whatever the content does, those stay reachable.
+
+    ``modal`` (default ``True``) and ``on_apply`` turn this into a genuinely non-modal
+    modal-with-an-Apply-button, for a caller with a live view behind the dialog that
+    should redraw as values are committed rather than only once the dialog closes. Both
+    default to the original behaviour, so every existing caller is unaffected.
+    ``on_apply``, when given, adds a third "Apply" button that calls it with
+    ``edited_values()`` WITHOUT closing the dialog, and moves the "edited since open"
+    baseline forward so a later OK does not resend the same keys.
     """
 
     def __init__(self, title, fields, values, parent=None, intro=None, derived=None,
-                 max_columns=3):
+                 max_columns=3, modal=True, on_apply=None, derived_debounce_ms=0):
         super().__init__(parent)
-        self.setModal(True)
+        self._modal = modal
+        self.setModal(modal)
+        self._on_apply = on_apply
+        self._derived_timer = None
         self.setWindowTitle(title)
         sections = _as_sections(fields)
         self._fields = [f for _t, fs in sections for f in fs]
         #: what the model held when this dialog opened — see edited_values()
         self._opened_with = {}
         self._derived = derived
+        if derived is not None and derived_debounce_ms:
+            # A debounce, not a rate limit: every edit restarts the timer, so only the
+            # value the user stopped on is ever computed, never an intermediate one.
+            self._derived_timer = QTimer(self)
+            self._derived_timer.setSingleShot(True)
+            self._derived_timer.setInterval(derived_debounce_ms)
+            self._derived_timer.timeout.connect(self._refresh_derived_now)
         self._widgets = {}
         self.cards = []
         # A grip is the affordance, not the mechanism: the dialog is resizable because its
@@ -255,6 +275,13 @@ class AdvancedDialog(QDialog):
         foot.addStretch(1)
         self.btn_cancel = QPushButton("Cancel")
         self.btn_cancel.clicked.connect(self.reject)
+        self.btn_apply = None
+        if self._on_apply is not None:
+            self.btn_apply = QPushButton("Apply")
+            self.btn_apply.clicked.connect(self._apply_clicked)
+            # Not the Enter default (see below) and not autoDefault: Apply is a deliberate
+            # extra step, not the one Enter should reach for.
+            self.btn_apply.setAutoDefault(False)
         self.btn_ok = QPushButton("OK")
         self.btn_ok.clicked.connect(self.accept)
         # Enter must COMMIT. Both buttons default to autoDefault, and with no explicit default
@@ -271,9 +298,13 @@ class AdvancedDialog(QDialog):
         except Exception:                       # pragma: no cover — styling is cosmetic
             pass
         foot.addWidget(self.btn_cancel)
+        if self.btn_apply is not None:
+            foot.addWidget(self.btn_apply)
         foot.addWidget(self.btn_ok)
         v.addLayout(foot)
-        self._refresh_derived()
+        # Synchronous even when debounced: the dialog must open showing a real value, not
+        # an empty line waiting out the first debounce window.
+        self._refresh_derived_now()
 
     def sizeHint(self):                     # noqa: N802 - Qt API
         """The size that shows the columns, not the size QScrollArea would ask for.
@@ -319,7 +350,55 @@ class AdvancedDialog(QDialog):
                     w.setFocus(Qt.OtherFocusReason)
                     break
 
+    def exec(self):                         # noqa: N802 - Qt API
+        """Block until closed, like ``QDialog.exec()`` — but for ``modal=False``, without
+        making the dialog modal while it runs.
+
+        ``QDialog.exec()`` sets ``Qt.WA_ShowModal`` UNCONDITIONALLY while it executes,
+        regardless of a prior ``setModal(False)`` (verified empirically: ``isModal()`` was
+        ``True`` mid-``exec()`` even though ``setModal(False)`` had been called first — Qt
+        restores the attribute afterwards, but the whole point of a non-modal Advanced
+        dialog is what happens WHILE it is open). So a genuinely non-modal blocking wait
+        needs its own event loop instead of Qt's ``exec()``, which a caller can still treat
+        exactly like a normal modal call: it returns only once the dialog is closed, with
+        the same ``QDialog.Accepted``/``Rejected`` result.
+        """
+        if not self._modal:
+            self.setResult(QDialog.Rejected)
+            self.show()
+            loop = QEventLoop()
+            self.finished.connect(loop.quit)
+            loop.exec()
+            return self.result()
+        return super().exec()
+
+    def done(self, r):                      # noqa: N802 - Qt API
+        """Stop the debounce timer on close — an in-flight ``singleShot`` outliving the
+        dialog it belongs to costs nothing observable today, but there is no reason to let
+        a closed dialog's timer fire into torn-down widgets."""
+        if self._derived_timer is not None:
+            self._derived_timer.stop()
+        super().done(r)
+
+    def _apply_clicked(self):
+        edited = self.edited_values()
+        if not edited:
+            return                          # nothing staged since open/last Apply: no-op
+        self._on_apply(edited)
+        # Move the "edited since open" baseline forward, so a later Apply or OK does not
+        # recommit the same keys — harmless (apply_values is idempotent) but a wasted
+        # recompute on every subsequent commit otherwise.
+        self._opened_with.update(self.values())
+
     def _refresh_derived(self, *_):
+        if self._derived is None:
+            return
+        if self._derived_timer is not None:
+            self._derived_timer.start()     # restart the debounce window on every edit
+            return
+        self._refresh_derived_now()
+
+    def _refresh_derived_now(self):
         if self._derived is None:
             return
         try:

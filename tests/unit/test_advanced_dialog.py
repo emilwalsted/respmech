@@ -110,6 +110,119 @@ def test_the_derived_line_follows_the_staged_values(qapp):
     assert dlg.derived.text() == "a is 9"
 
 
+# -- Apply / genuine non-modality / debounced derived (D13, UI-overhaul) ------
+# QDialog.exec() sets Qt.WA_ShowModal unconditionally while it runs, REGARDLESS of a prior
+# setModal(False) — verified empirically. A test that stubs exec() entirely (as _mech_stub
+# below does, for every OTHER mechanics-modal test) can never see that failure class: these
+# tests call the REAL AdvancedDialog.exec() via QTimer.singleShot to close it.
+def test_a_modal_dialog_stays_modal_during_the_real_exec(qapp):
+    """The default and every existing caller (ECG/EMG) must be unaffected."""
+    from PySide6.QtCore import QTimer
+    dlg = AdvancedDialog("T", _fields(), {"a": 1, "b": 0.5, "c": False})
+    seen = {}
+
+    def check_and_close():
+        seen["is_modal"] = dlg.isModal()
+        dlg.accept()
+
+    QTimer.singleShot(0, check_and_close)
+    assert dlg.exec() == QDialog.Accepted
+    assert seen["is_modal"] is True
+
+
+def test_a_non_modal_dialog_is_genuinely_non_modal_during_the_real_exec(qapp):
+    from PySide6.QtCore import QTimer
+    dlg = AdvancedDialog("T", _fields(), {"a": 1, "b": 0.5, "c": False}, modal=False)
+    seen = {}
+
+    def check_and_close():
+        seen["is_modal"] = dlg.isModal()
+        dlg.accept()
+
+    QTimer.singleShot(0, check_and_close)
+    assert dlg.exec() == QDialog.Accepted
+    assert seen["is_modal"] is False
+
+
+def test_a_non_modal_dialog_still_reports_reject_from_the_real_exec(qapp):
+    from PySide6.QtCore import QTimer
+    dlg = AdvancedDialog("T", _fields(), {"a": 1, "b": 0.5, "c": False}, modal=False)
+    QTimer.singleShot(0, dlg.reject)
+    assert dlg.exec() == QDialog.Rejected
+
+
+def test_a_dialog_without_on_apply_has_no_apply_button(qapp):
+    dlg = AdvancedDialog("T", _fields(), {"a": 1, "b": 0.5, "c": False})
+    assert dlg.btn_apply is None
+
+
+def test_apply_commits_without_closing_and_never_calls_accept_or_reject(qapp):
+    """Not just result() == Rejected — that is Qt's default regardless of whether accept()
+    or reject() ran, so it cannot tell 'still open' from 'closed unfavourably'. Spy on the
+    two methods themselves."""
+    calls = []
+    dlg = AdvancedDialog("T", _fields(), {"a": 1, "b": 0.5, "c": False},
+                         on_apply=lambda edited: calls.append(edited))
+    accepted, rejected = [], []
+    dlg.accept = lambda: accepted.append(1)
+    dlg.reject = lambda: rejected.append(1)
+    dlg.widget("a").setValue(7)
+    dlg.btn_apply.click()
+    assert calls == [{"a": 7}]
+    assert not accepted and not rejected
+
+
+def test_apply_without_an_edit_does_not_call_on_apply(qapp):
+    calls = []
+    dlg = AdvancedDialog("T", _fields(), {"a": 1, "b": 0.5, "c": False},
+                         on_apply=lambda edited: calls.append(edited))
+    dlg.btn_apply.click()
+    assert calls == []
+
+
+def test_apply_moves_the_edited_baseline_forward(qapp):
+    """A second Apply — or a later OK — must not resend an already-applied key:
+    apply_values() is idempotent so it would be harmless, but it is still a wasted
+    recompute that a debounced derived-line search makes newly expensive."""
+    calls = []
+    dlg = AdvancedDialog("T", _fields(), {"a": 1, "b": 0.5, "c": False},
+                         on_apply=lambda edited: calls.append(edited))
+    dlg.widget("a").setValue(7)
+    assert dlg.edited_values() == {"a": 7}
+    dlg.btn_apply.click()
+    assert dlg.edited_values() == {}, "Apply must move the baseline forward"
+    dlg.btn_apply.click()              # nothing new staged: on_apply must not fire again
+    assert calls == [{"a": 7}]
+
+
+def test_the_derived_line_shows_immediately_even_when_debounced(qapp):
+    """The dialog must open showing a real value, never an empty line waiting out the
+    first debounce window."""
+    dlg = AdvancedDialog("T", _fields(), {"a": 2, "b": 0.5, "c": False},
+                         derived=lambda v: f"a is {v['a']}", derived_debounce_ms=200)
+    assert dlg.derived.text() == "a is 2"
+
+
+def test_derived_debounce_delays_recompute_until_editing_stops(qapp):
+    from PySide6.QtTest import QTest
+    calls = []
+
+    def derived(v):
+        calls.append(v["a"])
+        return f"a is {v['a']}"
+
+    dlg = AdvancedDialog("T", _fields(), {"a": 1, "b": 0.5, "c": False},
+                         derived=derived, derived_debounce_ms=60)
+    calls.clear()                      # drop the synchronous open-time computation
+    dlg.widget("a").setValue(5)
+    dlg.widget("a").setValue(6)
+    dlg.widget("a").setValue(7)        # three rapid edits inside one debounce window
+    assert calls == [], "derived ran synchronously despite a debounce window"
+    QTest.qWait(200)
+    assert calls == [7], "debounce must coalesce to the LAST value, computed once"
+    assert dlg.derived.text() == "a is 7"
+
+
 # -- the ECG modal -------------------------------------------------------------
 def _preview(qapp, tmp_path):
     from respmech.ui.screens.preview_screen import PreviewScreen
@@ -222,6 +335,18 @@ def _mech_stub(monkeypatch, edit, accept=True):
             edit(self)
             return QDialog.Accepted if accept else QDialog.Rejected
     monkeypatch.setattr(ad, "AdvancedDialog", _Stub)
+
+
+def _rendered_preview(qapp, tmp_path):
+    """A PreviewScreen with the first synthetic file's mechanics channels actually
+    rendered (``_refresh_files()`` alone does not render — measured directly), so
+    ``self._trend_probe``/``_trend_probe_file``/``_trend_probe_shape`` are populated,
+    exactly as the real 'select a file' flow leaves them. The live breath count and the
+    trend-anchor hint in Mechanics — advanced… both read these."""
+    pv = _preview(qapp, tmp_path)
+    pv._preview()
+    assert pv._trend_probe is not None, "the synthetic file must render for this test"
+    return pv
 
 
 @pytest.mark.parametrize("accept", [True, False])
@@ -562,4 +687,192 @@ def test_the_legacy_threshold_reads_back_as_auto_at_its_minimum(qapp, tmp_path, 
     pv._open_mech_advanced()
     assert seen == {"shows_value": True, "special_text": True}
     assert s.processing.volume.trend_peak_min_height is None
+    pv.shutdown()
+
+
+# -- Apply, non-modality and the live breath count (D13, UI-overhaul) ---------
+def test_the_mechanics_button_names_what_is_behind_it(qapp, tmp_path):
+    """The button used to just say 'Advanced…' — indistinguishable from the ECG/EMG
+    buttons of the same name, and naming nothing that would tell you what shapes the
+    channel stack you are looking at."""
+    pv = _preview(qapp, tmp_path)
+    assert pv.btn_mech_advanced.text() == "Advanced… (breath detection, volume, WOB)"
+    assert pv.btn_mech_advanced.toolTip() == (
+        "Breath segmentation, work-of-breathing source, volume/drift corrections, "
+        "resampling and per-file breath-count overrides.")
+    pv.shutdown()
+
+
+def test_mech_dialog_is_not_modal_while_the_real_exec_runs(qapp, tmp_path, monkeypatch):
+    """Patches AdvancedDialog.exec ITSELF (not a subclass that overrides it away, as
+    _mech_stub does for every other mechanics test here) so the real modality logic
+    actually runs — a test that stubs exec() entirely cannot see this failure class."""
+    import respmech.ui.advanced_dialog as ad
+    from PySide6.QtCore import QTimer
+    pv = _preview(qapp, tmp_path)
+    real_exec = ad.AdvancedDialog.exec
+    seen = {}
+
+    def spying_exec(self):
+        seen["is_modal"] = self.isModal()
+        seen["has_apply"] = self.btn_apply is not None
+        QTimer.singleShot(0, self.accept)
+        return real_exec(self)
+
+    monkeypatch.setattr(ad.AdvancedDialog, "exec", spying_exec)
+    pv._open_mech_advanced()
+    assert seen["is_modal"] is False, "the mechanics dialog must be genuinely non-modal"
+    assert seen["has_apply"] is True
+    pv.shutdown()
+
+
+def test_ecg_and_emg_dialogs_stay_modal_with_no_apply_button(qapp, tmp_path, monkeypatch):
+    """The other two AdvancedDialog callers must be completely unaffected by D13 — same
+    real-exec check as the mechanics test above, for both of them."""
+    import respmech.ui.advanced_dialog as ad
+    from PySide6.QtCore import QTimer
+    pv = _preview(qapp, tmp_path)
+    real_exec = ad.AdvancedDialog.exec
+    seen = {"modal": [], "has_apply": []}
+
+    def spying_exec(self):
+        seen["modal"].append(self.isModal())
+        seen["has_apply"].append(self.btn_apply is not None)
+        QTimer.singleShot(0, self.accept)
+        return real_exec(self)
+
+    monkeypatch.setattr(ad.AdvancedDialog, "exec", spying_exec)
+    pv._open_ecg_advanced()
+    pv._open_emg_advanced()
+    assert seen["modal"] == [True, True]
+    assert seen["has_apply"] == [False, False]
+    pv.shutdown()
+
+
+def test_apply_commits_the_edited_keys_and_triggers_a_recompute_without_closing(
+        qapp, tmp_path, monkeypatch):
+    """Apply must run through the exact same commit path as OK — this stubs exec() (so it
+    does not test modality, that is covered above) but exercises the REAL on_apply callback
+    wired to the REAL Apply button, mid-'dialog', before any Accepted/Rejected is decided."""
+    pv = _preview(qapp, tmp_path)
+    s = pv.state.settings
+    edits = []
+    pv.settings_edited.connect(lambda: edits.append(1))
+
+    def edit(d):
+        assert d.btn_apply is not None, "the mechanics dialog must offer Apply"
+        d.widget("buffer").setValue(555)
+        d.btn_apply.click()
+        assert s.processing.segmentation.buffer == 555, "Apply must commit like OK does"
+        assert edits, "Apply must mark the analysis modified and trigger a recompute"
+        edits.clear()
+
+    _mech_stub(monkeypatch, edit, accept=False)   # Cancel afterwards: must not undo Apply
+    pv._open_mech_advanced()
+    assert s.processing.segmentation.buffer == 555, "an applied edit survives a later Cancel"
+    assert not edits, "a Cancel after Apply must not mark the analysis modified again"
+    pv.shutdown()
+
+
+def test_the_live_line_explains_when_no_file_has_been_previewed(qapp, tmp_path, monkeypatch):
+    pv = _preview(qapp, tmp_path)               # NOT rendered: _trend_probe stays None
+    assert pv._trend_probe is None
+    seen = {}
+    _mech_stub(monkeypatch, lambda d: seen.update(text=d.derived.text()), accept=False)
+    pv._open_mech_advanced()
+    assert seen["text"] == "No previewed file to count breaths in yet."
+    pv.shutdown()
+
+
+def test_the_live_line_counts_breaths_while_trend_correction_is_off(qapp, tmp_path, monkeypatch):
+    """The default state (correct_trend is False): the dead 'End-expiratory trend
+    correction is off.' sentence is replaced by a live, useful number."""
+    pv = _rendered_preview(qapp, tmp_path)
+    assert pv.state.settings.processing.volume.correct_trend is False
+    seen = {}
+    _mech_stub(monkeypatch, lambda d: seen.update(text=d.derived.text()), accept=False)
+    pv._open_mech_advanced()
+    assert "breath" in seen["text"] and "found with these thresholds" in seen["text"]
+    assert pv._trend_probe_file in seen["text"]
+    pv.shutdown()
+
+
+def test_the_live_breath_count_matches_what_a_real_volume_based_run_would_find(
+        qapp, tmp_path, monkeypatch):
+    """Not just A number: the SAME count ``stage_mechanics_preview`` — the real pipeline —
+    would produce end-to-end for a volume-based run under the same staged thresholds. A
+    weaker test that only re-derives the same call the implementation itself makes would
+    not catch the implementation quietly diverging from the real pipeline."""
+    from respmech.ui.workers import stage_mechanics_preview
+    pv = _rendered_preview(qapp, tmp_path)
+    s = pv.state.settings
+    s.processing.segmentation.method = "volume"      # force the real pipeline down this path
+    real = stage_mechanics_preview(s, pv._current_file())
+    v = {"height": s.processing.segmentation.peak.height,
+         "distance_s": s.processing.segmentation.peak.distance_s,
+         "width_s": s.processing.segmentation.peak.width_s}
+    n = pv._advanced_live_breath_count(pv._trend_probe, v)
+    assert n == real["nbreaths"] > 0
+    pv.shutdown()
+
+
+def test_the_trend_anchor_line_is_unchanged_when_trend_correction_is_on(
+        qapp, tmp_path, monkeypatch):
+    """The refactor that added the breath count for the OFF case must not change the
+    ON-case wording at all — this is the original trend-anchor line, byte for byte."""
+    pv = _rendered_preview(qapp, tmp_path)
+    seen = {}
+
+    def edit(d):
+        d.widget("correct_trend").setChecked(True)
+        d._refresh_derived_now()          # bypass the debounce window for this assertion
+        seen["text"] = d.derived.text()
+
+    _mech_stub(monkeypatch, edit, accept=False)
+    pv._open_mech_advanced()
+    assert "volume range" in seen["text"] and "trough(s) found" in seen["text"]
+    assert "breath" not in seen["text"]
+    assert pv._trend_probe_file in seen["text"]
+    pv.shutdown()
+
+
+def test_the_live_count_withdraws_when_volume_conditioning_changes(qapp, tmp_path, monkeypatch):
+    """The moment a field that CHANGES the staged volume is touched, the probe describes a
+    signal the run will no longer use — the count must be withdrawn, not left stale and
+    confidently wrong. Reuses the exact _TREND_PROBE_KEYS guard _trend_hint already had for
+    the trend-anchor count."""
+    pv = _rendered_preview(qapp, tmp_path)
+    seen = {}
+
+    def edit(d):
+        seen["before"] = d.derived.text()
+        cb = d.widget("correct_drift")
+        cb.setChecked(not cb.isChecked())
+        d._refresh_derived_now()          # bypass the debounce window for this assertion
+        seen["after"] = d.derived.text()
+
+    _mech_stub(monkeypatch, edit, accept=False)
+    pv._open_mech_advanced()
+    assert "found with these thresholds" in seen["before"]
+    assert "Volume conditioning changed" in seen["after"]
+    assert "breath count" in seen["after"]
+    pv.shutdown()
+
+
+def test_the_live_count_explains_when_the_thresholds_cannot_be_evaluated(
+        qapp, tmp_path, monkeypatch):
+    """A minimum distance of 0 s makes scipy.signal.find_peaks raise outright (distance
+    must be >= 1 sample) — a confidently wrong count would be worse than admitting it
+    could not be computed."""
+    pv = _rendered_preview(qapp, tmp_path)
+    seen = {}
+
+    def edit(d):
+        d.widget("distance_s").setValue(0.0)
+        d._refresh_derived_now()          # bypass the debounce window for this assertion
+        seen["text"] = d.derived.text()
+
+    _mech_stub(monkeypatch, edit, accept=False)
+    pv._open_mech_advanced()
+    assert seen["text"] == "Could not count breaths with these breath-detection thresholds."
     pv.shutdown()

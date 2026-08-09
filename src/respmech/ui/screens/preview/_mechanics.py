@@ -106,7 +106,7 @@ class _MechanicsMixin:
         self.crosshair_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         # All the mechanics settings live behind here now (they left the Setup screen); this
         # is the tab they shape, so it is where they belong.
-        self.btn_mech_advanced = QPushButton("Advanced…")
+        self.btn_mech_advanced = QPushButton("Advanced… (breath detection, volume, WOB)")
         self.btn_mech_advanced.setProperty("compact", True)
         self.btn_mech_advanced.setToolTip(
             "Breath segmentation, work-of-breathing source, volume/drift corrections, "
@@ -493,22 +493,59 @@ class _MechanicsMixin:
         if remaining:
             all_fields.append(("Other", list(remaining.values())))
         vals = dict(values); vals["breath_counts"] = bc_text
+
+        def _commit(staged):
+            """Write ``staged`` (an ``edited_values()`` dict) onto the model and, if
+            anything actually changed, mark the analysis modified and recompute. Shared by
+            Apply (mid-dialog) and OK (on close) so the two commit through exactly the same
+            path — Apply is not a second, parallel way to write these settings."""
+            changed = False
+            for grp, f in fields:
+                if f.key in staged and apply_values(owner[grp], {f.key: staged[f.key]}):
+                    changed = True
+            # only when the user actually edited the box — ``staged`` carries edited keys
+            # only, so an untouched commit must not re-parse (and re-write) the entries
+            if "breath_counts" in staged:
+                parsed = _parse_breath_counts(staged["breath_counts"], BreathCountEntry,
+                                              folder=s.input.folder)
+                if parsed != s.processing.breath_counts:
+                    s.processing.breath_counts = parsed
+                    changed = True
+            if not changed:
+                return False              # commit without an edit: no dirty flag, no recompute
+            self.settings_edited.emit()
+            self._request_autorun()      # mechanics feed mech + batch (+ the noise clip)
+            return True
+
         def _trend_hint(v):
-            """Count the anchors the trend correction would find in the previewed file,
-            live, as the thresholds are edited — this is the number that decides whether
-            the run succeeds, and it cannot be read off the settings alone."""
-            if not v.get("correct_trend"):
-                return "End-expiratory trend correction is off."
-            from respmech.core import compute
-            need = compute._TREND_MIN_ANCHORS.get(v["trend_method"], 2)
+            """The live line under the thresholds: end-expiratory trough count while trend
+            correction is on (the number that decides whether the run succeeds and cannot
+            be read off the settings alone), or a live BREATH count while it is off (see
+            _advanced_live_breath_count) — the number this dialog otherwise gives no
+            feedback on at all until the dialog is closed and the preview redraws."""
             probe = self._trend_probe
-            if probe is None or not len(probe):
-                return f"Needs at least {need} end-expiratory troughs in every file."
             # The probe is the drift-corrected volume from the LAST rendered preview. This
             # same dialog also stages the settings that BUILD that volume, so once any of
             # them is touched the probe describes a signal the run will not use — and a
-            # confident "OK"/"will fail" about the wrong signal is worse than no count.
-            if {k: v.get(k) for k in _TREND_PROBE_KEYS} != self._trend_probe_shape:
+            # confident count about the wrong signal is worse than no count. Shared by both
+            # branches below.
+            stale = ({k: v.get(k) for k in _TREND_PROBE_KEYS} != self._trend_probe_shape)
+            if not v.get("correct_trend"):
+                if probe is None or not len(probe):
+                    return "No previewed file to count breaths in yet."
+                if stale:
+                    return ("Volume conditioning changed — press OK, then reopen this "
+                            "dialog for a breath count.")
+                n = self._advanced_live_breath_count(probe, v)
+                if n is None:
+                    return "Could not count breaths with these breath-detection thresholds."
+                return (f"In {self._trend_probe_file}: {n} breath{'s' if n != 1 else ''} "
+                        "found with these thresholds.")
+            from respmech.core import compute
+            need = compute._TREND_MIN_ANCHORS.get(v["trend_method"], 2)
+            if probe is None or not len(probe):
+                return f"Needs at least {need} end-expiratory troughs in every file."
+            if stale:
                 return ("Volume conditioning changed — press OK, then reopen this dialog "
                         f"for a trough count. Needs at least {need}.")
             n = compute.trend_anchors(
@@ -521,30 +558,20 @@ class _MechanicsMixin:
                     + ("OK." if n >= need
                        else f"NOT ENOUGH (needs {need}); the run will fail this file."))
 
+        # Not modal (see AdvancedDialog.exec): the channel stack behind this dialog is
+        # exactly what the fields on it shape, so Apply has to be visible while it redraws.
+        # derived_debounce_ms=250: the live breath count runs a real peak search, not
+        # trivial arithmetic like the ECG/EMG modals' derived lines, so it must not fire on
+        # every keystroke.
         dlg = AdvancedDialog("Mechanics — advanced", all_fields, vals, parent=self,
                              intro="How breaths are detected, how work of breathing is "
                                    "computed, and the volume/drift corrections. The defaults "
                                    "suit ordinary recordings.",
-                             derived=_trend_hint)
+                             derived=_trend_hint, modal=False, on_apply=_commit,
+                             derived_debounce_ms=250)
         if dlg.exec() != QDialog.Accepted:
             return
-        staged = dlg.edited_values()          # see AdvancedDialog.edited_values
-        changed = False
-        for grp, f in fields:
-            if f.key in staged and apply_values(owner[grp], {f.key: staged[f.key]}):
-                changed = True
-        # only when the user actually edited the box — ``staged`` carries edited keys only,
-        # so an untouched OK must not re-parse (and re-write) the existing entries
-        if "breath_counts" in staged:
-            parsed = _parse_breath_counts(staged["breath_counts"], BreathCountEntry,
-                                          folder=s.input.folder)
-            if parsed != s.processing.breath_counts:
-                s.processing.breath_counts = parsed
-                changed = True
-        if not changed:
-            return                       # OK without an edit: no dirty flag, no recompute
-        self.settings_edited.emit()
-        self._request_autorun()          # mechanics feed mech + batch (+ the noise clip)
+        _commit(dlg.edited_values())          # see AdvancedDialog.edited_values
 
     # -- channel preview (Mechanics), synchronous render -------------------
     def _preview(self):
@@ -1076,6 +1103,45 @@ class _MechanicsMixin:
         vol, samp = self.state.settings.processing.volume, self.state.settings.processing.sampling
         src = {**vars(vol), **vars(samp)}
         return {k: src.get(k) for k in _TREND_PROBE_KEYS}
+
+    def _advanced_live_breath_count(self, probe, v):
+        """How many breaths the volume-based detector finds in the previewed file's
+        (drift-corrected) volume with the STAGED breath-detection thresholds — the live
+        read-out in Mechanics — advanced… while end-expiratory trend correction is off (see
+        _trend_hint above). Deliberately always volume-based regardless of the staged
+        segmentation method: only the volume probe is staged in this dialog, never flow.
+
+        Uses the EXISTING ``compute.separateintobreathsbyvolume`` — the same function
+        ``stage_mechanics_preview`` calls for volume-based segmentation — rather than a new
+        peak-finding implementation in the UI layer, against a lightweight stand-in for the
+        legacy settings namespace it expects and zero-filled arrays for the phase channels
+        this dialog does not stage (flow/poes/pgas/pdi): only their LENGTH matters to the
+        breath count, since only ``volume`` drives the peak search.
+
+        Returns ``None`` if the thresholds cannot be evaluated at all, e.g. a minimum
+        distance/width of 0 s, which ``scipy.signal.find_peaks`` rejects outright — a
+        confidently wrong count would be worse than an explanatory line saying there is
+        none."""
+        import types
+
+        from respmech.core import compute
+        n = len(probe)
+        zeros = np.zeros(n)
+        stand_in = types.SimpleNamespace(
+            processing=types.SimpleNamespace(
+                mechanics=types.SimpleNamespace(
+                    peakheight=v["height"], peakdistance=v["distance_s"],
+                    peakwidth=v["width_s"], excludebreaths={})),
+            input=types.SimpleNamespace(
+                format=types.SimpleNamespace(
+                    samplingfrequency=self.state.settings.input.format.sampling_frequency)))
+        try:
+            breaths = compute.separateintobreathsbyvolume(
+                self._trend_probe_file or "", np.arange(n), zeros, probe,
+                zeros, zeros, zeros, [], [], stand_in)
+        except Exception:                   # noqa: BLE001 — a live hint is never fatal
+            return None
+        return len(breaths)
 
     def _on_batch_result(self, result):
         """Render the automatic mechanics test run: the per-breath table + Campbell (the
