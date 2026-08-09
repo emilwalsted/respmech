@@ -70,7 +70,7 @@ try:
 except Exception:  # pragma: no cover
     _theme = None
 
-from ._mechanics import _MechanicsMixin
+from ._mechanics import _MechanicsMixin, _MechStackFloorFitter
 from ._ecg import _EcgMixin
 from ._emg_noise import _EmgNoiseMixin, NEEDS_ECG_HINT
 from ._busy_overlay import BusyOverlay
@@ -220,6 +220,13 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._ecg_tab = self._scrollable(self._ecg_page)
         self._emg_tab = self._scrollable(self._emg_page)
         self.subtabs.addTab(self._mech_tab, _TAB_MECH)
+        # D14: keep the Mechanics stack's floor eftergivende for whatever viewport this
+        # scroll area actually has right now — see _MechStackFloorFitter.
+        self._mech_stack_fitter = _MechStackFloorFitter(self, self._mech_tab.viewport())
+        # D14: the QC verdict + its two per-file actions live OUTSIDE the scrolling page now
+        # (see _build_mech_action_band) — built here so it can be pinned in THIS screen's
+        # own root layout, below self.subtabs, instead of scrolling away with the page.
+        self._mech_action_band = self._build_mech_action_band()
 
         # B02: the file rail — one row per file, replacing the old file_combo. A left-hand
         # panel rather than folded into the top bar, since a filterable, stateful row list
@@ -263,6 +270,10 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._workspace_split.setStretchFactor(1, 1)
         self._workspace_split.setSizes([210, 900])
         root.addWidget(self._workspace_split, 1)
+        # D14: fixed under the workspace, same as settings_screen.py pins its own QC strip
+        # (self.qc) below its scrolling form — see _build_mech_action_band's docstring.
+        root.addWidget(self._mech_action_band)
+        self._update_mech_action_band_visibility()
 
         # The control strips sit directly above wheel-zoomable plots, so an overshoot while
         # zooming used to land on a spin box and step it — and every ECG/noise parameter here
@@ -335,6 +346,9 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # the chip's themed height isn't known until the EMG sub-tab is first laid out;
         # match the 'Set noise profile' button to it then, so the strip is one band.
         self.subtabs.currentChanged.connect(lambda *_: QTimer.singleShot(0, self._align_noise_strip))
+        # D14: the action band only makes sense for the Mechanics sub-tab; cheap (show/hide),
+        # so unlike _align_noise_strip above this needs no debounce of its own.
+        self.subtabs.currentChanged.connect(lambda *_: self._update_mech_action_band_visibility())
         self.refresh_files()
 
     def _recentre_overlays(self, *_):

@@ -156,6 +156,13 @@ PLOT_ROW_MIN_HEIGHT = 96
 #: view's height on any window under ~1200 px tall.
 PLOT_DIAG_MIN_HEIGHT = 96
 
+#: Hard per-row floor a stacked graph's rows are never squeezed below, even once
+#: ``set_stack_floor``'s ``viewport_height`` lets the floor give way (D14, UI-overhaul).
+#: Below this a row stops being useful for judging a breath/burst by eye at all — it is the
+#: same job PLOT_ROW_MIN_HEIGHT does for a screen with room to spare, just for the screen
+#: that does not have it.
+PLOT_ROW_HARD_MIN = 60
+
 
 def set_plot_floor(widget, height: int = PLOT_MIN_HEIGHT) -> None:
     """Stop a plot widget from being squeezed below the height at which it stops being
@@ -166,7 +173,9 @@ def set_plot_floor(widget, height: int = PLOT_MIN_HEIGHT) -> None:
         pass
 
 
-def set_stack_floor(widget, rows: int, row_height: int = PLOT_ROW_MIN_HEIGHT) -> None:
+def set_stack_floor(widget, rows: int, row_height: int = PLOT_ROW_MIN_HEIGHT, *,
+                     viewport_height: int | None = None,
+                     row_hard_min: int = PLOT_ROW_HARD_MIN) -> None:
     """Floor a widget that STACKS ``rows`` graphs, per row rather than in total.
 
     The distinction is the whole point and it was got wrong once: flooring the container at
@@ -175,8 +184,30 @@ def set_stack_floor(widget, rows: int, row_height: int = PLOT_ROW_MIN_HEIGHT) ->
     than before the floor was introduced, on the tab the Preview screen opens on, while the
     container happily satisfied its 130 px. A stack's floor is ``rows * row_height``; the page
     scrolls when that does not fit, which is what was asked for.
+
+    ``viewport_height`` (D14, UI-overhaul) lets that floor give way once the viewport the
+    stack is actually shown in genuinely cannot afford ``rows * row_height``: on a 1280x720
+    screen a 5-channel stack's 480 px floor left the containing vertical splitter's lower
+    half permanently pinned at its own floor with zero pixels of travel — the splitter
+    reported movable but a drag could not move it, and scrolling was the only way to reach
+    the table/Campbell half at all. When given, the floor becomes
+    ``min(rows * row_height, 0.55 * viewport_height)``, clamped to never fall below
+    ``rows * row_hard_min`` — the stack keeps SOME readable trace per row even on the
+    shortest screen shipped to, it just stops being ``row_height`` tall.
+
+    Omitted (the default, ``None``, or a non-positive value meaning "not known yet" — e.g.
+    a viewport that has not been laid out), the floor is the original, viewport-blind
+    ``rows * row_height``, unchanged from before this parameter existed. Existing callers
+    that never pass it (the EMG raw-channel stack) are therefore untouched by this change.
     """
-    set_plot_floor(widget, max(1, int(rows)) * int(row_height))
+    rows = max(1, int(rows))
+    ideal = rows * int(row_height)
+    if viewport_height is None or viewport_height <= 0:
+        set_plot_floor(widget, ideal)
+        return
+    cap = int(0.55 * viewport_height)
+    hard_min = rows * int(row_hard_min)
+    set_plot_floor(widget, max(hard_min, min(ideal, cap)))
 
 
 def align_left_axis(plot, width: int = PLOT_AXIS_WIDTH) -> None:

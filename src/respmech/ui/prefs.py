@@ -118,6 +118,46 @@ def recent_label(path: str, max_dir: int = 34) -> str:
     return f"{name}  —  {folder}" if folder else name
 
 
+# --- generic splitter geometry (D14, UI-overhaul) ---------------------------
+# The codebase had no ``saveState``/``restoreState``/``saveGeometry`` call anywhere before
+# this ticket. Generic and small on purpose, so the next splitter that wants to remember a
+# user's chosen split reuses this pair rather than each growing its own QSettings accessor.
+#
+# A splitter fed by this pair is restored on EVERY construction of the screen that owns
+# it — not just in tests that explicitly opt in. A test that makes such a splitter emit a
+# real ``splitterMoved`` (a simulated drag, not a plain ``setSizes()`` call, which does not
+# emit it) without also using the ``isolated_prefs`` fixture (see conftest.py) will persist
+# that split to the shared throwaway QSettings scope and silently perturb every later
+# test's default layout. Always pair a real-drag test of a persisted splitter with
+# ``isolated_prefs``.
+def save_splitter_state(key: str, splitter) -> None:
+    """Remember one QSplitter's handle positions across sessions, keyed by ``key`` (e.g.
+    ``'preview.mech.vsplit'``)."""
+    s = _qsettings()
+    if s is None or splitter is None:
+        return
+    try:
+        s.setValue(f"splitter/{key}", splitter.saveState())
+    except Exception:                            # pragma: no cover - defensive
+        pass
+
+
+def restore_splitter_state(key: str, splitter) -> bool:
+    """Restore a previously-saved splitter state onto ``splitter``. Returns whether a saved
+    state existed and was applied, so a caller can fall back to its own default sizes when
+    the user has never touched this splitter yet."""
+    s = _qsettings()
+    if s is None or splitter is None:
+        return False
+    try:
+        state = s.value(f"splitter/{key}", None)
+        if state is None:
+            return False
+        return bool(splitter.restoreState(state))
+    except Exception:                            # pragma: no cover - defensive
+        return False
+
+
 def apply_rig(settings, rig: dict) -> None:
     """Apply a saved rig onto a Settings object (channel columns + sampling only)."""
     if not rig:

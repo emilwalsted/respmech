@@ -36,6 +36,7 @@ from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
                                   stage_ecg_reduction, stage_mechanics_preview,
                                   stage_noise_fidelity)
+from respmech.ui import prefs as _prefs
 
 try:
     from respmech.ui import theme as _theme
@@ -92,6 +93,56 @@ _CAMPBELL_XLABEL_VARIANTS = ("Lung volume above end-expiration (L)",
                             "Volume above EELV (L)", "V−EELV (L)")
 _CAMPBELL_YLABEL_VARIANTS = ("Oesophageal pressure  Poes (cmH₂O)", "Poes (cmH₂O)", "Poes")
 
+#: QSettings key for the persisted vertical splitter (channel stack / table+Campbell) — D14.
+_MECH_VSPLIT_PREF_KEY = "preview.mech.vsplit"
+
+#: How long to wait after the last ``splitterMoved`` before writing it to QSettings — a drag
+#: fires many of these, and only the position it settles on is worth persisting (D14).
+_SPLIT_SAVE_DEBOUNCE_MS = 400
+
+
+class _MechStackFloorFitter(QObject):
+    """Keep the Mechanics channel stack's floor eftergivende for the viewport it is actually
+    shown in (D14, UI-overhaul).
+
+    ``theme.set_stack_floor`` used to floor the five-channel stack at a flat
+    ``rows * PLOT_ROW_MIN_HEIGHT`` (480 px) regardless of the window. On a 1280x720 screen
+    that pinned the vertical splitter's lower half at ITS OWN floor with zero pixels of
+    travel — the splitter reported movable but a drag could not move it, so scrolling was
+    the only way to reach the table/Campbell half at all, and while scrolling the graphs the
+    "#1…#9" breath strip a user needs to click scrolled out of view with them. This installs
+    on the Mechanics scroll area's viewport and recomputes the floor (via
+    ``PreviewScreen._update_mech_stack_floor``) on every resize, so the floor gives way
+    exactly where it previously had no room to; a tall window is unaffected because the cap
+    only bites once the viewport is shorter than the full floor (see ``set_stack_floor``).
+
+    Deferred by one event-loop turn and coalesced — the same pattern
+    ``_CompactFigureFitter``/``_PlotTitleOverlay`` already use in this package: a resize drag
+    fires many Resize events, and shrinking the floor itself triggers a LayoutRequest the
+    FitScrollArea reacts to by resizing the page, which is not itself a viewport resize but
+    is cheap to just recompute against again next turn rather than special-case away.
+    ``QEvent.Show`` is included because a scroll area's viewport can hold its final size
+    while the Mechanics sub-tab is not yet the current one — GUI construction runs before
+    anything is shown — so the first live measurement often arrives as a Show, not a Resize.
+    """
+
+    def __init__(self, screen, viewport):
+        super().__init__(viewport)
+        self._screen = screen
+        self._viewport = viewport
+        self._pending = False
+        viewport.installEventFilter(self)
+
+    def eventFilter(self, obj, ev):
+        if obj is self._viewport and ev.type() in (QEvent.Resize, QEvent.Show) and not self._pending:
+            self._pending = True
+            QTimer.singleShot(0, self._run)
+        return False
+
+    def _run(self):
+        self._pending = False
+        self._screen._update_mech_stack_floor()
+
 
 class _MechanicsMixin:
 
@@ -125,6 +176,7 @@ class _MechanicsMixin:
         _xh.addWidget(self.crosshair_label, 0, Qt.AlignRight)
         v.addLayout(_xh)
         split = QSplitter(Qt.Vertical)
+        self._mech_vsplit = split
         self.plots = pg.GraphicsLayoutWidget()
         self.plots.setAccessibleName("Mechanics signals")   # C02: named for QAccessible/screen readers
         _theme.set_plot_floor(self.plots)
@@ -174,9 +226,81 @@ class _MechanicsMixin:
         lower.setSizes([560, 400])
         split.addWidget(lower)
         split.setStretchFactor(0, 3); split.setStretchFactor(1, 2)
+        # D14: restore a previously-chosen split BEFORE it is shown, so a user who has found
+        # a division that works keeps it session to session — falls back to the stretch
+        # factors above (unchanged default) the first time, when nothing is saved yet.
+        _prefs.restore_splitter_state(_MECH_VSPLIT_PREF_KEY, split)
+        self._mech_split_save_pending = False
+        split.splitterMoved.connect(self._schedule_mech_split_save)
         v.addWidget(split)
-        # P16/P17: a thin action bar — batch QC overview + crosshair read-out + export
-        bar = QHBoxLayout()
+        return w
+
+    def _schedule_mech_split_save(self, *_args):
+        """Debounced save of the vertical splitter's handle position (D14): a drag fires
+        many ``splitterMoved`` signals, and only where it settles is worth persisting."""
+        if self._mech_split_save_pending:
+            return
+        self._mech_split_save_pending = True
+        QTimer.singleShot(_SPLIT_SAVE_DEBOUNCE_MS, self._flush_mech_split_save)
+
+    def _flush_mech_split_save(self):
+        self._mech_split_save_pending = False
+        _prefs.save_splitter_state(_MECH_VSPLIT_PREF_KEY, self._mech_vsplit)
+
+    def _update_mech_stack_floor(self):
+        """Recompute the Mechanics channel stack's floor (D14) for the viewport it is
+        actually shown in right now. The floor gives way once that viewport genuinely
+        cannot afford the full ``rows * PLOT_ROW_MIN_HEIGHT`` — see
+        ``theme.set_stack_floor`` for why and by how much. Called both after every render
+        (``_render_preview``, which used to set the viewport-blind floor directly) and on
+        every resize/show of the Mechanics scroll area (``_MechStackFloorFitter``), so the
+        floor is correct regardless of which happens first — a render before the tab has
+        ever been shown (viewport height 0, so the floor stays the original ``rows *
+        row_height``), or a resize of an already-rendered tab.
+
+        Reached from a deferred ``QTimer.singleShot(0, ...)`` (``_MechStackFloorFitter``),
+        so the widgets it touches can in principle have been C++-deleted by the time it
+        fires (window closed mid-resize); guarded the same way the codebase already guards
+        every other cosmetic, deferred Qt call (see ``theme.set_plot_floor``) — never worth
+        crashing a build over a floor that no longer has anywhere to apply."""
+        if _theme is None:
+            return
+        try:
+            area = getattr(self, "_mech_tab", None)
+            vp_h = area.viewport().height() if area is not None else 0
+            _theme.set_stack_floor(self.plots, len(_CHANNELS),
+                                   viewport_height=vp_h if vp_h > 0 else None)
+        except RuntimeError:                  # pragma: no cover - deleted C++ widget
+            pass
+
+    def _update_mech_action_band_visibility(self):
+        """Show the Mechanics action band (D14) only while the Mechanics sub-tab is the
+        current one — the ECG/EMG sub-tabs have no equivalent band, and it would otherwise
+        sit fixed under whichever page happens to be showing. Compares the TAB WRAPPER
+        (``_mech_tab``), not the page, because that is what ``self.subtabs`` actually holds
+        (see the comment in ``PreviewScreen._build`` on why the wrapper is the tab item)."""
+        band = getattr(self, "_mech_action_band", None)
+        if band is not None:
+            band.setVisible(self.subtabs.currentWidget() is self._mech_tab)
+
+    def _build_mech_action_band(self):
+        """The Mechanics QC verdict + its two per-file actions (P16/P17), built as a small
+        standalone widget so ``PreviewScreen._build`` can pin it in the ROOT layout under
+        ``self.subtabs`` (D14, UI-overhaul) — fixed OUTSIDE the scrolling page, the same
+        pattern ``settings_screen.py`` uses for its own QC strip (``self.qc``).
+
+        It used to sit inside ``_build_mech_tab``'s scrolled page, at the very bottom. On a
+        short screen the page scrolls to reach it, and while scrolled the verdict that gives
+        the Mechanics tab its name — and the only two actions the tab offers — were the ONE
+        thing guaranteed to be off screen: the tab opened on the channel stack, never on its
+        own judgement. Visibility is toggled by ``PreviewScreen`` to only the Mechanics
+        sub-tab (``_update_mech_action_band_visibility``); the ECG/EMG sub-tabs have no
+        equivalent band."""
+        band = QWidget()
+        band.setMinimumHeight(36)
+        band.setMaximumHeight(40)
+        bar = QHBoxLayout(band)
+        bar.setContentsMargins(6, 0, 6, 0)
         self.qc_overview = QLabel("")
         self.qc_overview.setProperty("banner", True)   # box baked at first polish (theme.py)
         self.qc_overview.setProperty("status", "muted")
@@ -195,8 +319,7 @@ class _MechanicsMixin:
         self.btn_process_file.clicked.connect(self._process_this_file)
         bar.addWidget(self.qc_overview); bar.addStretch(1)
         bar.addWidget(self.btn_process_file); bar.addWidget(self.btn_export_fig)
-        v.addLayout(bar)
-        return w
+        return band
 
     def _process_this_file(self):
         name = self._previewed_file or self._selected_filename()
@@ -610,9 +733,10 @@ class _MechanicsMixin:
         self._channel_plots = []
         self._crosshair_lines = []                       # cleared with the plots; rebuilt below
         pal = _plot_pal()
-        # Per ROW, not for the stack as a whole — see theme.set_stack_floor. Five channels
-        # sharing a 130 px container is 10 px of trace each.
-        _theme.set_stack_floor(self.plots, len(_CHANNELS))
+        # Per ROW, not for the stack as a whole, and eftergivende for the viewport this stack
+        # is actually shown in (D14) — see _update_mech_stack_floor/theme.set_stack_floor.
+        # Five channels sharing a flat 130 px container is 10 px of trace each.
+        self._update_mech_stack_floor()
         for i, (key, label, colour) in enumerate(_CHANNELS):
             p = self.plots.addPlot(row=i, col=0, axisItems={"left": SciAxis(orientation="left")})
             p.showGrid(x=True, y=True, alpha=pal["grid_alpha"])
