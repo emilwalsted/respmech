@@ -362,14 +362,32 @@ class AdvancedDialog(QDialog):
         needs its own event loop instead of Qt's ``exec()``, which a caller can still treat
         exactly like a normal modal call: it returns only once the dialog is closed, with
         the same ``QDialog.Accepted``/``Rejected`` result.
+
+        Also quits on ``destroyed`` — not reachable through this dialog's own Cancel/OK/✕
+        (all three end in ``done()``, which emits ``finished``), but a defensive fallback
+        for a parent being torn down with this dialog still open, which ordinary Qt child
+        cleanup can do without ever calling ``close()``/``done()`` on the child. Without it
+        the loop would spin forever, since ``finished`` is never emitted by C++-side
+        destruction. Once ``destroyed`` has fired, ``self`` may no longer be a live
+        object — read the RESULT captured in the closure, not ``self.result()``.
         """
         if not self._modal:
             self.setResult(QDialog.Rejected)
             self.show()
             loop = QEventLoop()
-            self.finished.connect(loop.quit)
+            closed = {"result": QDialog.Rejected}
+
+            def _capture_and_quit():
+                try:
+                    closed["result"] = self.result()
+                except RuntimeError:            # destroyed before finished() could fire
+                    pass
+                loop.quit()
+
+            self.finished.connect(_capture_and_quit)
+            self.destroyed.connect(loop.quit)
             loop.exec()
-            return self.result()
+            return closed["result"]
         return super().exec()
 
     def done(self, r):                      # noqa: N802 - Qt API

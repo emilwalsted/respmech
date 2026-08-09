@@ -706,7 +706,15 @@ def test_the_mechanics_button_names_what_is_behind_it(qapp, tmp_path):
 def test_mech_dialog_is_not_modal_while_the_real_exec_runs(qapp, tmp_path, monkeypatch):
     """Patches AdvancedDialog.exec ITSELF (not a subclass that overrides it away, as
     _mech_stub does for every other mechanics test here) so the real modality logic
-    actually runs — a test that stubs exec() entirely cannot see this failure class."""
+    actually runs — a test that stubs exec() entirely cannot see this failure class.
+
+    ``isModal()`` is sampled from INSIDE the ``QTimer.singleShot`` callback — i.e. while
+    the real ``exec()``'s own event loop is spinning — not before ``real_exec(self)`` is
+    even called. Sampling it before proves only that the right ``modal=`` argument reached
+    the constructor (``setModal()`` in ``__init__``, unaffected by whatever ``exec()``
+    itself later does); it would stay green even if ``exec()`` were reverted to
+    unconditionally call ``super().exec()`` — the exact regression this override exists to
+    prevent, and the one the earlier, top-of-file generic tests already catch this way."""
     import respmech.ui.advanced_dialog as ad
     from PySide6.QtCore import QTimer
     pv = _preview(qapp, tmp_path)
@@ -714,21 +722,26 @@ def test_mech_dialog_is_not_modal_while_the_real_exec_runs(qapp, tmp_path, monke
     seen = {}
 
     def spying_exec(self):
-        seen["is_modal"] = self.isModal()
         seen["has_apply"] = self.btn_apply is not None
-        QTimer.singleShot(0, self.accept)
+
+        def check_and_close():
+            seen["is_modal_during_exec"] = self.isModal()
+            self.accept()
+
+        QTimer.singleShot(0, check_and_close)
         return real_exec(self)
 
     monkeypatch.setattr(ad.AdvancedDialog, "exec", spying_exec)
     pv._open_mech_advanced()
-    assert seen["is_modal"] is False, "the mechanics dialog must be genuinely non-modal"
+    assert seen["is_modal_during_exec"] is False, \
+        "the mechanics dialog must be genuinely non-modal WHILE it is open"
     assert seen["has_apply"] is True
     pv.shutdown()
 
 
 def test_ecg_and_emg_dialogs_stay_modal_with_no_apply_button(qapp, tmp_path, monkeypatch):
     """The other two AdvancedDialog callers must be completely unaffected by D13 — same
-    real-exec check as the mechanics test above, for both of them."""
+    real-exec, sampled-mid-exec check as the mechanics test above, for both of them."""
     import respmech.ui.advanced_dialog as ad
     from PySide6.QtCore import QTimer
     pv = _preview(qapp, tmp_path)
@@ -736,9 +749,13 @@ def test_ecg_and_emg_dialogs_stay_modal_with_no_apply_button(qapp, tmp_path, mon
     seen = {"modal": [], "has_apply": []}
 
     def spying_exec(self):
-        seen["modal"].append(self.isModal())
         seen["has_apply"].append(self.btn_apply is not None)
-        QTimer.singleShot(0, self.accept)
+
+        def check_and_close():
+            seen["modal"].append(self.isModal())
+            self.accept()
+
+        QTimer.singleShot(0, check_and_close)
         return real_exec(self)
 
     monkeypatch.setattr(ad.AdvancedDialog, "exec", spying_exec)
@@ -749,28 +766,102 @@ def test_ecg_and_emg_dialogs_stay_modal_with_no_apply_button(qapp, tmp_path, mon
     pv.shutdown()
 
 
+def test_mech_dialog_debounces_the_live_derived_line(qapp, tmp_path, monkeypatch):
+    """The ticket requires the live breath-count search to be debounced — a real scipy peak
+    search, not the trivial arithmetic the OTHER two modals' derived lines do. Prove
+    ``_open_mech_advanced`` actually passes a non-zero ``derived_debounce_ms`` (setting it
+    to 0 would make every keystroke recompute synchronously, which every OTHER
+    mechanics-derived-line test in this file would still pass, since they all deliberately
+    call ``_refresh_derived_now()`` to bypass the debounce for their own assertions)."""
+    import respmech.ui.advanced_dialog as ad
+    from PySide6.QtCore import QTimer
+    pv = _preview(qapp, tmp_path)
+    real_exec = ad.AdvancedDialog.exec
+    seen = {}
+
+    def spying_exec(self):
+        seen["has_timer"] = self._derived_timer is not None
+        seen["interval_ms"] = self._derived_timer.interval() if self._derived_timer else None
+        QTimer.singleShot(0, self.accept)
+        return real_exec(self)
+
+    monkeypatch.setattr(ad.AdvancedDialog, "exec", spying_exec)
+    pv._open_mech_advanced()
+    assert seen["has_timer"] is True, "the live breath count must be debounced, not synchronous"
+    assert seen["interval_ms"] == 250
+    pv.shutdown()
+
+
+def test_mech_dialog_has_exactly_three_buttons(qapp, tmp_path, monkeypatch):
+    pv = _preview(qapp, tmp_path)
+    seen = {}
+    _mech_stub(monkeypatch, lambda d: seen.update(
+        cancel=d.btn_cancel, apply=d.btn_apply, ok=d.btn_ok), accept=False)
+    pv._open_mech_advanced()
+    assert seen["cancel"] is not None and seen["apply"] is not None and seen["ok"] is not None
+    pv.shutdown()
+
+
 def test_apply_commits_the_edited_keys_and_triggers_a_recompute_without_closing(
         qapp, tmp_path, monkeypatch):
     """Apply must run through the exact same commit path as OK — this stubs exec() (so it
     does not test modality, that is covered above) but exercises the REAL on_apply callback
-    wired to the REAL Apply button, mid-'dialog', before any Accepted/Rejected is decided."""
+    wired to the REAL Apply button, mid-'dialog', before any Accepted/Rejected is decided.
+
+    Spies on ``_request_autorun`` directly, not just ``settings_edited`` — deleting the
+    ``_request_autorun()`` call from ``_commit`` while leaving ``settings_edited.emit()`` in
+    place would still mark the analysis "modified" and pass a signal-only assertion, without
+    ever actually scheduling the recompute the ticket names explicitly ("udløser en
+    genberegning")."""
     pv = _preview(qapp, tmp_path)
     s = pv.state.settings
     edits = []
     pv.settings_edited.connect(lambda: edits.append(1))
+    autoruns = []
+    monkeypatch.setattr(pv, "_request_autorun",
+                        lambda *a, **k: autoruns.append((a, k)))
 
     def edit(d):
         assert d.btn_apply is not None, "the mechanics dialog must offer Apply"
         d.widget("buffer").setValue(555)
         d.btn_apply.click()
         assert s.processing.segmentation.buffer == 555, "Apply must commit like OK does"
-        assert edits, "Apply must mark the analysis modified and trigger a recompute"
+        assert edits, "Apply must mark the analysis modified"
+        assert autoruns, "Apply must trigger a recompute"
         edits.clear()
+        autoruns.clear()
 
     _mech_stub(monkeypatch, edit, accept=False)   # Cancel afterwards: must not undo Apply
     pv._open_mech_advanced()
     assert s.processing.segmentation.buffer == 555, "an applied edit survives a later Cancel"
     assert not edits, "a Cancel after Apply must not mark the analysis modified again"
+    assert not autoruns, "a Cancel after Apply must not trigger a second recompute"
+    pv.shutdown()
+
+
+def test_apply_then_a_further_edit_then_ok_commits_both(qapp, tmp_path, monkeypatch):
+    """The full real-world flow: tweak, Apply, tweak something else, OK. Both edits must
+    land, Apply must not resend on the later OK (edited_values() baseline moved forward —
+    see the generic test_apply_moves_the_edited_baseline_forward), and BOTH commits must
+    each trigger their own recompute."""
+    pv = _preview(qapp, tmp_path)
+    s = pv.state.settings
+    autoruns = []
+    monkeypatch.setattr(pv, "_request_autorun",
+                        lambda *a, **k: autoruns.append((a, k)))
+
+    def edit(d):
+        d.widget("buffer").setValue(555)
+        d.btn_apply.click()
+        assert s.processing.segmentation.buffer == 555
+        assert len(autoruns) == 1, "Apply must trigger exactly one recompute"
+        d.widget("height").setValue(0.25)
+
+    _mech_stub(monkeypatch, edit, accept=True)
+    pv._open_mech_advanced()
+    assert s.processing.segmentation.buffer == 555, "Apply's edit must survive the later OK"
+    assert s.processing.segmentation.peak.height == 0.25, "OK's own edit must also commit"
+    assert len(autoruns) == 2, "each commit (Apply, then OK) must trigger its own recompute"
     pv.shutdown()
 
 
@@ -819,20 +910,85 @@ def test_the_live_breath_count_matches_what_a_real_volume_based_run_would_find(
 def test_the_trend_anchor_line_is_unchanged_when_trend_correction_is_on(
         qapp, tmp_path, monkeypatch):
     """The refactor that added the breath count for the OFF case must not change the
-    ON-case wording at all — this is the original trend-anchor line, byte for byte."""
+    ON-case wording at all — asserted against the EXACT string the original, unmoved
+    f-string would produce (not just substrings), so a tweak to the 'OK.'/'NOT ENOUGH…'
+    tail — which a pure substring check would miss — fails this test too."""
+    import numpy as np
+    from respmech.core import compute
     pv = _rendered_preview(qapp, tmp_path)
+    s = pv.state.settings
     seen = {}
 
     def edit(d):
         d.widget("correct_trend").setChecked(True)
         d._refresh_derived_now()          # bypass the debounce window for this assertion
         seen["text"] = d.derived.text()
+        seen["v"] = d.values()
 
     _mech_stub(monkeypatch, edit, accept=False)
     pv._open_mech_advanced()
-    assert "volume range" in seen["text"] and "trough(s) found" in seen["text"]
-    assert "breath" not in seen["text"]
-    assert pv._trend_probe_file in seen["text"]
+
+    v = seen["v"]
+    need = compute._TREND_MIN_ANCHORS.get(v["trend_method"], 2)
+    n = compute.trend_anchors(
+        pv._trend_probe, s.input.format.sampling_frequency,
+        min_height=v["trend_peak_min_height"],
+        min_prominence_frac=v["trend_peak_min_prominence_frac"],
+        min_distance_s=v["trend_peak_min_distance_s"]).size
+    expected = (f"In {pv._trend_probe_file}: volume range {float(np.ptp(pv._trend_probe)):.2f}, "
+                f"{n} trough(s) found — "
+                + ("OK." if n >= need else f"NOT ENOUGH (needs {need}); the run will fail this file."))
+    assert seen["text"] == expected
+    pv.shutdown()
+
+
+def test_the_trend_anchor_hint_explains_when_no_file_has_been_previewed(qapp, tmp_path, monkeypatch):
+    """The ON-case counterpart to test_the_live_line_explains_when_no_file_has_been_previewed
+    (the OFF case) — pre-existing logic, moved verbatim by this ticket, but untested until
+    now anywhere in the repository."""
+    from respmech.core import compute
+    pv = _preview(qapp, tmp_path)               # NOT rendered: _trend_probe stays None
+    assert pv._trend_probe is None
+    seen = {}
+
+    def edit(d):
+        d.widget("correct_trend").setChecked(True)
+        d._refresh_derived_now()
+        seen["text"] = d.derived.text()
+        seen["v"] = d.values()
+
+    _mech_stub(monkeypatch, edit, accept=False)
+    pv._open_mech_advanced()
+    need = compute._TREND_MIN_ANCHORS.get(seen["v"]["trend_method"], 2)
+    assert seen["text"] == f"Needs at least {need} end-expiratory troughs in every file."
+    pv.shutdown()
+
+
+def test_the_trend_anchor_hint_withdraws_when_volume_conditioning_changes(
+        qapp, tmp_path, monkeypatch):
+    """The ON-case counterpart to test_the_live_count_withdraws_when_volume_conditioning_changes
+    (the OFF case) — pre-existing logic, moved verbatim by this ticket, but untested until
+    now anywhere in the repository."""
+    from respmech.core import compute
+    pv = _rendered_preview(qapp, tmp_path)
+    seen = {}
+
+    def edit(d):
+        d.widget("correct_trend").setChecked(True)
+        d._refresh_derived_now()
+        seen["before"] = d.derived.text()
+        seen["v"] = d.values()
+        cb = d.widget("correct_drift")
+        cb.setChecked(not cb.isChecked())
+        d._refresh_derived_now()
+        seen["after"] = d.derived.text()
+
+    _mech_stub(monkeypatch, edit, accept=False)
+    pv._open_mech_advanced()
+    assert "trough(s) found" in seen["before"]
+    need = compute._TREND_MIN_ANCHORS.get(seen["v"]["trend_method"], 2)
+    assert seen["after"] == ("Volume conditioning changed — press OK, then reopen this "
+                             f"dialog for a trough count. Needs at least {need}.")
     pv.shutdown()
 
 
