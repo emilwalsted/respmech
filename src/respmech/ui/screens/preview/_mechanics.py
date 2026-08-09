@@ -83,6 +83,15 @@ _SOFT_FILE_ERRORS = ("TrimError", "VolumeTrendError", "NoBreathsError")
 _TREND_PROBE_KEYS = ("integrate_from_flow", "correct_drift", "inverse_flow",
                      "inverse_volume", "resample", "resample_to_frequency")
 
+# Campbell diagram axis-label ladders (D12/UI-overhaul). The volume axis must ALWAYS
+# name its datum — EELV or "end-expiration" — never bottom out at the ambiguous
+# "Volume (L)", which on a Campbell diagram reads as absolute lung volume, a different
+# quantity. Poes gets its own ladder now that the axis swap below moves it onto the
+# height-constrained axis the volume label used to occupy.
+_CAMPBELL_XLABEL_VARIANTS = ("Lung volume above end-expiration (L)",
+                            "Volume above EELV (L)", "V−EELV (L)")
+_CAMPBELL_YLABEL_VARIANTS = ("Oesophageal pressure  Poes (cmH₂O)", "Poes (cmH₂O)")
+
 
 class _MechanicsMixin:
 
@@ -157,9 +166,12 @@ class _MechanicsMixin:
         # clipped title did; the figure keeps its title only for the export (_export_campbell).
         self._campbell_fitter = _CompactFigureFitter(self.campbell)
         lower.addWidget(self._titled("Campbell diagram", self.campbell))
-        # the per-breath table takes ~3/4 of the width; the Campbell diagram ~1/4 (default)
-        lower.setStretchFactor(0, 3); lower.setStretchFactor(1, 1)
-        lower.setSizes([720, 240])
+        # D12: the diagram is what the user came for, not the number dump beside it — at
+        # 3:1 (720/240) a maximised window gave the table 1265 px and the diagram 406x249,
+        # a 3x weight difference in favour of the numbers. ~58/42 (matches the stretch
+        # factor below) gives the diagram room to be legible without starving the table.
+        lower.setStretchFactor(0, 7); lower.setStretchFactor(1, 5)
+        lower.setSizes([560, 400])
         split.addWidget(lower)
         split.setStretchFactor(0, 3); split.setStretchFactor(1, 2)
         v.addWidget(split)
@@ -1147,22 +1159,28 @@ class _MechanicsMixin:
         ax.set_facecolor(pal["mpl_bg"])
         kept = [b for b in breaths.values() if not b["ignored"]]
         for b in kept:
-            ax.plot(b["poes"], b["volume"], color=pal["mpl_loop"], lw=0.7, alpha=0.5, zorder=1)
+            ax.plot(b["volume"], b["poes"], color=pal["mpl_loop"], lw=0.7, alpha=0.5, zorder=1)
         # P12: overlay the average breath bold, draw the elastic recoil (relaxation)
         # line EELV→EILV, and shade the inspiratory work between the Poes trace and it.
         self._overlay_campbell_work(ax, kept, pal)
-        ax.axvline(0, color=pal["mpl_zeroline"], lw=0.8, zorder=0)
-        ax.set_xlabel("Oesophageal pressure  Poes (cmH₂O)")
-        ax.set_ylabel("Lung volume above end-expiration (L)")
+        ax.axhline(0, color=pal["mpl_zeroline"], lw=0.8, zorder=0)
+        ax.set_xlabel(_CAMPBELL_XLABEL_VARIANTS[0])
+        ax.set_ylabel(_CAMPBELL_YLABEL_VARIANTS[0])
+        # D12: volume on x (inverted) and Poes on y — the SAME direction the written
+        # Campbell PDF uses (core/plots._pv_average). Before this ticket the two figures
+        # were mirror images of each other for the same breaths. Emil's decision
+        # 04-08-2026 was to fix the preview, not the writer: the writer's orientation is
+        # the 1.x-inherited convention every past export already carries.
+        ax.invert_xaxis()
         # No figure title on screen — the panel header carries it. tight_layout() is replaced
         # by _fit_compact_figure, which installs the live tight ENGINE (this figure carried a
         # one-shot PlaceHolderLayoutEngine, so it never re-solved when the splitter moved) and
         # shrinks the labels when the panel is short.
         _fit_compact_figure(
             self.campbell, ax,
-            legend_kw={"loc": "lower left", "frameon": False, "fontsize": 7},
-            ylabel_variants=("Lung volume above end-expiration (L)",
-                             "Volume above EELV (L)", "Volume (L)"))
+            legend_kw={"loc": "lower right", "frameon": False, "fontsize": 7},
+            xlabel_variants=_CAMPBELL_XLABEL_VARIANTS,
+            ylabel_variants=_CAMPBELL_YLABEL_VARIANTS)
         self.campbell.draw()
         self.btn_export_fig.setEnabled(True)         # a diagram now exists to export
 
@@ -1180,27 +1198,36 @@ class _MechanicsMixin:
         try:
             import numpy as np
             if vavg is not None and pavg is not None and len(vavg):
-                ax.plot(pavg, vavg, color=pal["mpl_accent"], lw=2.0, zorder=3,
+                ax.plot(vavg, pavg, color=pal["mpl_accent"], lw=2.0, zorder=3,
                         label="average breath")
             if eelv is not None and eilv is not None:
                 # elastic recoil line: straight line between the two volume endpoints
-                ax.plot([eelv[1], eilv[1]], [eelv[0], eilv[0]], color=pal["mpl_target"],
+                ax.plot([eelv[0], eilv[0]], [eelv[1], eilv[1]], color=pal["mpl_target"],
                         ls="--", lw=1.3, zorder=4, label="elastic recoil")
                 if iv is not None and ip is not None and len(iv) > 1:
                     iv = np.asarray(iv, float); ip = np.asarray(ip, float)
                     # Poes on the recoil line at each inspiratory volume
                     line_p = np.interp(iv, sorted([eelv[0], eilv[0]]),
                                        [eelv[1], eilv[1]] if eelv[0] <= eilv[0] else [eilv[1], eelv[1]])
-                    ax.fill_betweenx(iv, ip, line_p, color=pal["mpl_accent"], alpha=0.18,
-                                     zorder=2, label="inspiratory work")
+                    ax.fill_between(iv, ip, line_p, color=pal["mpl_accent"], alpha=0.18,
+                                    zorder=2, label="inspiratory work")
             wob = dict(b.get("wob") or {})
             if "wobtotal" in wob:
+                # fg on mpl_bg (not mpl_loop, the colour of the loops the text sits over)
+                # clears WCAG's 4.5:1 body-text floor in both themes, and the boxed
+                # background keeps it legible over whichever loop happens to pass beneath.
                 ax.text(0.02, 0.98, f"WOB {wob['wobtotal']:.2f} J·min⁻¹",
-                        transform=ax.transAxes, va="top", ha="left", fontsize=8,
-                        color=pal["mpl_loop"])
-            # Bottom-left: with Poes on x and volume on y that corner is empty (the loop's
-            # EELV end sits bottom-right). The output PDF transposes these axes, so its
-            # legend must NOT follow — see core/plots._pv_average.
+                        transform=ax.transAxes, va="top", ha="left", fontsize=9,
+                        fontweight="bold", color=pal["fg"],
+                        bbox=dict(facecolor=pal["mpl_bg"], edgecolor="none", alpha=0.85, pad=2))
+            # Top-right / bottom-left: with volume on x (inverted) and Poes on y, the loop
+            # runs from EELV (low volume, near-baseline Poes → top-right) to EILV (high
+            # volume, more negative Poes → bottom-left) — the SAME direction the written
+            # Campbell PDF uses (core/plots._pv_average), so the two figures agree and this
+            # legend no longer needs to counter a transposition. The WOB read-out above is
+            # fixed at the top-left corner (axes fraction, independent of data), which
+            # leaves bottom-right as the one corner neither the loop nor the read-out
+            # claims — _draw_campbell's legend_kw places the legend there.
             # The legend is deliberately NOT placed here. At the height this panel gets, a
             # three-entry key covers the loops it labels, so whether to draw it at all is a
             # function of the height — which only the fit knows. _draw_campbell hands the

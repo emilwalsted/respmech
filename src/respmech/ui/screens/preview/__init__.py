@@ -11,6 +11,7 @@ from ._plot_helpers import (_SUP, SciAxis, _CHANNELS, _EMG_PENS, _pen, _rms_enve
 from ._figure_fit import (_pick_xlabel, _pick_ylabel, _fit_compact_figure, refit_compact_figure, _CompactFigureFitter, _PlotTitleOverlay)
 from ._busy_overlay import (BusyOverlay)
 from ._jobs import (_TAB_MECH, _TAB_ECG, _TAB_NOISE, _PANELS, _SPIN_TEXT, _KIND_LABEL, _AUTO_KINDS, _FILE_KINDS, _kinds_for_settings_path, _changed_settings_paths, _Job, _ORPHANED_THREADS, _MAX_ACTIVE, _FileRunError)
-from ._mechanics import (_parse_breath_counts, _SOFT_FILE_ERRORS, _TREND_PROBE_KEYS)
+from ._mechanics import (_parse_breath_counts, _SOFT_FILE_ERRORS, _TREND_PROBE_KEYS,
+                         _CAMPBELL_XLABEL_VARIANTS, _CAMPBELL_YLABEL_VARIANTS)
 from ._emg_noise import (NEEDS_ECG_HINT, NEEDS_ECG_GATE_HINT)
 from .screen import PreviewScreen, AUTO_BATCH_HINT

@@ -29,6 +29,7 @@ from respmech.ui.screens.preview import (
     _Job, _ORPHANED_THREADS, _MAX_ACTIVE, _FileRunError,
     # mechanics sub-tab
     _parse_breath_counts, _SOFT_FILE_ERRORS, _TREND_PROBE_KEYS,
+    _CAMPBELL_XLABEL_VARIANTS, _CAMPBELL_YLABEL_VARIANTS,
     # EMG + noise sub-tab
     NEEDS_ECG_HINT, NEEDS_ECG_GATE_HINT,
     # the screen itself
@@ -46,6 +47,7 @@ __all__ = [
     "_AUTO_KINDS", "_FILE_KINDS", "_kinds_for_settings_path", "_changed_settings_paths",
     "_Job", "_ORPHANED_THREADS", "_MAX_ACTIVE", "_FileRunError",
     "_parse_breath_counts", "_SOFT_FILE_ERRORS", "_TREND_PROBE_KEYS",
+    "_CAMPBELL_XLABEL_VARIANTS", "_CAMPBELL_YLABEL_VARIANTS",
     "NEEDS_ECG_HINT", "NEEDS_ECG_GATE_HINT",
     "PreviewScreen", "AUTO_BATCH_HINT",
 ]
