@@ -71,6 +71,49 @@ def test_campbell_preview_orientation_matches_the_written_figure(qapp):
     win.close()
 
 
+def test_campbell_recoil_line_and_shaded_work_match_the_new_orientation(qapp):
+    """test_campbell_preview_orientation_matches_the_written_figure only checks the bare
+    per-breath loop line (the first ax.plot() call). _overlay_campbell_work draws three more
+    data-derived pieces -- the average-breath line, the elastic recoil line, and the shaded
+    inspiratory-work polygon (fill_between, swapped from fill_betweenx by D12) -- and a
+    transposition bug in any of them would show the same defect this ticket exists to fix
+    (recoil line / shaded work landing in the wrong place relative to the loop) without
+    tripping the orientation test above. Render the real overlay and check each piece's own
+    data against the breath dict, not just that the labels/collection count exist (the older
+    P12 test above does only that, and would pass unchanged even mirror-imaged)."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    s = synth_settings("")
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    fr = run_batch(s).ok_files["synth_case_A.csv"]
+    pv._draw_campbell(fr.breaths)
+    ax = pv.campbell.figure.axes[0]
+    kept = [b for b in fr.breaths.values() if not b["ignored"]]
+    b = kept[0]
+    handles, labels = ax.get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+
+    avg = by_label["average breath"]
+    np.testing.assert_array_equal(avg.get_xdata(), b["volumeavg"])
+    np.testing.assert_array_equal(avg.get_ydata(), b["poesavg"])
+
+    eelv, eilv = b["eelvavg"], b["eilvavg"]   # each [volume, poes]
+    recoil = by_label["elastic recoil"]
+    np.testing.assert_array_equal(recoil.get_xdata(), [eelv[0], eilv[0]])
+    np.testing.assert_array_equal(recoil.get_ydata(), [eelv[1], eilv[1]])
+
+    # fill_between(x, y1, y2) fills VERTICALLY as a function of x, so the shaded polygon's
+    # x-extent must span the inspiratory VOLUME values. Had this stayed fill_betweenx (or been
+    # swapped back to it by mistake), the polygon's x-extent would instead span the Poes
+    # values -- a different, wrong number range that this assertion catches.
+    poly = next(c for c in ax.collections if c.get_label() == "inspiratory work")
+    verts = poly.get_paths()[0].vertices
+    iv = np.asarray(b["inspiration"]["volumeavg"], float)
+    assert np.isclose(verts[:, 0].min(), iv.min())
+    assert np.isclose(verts[:, 0].max(), iv.max())
+    win.close()
+
+
 def test_campbell_volume_axis_label_always_carries_the_datum():
     """Every candidate wording for the volume axis must name its datum (EELV or
     end-expiration). "Volume (L)" alone reads as absolute lung volume on a Campbell diagram,
