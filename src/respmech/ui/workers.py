@@ -951,8 +951,24 @@ def stage_noise_fidelity(settings: Settings, cancel_check=None) -> dict:
         # Copy on return: a shared cache entry, and _apply_noise_report reads it while the
         # renderers hold on to the frontier lists (same contract as _load_and_condition).
         import copy as _copy                                # noqa: PLC0415
-        return _copy.deepcopy(
+        report = _copy.deepcopy(
             _pc.cached(_pc.NOISE_REPORT, key, _compute))    # test-wide report; keyed on all-file tokens
+        # D09: the reference clip's frame count travels WITH the report, so the
+        # fidelity panel can carry the core's stability warning visibly (from_clip
+        # says it through warnings.warn, which reaches a stderr nobody sees). The
+        # clip build is the same shared, cached one _compute used, so this costs a
+        # cache hit — and it is recomputed here, ON the copy, rather than stored in
+        # the cache entry, so older cached reports simply lack the key and the
+        # caption hides itself instead of showing a stale count.
+        try:
+            from respmech.ui.stft_frames import stft_frame_count   # noqa: PLC0415
+            n = settings.processing.emg.noise
+            clip = _cached_reference_clip(settings, s, cancel_check=cancel_check)
+            report["noise_clip_frames"] = stft_frame_count(
+                len(clip), n.win_length, n.hop_length)
+        except Exception:                                   # noqa: BLE001
+            pass          # the report itself is intact; the caption just stays hidden
+        return report
     except (compute.TrimError, DataValidationError, FileNotFoundError, ImportError) as e:
         # A user-fixable precondition on the reference/input files — most often a misassigned or
         # inverted flow channel, so the reference has no segmentable breaths for the quiet-

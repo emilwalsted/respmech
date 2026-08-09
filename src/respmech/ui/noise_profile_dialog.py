@@ -44,6 +44,9 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFrame, QHBoxLa
 import pyqtgraph as pg
 
 from respmech.ui.flow_layout import ElidingCheckBox
+from respmech.ui.stft_frames import (DEFAULT_HOP_LENGTH, DEFAULT_WIN_LENGTH,
+                                     MIN_STABLE_FRAMES, min_seconds_for_frames,
+                                     stft_frame_count)
 from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
 
 try:
@@ -54,7 +57,6 @@ except Exception:  # pragma: no cover
 #: sentinel returned by ``selected_region`` for the whole-expiration option
 EXPIRATION = "expiration"
 
-_WARN_SECONDS = 0.5
 _TIME_STEPS = 1000.0                   # scrollbar ticks per second: QScrollBar is integer-only
 _GLW_MARGIN = 10                       # GraphicsLayoutWidget's own margin around the plots
 #: Minimum height (px) for one channel row, so a rest span stays judgeable by eye however
@@ -98,7 +100,8 @@ class NoiseProfileDialog(QDialog):
     """Pick a rest span across the raw EMG channels to use as the noise reference."""
 
     def __init__(self, raw, t, fs, cols, parent=None, file_name="", flow=None,
-                reference_file="", peak_times=None, ecg_applied=True):
+                reference_file="", peak_times=None, ecg_applied=True,
+                win_length=DEFAULT_WIN_LENGTH, hop_length=DEFAULT_HOP_LENGTH):
         super().__init__(parent)
         self.setWindowTitle("Set noise profile" + (f" — {file_name}" if file_name else ""))
         self.setModal(True)
@@ -113,6 +116,11 @@ class NoiseProfileDialog(QDialog):
         self._peak_times = (np.asarray(peak_times, dtype=float)
                             if peak_times is not None else np.array([], dtype=float))
         self._ecg_applied = bool(ecg_applied)
+        # The STFT geometry the noise profile will actually be built with, threaded in
+        # from settings.processing.emg.noise by the caller (D09). Without it the frame
+        # threshold cannot be computed and any warning would silently assume 1000 Hz.
+        self._win_length = int(win_length)
+        self._hop_length = int(hop_length)
         self._selection = None             # (t0, t1) in seconds, or None
         # the file the TEST's shared reference currently lives on (may differ from the
         # file this picker was opened on, or be "" if no reference is set yet) — drives
@@ -494,9 +502,22 @@ class NoiseProfileDialog(QDialog):
         self.info.setText(f"Current reference: {where}, {t0:.3f}–{t1:.3f} s")
 
     def _maybe_warn(self, width):
-        if width > _WARN_SECONDS:
-            self.warn.setText(f"⚠ A noise profile wider than {_WARN_SECONDS:g} s "
-                              f"(selected {width:.3f} s) can increase processing time markedly.")
+        """Judge the dragged span by the SAME frame arithmetic the EMG tab applies
+        (D09) — live, on every ``_set_selection``. The old rule warned above a fixed
+        0.5 s about processing time, which the reference's width does not drive
+        (the costly sweep runs on the ACTIVE clip), and at 1000 Hz it pointed the
+        user away from the only spans the tab would call good. Below the stability
+        threshold the label says how far to drag, in seconds; at or past it, the
+        label goes quiet."""
+        frames = stft_frame_count(int(round(width * self._fs)),
+                                  self._win_length, self._hop_length)
+        if frames < MIN_STABLE_FRAMES:
+            need = min_seconds_for_frames(MIN_STABLE_FRAMES, self._fs,
+                                          self._win_length, self._hop_length)
+            enkelt = "frame" if frames == 1 else "frames"
+            self.warn.setText(
+                f"⚠ {width:.2f} s gives {frames} STFT {enkelt} — too short for a stable "
+                f"noise estimate. Drag to at least {need:.2f} s ({MIN_STABLE_FRAMES} frames).")
             self.warn.setVisible(True)
         else:
             self.warn.setVisible(False)

@@ -781,6 +781,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self.emg_psd_canvas.figure.clear(); self.emg_psd_canvas.draw()
         if include_noise:
             self.fidelity_canvas.figure.clear(); self.fidelity_canvas.draw()
+            self._update_fidelity_caption(None)   # D09: a cleared panel carries no stability warning
             self._set_fidelity_panel_title(None)   # test-wide result is being recomputed too
             self._noise_has_result = False
         self._reset_breath_state()   # clears _bov/_breaths/_emg_all/result plot/_previewed_file/mech_caption
@@ -821,6 +822,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._set_trace_key([])       # the legend this replaced was emptied by plots.clear()
         self.emg_psd_canvas.figure.clear(); self.emg_psd_canvas.draw()
         self.fidelity_canvas.figure.clear(); self.fidelity_canvas.draw()
+        self._update_fidelity_caption(None)   # D09: a cleared panel carries no stability warning
         self._set_fidelity_panel_title(None)
         self._noise_has_result = False
         self._reset_breath_state()   # clears _bov/_breaths/_emg_all/result plot/_previewed_file

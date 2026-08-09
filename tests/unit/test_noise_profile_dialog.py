@@ -30,11 +30,14 @@ def test_selection_enables_ok_and_marks_every_channel(qapp):
     from respmech.ui.noise_profile_dialog import NoiseProfileDialog
     raw, t, fs, cols = _data()
     dlg = NoiseProfileDialog(raw, t, fs, cols)
-    dlg._set_selection(0.20, 0.50)
-    assert dlg.selected_region() == (0.20, 0.50)
+    dlg._set_selection(0.20, 1.00)
+    assert dlg.selected_region() == (0.20, 1.00)
     assert dlg.btn_ok.isEnabled() is True
     assert all(r.isVisible() for r in dlg._regions)      # shaded on every channel
-    assert dlg.warn.isHidden() is True                   # 0.30 s <= 0.5 s -> no warning
+    # 0.80 s at 1000 Hz -> 9 STFT frames >= 8 -> stable, so no warning (D09: the
+    # old fixed-width rule was silent at 0.30 s too, but 0.30 s is only 1 frame
+    # and deserved the warning it now gets)
+    assert dlg.warn.isHidden() is True
     # a plain click clears it (afværge)
     dlg._clear_selection()
     assert dlg.selected_region() is None and dlg.btn_ok.isEnabled() is False
@@ -42,17 +45,62 @@ def test_selection_enables_ok_and_marks_every_channel(qapp):
     dlg.deleteLater()
 
 
-def test_wide_selection_warns_about_processing_time(qapp):
+def test_short_selection_warns_in_frames_and_says_how_far_to_drag(qapp):
+    """D09: the warning is driven by the SAME frame arithmetic as the tab, live
+    while dragging, and gives the target in seconds. At 1000 Hz with the default
+    256/64 STFT, stability needs 0.704 s — so the ticket's 0.45 s must warn (it
+    yields 4 frames) and 0.71 s must not. The old fixed-width rule pointed the
+    exact opposite way on both."""
     from respmech.ui.noise_profile_dialog import NoiseProfileDialog
-    raw, t, fs, cols = _data(n=3000)
+    from respmech.ui.stft_frames import stft_frame_count
+
+    raw, t, fs, cols = _data(n=3000, fs=1000)
     dlg = NoiseProfileDialog(raw, t, fs, cols)
-    dlg._set_selection(0.10, 1.20)                       # 1.10 s > 0.5 s
+    dlg._set_selection(1.00, 1.45)                       # 0.45 s -> 4 frames
     assert dlg.warn.isHidden() is False
-    assert "processing time" in dlg.warn.text().lower()
-    # narrowing back under the threshold hides the warning again
-    dlg._set_selection(0.10, 0.30)
+    txt = dlg.warn.text()
+    # the number shown is the number the tab computes for the same span — one statement
+    frames = stft_frame_count(int(round(0.45 * fs)), 256, 64)
+    assert str(frames) in txt and "frame" in txt.lower()
+    assert "0.70" in txt, f"the warning must give the target in seconds, got: {txt}"
+    assert "processing time" not in txt.lower(), (
+        "the compute-time wording is gone: the reference's width never drove it")
+    # dragging past the threshold turns the label neutral, live
+    dlg._set_selection(1.00, 2.71)                       # 1.71 s -> well past 0.704 s
     assert dlg.warn.isHidden() is True
     dlg.deleteLater()
+
+
+def test_no_warning_for_the_tickets_real_2000_hz_analysis(qapp):
+    """The counterexample that proved the fixed rule frequency-blind: 0.4797 s at
+    2000 Hz yields 11 frames and is fine, though it is narrower than the old 0.5 s
+    line ever allowed for 1000 Hz recordings."""
+    from respmech.ui.noise_profile_dialog import NoiseProfileDialog
+
+    raw, t, fs, cols = _data(n=16000, fs=2000)
+    dlg = NoiseProfileDialog(raw, t, fs, cols)
+    dlg._set_selection(5.1799, 5.6595)
+    assert dlg.warn.isHidden() is True
+    dlg.deleteLater()
+
+
+def test_win_and_hop_are_threaded_not_assumed(qapp):
+    """The dialog cannot know the frequency-dependent threshold without the STFT
+    geometry; hardcoding it would quietly assume 1000 Hz. With a coarser hop the
+    same span yields fewer frames, so the SAME 1.0 s that is fine at 256/64 must
+    warn at 512/256."""
+    from respmech.ui.noise_profile_dialog import NoiseProfileDialog
+
+    raw, t, fs, cols = _data(n=4000, fs=1000)
+    fin = NoiseProfileDialog(raw, t, fs, cols)                    # defaults 256/64
+    fin._set_selection(1.00, 2.00)                                # 1.0 s -> 12 frames
+    assert fin.warn.isHidden() is True
+    grov = NoiseProfileDialog(raw, t, fs, cols,
+                              win_length=512, hop_length=256)
+    grov._set_selection(1.00, 2.00)                               # 1.0 s -> 2 frames
+    assert grov.warn.isHidden() is False
+    assert "2" in grov.warn.text()
+    fin.deleteLater(); grov.deleteLater()
 
 
 def test_reversed_drag_is_normalised(qapp):
@@ -357,4 +405,65 @@ def test_no_peak_times_draws_no_markers(qapp):
     raw, t, fs, cols = _data(nch=3)
     dlg = NoiseProfileDialog(raw, t, fs, cols)
     assert all(_capture_items(p) == [] for p in dlg._plots)
+    dlg.deleteLater()
+
+
+# ---------------------------------------------------------------- D09: the caption --
+# The core's own stability warning ("Noise reference gives only N STFT frames…")
+# went through warnings.warn to a stderr no packaged-app user ever sees, while the
+# fidelity verdict for the same short reference read as a pass. The fidelity panel
+# now carries a persistent caption, driven by the SAME frame arithmetic in the UI
+# (never warnings.catch_warnings: process-global, and the worker thread runs
+# beside other jobs).
+
+def _preview(qapp, tmp_path):
+    from respmech.core.settings import Settings
+    from respmech.ui.state import AppState
+    from respmech.ui.screens.preview_screen import PreviewScreen
+    s = Settings()
+    s.output.folder = str(tmp_path)
+    pv = PreviewScreen(AppState(s))
+    qapp.processEvents()
+    return pv
+
+
+def test_fidelity_caption_is_visible_below_the_stability_threshold(qapp, tmp_path):
+    pv = _preview(qapp, tmp_path)
+    pv._update_fidelity_caption({"noise_clip_frames": 4})
+    assert pv.fidelity_caption.isHidden() is False
+    txt = pv.fidelity_caption.fullText() if hasattr(pv.fidelity_caption, "fullText") else pv.fidelity_caption.text()
+    assert "4" in txt and "frame" in txt.lower()
+    assert pv.fidelity_caption.property("status") == "warn"
+    pv.deleteLater()
+
+
+def test_fidelity_caption_is_absent_at_or_above_the_threshold(qapp, tmp_path):
+    pv = _preview(qapp, tmp_path)
+    pv._update_fidelity_caption({"noise_clip_frames": 11})
+    assert pv.fidelity_caption.isHidden() is True
+    # and a report WITHOUT the key (older cache entries, the batch path) hides
+    # rather than guesses — showing a stale count would be worse than nothing
+    pv._update_fidelity_caption({"noise_clip_frames": 3})
+    pv._update_fidelity_caption({})
+    assert pv.fidelity_caption.isHidden() is True
+    pv._update_fidelity_caption({"noise_clip_frames": 3})
+    pv._update_fidelity_caption(None)
+    assert pv.fidelity_caption.isHidden() is True
+    pv.deleteLater()
+
+
+def test_the_tab_and_dialog_quote_the_same_frame_count(qapp, tmp_path):
+    """The ticket's acceptance in one line: for the same span, the figure the tab
+    computes is the figure the dialog shows. Both call ui.stft_frames, so this is
+    structural; here it is also measured."""
+    import re as _re
+    from respmech.ui.noise_profile_dialog import NoiseProfileDialog
+    from respmech.ui.stft_frames import stft_frame_count
+
+    raw, t, fs, cols = _data(n=2000, fs=1000)
+    dlg = NoiseProfileDialog(raw, t, fs, cols, win_length=256, hop_length=64)
+    dlg._set_selection(0.20, 0.65)                        # 0.45 s -> 4 frames
+    vist = _re.search(r"gives (\d+) STFT", dlg.warn.text())
+    assert vist is not None
+    assert int(vist.group(1)) == stft_frame_count(int(round(0.45 * fs)), 256, 64)
     dlg.deleteLater()

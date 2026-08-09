@@ -27,9 +27,12 @@ from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
 from respmech.ui.noise_profile_dialog import NOISE_ACCENT
 from respmech.ui import plot_perf
+from respmech.ui.stft_frames import (MIN_STABLE_FRAMES,
+                                     min_seconds_for_frames,
+                                     stft_frame_count)
 from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
 from respmech.ui import wheel as _wheel
-from respmech.ui.flow_layout import (FlowLayout, cluster as _cluster,
+from respmech.ui.flow_layout import (ElidingLabel, FlowLayout, cluster as _cluster,
                                      elide as _elide, install_flow as _install_flow)
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
@@ -259,6 +262,18 @@ class _EmgNoiseMixin:
         # set once here too (not only in _set_fidelity_panel_title) so the explanation is
         # available before any file has been run and produced a report to reset the title
         self._fidelity_panel._title_label.setToolTip(_FIDELITY_TITLE + _FIDELITY_TOOLTIP_SUFFIX)
+        # Persistent caption for the core's own stability warning (D09). from_clip
+        # emits "Noise reference gives only N STFT frames…" through warnings.warn,
+        # which nobody running a packaged app ever sees, while the fidelity verdict
+        # for that same short reference reads as a pass — so the app's only visible
+        # statement about an unstable reference was positive. The frame count is
+        # recomputed in the UI with the same arithmetic instead of capturing the
+        # warning: warnings.catch_warnings is process-global state, and
+        # stage_noise_fidelity runs on a worker thread beside other jobs.
+        self.fidelity_caption = ElidingLabel("")
+        self.fidelity_caption.setProperty("status", "muted")
+        self.fidelity_caption.setVisible(False)
+        self._fidelity_panel.layout().insertWidget(1, self.fidelity_caption)
         bottom.addWidget(self._fidelity_panel)
         self._psd_panel = self._titled("Detail PSD", self.emg_psd_canvas)
         bottom.addWidget(self._psd_panel)
@@ -795,13 +810,16 @@ class _EmgNoiseMixin:
         n.use_expiration = False
         fs = self.state.settings.input.format.sampling_frequency or 0
         span = int(round((t1 - t0) * fs))
-        nframes = 1 + max(0, span - n.win_length) // max(1, n.hop_length)
+        # The SAME arithmetic the dialog warns with while dragging (D09): one shared
+        # function, so the two guards are one statement and cannot diverge again.
+        nframes = stft_frame_count(span, n.win_length, n.hop_length)
         self.noise_reference_changed.emit(name, [[t0, t1]], False)
         self._refresh_noise_readout()
         self._refresh_noise_reference_band()          # reflect the choice on the detail plot
         self._set_status(
             f"Noise profile ← {name} [{t0:.2f}–{t1:.2f} s]: {span} samples ≈ {nframes} STFT frames "
-            + ("(good)" if nframes >= 8 else "(short — pick a longer rest span)")
+            + ("(good)" if nframes >= MIN_STABLE_FRAMES else
+               f"(short — drag to ≥ {min_seconds_for_frames(MIN_STABLE_FRAMES, fs or 1.0, n.win_length, n.hop_length):.2f} s)")
             + ". Enable 'Reduce EMG noise' to apply it.")
         self._update_actions()
         self._request_autorun()          # re-condition against the new reference
@@ -849,7 +867,8 @@ class _EmgNoiseMixin:
         dlg = NoiseProfileDialog(data["processed"], data["t"], data["fs"], data["cols"],
                                  parent=self, file_name=self._selected_filename(),
                                  flow=data.get("flow"), reference_file=n.reference_file or "",
-                                 peak_times=data.get("peaks"), ecg_applied=ecg_applied)
+                                 peak_times=data.get("peaks"), ecg_applied=ecg_applied,
+                                 win_length=n.win_length, hop_length=n.hop_length)
         dlg.use_expiration.setChecked(bool(n.use_expiration or not n.reference_intervals))
         # Seed the picker with the reference already saved for this test (D07), so a user
         # who opens the dialog to CHECK what is set — the app's own declared workflow of
@@ -1115,11 +1134,33 @@ class _EmgNoiseMixin:
         # only surviving until the first one.
         label.setToolTip(label.toolTip() + _FIDELITY_TOOLTIP_SUFFIX)
 
+    def _update_fidelity_caption(self, nr):
+        """Keep the fidelity panel honest about reference stability. Shown only when
+        the report carries ``noise_clip_frames`` below the stability threshold; a
+        report without the key (older cache entries, the batch path) hides the
+        caption rather than guessing."""
+        frames = (nr or {}).get("noise_clip_frames")
+        cap = getattr(self, "fidelity_caption", None)
+        if cap is None:
+            return
+        if frames is not None and frames < MIN_STABLE_FRAMES:
+            cap.setFullText(f"⚠ Noise reference gives only {frames} STFT "
+                            f"{'frame' if frames == 1 else 'frames'} "
+                            f"(≥ {MIN_STABLE_FRAMES} recommended for a stable estimate) — "
+                            "drag a longer rest span in 'Set noise profile'.")
+            cap.setProperty("status", "warn")
+            cap.setVisible(True)
+        else:
+            cap.setVisible(False)
+            cap.setProperty("status", "muted")
+        cap.style().unpolish(cap); cap.style().polish(cap)
+
     def render_noise_report(self, result):
         """Draw the fidelity frontier + status from a full batch result (with ECG
         suppression from its ok_files). Used by the manual test run."""
         nr = result.noise_report
         self._draw_fidelity(nr)
+        self._update_fidelity_caption(nr)
         chosen = nr.get("prop_decrease")
         target = nr.get("fidelity_target", 0.8)
         worst = min((r["fidelity"] for r in nr.get("channels", [])), default=float("nan"))
@@ -1148,6 +1189,7 @@ class _EmgNoiseMixin:
         spinbox + re-conditioned EMG use the value the sweep chose — the core never
         mutates settings), and re-dispatch the EMG conditioning views with it."""
         self._draw_fidelity(nr)
+        self._update_fidelity_caption(nr)
         chosen = nr.get("prop_decrease")
         noise = self.state.settings.processing.emg.noise
         if chosen is not None and noise.auto_prop:
