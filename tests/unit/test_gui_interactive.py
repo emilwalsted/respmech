@@ -1060,24 +1060,27 @@ def test_file_strip_and_rail_size_to_content_not_window(qapp, tmp_path):
     win.close()
 
 
-def test_campbell_legend_sits_bottom_left_in_the_preview_only(qapp):
-    """The preview plots Poes on x and volume on y, which leaves the bottom-LEFT corner
-    empty (the loop's EELV end is bottom-right). The output PDF transposes those axes, so
-    its legend must NOT follow: "lower left" there lands on the loop's EILV tip. Its
-    loc="best" already places it clear of the data."""
+def test_campbell_legend_sits_bottom_right_in_the_preview_only(qapp):
+    """D12 (UI-overhaul): the preview now plots volume on x (inverted) and Poes on y, the
+    SAME direction the written Campbell PDF uses (core/plots._pv_average), so the two
+    figures agree and neither legend has to counter a transposition any more. In this
+    orientation the loop runs from EELV (near-baseline Poes, low volume -> top-right) to
+    EILV (more negative Poes, high volume -> bottom-left); the WOB read-out is fixed at the
+    top-left corner (axes fraction), which leaves bottom-right as the one corner neither the
+    loop nor the read-out claims. Before D12 this was "lower left", when Poes sat on x and
+    volume on y and the two figures were mirror images of each other."""
     import inspect
     from respmech.ui.screens import preview_screen as ps
     from respmech.core import plots
-    # The call moved out of _overlay_campbell_work and into _draw_campbell, which hands it
-    # to _fit_compact_figure: at the height this panel gets, a legend has to be SHED when
-    # there is no room for it, and only the fit knows the height. The contract is unchanged
-    # — it is still "lower left", and still only in the preview.
-    assert 'loc": "lower left"' in inspect.getsource(ps.PreviewScreen._draw_campbell)
+    # The call lives in _draw_campbell, which hands it to _fit_compact_figure: at the height
+    # this panel gets, a legend has to be SHED when there is no room for it, and only the fit
+    # knows the height.
+    assert 'loc": "lower right"' in inspect.getsource(ps.PreviewScreen._draw_campbell)
     assert 'ax.legend(' not in inspect.getsource(ps.PreviewScreen._overlay_campbell_work), (
         "the overlay places its own legend again, so the fit can no longer shed it")
-    # the PDF's Campbell keeps auto-placement — its axes are transposed
+    # the PDF's Campbell keeps auto-placement, unaffected by this ticket
     assert 'loc="best"' in inspect.getsource(plots._pv_average)
-    assert 'loc="lower left"' not in inspect.getsource(plots._pv_average)
+    assert 'loc="lower right"' not in inspect.getsource(plots._pv_average)
 
 
 def test_breath_labels_stay_pinned_to_the_view_top_under_zoom(qapp, tmp_path):

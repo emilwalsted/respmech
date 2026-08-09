@@ -90,7 +90,7 @@ _TREND_PROBE_KEYS = ("integrate_from_flow", "correct_drift", "inverse_flow",
 # height-constrained axis the volume label used to occupy.
 _CAMPBELL_XLABEL_VARIANTS = ("Lung volume above end-expiration (L)",
                             "Volume above EELV (L)", "V−EELV (L)")
-_CAMPBELL_YLABEL_VARIANTS = ("Oesophageal pressure  Poes (cmH₂O)", "Poes (cmH₂O)")
+_CAMPBELL_YLABEL_VARIANTS = ("Oesophageal pressure  Poes (cmH₂O)", "Poes (cmH₂O)", "Poes")
 
 
 class _MechanicsMixin:

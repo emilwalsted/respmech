@@ -41,6 +41,129 @@ def test_campbell_has_recoil_line_and_shaded_work(qapp):
 
 
 # --------------------------------------------------------------------------- #
+# D12 (UI-overhaul) — the preview's Campbell diagram matches the written figure
+# --------------------------------------------------------------------------- #
+def test_campbell_preview_orientation_matches_the_written_figure(qapp):
+    """Before D12 the preview plotted Poes on x / volume on y while the written Campbell PDF
+    (core/plots._pv_average) plots volume on x (inverted) / Poes on y -- the same breaths
+    came out as mirror images of each other. Emil's decision, 04-08-2026, was to fix the
+    preview to match the writer's 1.x-inherited convention, not the other way around."""
+    import inspect
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    from respmech.core import plots
+    s = synth_settings("")
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    fr = run_batch(s).ok_files["synth_case_A.csv"]
+    pv._draw_campbell(fr.breaths)
+    ax = pv.campbell.figure.axes[0]
+    assert ax.xaxis_inverted()
+    assert "EELV" in ax.get_xlabel() or "end-expiration" in ax.get_xlabel()
+    kept = [b for b in fr.breaths.values() if not b["ignored"]]
+    loop_line = ax.lines[0]   # the first ax.plot() in _draw_campbell, one call per kept breath
+    np.testing.assert_array_equal(loop_line.get_xdata(), kept[0]["volume"])
+    np.testing.assert_array_equal(loop_line.get_ydata(), kept[0]["poes"])
+    # _pv_average writes straight to a PDF and returns no inspectable Axes, so the writer's
+    # own orientation is verified structurally rather than by rendering it a second time.
+    src = inspect.getsource(plots._pv_average)
+    assert 'ax.plot(b["volume"], b["poes"]' in src
+    assert "ax.invert_xaxis()" in src
+    win.close()
+
+
+def test_campbell_volume_axis_label_always_carries_the_datum():
+    """Every candidate wording for the volume axis must name its datum (EELV or
+    end-expiration). "Volume (L)" alone reads as absolute lung volume on a Campbell diagram,
+    a different quantity from volume above EELV -- the ambiguity a short panel used to fall
+    back to before this ticket."""
+    from respmech.ui.screens.preview._mechanics import _CAMPBELL_XLABEL_VARIANTS
+    assert len(_CAMPBELL_XLABEL_VARIANTS) >= 2   # more than one rung, or there is no ladder
+    for variant in _CAMPBELL_XLABEL_VARIANTS:
+        assert "EELV" in variant or "end-expiration" in variant, variant
+
+
+def test_campbell_volume_label_fits_the_narrow_panel_it_actually_gets(qapp):
+    """Measured on the target 1280x760 window: the Campbell panel is 295x130 px. Before D12
+    the volume label lived on the Y axis there, with only 63.3 px of vertical room -- not
+    enough for anything but the ambiguous "Volume (L)". After the axis swap it lives on X,
+    where the same panel gives it 295 px. Assert the pick as a FIT (rendered width against
+    the room actually measured this run), never as a hard-coded pixel number -- macOS and
+    Windows measure text extents differently."""
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+    from respmech.ui.screens.preview._figure_fit import _pick_xlabel
+    from respmech.ui.screens.preview._mechanics import _CAMPBELL_XLABEL_VARIANTS
+    fig = Figure(figsize=(4, 4))
+    canvas = FigureCanvasQTAgg(fig)
+    canvas.resize(295, 130)
+    ax = fig.add_subplot(111)
+    chosen = _pick_xlabel(canvas, ax, _CAMPBELL_XLABEL_VARIANTS)
+    assert "EELV" in chosen or "end-expiration" in chosen
+    r = canvas.get_renderer()
+    extent = ax.xaxis.label.get_window_extent(renderer=r)
+    centre = (extent.x0 + extent.x1) / 2.0
+    room = 2.0 * min(centre, float(canvas.figure.bbox.width) - centre)
+    assert extent.width <= room + 1.0   # +1 px float/antialiasing slack, not a text-width literal
+
+
+def test_wob_annotation_contrasts_with_its_background_and_the_loop_colour(qapp):
+    """The WOB read-out used to be drawn in pal["mpl_loop"] -- the exact colour of the loops
+    it sits on top of -- which measured 3.35:1 against white at 8 pt, under WCAG's 4.5:1
+    body-text floor. It now uses pal["fg"] at 9 pt bold with a background box: a colour
+    distinct from the loops in both themes, and >=4.5:1 against the figure background in
+    light theme."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    from respmech.ui import theme as _theme
+    import matplotlib.colors as mcolors
+
+    def _rel_luminance(rgb):
+        out = []
+        for v in rgb[:3]:
+            out.append(v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4)
+        return 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2]
+
+    def _contrast(a, b):
+        la, lb = _rel_luminance(a) + 0.05, _rel_luminance(b) + 0.05
+        return max(la, lb) / min(la, lb)
+
+    s = synth_settings("")
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    fr = run_batch(s).ok_files["synth_case_A.csv"]
+    for pal in (_theme._PLOT_LIGHT, _theme._PLOT_DARK):
+        pv._draw_campbell(fr.breaths, pal=pal)
+        ax = pv.campbell.figure.axes[0]
+        wob_text = next(t for t in ax.texts if "WOB" in t.get_text())
+        fg_rgb = mcolors.to_rgb(pal["fg"])
+        loop_rgb = mcolors.to_rgb(pal["mpl_loop"])
+        text_rgb = mcolors.to_rgb(wob_text.get_color())
+        assert text_rgb == fg_rgb
+        assert text_rgb != loop_rgb   # not the colour of the loops it is drawn over
+        assert wob_text.get_bbox_patch() is not None   # background box keeps it legible
+        if pal is _theme._PLOT_LIGHT:
+            assert _contrast(text_rgb, mcolors.to_rgb(pal["mpl_bg"])) >= 4.5
+    win.close()
+
+
+def test_mechanics_splitter_gives_the_diagram_more_room_than_before(qapp):
+    """The table used to outweigh the diagram 3:1 (setStretchFactor(0,3)/(1,1),
+    setSizes([720, 240])) -- Emil measured a maximised window at 1265 px of table against
+    406x249 of diagram, three times the weight in favour of the number dump. The new ~58/42
+    split (stretch 7:5, setSizes([560, 400])) is asserted as the RATIO the splitter actually
+    reaches, never as a pixel literal: Qt redistributes setSizes() against whatever width the
+    splitter is given at construction time, so only the ratio survives across environments."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings("")
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    lower = pv.table.parentWidget()
+    table_w, diagram_w = lower.sizes()
+    assert diagram_w > 0
+    ratio = table_w / diagram_w
+    assert 1.2 <= ratio <= 1.6, ratio   # 560/400 == 1.4; the OLD split measured 720/240 == 3.0
+    win.close()
+
+
+# --------------------------------------------------------------------------- #
 # P13 — RMS envelope
 # --------------------------------------------------------------------------- #
 def test_rms_envelope_helper():
