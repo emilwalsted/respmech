@@ -44,8 +44,9 @@ except Exception:  # pragma: no cover
     _theme = None
 
 from ._figure_fit import _CompactFigureFitter, _fit_compact_figure
-from ._jobs import _FileRunError, _PANELS
-from ._plot_helpers import SciAxis, _CHANNELS, _pen, _plot_pal, _restrict_body_wheel_to_x
+from ._jobs import _FileRunError, _KIND_LABEL, _PANELS
+from ._plot_helpers import (BreathSpansItem, SciAxis, _CHANNELS, _pen, _plot_pal,
+                            _restrict_body_wheel_to_x)
 
 
 
@@ -720,15 +721,107 @@ class _MechanicsMixin:
 
     def _render_preview(self, data):
         """Draw the mechanics channel stack + breath overlays and the raw EMG
-        stack from staged arrays. GUI-thread only; shared by the synchronous
-        _preview() and the async 'mech' job."""
-        fs = data["fs"]
-        series = data["series"]
+        stack from staged arrays, fully synchronously. GUI-thread only; this is
+        the contract _preview() (and every existing test that calls it) relies
+        on — one call in, everything on screen when it returns.
+
+        The live reactive job dispatch does NOT call this: _RENDER['mech'] is
+        _render_preview_async, which runs the same three stages (below) but
+        yields the event loop between the two expensive ones — see its
+        docstring and ticket D15."""
+        self._render_preview_stage1(data)
+        self._render_preview_stage2(data)
+        self._render_preview_stage3(data)
+
+    def _render_preview_async(self, data):
+        """The reactive 'mech' job's render entry point (_RENDER['mech'] in
+        screen.py). Same three stages as _render_preview, but stage2 (breath
+        overlays) and stage3 (raw EMG stack + detail/result repaint + status)
+        are each posted with ``QTimer.singleShot(0, …)`` instead of run back to
+        back in one Python call.
+
+        Those two stages are what measured 3.4-4.3s of unbroken GUI-thread block
+        on a real six-minute recording, on top of an 8.7-11.7s deferred-redraw
+        stall once control finally returned to Qt — a total ~12s freeze on a
+        single ▶ file-step (ticket D15). Splitting them lets Qt's event loop turn
+        in between: the busy overlay's indeterminate QProgressBar can animate,
+        and a click or scroll during the gap is not simply queued up behind a
+        frozen thread. The panel-level item-count reduction (BreathSpansItem, see
+        _plot_helpers.py) is the primary fix for the total time; this split is
+        what keeps that remaining time from reading as a hang.
+
+        _mech_render_gen is bumped by stage1 (and by _reset_breath_state) so a
+        stale continuation — the user stepped to another file before this one's
+        deferred stage fired — recognises it no longer owns the panels and
+        abandons without touching them; see _render_preview_async_stage2/3.
+        This chain owns stopping the 'channels'/'raw' busy overlays itself
+        (_PANELS['mech']) once stage3 completes — screen.py's _on_job_done skips
+        its own generic post-render stop for kind == 'mech' for exactly that
+        reason."""
+        self._render_preview_stage1(data)
+        gen = self._mech_render_gen
+        QTimer.singleShot(0, lambda: self._render_preview_async_stage2(gen, data))
+
+    def _render_preview_async_stage2(self, gen, data):
+        if gen != self._mech_render_gen:
+            return                      # superseded — the newer render owns the panels now
+        try:
+            self._render_preview_stage2(data)
+        except Exception:               # noqa: BLE001 — same surface a sync failure gets
+            self._fail_async_mech_render(traceback.format_exc())
+            return
+        QTimer.singleShot(0, lambda: self._render_preview_async_stage3(gen, data))
+
+    def _render_preview_async_stage3(self, gen, data):
+        if gen != self._mech_render_gen:
+            return
+        try:
+            self._render_preview_stage3(data)
+        except Exception:               # noqa: BLE001
+            self._fail_async_mech_render(traceback.format_exc())
+            return
+        for p in _PANELS["mech"]:
+            self._overlays[p].stop()
+
+    def _fail_async_mech_render(self, detail):
+        """Mirror _on_job_done's own 'display error' card + status line for a
+        failure that happens in a DEFERRED stage — outside _on_job_done's own
+        try/except, since that only wraps the synchronous stage1 call."""
+        label = _KIND_LABEL["mech"]
+        msg = f"{label} — display error: {short_error(detail)}"
+        self._set_status(msg)
+        for p in _PANELS["mech"]:
+            self._overlays[p].show_error(msg, detail)
+        self._update_actions(status=False)
+
+    def _render_preview_stage1(self, data):
+        """Clear stale panel state and draw the five channel curves + crosshairs.
+        Kept cheap and synchronous even on the async path: curve-plotting is not
+        the cost this ticket addresses (decimation/clipToView already bound it,
+        see plot_perf.tune) — the breath overlays and the raw EMG stack are."""
+        self._mech_render_gen += 1
         t = data["t"]
-        spans = data["spans"]
-        self._trim_offset_s = data["startix"] / fs      # trimmed span -> absolute EMG time
-        self._breaths = list(spans)
-        self._clear_panel_overlays("channels", "raw")   # dismiss any stale error card
+        series = data["series"]
+        self._trim_offset_s = data["startix"] / data["fs"]  # trimmed span -> absolute EMG time
+        self._breaths = list(data["spans"])
+        # Drop the click-to-toggle maps NOW, not just on a file switch (_reset_breath_state):
+        # a same-file settings edit re-dispatches 'mech' WITHOUT going through a file switch,
+        # so without this, a click landing in the stage1->stage2 gap (the async path's
+        # QTimer.singleShot(0, ...) turn) would hit-test against the PRE-edit breath spans —
+        # still non-empty, so _on_plot_clicked's guard would not catch it — and could toggle
+        # an exclusion for a breath number that no longer matches what stage2 is about to
+        # draw. Found in self-review of this ticket. Clearing them makes that gap read as
+        # "no breaths known yet" (the same guard _reset_breath_state already relies on),
+        # exactly like the very first render of a file.
+        self._breath_spans = {}
+        self._breath_regions = {}
+        self._breath_texts = {}
+        # error-only, not stop(): a legitimately in-flight async render's busy overlay
+        # (see _render_preview_async) must survive this — stopping it here was found,
+        # in this ticket, to be the reason the busy spinner "froze" instead of animating:
+        # Qt has no chance to repaint the resulting hide() until the render's own block
+        # ends, so the LAST painted frame just sits there for the whole thing.
+        self._clear_panel_errors("channels", "raw")
         self.plots.clear()
         self._channel_plots = []
         self._crosshair_lines = []                       # cleared with the plots; rebuilt below
@@ -764,8 +857,22 @@ class _MechanicsMixin:
             ln = p.addLine(x=0, pen=pg.mkPen(pal["separator"], width=1, style=Qt.DashLine))
             ln.hide()
             self._crosshair_lines.append(ln)
-        self._draw_breath_overlays(spans, data["label_y"],
+        self.btn_process_file.setEnabled(True)       # a file is loaded → can process just it
+
+    def _render_preview_stage2(self, data):
+        """Breath overlays on the mechanics stack — the single most expensive
+        piece measured in ticket D15 (1.6-2.4s of the ~3.4-4.3s synchronous
+        block), now a handful of BreathSpansItem paints instead of up to 1210
+        individual QGraphicsItems."""
+        self._draw_breath_overlays(data["spans"], data["label_y"],
                                    carried=self._exclusion_carried_for(data["name"]))
+
+    def _render_preview_stage3(self, data):
+        """The raw EMG stack, the detail/result overlay repaint, and the status
+        line/caption/trend-probe bookkeeping that used to close out
+        _render_preview in one go."""
+        fs = data["fs"]
+        spans = data["spans"]
         self._render_raw_stack(data["emg"], fs, data.get("emg_flow"))
         # breaths are now known -> (re)number any EMG detail/result already rendered
         self._repaint_view_breaths("detail")
@@ -778,7 +885,6 @@ class _MechanicsMixin:
         self._trend_probe = data.get("vol_drift")
         self._trend_probe_file = data["name"]
         self._trend_probe_shape = self._trend_probe_settings()
-        self.btn_process_file.setEnabled(True)       # a file is loaded → can process just it
         if data.get("trim_error"):
             self._set_status(f"{data['name']}: showing raw channels — could not detect "
                              f"breaths. {data['trim_error']}")
@@ -976,26 +1082,26 @@ class _MechanicsMixin:
         return f"#{num}"
 
     def _draw_breath_overlays(self, spans, label_y=0.0, carried=False):
+        """Shade every breath + a number label on the mechanics stack. One
+        BreathSpansItem PER PLOT carries every breath's region (D15) — the old
+        per-breath pg.LinearRegionItem (plus its now-dropped redundant boundary
+        line, see BreathSpansItem's docstring) is gone; only the label stays a
+        per-breath TextItem, same as before."""
         self._mech_unpin()               # the old labels are torn down with their pin slot
         self._breath_spans = {n: (t0, t1) for (n, t0, t1, _ig) in spans}
-        self._breath_regions = {n: [] for (n, _0, _1, _ig) in spans}
+        self._breath_regions = {n: [] for (n, _0, _1, _ig) in spans}   # n -> [(item, index), ...]
         self._breath_texts = {}
-        sep = _plot_pal()["separator"]
-        tip = ("Excluded — carried over from a previous recordings folder. Confirm on the "
-               "Setup screen or click the breath to make this folder's own decision."
-               if carried else None)
-        for n, t0, t1, ignored in spans:
-            for plot in self._channel_plots:
-                reg = pg.LinearRegionItem(values=(t0, t1), movable=False,
-                                          brush=self._breath_brush(ignored, carried=carried),
-                                          pen=pg.mkPen(None))
-                reg.setZValue(-10)
-                if ignored and tip:
-                    reg.setToolTip(tip)
-                plot.addItem(reg)
-                self._breath_regions[n].append(reg)
-                plot.addLine(x=t0, pen=pg.mkPen(sep, width=1, style=Qt.DashLine))
-            if self._channel_plots:
+        brushes_by_index = [self._breath_brush(ignored, carried=carried) for _n, _t0, _t1, ignored in spans]
+        for plot in self._channel_plots:
+            item = BreathSpansItem()
+            item.set_spans([(t0, t1, brushes_by_index[i])
+                            for i, (_n, t0, t1, _ig) in enumerate(spans)])
+            item.setZValue(-10)
+            plot.addItem(item)
+            for i, (n, _t0, _t1, _ig) in enumerate(spans):
+                self._breath_regions[n].append((item, i))
+        if self._channel_plots:
+            for n, t0, t1, ignored in spans:
                 txt = self._breath_text(n, ignored)
                 txt.setPos((t0 + t1) / 2.0, label_y)
                 self._channel_plots[0].addItem(txt, ignoreBounds=True)
@@ -1059,8 +1165,10 @@ class _MechanicsMixin:
             if not entry.breaths:
                 excl.remove(entry)
         self.settings_edited.emit()      # exclude_breaths lands in the .toml -> mark dirty
-        for reg in self._breath_regions.get(breath_no, []):
-            reg.setBrush(self._breath_brush(now_excluded)); reg.update()
+        # each entry is (BreathSpansItem, index-into-that-item's-span-list) — one PAIR per
+        # plot the breath is drawn on (5 for the mechanics stack), not one item per plot.
+        for item, idx in self._breath_regions.get(breath_no, []):
+            item.set_brush(idx, self._breath_brush(now_excluded))
         txt = self._breath_texts.get(breath_no)
         if txt is not None:
             txt.setColor(self._breath_label_color(now_excluded))
@@ -1069,9 +1177,9 @@ class _MechanicsMixin:
             rec = self._bov.get(view)
             if not rec:
                 continue
-            for reg in rec["regions"].get(breath_no, []):
+            for item, idx in rec["regions"].get(breath_no, []):
                 try:
-                    reg.setBrush(self._breath_brush(now_excluded)); reg.update()
+                    item.set_brush(idx, self._breath_brush(now_excluded))
                 except Exception:                      # noqa: BLE001
                     pass
             t = rec["texts"].get(breath_no)
@@ -1133,8 +1241,14 @@ class _MechanicsMixin:
 
     def _paint_breaths(self, view, plot_items, offset, label_y):
         """Idempotent per-view overlay: remove the view's previous items (guarded),
-        then shade every breath + a boundary line on each plot and a number on the
-        first plot. Colour is taken from the LIVE exclusion set."""
+        then shade every breath on each plot and a number on the first plot.
+        Colour is taken from the LIVE exclusion set.
+
+        One BreathSpansItem PER PLOT carries every breath's region (same D15
+        item-count fix as _draw_breath_overlays — the raw EMG view can have as
+        many plots as EMG channels, so this was the same 11-items-per-breath
+        blow-up, just with a channel count instead of 5). The redundant boundary
+        line each region used to get is dropped here too, for the same reason."""
         rec = self._bov.get(view)
         if rec:
             rec.get("unpin", lambda: None)()           # detach the old pin slot eagerly
@@ -1150,19 +1264,17 @@ class _MechanicsMixin:
         carried = self._exclusion_carried_for(self._selected_filename())
         reg_map = self._bov[view]["regions"]; txt_map = self._bov[view]["texts"]
         items = self._bov[view]["items"]
-        sep = _plot_pal()["separator"]
-        for (num, t0, t1, _ig) in self._breaths:
-            ignored = num in excl
-            a, b = t0 + offset, t1 + offset
-            for p in plot_items:
-                reg = pg.LinearRegionItem(values=(a, b), movable=False,
-                                          brush=self._breath_brush(ignored, carried=carried),
-                                          pen=pg.mkPen(None))
-                reg.setZValue(-10)
-                p.addItem(reg)
-                items.append((p, reg)); reg_map.setdefault(num, []).append(reg)
-                line = p.addLine(x=a, pen=pg.mkPen(sep, width=1, style=Qt.DashLine))
-                items.append((p, line))
+        spans = [(num, t0 + offset, t1 + offset, num in excl) for (num, t0, t1, _ig) in self._breaths]
+        for p in plot_items:
+            item = BreathSpansItem()
+            item.set_spans([(a, b, self._breath_brush(ignored, carried=carried))
+                            for _num, a, b, ignored in spans])
+            item.setZValue(-10)
+            p.addItem(item)
+            items.append((p, item))
+            for i, (num, _a, _b, _ig) in enumerate(spans):
+                reg_map.setdefault(num, []).append((item, i))
+        for num, a, b, ignored in spans:
             txt = self._breath_text(num, ignored)
             txt.setPos((a + b) / 2.0, label_y)
             plot_items[0].addItem(txt, ignoreBounds=True)
@@ -1190,6 +1302,11 @@ class _MechanicsMixin:
     def _reset_breath_state(self):
         """On a file change, drop stale overlays + spans so a new-file EMG job that
         finishes before the new mech never shows the previous file's numbers."""
+        # invalidate any deferred _render_preview_async continuation still pending for
+        # the file being left — see _render_preview_stage1/_render_preview_async's
+        # docstring. self.plots itself is cleared by the caller (_begin_file_switch),
+        # so there is nothing of the mechanics stack's own overlays left to remove here.
+        self._mech_render_gen += 1
         self._mech_unpin()
         self._mech_unpin = lambda: None
         for rec in self._bov.values():

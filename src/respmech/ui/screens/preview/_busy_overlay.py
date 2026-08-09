@@ -196,6 +196,30 @@ class BusyOverlay(QWidget):
         self.message = ""
         self.hide()
 
+    def clear_error(self):
+        """Dismiss an error card left over from a PREVIOUS attempt, without
+        touching a currently-busy state the way ``stop()`` unconditionally would.
+
+        Used at the start of a render so a stale error never sits over fresh
+        content — but a render can also start while its own job is still
+        legitimately in flight (the reactive dispatch shows the spinner before
+        the worker even starts, see screen.py's ``_launch``), and calling
+        ``stop()`` there would hide the ONE sign of life the user has for the
+        rest of that render (ticket D15: the spinner was found effectively
+        hidden — Qt never got the chance to repaint that hide() mid-block, so
+        the last painted frame just sat there, looking frozen rather than gone).
+
+        This alone does not make the spinner ANIMATE during the render — an
+        indeterminate QProgressBar's own style timer still cannot tick while
+        the GUI thread is busy inside a synchronous chunk of work. It is the
+        companion QTimer.singleShot split in _render_preview_async (see its
+        docstring) that gives the event loop somewhere to turn and the timer
+        somewhere to fire; this method only stops that render's own overlay
+        from being wrongly hidden in the first place. The two fixes are
+        complementary, not redundant."""
+        if self.error is not None:
+            self.stop()
+
     def show_error(self, summary, detail):
         """Switch to the error card: a short summary + a round info button that
         opens the full ``detail`` (traceback) in a copyable dialog."""

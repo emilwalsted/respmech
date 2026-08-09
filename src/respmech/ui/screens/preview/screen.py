@@ -141,6 +141,11 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._breath_regions = {}
         self._breath_texts = {}
         self._mech_unpin = lambda: None   # detaches the mechanics label-pin slot
+        # bumped by every _render_preview_stage1/_reset_breath_state call; a deferred
+        # _render_preview_async continuation checks it still matches before touching
+        # the mechanics panels, so a stale render (superseded by a file switch) is a
+        # silent no-op instead of drawing over the newer file's plots (ticket D15)
+        self._mech_render_gen = 0
         # draggable noise-selection region (feature B)
         self._noise_region = None
         self._noise_label = None          # 'noise reference' caption at the band's left edge
@@ -159,7 +164,12 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._build()
         # render dispatch by job kind (built after _build so the methods exist)
         self._RENDER = {
-            "mech": self._render_preview,
+            # _render_preview_async, not _render_preview: the reactive job path defers
+            # its two expensive stages via QTimer.singleShot so the GUI thread does not
+            # freeze for the whole render (ticket D15) — see its docstring. It owns
+            # stopping _PANELS['mech']'s busy overlays itself; _on_job_done below skips
+            # its own generic stop for this one kind for exactly that reason.
+            "mech": self._render_preview_async,
             "batch": self._on_batch_result,
             "ecg": self._on_ecg_result,
             "emg_all": self._on_emg_all_result,
@@ -1094,8 +1104,15 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
                 self._qc_overview_not_assessed(detail)
             self._update_actions(status=False)
             return
-        for p in _PANELS[job.kind]:
-            self._overlays[p].stop()
+        # 'mech' is deliberately excluded: _render_preview_async only just returned from
+        # its SYNCHRONOUS first stage here (see _RENDER['mech']) — the two deferred
+        # stages that draw the breath overlays and the raw stack are still pending on
+        # the event loop, and it stops _PANELS['mech']'s own overlays itself once the
+        # LAST one completes (ticket D15). Stopping them here would hide the busy
+        # spinner over a panel that has not actually finished drawing yet.
+        if job.kind != "mech":
+            for p in _PANELS[job.kind]:
+                self._overlays[p].stop()
         if job.kind == "noise":
             self._noise_has_result = True   # the fidelity panel now holds a current result
         self._update_actions(status=False)
@@ -1148,13 +1165,23 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         return ov.error if ov is not None else None
 
     def _clear_panel_overlays(self, *keys):
-        """Dismiss any spinner/error card on these panels — called by the
-        synchronous render paths so a successful redraw never leaves a stale
-        error card raised over fresh content."""
+        """Dismiss any spinner/error card on these panels — called when a panel
+        set is being reset wholesale (a file switch, a settings gate) and
+        nothing should be left showing on it, busy or not."""
         for k in keys:
             ov = self._overlays.get(k)
             if ov is not None:
                 ov.stop()
+
+    def _clear_panel_errors(self, *keys):
+        """Dismiss a stale ERROR card only — used at the start of a render
+        (_render_preview_stage1) so a previous attempt's failure never sits over
+        fresh content, WITHOUT hiding a spinner a still-in-flight job's overlay
+        may legitimately be showing (see BusyOverlay.clear_error)."""
+        for k in keys:
+            ov = self._overlays.get(k)
+            if ov is not None:
+                ov.clear_error()
 
     def _safe_top(self, *arrays, default=1.0):
         """A finite, headless-safe top-of-signal value for placing the number label."""

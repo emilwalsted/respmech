@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton,
                                QScrollArea, QSplitter, QTableWidget, QTableWidgetItem,
                                QTabWidget, QVBoxLayout, QWidget)
-from PySide6.QtCore import Qt, QEvent, QObject, QSize, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QEvent, QObject, QRectF, QSize, QThread, QTimer, Signal
 from PySide6.QtGui import QFont
 
 import pyqtgraph as pg
@@ -152,6 +152,89 @@ def _plot_pal():
         except Exception:  # pragma: no cover - defensive
             pass
     return _FALLBACK_PAL
+
+
+class BreathSpansItem(pg.GraphicsObject):
+    """One filled-region item per PLOT that paints every breath span on that plot,
+    replacing one ``pg.LinearRegionItem`` (plus a now-removed boundary line — see
+    below) per breath. A six-minute recording can carry 100+ breaths; on a 5-channel
+    mechanics stack that was 11 QGraphicsItems x breaths x channels = over a thousand
+    items, and the per-item redraw cost of that is what froze the GUI for seconds on
+    every file step (ticket D15). One aggregate item per plot — a handful total,
+    however many breaths it carries — replaces that with a fixed item count.
+
+    The boundary line pg.LinearRegionItem's neighbour used to draw is dropped
+    entirely, here and at every other caller of this class: it sat exactly on the
+    region's own left edge and drew nothing the region didn't already show.
+
+    Y-extent tracks the current view exactly like LinearRegionItem's own default
+    ``span=(0, 1)`` does (``self.viewRect()``, refreshed by the base class on every
+    view-transform change) — full plot height regardless of y-zoom, without this
+    item having to know the plotted data's y-range at all. ``dataBounds`` mirrors
+    LinearRegionItem's own axis restriction for the same reason LinearRegionItem
+    has it: the item's y-extent is DERIVED from the view, so it must never feed
+    back into that view's own y-autorange calculation.
+
+    Purely a painter: mouse interaction (breath click-to-toggle) is resolved
+    elsewhere from scene coordinates against the breath-span data, never from an
+    item the mouse actually hit, so this item needs no hover/click handling of its
+    own to keep that behaviour. One consequence, accepted for this ticket: a
+    per-breath hover tooltip ("carried over from a previous folder…") that used to
+    sit on the individual LinearRegionItem cannot be reproduced on a single shared
+    item without new hover-tracking machinery outside this ticket's scope — the
+    same fact is already shown, always-on, by the hatched brush this item still
+    paints for a carried breath (see ``_breath_brush``) and by the QC line, so nothing
+    that was the ONLY way to learn something is lost, only a redundant hover on top."""
+
+    def __init__(self):
+        super().__init__()
+        self._spans = []      # [(t0, t1, QBrush), ...] — order is paint (== z) order
+        self._x0 = self._x1 = 0.0
+
+    def set_spans(self, spans):
+        """Replace the full set of spans. ``spans``: iterable of ``(t0, t1, brush)``.
+        Called once per file preview — not per breath, that is the whole point."""
+        self._spans = list(spans)
+        if self._spans:
+            self._x0 = min(t0 for t0, _t1, _b in self._spans)
+            self._x1 = max(t1 for _t0, t1, _b in self._spans)
+        else:
+            self._x0 = self._x1 = 0.0
+        self.prepareGeometryChange()
+        self.update()
+
+    def set_brush(self, index, brush):
+        """Recolour ONE span by its position in the list ``set_spans`` was given —
+        the include/exclude toggle repaint path. Geometry is untouched, so this is
+        just a paint, not a prepareGeometryChange."""
+        if 0 <= index < len(self._spans):
+            t0, t1, _old = self._spans[index]
+            self._spans[index] = (t0, t1, brush)
+            self.update()
+
+    def boundingRect(self):
+        vr = self.viewRect()
+        br = QRectF(vr) if vr is not None else QRectF()
+        if self._spans:
+            br.setLeft(self._x0)
+            br.setRight(self._x1)
+        return br
+
+    def paint(self, p, *args):
+        if not self._spans:
+            return
+        vr = self.viewRect()
+        full = QRectF(vr) if vr is not None else self.boundingRect()
+        top, height = full.top(), full.height()
+        p.setPen(pg.mkPen(None))
+        for t0, t1, brush in self._spans:
+            p.setBrush(brush)
+            p.drawRect(QRectF(t0, top, t1 - t0, height))
+
+    def dataBounds(self, axis, frac=1.0, orthoRange=None):
+        if axis == 0:
+            return (self._x0, self._x1) if self._spans else None
+        return None
 
 
 _CHECK_ICON_PATH = None

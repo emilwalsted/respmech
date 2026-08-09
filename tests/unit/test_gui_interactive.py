@@ -288,7 +288,10 @@ def _stage_mech(pv, s, name="synth_case_A.csv"):
 
 
 def _red_dominant(reg):
-    c = reg.brush.color()
+    # D15: reg is now (BreathSpansItem, index-into-that-item's-span-list) — one shared
+    # item per plot carries every breath's brush, not one pg.LinearRegionItem per breath.
+    item, idx = reg
+    c = item._spans[idx][2].color()
     return c.red() > c.blue()            # excluded brush is red, included is blue
 
 
@@ -305,7 +308,8 @@ def test_emg_raw_view_numbers_breaths_at_trim_offset(qapp, tmp_path):
     assert pv._trim_offset_s == off and pv._breaths
     raw = pv._bov["raw"]
     for (num, t0, t1, _ig) in pv._breaths:
-        a, b = raw["regions"][num][0].getRegion()     # region on the first raw subplot
+        item, idx = raw["regions"][num][0]            # shared span item on the first raw subplot
+        a, b = item._spans[idx][0], item._spans[idx][1]
         assert abs(a - (t0 + off)) < 1e-6 and abs(b - (t1 + off)) < 1e-6
         assert num in raw["texts"]                    # a visible number label per breath
     win.close()

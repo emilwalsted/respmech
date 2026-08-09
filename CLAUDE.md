@@ -519,6 +519,100 @@ blocking" helper targets the BASE class rather than the actual subclass being co
 Patching the most-derived class an opener actually builds is the only version of this pattern
 that survives a future override.
 
+### One aggregate `pg.GraphicsObject` beats N `pg.LinearRegionItem`s for "many same-shaped shaded spans" — and `pg.LinearRegionItem`'s own trick for full-height-regardless-of-zoom is reusable
+
+Found fixing ticket D15 (the mechanics stack froze the GUI thread for up to ~12s stepping
+through files with real recordings — up to 1210 `QGraphicsItem`s for 110 breaths across 5
+channel plots, 11 per breath per plot: a region, a now-redundant boundary line, and a label).
+`ui/screens/preview/_plot_helpers.py::BreathSpansItem` replaces the per-breath
+`pg.LinearRegionItem` with ONE `pg.GraphicsObject` subclass instance per plot that paints every
+breath span itself in one `paint()` call, holding `[(t0, t1, brush), ...]` and a
+`set_brush(index, brush)` for the include/exclude toggle repaint.
+
+The part worth knowing for any future "many shaded regions on one plot" need: `LinearRegionItem`
+gets its "spans the full plot height regardless of y-zoom" behaviour from
+`self.viewRect()` (`GraphicsItem.viewRect()`, cached and auto-invalidated by the base class's
+`viewTransformChanged` slot on every pan/zoom/resize) — **not** from tracking the ViewBox's
+y-range itself. A hand-rolled aggregate item can reuse this directly: `boundingRect()`/`paint()`
+both call `self.viewRect()` for the y-extent and only override left/right with the item's own
+x-extent. And `dataBounds(axis, ...)` must mirror `LinearRegionItem`'s own axis restriction —
+return `None` for the y-axis — or the item's self-derived y-extent feeds back into the very
+y-autorange computation it derives from, which is nonsensical and, depending on call order, can
+produce a runaway range.
+
+Applied in two places (`_draw_breath_overlays` for the mechanics stack, `_paint_breaths` for the
+shared raw/detail/result EMG views) — same anti-pattern, same fix, generalized because both were
+part of the same measured freeze. Click-to-toggle needed no changes: it already resolved a click
+to a breath number from scene coordinates against a plain dict (`_breath_spans`), never from the
+graphics item the mouse actually hit, so swapping what PAINTS the region is invisible to it. One
+real loss: a per-region hover tooltip on the old `LinearRegionItem` (explaining a "carried over"
+exclusion) cannot be reproduced on one shared item without new hover-tracking — dropped, since the
+same fact is already shown by the hatched brush and the QC line.
+
+**Rule:** the next time a screen needs to draw "N same-shaped shaded regions along a plot's time
+axis" (event markers, segment colouring, more breath-like overlays), reach for this
+`BreathSpansItem` pattern — one item per plot with an internal list — not a `pg.LinearRegionItem`
+per element. It is the difference between an O(1)-per-plot item count and an O(N) one.
+
+### A "clear the stale error card" call must not also silence a currently-busy overlay — `BusyOverlay.stop()` conflates the two
+
+Found in the same D15 pass, as a second, independent bug behind the same symptom (the busy
+spinner over Preview & QC's Mechanics/raw panels appeared "frozen" during the freeze above,
+rather than obviously hidden or obviously animating). `_render_preview` calls
+`_clear_panel_overlays("channels", "raw")` as its first statement, so a stale error card from a
+previous failed render never sits over a fresh one — but `BusyOverlay.stop()` (what that call
+uses) unconditionally does `busy = False; error = None; hide()`, whatever state the overlay was
+actually in. The REACTIVE job dispatch (`screen.py::_launch`) shows the busy overlay BEFORE the
+worker thread even starts, so by the time the worker finishes and `_render_preview` runs, the
+overlay is legitimately busy=True — and that first-line `stop()` call hides it immediately,
+before a single expensive draw call has run. Because `QWidget.hide()`'s visual effect is not
+painted until the event loop next turns, and the very next thing that happens is the GUI-thread
+block this ticket exists to fix, the LAST rendered frame of the spinner just sits on screen,
+unchanged, for the whole freeze — visually indistinguishable from "frozen", because it effectively
+is: a real widget's disappearance that Qt was never given a chance to actually paint.
+
+Fixed with `BusyOverlay.clear_error()`: only `stop()`s (hides) the overlay if `self.error is not
+None`; otherwise a no-op, so a legitimately busy overlay is left exactly as it was.
+`_render_preview_stage1` (see the next entry) uses `clear_error()`, not
+`_clear_panel_overlays`/`.stop()`.
+
+**Rule:** anywhere in this screen (or a future one with the same busy/error overlay pattern) that
+needs to "dismiss a stale error before drawing", use `clear_error()`. Reach for
+`_clear_panel_overlays`/`.stop()` only where a WHOLE panel set is being reset from scratch (a file
+switch, an invalid-settings blank) and nothing — busy or not — should survive that reset.
+
+### Splitting a synchronous render across `QTimer.singleShot(0, ...)` needs its OWN staleness guard, distinct from the job-token check that already exists
+
+Also from D15. The reactive job dispatch already guards against a superseded WORKER result:
+`_on_job_done` checks `job.token != self._tokens[job.kind]` before calling the render function at
+all. That guard is not enough once the render function ITSELF is split into deferred pieces: once
+`_render_preview_async`'s stage1 (the cheap part — clear stale state, draw the 5 channel curves)
+returns and hands control back to the event loop, the user can switch files before stage2/stage3
+(the two expensive, now-deferred pieces — breath overlays, raw EMG stack) get their
+`QTimer.singleShot(0, ...)` turn. `_begin_file_switch` clears `self._channel_plots`/calls
+`self.plots.clear()` synchronously and immediately (no async gap of its own), so a stale stage2
+firing afterwards would either draw nothing useful (the plot list is now empty) or — worse —
+repopulate `self._breath_spans`/`self._breath_regions` with the OLD file's data right after
+`_reset_breath_state()` had deliberately emptied them for the new one, silently resurrecting stale
+click-to-toggle state for a file no longer on screen.
+
+Fixed with a plain integer generation counter, `self._mech_render_gen`: bumped once at the top of
+`_render_preview_stage1` (covers every new render, sync or async) AND once in
+`_reset_breath_state()` (covers a file switch that hasn't yet triggered a new render). Each
+deferred continuation (`_render_preview_async_stage2/3`) captures the counter's value at schedule
+time and checks it still matches before touching anything; a mismatch means silently abandoning —
+a newer render or reset already owns the panels. `QTimer.singleShot(0, ...)`'s lambda captures
+`self`, but nothing explicitly cancels a pending one on window close; a stale callback firing after
+teardown is caught the same way (the generation will not match, since nothing else bumps it after
+close — verify this holds if `MainWindow.closeEvent`/`shutdown()` is ever changed to reset state
+during teardown, which would need its own bump too).
+
+**Rule:** a job-token check at DISPATCH time (`_schedule`/`_on_job_done`'s existing pattern) and a
+generation counter at RENDER time (this ticket's pattern) answer two different questions —
+"is this still the current worker result?" vs. "does this still-executing, already-dispatched
+render still own the widgets it's about to touch?" — and splitting any other reactive render across
+`QTimer.singleShot(0, ...)` needs BOTH, not just the one that already existed.
+
 ## Releases (`.github/workflows/release.yml` = "Build installers")
 
 - Trigger: push a `v*` tag (or manual dispatch). Builds a Windows **MSI** and a

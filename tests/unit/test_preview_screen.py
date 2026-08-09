@@ -9,6 +9,7 @@ import pyqtgraph as pg
 import pytest
 from PySide6.QtCore import QPointF, Qt
 
+from respmech.ui.screens.preview._plot_helpers import BreathSpansItem
 from respmech.ui.state import AppState
 
 from _helpers import INPUT, requires_synth, synth_settings
@@ -816,4 +817,207 @@ def test_clearing_the_campbell_also_disarms_its_export(qapp, tmp_path):
         getattr(pv, clear)()
         assert armed() == (False, False), (
             f"{clear} left the export armed over a cleared figure")
+    win.close()
+
+
+# ---------------------------------------------------------------------------
+# D15 (UI-overhaul) — the mechanics render must not freeze the GUI thread
+# ---------------------------------------------------------------------------
+def _total_items(plots):
+    return sum(len(p.items) for p in plots)
+
+
+def test_breath_overlay_item_count_grows_by_one_label_per_breath_not_eleven(qapp):
+    """The regression this ticket exists to fix: before D15, every breath added 5
+    pg.LinearRegionItems + 5 boundary lines + 1 label to the 5-channel mechanics stack
+    (11 items/breath). Redrawing with 20 more breaths must now add exactly 20 items
+    (one label each) — the aggregate BreathSpansItem count per plot stays fixed at 1,
+    however many breaths it carries."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings("")
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    from respmech.ui.workers import stage_mechanics_preview
+    data = stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv"))
+
+    def spans_of(n):
+        return [(i + 1, float(i), float(i) + 0.5, False) for i in range(n)]
+
+    pv._render_preview_stage1(data)                # builds the 5 channel plots
+    assert len(pv._channel_plots) == 5
+    pv._draw_breath_overlays(spans_of(3), label_y=0.0)
+    for p in pv._channel_plots:
+        assert sum(isinstance(it, BreathSpansItem) for it in p.items) == 1
+    base = _total_items(pv._channel_plots)
+
+    pv._render_preview_stage1(data)                # plots.clear() wipes the first draw
+    pv._draw_breath_overlays(spans_of(3 + 20), label_y=0.0)
+    for p in pv._channel_plots:
+        # still exactly ONE aggregate item per plot — not 21
+        assert sum(isinstance(it, BreathSpansItem) for it in p.items) == 1
+    grown = _total_items(pv._channel_plots)
+
+    assert grown - base == 20, "20 more breaths must add 20 items (labels), not 20*11"
+    win.close()
+
+
+def test_raw_view_breath_overlays_also_use_one_aggregate_item_per_plot(qapp):
+    """The same fix applies to _paint_breaths, shared by the raw/detail/result EMG
+    views — _render_raw_stack's overlay call was the ticket's other measured cost, and
+    the raw view can have more channels (hence more items/breath) than the mechanics
+    stack's fixed 5."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings("")
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    assert pv._emg_raw_subplots, "the fixture must have EMG channels for this test to mean anything"
+    for p in pv._emg_raw_subplots:
+        assert sum(isinstance(it, BreathSpansItem) for it in p.items) == 1
+    win.close()
+
+
+def test_toggle_breath_recolours_the_shared_span_item_through_the_new_drawing_path(qapp):
+    """Click-to-toggle must still change a breath's colour, with the same colours
+    _breath_brush already defines — now through BreathSpansItem.set_brush() instead of
+    pg.LinearRegionItem.setBrush() on a removed per-breath item."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings("")
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    plot = pv._channel_plots[0]
+    span_items = [it for it in plot.items if isinstance(it, BreathSpansItem)]
+    assert len(span_items) == 1
+    item = span_items[0]
+
+    breath_no = next(iter(pv._breath_spans))
+    item_idx = next(idx for (it, idx) in pv._breath_regions[breath_no] if it is item)
+    incl_rgb = item._spans[item_idx][2].color().getRgb()
+    assert incl_rgb == pv._breath_brush(False).color().getRgb()
+
+    pv._toggle_breath(breath_no)                    # exclude it
+    excl_rgb = item._spans[item_idx][2].color().getRgb()
+    assert excl_rgb == pv._breath_brush(True).color().getRgb()
+    assert excl_rgb != incl_rgb
+
+    pv._toggle_breath(breath_no)                    # re-include it
+    back_rgb = item._spans[item_idx][2].color().getRgb()
+    assert back_rgb == incl_rgb
+    win.close()
+
+
+def test_busy_overlay_clear_error_keeps_a_legitimately_busy_spinner_alive(qapp):
+    """The bug behind the frozen-looking spinner: _clear_panel_overlays()'s stop()
+    unconditionally hides the overlay, busy or not. _render_preview_stage1 used to call
+    it first thing — which, for the reactive job path, meant the SAME overlay _launch()
+    had just shown as busy was force-hidden before a single pixel of the (then still
+    fully synchronous) render had been drawn. Because Qt only actually repaints a
+    hide() once the event loop next turns, the widget's LAST rendered frame just sat
+    there, unchanged, for the whole freeze — indistinguishable from a live but frozen
+    spinner. clear_error() is the fix: it must leave a busy overlay exactly as it was,
+    and only actually hide something if there was an error card to dismiss."""
+    from respmech.ui.screens.preview._busy_overlay import BusyOverlay
+    from PySide6.QtWidgets import QWidget
+    panel = QWidget()
+    ov = BusyOverlay(panel)
+
+    ov.start("Loading…")
+    assert ov.is_busy() and ov.error is None
+    ov.clear_error()
+    assert ov.is_busy(), "clear_error() must not stop a legitimately busy overlay"
+
+    ov.show_error("Channel preview failed", "boom")
+    assert not ov.is_busy() and ov.error is not None
+    ov.clear_error()
+    assert not ov.is_busy() and ov.error is None, "clear_error() must dismiss a stale error card"
+    panel.deleteLater()
+
+
+def test_async_mech_render_defers_overlays_and_raw_stack_across_the_event_loop(qapp, tmp_path):
+    """The reactive 'mech' job (_render_preview_async, what _RENDER['mech'] actually
+    calls) must not draw the breath overlays and the raw EMG stack in the same
+    synchronous call as the channel curves: each is posted with
+    QTimer.singleShot(0, …) so the event loop turns between them — this is what
+    keeps the busy spinner animated and the GUI responsive during the remaining
+    render time, rather than freezing for the whole thing in one Python call.
+    Verified structurally (item counts appearing over successive processEvents()
+    calls, matching the empirically-confirmed one-processEvents()-per-singleShot(0)
+    firing order) — a real native block-time measurement is not possible in this
+    offscreen sandbox, see the ticket's own note on that."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_mechanics_preview
+    s = synth_settings(tmp_path)
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    data = stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv"))
+
+    pv._overlays["channels"].start("Loading channels…")
+    pv._overlays["raw"].start("Loading channels…")
+    pv._render_preview_async(data)
+    assert len(pv._channel_plots) == 5              # stage1 ran synchronously
+    assert pv._breath_spans == {}                   # stage2 (overlays) has NOT run yet
+    assert pv._overlays["channels"].is_busy()        # nobody has stopped it — still drawing
+
+    qapp.processEvents()                             # fires stage2's singleShot(0)
+    assert pv._breath_spans                          # stage2 has now run
+    assert not pv._emg_raw_subplots                  # stage3 (raw stack) has NOT run yet
+    assert pv._overlays["channels"].is_busy()
+    assert pv._overlays["raw"].is_busy()
+
+    qapp.processEvents()                             # fires stage3's singleShot(0)
+    assert pv._emg_raw_subplots                      # stage3 has now run
+    assert not pv._overlays["channels"].is_busy(), "the chain must stop its own overlay when done"
+    assert not pv._overlays["raw"].is_busy()
+    win.close()
+
+
+def test_async_mech_render_abandons_a_render_superseded_mid_chain(qapp, tmp_path):
+    """If the user steps to another file before a deferred stage of
+    _render_preview_async fires, that stage must recognise (via the generation
+    counter _reset_breath_state bumps on a file switch) that it no longer owns the
+    panels and do nothing — not repopulate stale breath state for a file that is no
+    longer on screen."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_mechanics_preview
+    s = synth_settings(tmp_path)
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    data = stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv"))
+
+    pv._render_preview_async(data)                  # stage1 runs; stage2 is queued
+    pv._reset_breath_state()                        # simulate a file switch mid-chain
+    assert pv._breath_spans == {}
+
+    qapp.processEvents()                             # would-be stage2 for the OLD render
+    qapp.processEvents()                             # would-be stage3 for the OLD render
+    assert pv._breath_spans == {}, "a superseded render must not repopulate stale breath state"
+    win.close()
+
+
+def test_a_click_during_the_async_stage1_to_stage2_gap_cannot_toggle_a_stale_breath(qapp, tmp_path):
+    """Found in self-review of this ticket: a SAME-FILE settings edit re-dispatches
+    'mech' without going through a file switch, so _reset_breath_state (which used
+    to be the only thing clearing _breath_spans) never runs. Without stage1 ALSO
+    clearing _breath_spans/_breath_regions/_breath_texts itself, a click landing in
+    the stage1->stage2 gap (the async path's one QTimer.singleShot(0, ...) turn)
+    would hit-test against the PRE-edit breath spans — still non-empty, so
+    _on_plot_clicked's guard would not catch it — and could silently toggle an
+    exclusion for a breath number that no longer matches what stage2 is about to
+    draw. This did not exist before D15: the old _render_preview was one
+    synchronous call with no gap for a click to land in."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_mechanics_preview
+    s = synth_settings(tmp_path)
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    data = stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv"))
+
+    pv._render_preview_async(data)                  # first render, run to completion
+    qapp.processEvents(); qapp.processEvents()
+    assert pv._breath_spans, "the fixture must have detected breaths for this test to mean anything"
+
+    # a same-file settings-edit re-dispatch: NO file switch, so _reset_breath_state
+    # is deliberately NOT called here (that would defeat the point of this test)
+    pv._render_preview_async(data)
+    assert pv._breath_spans == {}, "stage1 must clear the stale click-map immediately, not wait for stage2"
+    a_breath_no = data["spans"][0][0]
+    assert pv._toggle_breath(a_breath_no) is None, "a click in the gap must be a no-op, never a stale toggle"
+    excl = {b for e in s.processing.exclude_breaths
+            if e.file == "synth_case_A.csv" for b in e.breaths}
+    assert a_breath_no not in excl, "no exclusion may have been written from a stale-window click"
     win.close()
