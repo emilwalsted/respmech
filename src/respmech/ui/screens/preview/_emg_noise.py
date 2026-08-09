@@ -145,8 +145,18 @@ class _EmgNoiseMixin:
 
         self.btn_emg_advanced = QPushButton("Advanced…")
         self.btn_emg_advanced.setProperty("compact", True)
-        self.btn_emg_advanced.setToolTip("The cardiac-gated peak, spectral-gate internals, "
-                                         "quality guards and the diagnostic exports.")
+        # D10 (UI-overhaul): leads with the RMS window, because that is what a user most
+        # often opens this modal looking for and neither this tooltip nor the modal's own
+        # intro used to mention it — see _open_emg_advanced's intro= below. Careful with the
+        # wording: only rms_window_s "defines the reported EMG number" (its own help text
+        # below says so); normalization explicitly does NOT ("never changes the raw RMS",
+        # also below) — it adds a second, normalised sheet alongside the raw one. An earlier
+        # draft of this tooltip conflated the two, found in self-review.
+        self.btn_emg_advanced.setToolTip(
+            "RMS window, which defines the reported EMG number, plus optional amplitude "
+            "normalisation, the noise-suppression strength and fidelity target, the "
+            "spectral-gate internals, the gated-peak quality guards and the diagnostic "
+            "exports.")
         self.btn_emg_advanced.clicked.connect(self._open_emg_advanced)
 
         # A WRAPPING row, not a QHBoxLayout: these chips together are ~1700 px wide, and a
@@ -431,8 +441,18 @@ class _EmgNoiseMixin:
              ("Heartbeat and island guards", gate_fields),
              ("Diagnostics", out_fields)],
             values, parent=self,
-            intro="The strip keeps the noise on/off toggle, the reference picker and "
-                  "Auto. Everything that tunes HOW the gate is computed lives here.",
+            # D10 (UI-overhaul): the old intro claimed everything here tunes HOW the gate is
+            # computed, which was never true of the RMS/normalisation card (it defines the
+            # reported EMG number, not the gate) or of the gated-peak and WAV-export cards
+            # (pure output, nothing here recomputes the gate). Name every card instead, so
+            # the intro is actually a description of the modal's contents rather than a claim
+            # about them. Same normalization/rms_window_s precision as the button tooltip
+            # above — see that comment.
+            intro="The RMS window that defines the reported EMG number, optional amplitude "
+                  "normalisation, the noise-suppression strength and fidelity target, the "
+                  "spectral-gate internals, the gated-peak quality guards, and the "
+                  "diagnostic exports. The strip keeps the noise on/off toggle, the "
+                  "reference picker and Auto.",
             derived=_ms)
         # 'Auto' owns the suppression strength: with it on the run overwrites whatever is
         # here, so an edit would silently do nothing. The strip control used to grey out for

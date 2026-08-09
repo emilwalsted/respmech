@@ -43,6 +43,19 @@ def test_every_row_names_its_settings_variable(qapp):
         assert f.path in tip and len(tip) > len(f.path) + 5
 
 
+def test_a_longer_intro_of_ordinary_words_does_not_widen_the_dialog(qapp):
+    """D10 (UI-overhaul) lengthened the EMG-advanced modal's intro text. WrapLabel's minimum
+    width is bound by its LONGEST WORD, not the paragraph's total length (see
+    section_flow.WrapLabel's own docstring) — that is the property a longer intro relies on to
+    not widen the modal. Guard the property itself, generically, with a ratio rather than a
+    pixel literal: a short intro and a much longer one built from equally ordinary words must
+    report the same minimum width."""
+    short = AdvancedDialog("T", _fields(), {"a": 3, "b": 0.25, "c": True}, intro="Short intro.")
+    long_intro = ("A rather long explanatory introduction sentence about several settings. " * 4)
+    long = AdvancedDialog("T", _fields(), {"a": 3, "b": 0.25, "c": True}, intro=long_intro)
+    assert long.minimumSizeHint().width() == short.minimumSizeHint().width()
+
+
 def test_editing_stages_without_touching_anything_outside(qapp):
     dlg = AdvancedDialog("T", _fields(), {"a": 1, "b": 0.5, "c": False})
     dlg.widget("a").setValue(7)
@@ -388,6 +401,92 @@ def test_the_emg_advanced_modal_hosts_the_rms_settings(qapp, tmp_path, monkeypat
     pv._open_emg_advanced()
     assert e.rms_window_s == 0.08 and e.normalization == "none"
     assert edits
+    pv.shutdown()
+
+
+#: How early "RMS window" must appear to count as LEADING the string, not merely appearing in
+#: it somewhere. The ticket asked for it first; a substring check alone would keep passing if a
+#: future edit buried the phrase at the end of a long sentence.
+_LEADS_WITHIN = 20
+
+
+def test_the_emg_advanced_button_and_modal_lead_with_rms_settings(qapp, tmp_path, monkeypatch):
+    """D10 (UI-overhaul): both entry points into the EMG-advanced modal — the button's tooltip
+    and the modal's own intro — must LEAD WITH the RMS window, since that is what a user most
+    often opens this modal looking for, and previously neither said so (the button tooltip only
+    named the gate/guards/exports, and the modal's intro claimed everything in it tunes the
+    noise gate, which was never true of the RMS card). Checked by POSITION, not just substring
+    presence, since a mention buried at the end of a long sentence would not fix the problem
+    this ticket exists for. Asserted on toolTip()/fullText() as the full strings, not on a
+    possibly-elided text().
+
+    Normalisation is deliberately NOT claimed to "define the reported EMG number" here: only
+    rms_window_s does (see its own Field help text in _emg_noise.py); normalization's help text
+    says the opposite ("never changes the raw RMS") — an earlier draft of this text conflated
+    the two and was caught in self-review.
+    """
+    pv = _preview(qapp, tmp_path)
+    tip = pv.btn_emg_advanced.toolTip()
+    assert tip.index("RMS window") < _LEADS_WITHIN, (
+        f"button tooltip does not lead with the RMS window: {tip!r}")
+    assert "normalisation" in tip.lower()
+    assert "amplitude normalisation, which define" not in tip.lower(), (
+        "tooltip must not claim normalisation defines the reported EMG number — only the "
+        "RMS window does; normalization's own help text says it 'never changes the raw RMS'")
+
+    captured = {}
+    _mech_stub(monkeypatch, lambda d: captured.setdefault("dlg", d), accept=False)
+    pv._open_emg_advanced()
+    dlg = captured["dlg"]
+    intro_label = dlg.layout().itemAt(0).widget()
+    intro = intro_label.fullText()
+    assert intro.index("RMS window") < _LEADS_WITHIN, (
+        f"modal intro does not lead with the RMS window: {intro!r}")
+    assert "normalisation" in intro.lower()
+    assert "amplitude normalisation that define" not in intro.lower(), (
+        "intro must not claim normalisation defines the reported EMG number — see the "
+        "tooltip assertion above for why")
+    pv.shutdown()
+
+
+def test_the_emg_advanced_cards_and_fields_are_unmoved(qapp, tmp_path, monkeypatch):
+    """D10 only reworded the intro/tooltip; the six cards and their 19 fields must be exactly
+    as before, proving nothing was moved by accident while rewriting the words around them."""
+    pv = _preview(qapp, tmp_path)
+    captured = {}
+    _mech_stub(monkeypatch, lambda d: captured.setdefault("dlg", d), accept=False)
+    pv._open_emg_advanced()
+    dlg = captured["dlg"]
+    assert [c.title() for c in dlg.cards] == [
+        "RMS and normalisation", "Noise suppression", "Spectral gate (STFT)",
+        "Gated peak (saved output)", "Heartbeat and island guards", "Diagnostics"]
+    assert len(dlg._fields) == 19
+    assert {f.key for f in dlg._fields} == {
+        "rms_window_s", "outlier_rms_sd_limit", "normalization",
+        "prop_decrease", "fidelity_target",
+        "n_std_thresh", "n_fft", "win_length", "hop_length", "n_grad_freq", "n_grad_time",
+        "enabled", "gate_half_width_s",
+        "min_survival", "min_island_s", "long_rr_factor", "max_long_rr_frac",
+        "hr_ceiling_margin",
+        "save_sound"}
+    pv.shutdown()
+
+
+def test_the_emg_advanced_button_width_is_unaffected_by_its_tooltip(qapp, tmp_path):
+    """A QPushButton's sizeHint is driven by its LABEL, never its tooltip, so D10's much longer
+    tooltip must not have changed the strip's width. Ratio guard, not a pixel literal: the
+    button's width with the new tooltip must equal its width with no tooltip at all."""
+    pv = _preview(qapp, tmp_path)
+    btn = pv.btn_emg_advanced
+    with_tip = btn.sizeHint().width()
+    original_tip = btn.toolTip()
+    assert original_tip, "the button has no tooltip — this test would be vacuous"
+    btn.setToolTip("")
+    without_tip = btn.sizeHint().width()
+    btn.setToolTip(original_tip)
+    assert with_tip == without_tip, (
+        f"button width changed with its tooltip ({with_tip} vs {without_tip} px) — a tooltip "
+        f"must never affect layout")
     pv.shutdown()
 
 
