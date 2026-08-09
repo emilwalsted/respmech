@@ -486,6 +486,39 @@ production one, but it costs real time to diagnose blind: **any test that synthe
 even when the assertion under test only cares about the drop. See `install_path_drop`'s
 tests (`tests/unit/test_path_drop.py`, `test_file_association.py`) for the pattern.
 
+### A test helper that monkeypatches `QDialog.exec` misses a subclass that overrides `exec()` itself — and hangs, not fails
+
+Found writing/verifying ticket D13 (`AdvancedDialog` gained a `modal` parameter and its own
+`exec()` override — see `ui/advanced_dialog.py`). Two existing test helpers,
+`test_dialog_fits_screen.py::_advanced_dialogs` and
+`test_theme_paints_both_modes.py::_all_windows`, build all three Advanced modals by
+monkeypatching `QDialog.exec = _capture` (auto-reject, no blocking) around the three
+`_open_*_advanced()` openers — a standard, previously-safe Qt testing pattern, since every
+dialog used to be a bare `QDialog.exec()` call.
+
+`AdvancedDialog.exec()` now branches on `modal`: for `modal=True` (ECG/EMG, and the default)
+it still calls `super().exec()`, so the `QDialog.exec` patch keeps working for those. But for
+`modal=False` (the mechanics dialog only) it **never calls `QDialog.exec`/`super().exec()` at
+all** — it calls `self.show()` and runs its own `QEventLoop`, because `QDialog.exec()` sets
+`Qt.WA_ShowModal` unconditionally regardless of `setModal(False)` (see the class's own
+docstring). A patch on the base class therefore silently never intercepts this one subclass
+in this one mode: the dialog really shows and really blocks, forever, since nothing in either
+helper ever accepts/rejects/closes it.
+
+**The failure mode is a hang, not a red test or an exception** — measured directly: the
+process burned ~2s of CPU time over 3 minutes of wall clock (an idle wait, not a slow
+computation), and it looked exactly like the sandbox's known unrelated OOM/resource-pressure
+symptoms until `time` on the isolated command made the near-zero CPU usage obvious. Both
+helpers were fixed by patching `AdvancedDialog.exec` itself instead of `QDialog.exec` —
+that intercepts before the modal/non-modal branch is even evaluated, so it correctly covers
+both cases regardless of which one a given caller uses.
+
+**Rule for any future dialog subclass that overrides `exec()`** (not just `AdvancedDialog`):
+grep for `\.exec\s*=` across `tests/unit/` and check whether an existing "build without
+blocking" helper targets the BASE class rather than the actual subclass being constructed.
+Patching the most-derived class an opener actually builds is the only version of this pattern
+that survives a future override.
+
 ## Releases (`.github/workflows/release.yml` = "Build installers")
 
 - Trigger: push a `v*` tag (or manual dispatch). Builds a Windows **MSI** and a
