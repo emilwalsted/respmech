@@ -180,15 +180,33 @@ class SettingsScreen(QWidget):
         fent = QFormLayout(gent)
         fent.setRowWrapPolicy(QFormLayout.WrapLongRows)
         self.ent_epochs = QSpinBox(); self.ent_epochs.setRange(1, 100)
-        self._row(fent, "Embedding (m)", self.ent_epochs, "processing.entropy.epochs",
-                  "Embedding dimension (m) for sample entropy; 2 by convention.")
+        # D11 (UI-overhaul): labelled/explained as what the FIELD actually is, not what the
+        # literature calls the neighbouring parameter it is one more than. core/entropy.py's
+        # own docstring says "sample_length is equal to m + 1" and sets M = sample_length - 1
+        # — the stored value (default 2) has always meant m = 1, never the "2 by convention"
+        # the old label/tooltip implied. The VALUE is unchanged; only the words about it are.
+        self._row(fent, "Template length (m + 1)", self.ent_epochs, "processing.entropy.epochs",
+                  "Template length for sample entropy, one more than the embedding "
+                  "dimension. The default 2 gives m = 1; set 3 for the m = 2 that is "
+                  "conventional in the literature.")
         self.ent_tol = QDoubleSpinBox(); self.ent_tol.setRange(0.0, 10.0)
         self.ent_tol.setDecimals(4); self.ent_tol.setSingleStep(0.05)
-        self._row(fent, "Tolerance (r)", self.ent_tol, "processing.entropy.tolerance",
-                  "Matching tolerance (r) for sample entropy; 0.1 by convention.")
+        # Same fix: core/compute.py multiplies this by each column's own np.std, so the
+        # actual tolerance is value x SD, which neither the old label nor tooltip said.
+        self._row(fent, "Tolerance (r), × SD", self.ent_tol, "processing.entropy.tolerance",
+                  "Matching tolerance r, as a multiple of the per-column standard "
+                  "deviation (0.1 × SD by default; 0.2 × SD is the common literature "
+                  "value).")
         _enthint = QLabel("Computed on the columns ticked as Entropy in the channel picker.")
         _enthint.setWordWrap(True); _enthint.setProperty("status", "muted")
         fent.addRow("", _enthint)
+        # Live read-out in the app's own vocabulary (m, not "template length"), so a user can
+        # write their methods section straight off this line without opening the source.
+        self.ent_caption = QLabel(""); self.ent_caption.setWordWrap(True)
+        self.ent_caption.setProperty("status", "muted")
+        fent.addRow("", self.ent_caption)
+        self.ent_epochs.valueChanged.connect(self._update_entropy_caption)
+        self.ent_tol.valueChanged.connect(self._update_entropy_caption)
 
         # 'What to save' lives inside the Output card now (one place for everything the run
         # produces and where it goes), so these rows attach to the Output form (fo). The two
@@ -600,6 +618,7 @@ class SettingsScreen(QWidget):
     def _sync_widgets(self):
         self._refresh_channel_view()   # 'Volume: derived from flow' follows the model
         self._update_save_preview()
+        self._update_entropy_caption()   # a loaded analysis may set m/r without a valueChanged
 
     def _update_save_preview(self):
         """The 'You will get' line under the output checklist — the deliverables the current
@@ -651,6 +670,16 @@ class SettingsScreen(QWidget):
             got.append("cardiac-gated peak EMG columns")
         got.append("run report + analysis snapshot")                  # P7, always written
         self.save_preview.setText(", ".join(got) if got else "run report + analysis snapshot only.")
+
+    def _update_entropy_caption(self, *_):
+        """D11 (UI-overhaul): 'Template length (m + 1)' names the FIELD, but a user still
+        needs the number the paper calls m — this line does that arithmetic for them, in the
+        app's own vocabulary, so the methods section can be written straight off it."""
+        if getattr(self, "ent_caption", None) is None:
+            return
+        m = self.ent_epochs.value() - 1
+        r = self.ent_tol.value()
+        self.ent_caption.setText(f"Computing SampEn with m = {m}, r = {r:g} × SD.")
 
     # -- reactivity ---------------------------------------------------------
     def _wire_reactivity(self):

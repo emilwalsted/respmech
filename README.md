@@ -150,8 +150,15 @@ the signal-to-noise of the inspiratory pattern roughly doubles from step 2 to st
 ## Entropy
 
 Sample Entropy is calculated per breath for the selected channels and averaged like the other
-measurements. The embedding (*m*) and tolerance (*r*, multiplied by the SD of the data)
-parameters are configurable in Setup ▸ Advanced.
+measurements, in Setup's "Sample entropy" card (shown once a channel is assigned to Entropy in
+the channel picker). The two settings there are named after what they literally are, not after
+the neighbouring textbook parameter: **Template length (m + 1)** is one more than the embedding
+dimension *m* used in the sample-entropy literature — the app's default of 2 gives *m* = 1, and
+3 gives the *m* = 2 that is conventional there. **Tolerance (r), × SD** is a multiple of the
+per-column standard deviation, not an absolute tolerance — the app's default of 0.1 means
+0.1 × SD, and 0.2 × SD is the common literature value. A read-out under the two fields states
+the resulting *m* and *r* in those terms, and the same wording is recorded in each output
+workbook's Provenance sheet whenever entropy is actually computed.
 
 _<a name="sampenref1">1</a>) Lozano-García M, Leonardo, Moxham J, Rafferty F., Torres A, Jolley CJ, Jané R. Assessment of Inspiratory Muscle Activation using Surface Diaphragm Mechanomyography and Crural Diaphragm Electromyography. doi:10.1109/EMBC.2018.8513046._
 

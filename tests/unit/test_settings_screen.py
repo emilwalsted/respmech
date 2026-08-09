@@ -163,6 +163,58 @@ def test_advanced_panel_roundtrips_toml_only_knobs(qapp, tmp_path):
     win.close()
 
 
+def test_entropy_fields_are_named_and_explained_for_what_they_are(qapp, tmp_path):
+    """D11 (UI-overhaul): the old label 'Embedding (m)' and tooltip 'Embedding dimension (m)
+    ...; 2 by convention' were both wrong — core/entropy.py sets M = sample_length - 1, so the
+    stored value (default 2) has always meant m = 1, never m = 2. Same story for tolerance:
+    core/compute.py multiplies it by each column's own std, which neither old text said.
+    Checked on the FULL toolTip(), not an elided text(), since that is the only place the
+    variable-path + description actually live (see settings_screen.py's _row helper); the
+    LABEL is found via QFormLayout.labelForField, the same accessor _row itself relies on to
+    keep the label and the field showing the same tooltip."""
+    from PySide6.QtWidgets import QFormLayout
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(str(tmp_path))))
+    sc = win.settings_screen
+    form = sc.ent_epochs.parentWidget().layout()
+    assert isinstance(form, QFormLayout)
+
+    epochs_label = form.labelForField(sc.ent_epochs)
+    assert epochs_label.text() == "Template length (m + 1)"
+    tip = sc.ent_epochs.toolTip()
+    assert epochs_label.toolTip() == tip, "label and field must share the same tooltip"
+    assert "processing.entropy.epochs" in tip
+    assert "one more than the embedding dimension" in tip
+    assert "default 2 gives m = 1" in tip
+    assert "m = 2" in tip and "conventional in the literature" in tip
+    assert "2 by convention" not in tip, "the old, wrong claim must not survive verbatim"
+
+    tol_label = form.labelForField(sc.ent_tol)
+    assert tol_label.text() == "Tolerance (r), × SD"
+    tol_tip = sc.ent_tol.toolTip()
+    assert tol_label.toolTip() == tol_tip
+    assert "processing.entropy.tolerance" in tol_tip
+    assert "multiple of the per-column standard deviation" in tol_tip
+    assert "0.1 × SD by default" in tol_tip and "0.2 × SD" in tol_tip
+    win.close()
+
+
+def test_entropy_readout_states_m_and_r_in_the_apps_own_words(qapp, tmp_path):
+    """The live caption under the two entropy fields does the m = epochs - 1 arithmetic for
+    the user, in the terms a methods section would use, and follows every edit."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(str(tmp_path))))
+    sc = win.settings_screen
+    sc.ent_epochs.setValue(2)
+    sc.ent_tol.setValue(0.1)
+    assert sc.ent_caption.text() == "Computing SampEn with m = 1, r = 0.1 × SD."
+    sc.ent_epochs.setValue(3)
+    assert sc.ent_caption.text() == "Computing SampEn with m = 2, r = 0.1 × SD."
+    sc.ent_tol.setValue(0.2)
+    assert sc.ent_caption.text() == "Computing SampEn with m = 2, r = 0.2 × SD."
+    win.close()
+
+
 def test_decimal_separator_picker_reflects_and_writes_the_model(qapp, tmp_path):
     """Ticket D03: the manual override for CSV/text decimal separator, next to MATLAB file
     variant on the Input card. Like matlab_variant, it is Setup-owned and bound: from_state

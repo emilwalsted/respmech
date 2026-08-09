@@ -235,6 +235,28 @@ def test_write_batch_adds_units_provenance_summary_without_touching_data(tmp_pat
     assert os.path.isfile(os.path.join(tmp_path, "data", "Cohort summary.xlsx"))
 
 
+def test_provenance_names_sample_entropy_only_when_it_is_computed(tmp_path):
+    """D11 (UI-overhaul): the Provenance sheet gets a 'Sample entropy' row, in the same m/r
+    words as Setup's own read-out, but only when a channel is actually assigned to entropy —
+    an empty processing.entropy.epochs/tolerance would otherwise be printed as if a run had
+    used them when nothing was computed at all."""
+    from respmech.core.io.writers import _provenance_rows
+    s = synth_settings(tmp_path)
+    s.input.channels.entropy = []                      # nothing assigned -> nothing computed
+    rows = dict(_provenance_rows(s, datetime(2026, 7, 11)).values)
+    assert "Sample entropy" not in rows
+
+    s.input.channels.entropy = [3]
+    s.processing.entropy.epochs = 2
+    s.processing.entropy.tolerance = 0.1
+    rows = dict(_provenance_rows(s, datetime(2026, 7, 11)).values)
+    assert rows["Sample entropy"] == "m = 1, r = 0.1 × SD"
+
+    s.processing.entropy.epochs = 3
+    rows = dict(_provenance_rows(s, datetime(2026, 7, 11)).values)
+    assert rows["Sample entropy"] == "m = 2, r = 0.1 × SD"
+
+
 # ---------------------------------------------------------------------------
 # Run report + reloadable manifest (P7); sample data (P23) — waves 2, 6
 # ---------------------------------------------------------------------------

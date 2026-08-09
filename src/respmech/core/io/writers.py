@@ -46,18 +46,23 @@ def _units_df(columns):
 def _provenance_rows(settings, when):
     ts = (when or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
     ip = settings.input
-    return pd.DataFrame(
-        [("RespMech version", __version__),
-         ("Generated", ts),
-         ("Input folder", ip.folder),
-         ("Input pattern", ip.files),
-         ("Sampling frequency (Hz)", ip.format.sampling_frequency),
-         ("Breath separation", f"{settings.processing.segmentation.method}, "
-                               f"buffer {settings.processing.segmentation.buffer}"),
-         ("Drift correction", settings.processing.volume.correct_drift),
-         ("EMG normalisation", settings.processing.emg.normalization),
-         ("Settings snapshot", "analysis-used.toml")],
-        columns=["Key", "Value"])
+    rows = [("RespMech version", __version__),
+            ("Generated", ts),
+            ("Input folder", ip.folder),
+            ("Input pattern", ip.files),
+            ("Sampling frequency (Hz)", ip.format.sampling_frequency),
+            ("Breath separation", f"{settings.processing.segmentation.method}, "
+                                  f"buffer {settings.processing.segmentation.buffer}"),
+            ("Drift correction", settings.processing.volume.correct_drift),
+            ("EMG normalisation", settings.processing.emg.normalization)]
+    if ip.channels.entropy:
+        # D11 (UI-overhaul): same m/r a reader would need for a methods section, in the same
+        # words as the Setup screen's own read-out (settings_screen.py's ent_caption) — only
+        # added when entropy is actually computed (an empty channel list means it is not).
+        ent = settings.processing.entropy
+        rows.append(("Sample entropy", f"m = {ent.epochs - 1}, r = {ent.tolerance:g} × SD"))
+    rows.append(("Settings snapshot", "analysis-used.toml"))
+    return pd.DataFrame(rows, columns=["Key", "Value"])
 
 
 _WEBSITE = "https://github.com/emilwalsted/respmech"
