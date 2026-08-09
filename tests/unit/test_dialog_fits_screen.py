@@ -47,6 +47,7 @@ _DATA_OUT = {"saveaveragedata": True, "savebreathbybreathdata": True}
 
 def _advanced_dialogs(qapp, tmp_path):
     """Build the three Advanced modals without blocking on exec()."""
+    from respmech.ui.advanced_dialog import AdvancedDialog
     from respmech.ui.main_window import MainWindow
     s = synth_settings(str(tmp_path), data_out=_DATA_OUT, remove_ecg=True, noise=True)
     win = MainWindow(AppState(s))
@@ -55,18 +56,23 @@ def _advanced_dialogs(qapp, tmp_path):
     for _ in range(6):
         qapp.processEvents()
     captured = {}
-    original = QDialog.exec
+    # Patch AdvancedDialog.exec ITSELF, not QDialog.exec (D13, UI-overhaul): the mechanics
+    # modal is now non-modal and its exec() override never calls QDialog's own exec() at
+    # all (see advanced_dialog.py), so a patch on the base class would silently miss it —
+    # the dialog would actually show() and block on a real QEventLoop, forever, since
+    # nothing here ever accepts/rejects/closes it.
+    original = AdvancedDialog.exec
 
     def _capture(self):
         captured[self.windowTitle()] = self
         return QDialog.Rejected
 
-    QDialog.exec = _capture
+    AdvancedDialog.exec = _capture
     try:
         for opener in ("_open_mech_advanced", "_open_emg_advanced", "_open_ecg_advanced"):
             getattr(win.preview_screen, opener)()
     finally:
-        QDialog.exec = original
+        AdvancedDialog.exec = original
     assert captured, "no Advanced dialog was built — every assertion below would be vacuous"
     return captured, win
 
