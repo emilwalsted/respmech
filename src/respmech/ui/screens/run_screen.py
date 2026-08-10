@@ -157,7 +157,18 @@ class RunScreen(QWidget):
         self.refresh_actions()
 
     def _build(self):
-        root = QVBoxLayout(self); root.setContentsMargins(11, 11, 11, 11)   # deterministic, matches Setup
+        # Collapsed, this screen is ONE summary row, and 11 px of card padding above and
+        # below a 26 px row is 22 px of the workspace's vertical budget spent on air: the
+        # noise tab's "thirds" guard measured chrome+settings at 43% of an 850 px window
+        # on the Windows runner (test_the_noise_tab_divides_into_thirds, red 10-08-2026),
+        # and the drawer's padding was the largest single compressible piece. So the
+        # margins now FOLLOW the drawer's state — a slim (11, 3, 11, 3) while it is the
+        # always-on row B03 promised would cost "as close to nothing as this screen can
+        # make it", and the full (11, 11, 11, 11) card framing (matching Setup) only while
+        # the section is actually open. _on_toggle_results owns the switch; a run's
+        # auto-expand goes through the same toggle, so there is exactly one path.
+        root = QVBoxLayout(self); root.setContentsMargins(11, 3, 11, 3)
+        self._root_lay = root
 
         # B03: a single compact row is ALL that shows outside the collapsible section below
         # — everything else (action bar, io-info, progress, log, averages table) lives
@@ -178,6 +189,10 @@ class RunScreen(QWidget):
         self._drawer_summary = ElidingLabel(mode=Qt.ElideRight)
         self._drawer_summary.setProperty("status", "muted")
         self.btn_toggle_results = QPushButton("Run & results ▸")
+        # The compact button style (6 px vertical padding vs the default): this button IS
+        # the collapsed drawer's whole height, so its padding is workspace budget — same
+        # thirds-guard arithmetic as the margins note above, worth ~6-8 px more.
+        self.btn_toggle_results.setProperty("compact", True)
         self.btn_toggle_results.setCheckable(True)
         self.btn_toggle_results.setAutoDefault(False)
         self.btn_toggle_results.setToolTip(
@@ -506,6 +521,9 @@ class RunScreen(QWidget):
     def _on_toggle_results(self, checked):
         self._results_section.setVisible(checked)
         self.btn_toggle_results.setText("Run & results ▾" if checked else "Run & results ▸")
+        # Card framing only while the section is open; collapsed, the drawer is a summary
+        # row and pays a summary row's margins — see _build's note on the thirds guard.
+        self._root_lay.setContentsMargins(11, 11 if checked else 3, 11, 11 if checked else 3)
 
     def _run_report_path(self) -> str | None:
         """The most recently written ``run-report*.txt`` in the active output folder, or
