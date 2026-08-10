@@ -23,8 +23,12 @@ CLI (`respmech run/validate/migrate`). Settings are declarative **TOML**.
 - `legacy/` — the **frozen v1 monolith**; the v2 engine is a faithful port of it.
 - `tests/golden/` — characterisation tests that pin v2 output **byte-for-byte**
   against v1 references. `docs/REVERSE_ENGINEERING.md` = the formulas/units.
-- CI: `.github/workflows/ci.yml` (GUI smoke on win/mac + numerical golden on
-  ubuntu), runs on every branch.
+- CI: `.github/workflows/ci.yml` — GUI smoke on win/mac (full 2×2 matrix on
+  master/PRs/dispatch, one Python per OS on feature-branch pushes, to keep the
+  macOS runner queue drainable), a fast `smoke-linux` job on ubuntu (the exact
+  claim a Linux ticket sandbox can make locally, ~15 min), and the numerical
+  golden on ubuntu. Every job carries `timeout-minutes` — a hung Qt test used to
+  burn a runner for the 6 h default. Runs on every branch.
 
 ### CI showing red does not always mean a test failed (found 07-08-2026)
 
@@ -60,6 +64,42 @@ infrastructure* next, not just the tests.
 Both fixes are on `master` and were merged forward into `ui-overhaul`. Regression
 tests: `tests/unit/test_check_changelog.py::test_a_non_utf8_default_locale_does_not_crash_the_tool`,
 `tests/unit/test_ci_workflow_concurrency.py`.
+
+### A ticket is not done while its own CI run is red (added 10-08-2026)
+
+Every ticket session runs on **Linux**, and a green local `pytest tests/unit
+tests/golden` there is necessary but **not sufficient**: the win/mac smoke fails on
+real portability differences a Linux run structurally cannot see. Measured
+05→10-08-2026 on `ui-overhaul`: ~45 consecutive pushes failed the win/mac GUI smoke,
+every pushing ticket believed it was green because its local suite was, nobody looked
+back at CI after pushing, and the maintainer's inbox took a failure mail per push for
+five days. The reds were all of exactly the classes this file already warns about:
+seven `QUrl.toLocalFile()` paths compared against native separators (`'C:/…' !=
+'C:\\…'` — fixed 10-08 with `os.path.normpath` at the drop boundary in
+`ui/path_drop.py` / `MainWindow._dropped_analysis_path`; any future URL→path
+conversion needs the same), one assertion on an ElidingLabel's rendered `text()`
+(the elide rule above, again — assert `fullText()`/`toolTip()`), and six
+Windows-metrics layout budgets (five still open when this was written).
+
+The protocol, after **every** push:
+
+1. `gh run list --branch <branch> --limit 3` — the run for your HEAD sha appears
+   within seconds of the push.
+2. Watch it to a verdict: `gh run watch <run-id> --exit-status` (or poll
+   `gh run view <run-id>`). **`GUI smoke · ubuntu-latest` (~15 min) is the same claim
+   as your local suite and must be green. The Windows jobs (~35 min) must be green
+   before the ticket reports success.** Read failures with
+   `gh run view <run-id> --log-failed`.
+3. macOS can queue for hours behind earlier runs — do not block the hand-off on it,
+   but check the latest *completed* macOS smoke on the branch before starting new
+   work, and treat an inherited red as yours to clear before building on top of it.
+4. Layout or wording changes: model the Windows runner **before** pushing —
+   `windows_metrics` fixture / `QFont.setStretch(145)` (metrics section above). A
+   pixel-marginal row that fits your DejaVu does not fit Segoe, and macOS adds
+   button chrome DejaVu maths won't predict.
+5. If `gh` is unavailable in the session, say so in the hand-off instead of implying
+   green: "suite green locally; CI not checked" is honest and lets the next session
+   check. Never report a ticket done while its run shows a failed job.
 
 ## Dev environment — check which interpreter you are actually running
 
