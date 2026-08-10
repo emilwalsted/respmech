@@ -780,9 +780,14 @@ def test_io_info_shows_folder_mask_count_and_output_before_running(qapp, tmp_pat
     assert INPUT in read_tip
     assert "Writing:" in write_tip
     assert str(tmp_path) in write_tip
-    # the label text (unshown widget, width 0 -> ElidingLabel shows the full string) matches
-    assert rn.read_info.text() == read_tip
-    assert rn.write_info.text() == write_tip
+    # The un-elided SOURCE string matches the tooltip, by ElidingLabel's own contract.
+    # Never assert on the rendered text(): how much of it survives is a font/width
+    # measurement, not a fact about the app — the first cut asserted text() == tip on the
+    # "unshown widget, width 0" assumption, and both CI runners elided the middle of the
+    # path ('…/Users/ru' → 'i…nner') while every Linux run passed (CLAUDE.md, metrics
+    # section; exactly the elided-text() trap it warns about).
+    assert rn.read_info.fullText() == read_tip
+    assert rn.write_info.fullText() == write_tip
     win.close()
 
 
