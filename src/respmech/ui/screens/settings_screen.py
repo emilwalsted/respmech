@@ -10,6 +10,7 @@ model is preserved on load/save round-trips.
 from __future__ import annotations
 
 import os
+import tomllib
 import traceback
 
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
@@ -20,6 +21,7 @@ from PySide6.QtCore import Signal, QTimer
 
 from respmech.core.settings import BreathCountEntry, Settings, SettingsError
 from respmech.ui.dialogs import open_error_dialog, short_error
+from respmech.ui.migration_report_dialog import open_migration_report
 from respmech.ui.flow_layout import install_flow
 from respmech.ui.help_text import tooltip as _tip
 from respmech.ui.manifest import build_manifest, narrow_mask
@@ -1698,13 +1700,17 @@ class SettingsScreen(QWidget):
         except Exception:                       # noqa: BLE001
             pass
 
-    def _report_error(self, operation, detail):
+    def _report_error(self, operation, detail, intro=None, collapsed_detail=False):
         """Consistent failure surface: a short status line + a copyable full trace
-        (matches the Preview/Run screens)."""
+        (matches the Preview/Run screens). ``intro``/``collapsed_detail`` (ticket D16,
+        reusing D01's pattern) let a caller that already has a plain-language diagnosis
+        lead with it — the trace stays one click away behind a "Details" toggle instead
+        of the generic "<operation> failed." caption that explains nothing."""
         self._set_status(f"{operation} failed — {short_error(detail)}")
         self._err_dialog = open_error_dialog(
             self, f"{operation} — error", detail,
-            intro=f"{operation} failed. The full detail below is copyable.",
+            intro=intro or f"{operation} failed. The full detail below is copyable.",
+            collapsed_detail=collapsed_detail,
             prior=self._err_dialog)
 
     def _load(self, path=None):
@@ -1719,11 +1725,24 @@ class SettingsScreen(QWidget):
         try:
             self.state.load_toml(p)
             self.from_state()
-        except Exception:                       # noqa: BLE001 — roll back so nothing partially applies
+        except Exception as e:                  # noqa: BLE001 — roll back so nothing partially applies
             detail = traceback.format_exc()
             self.state.settings, self.state.settings_path = prior, prior_path
             self._resync_form()
-            self._report_error("Open analysis", detail)
+            if isinstance(e, tomllib.TOMLDecodeError):
+                # ticket D16: a malformed .toml used to surface as a bare "Open analysis
+                # failed" caption over a 15-line traceback ending inside tomllib itself —
+                # the user's mental model is "my analysis file", and the app deliberately
+                # never says TOML anywhere else in the interface. str(e) already carries
+                # tomllib's own "(at line N, column M)" location, so it is reused verbatim
+                # rather than re-parsed.
+                self._report_error(
+                    "Open analysis", detail,
+                    intro=f"'{os.path.basename(p)}' could not be read — it is not a "
+                          f"valid analysis file ({e}). Your current analysis is unchanged.",
+                    collapsed_detail=True)
+            else:
+                self._report_error("Open analysis", detail)
             return False
         self._set_status(f"Opened {p}")
         self._mark_clean()
@@ -1912,9 +1931,8 @@ class SettingsScreen(QWidget):
             self._resync_form()
             self._report_error("Open legacy analysis", detail)
             return False
-        self._report_dialog = open_error_dialog(
-            self, "Migration report", report,
-            intro="Legacy analysis imported and converted.", prior=self._report_dialog)
+        self._report_dialog = open_migration_report(
+            self, report, source_path=p, prior=self._report_dialog)
         self._set_status(f"Imported {p}")
         # ticket C03 point 7: a converted 1.x analysis has no .toml of its own yet — it was
         # marked CLEAN before, which is what let closeEvent's confirm_discard_changes and

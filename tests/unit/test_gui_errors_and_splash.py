@@ -30,9 +30,43 @@ def _settings(outdir):
 # -- copyable text dialog + error summary -----------------------------------
 def test_short_error_extracts_last_line():
     from respmech.ui.dialogs import short_error
-    tb = "Traceback (most recent call last):\n  File \"x\", line 1\nValueError: boom"
-    assert short_error(tb) == "ValueError: boom"
     assert short_error("") == "unknown error"
+
+
+def test_short_error_strips_the_exception_type_prefix():
+    """Ticket D16: a traceback's last line is ``<dotted.qualified.Name>: message`` — the
+    module/class prefix is implementation detail a physiologist reading the status bar or
+    an error card has no use for, so only the message is kept. Verbatim example from the
+    ticket."""
+    from respmech.ui.dialogs import short_error
+    tb = ("Traceback (most recent call last):\n  File \"x\", line 1\n"
+          "respmech.core.io.loaders.DataValidationError: Volume channel is set to "
+          "column 6, but subj04_short.csv has only 5 columns.")
+    assert short_error(tb) == ("Volume channel is set to column 6, but subj04_short.csv "
+                               "has only 5 columns.")
+    # a builtin exception (no dots at all) is stripped the same way
+    assert short_error("ValueError: boom") == "boom"
+
+
+def test_short_error_leaves_a_non_traceback_message_unchanged():
+    """A multi-line message whose last line is NOT of the ``Type: message`` shape (no
+    identifier-chain prefix before a colon) must be returned exactly as-is."""
+    from respmech.ui.dialogs import short_error
+    msg = "Analysis completed, but writing the output failed.\nSome files may be partially written."
+    assert short_error(msg) == "Some files may be partially written."
+    # a single line with a space before the colon isn't a Type: message either
+    assert short_error("writing failed: disk full") == "writing failed: disk full"
+
+
+def test_exception_type_name_parses_the_bare_class_name():
+    from respmech.ui.dialogs import exception_type_name
+    tb = ("Traceback (most recent call last):\n  ...\n"
+          "respmech.core.io.loaders.DataValidationError: Flow channel is set to column 5, "
+          "but subject01.csv has only 1 column.")
+    assert exception_type_name(tb) == "DataValidationError"
+    assert exception_type_name("RuntimeError: kaboom") == "RuntimeError"
+    assert exception_type_name("writing failed: disk full") is None
+    assert exception_type_name("") is None
 
 
 def test_text_viewer_dialog_is_copyable(qapp):
@@ -157,7 +191,9 @@ def test_failed_job_shows_panel_error_with_copyable_detail(qapp, tmp_path):
 def test_error_card_summary_carries_the_diagnosis(qapp, tmp_path):
     """The error card's own visible summary now carries the exception's diagnosis (A03
     point 5), not only the generic '<job> failed' — previously the diagnosis was reachable
-    only via the transient status line or behind the round 'i' info button."""
+    only via the transient status line or behind the round 'i' info button. Ticket D16:
+    the diagnosis itself is now also stripped of its 'Type:' prefix (short_error), so the
+    card reads as a sentence rather than 'valueerror: bad channel'."""
     from PySide6.QtCore import QThread
     from respmech.ui.main_window import MainWindow
     from respmech.ui.screens.preview_screen import _Job
@@ -168,7 +204,29 @@ def test_error_card_summary_carries_the_diagnosis(qapp, tmp_path):
     pv._jobs["mech"] = job
     pv._on_job_done(job, None)
     ov = pv._overlays["channels"]
-    assert "valueerror: bad channel" in ov._err_label.text().lower()
+    assert "bad channel" in ov._err_label.text().lower()
+    assert "valueerror" not in ov._err_label.text().lower()
+    win.close()
+
+
+def test_failed_preview_job_card_names_the_column_mismatch(qapp, tmp_path):
+    """Ticket D16's own acceptance criterion: a preview job that fails on a too-narrow
+    file must show the column-count diagnosis on the card ITSELF, not just '… failed'
+    behind the info button."""
+    from PySide6.QtCore import QThread
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.screens.preview_screen import _Job
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    job = _Job("mech", pv._tokens["mech"], QThread(), object())
+    job.error = ("Traceback (most recent call last):\n  ...\n"
+                "respmech.core.io.loaders.DataValidationError: Flow channel is set to "
+                "column 5, but subject01.csv has only 1 column.")
+    pv._jobs["mech"] = job
+    pv._on_job_done(job, None)
+    ov = pv._overlays["channels"]
+    assert "column 5" in ov._err_label.text() and "subject01.csv" in ov._err_label.text()
+    assert ov._err_label.text().strip() != "Channel preview failed"
     win.close()
 
 
@@ -243,6 +301,44 @@ def test_run_screen_error_report_and_window(qapp, tmp_path):
     rs._fatal_msg = "RuntimeError: kaboom"
     rep2 = rs._error_report(None, {})
     assert "did not complete" in rep2 and "kaboom" in rep2
+
+
+def test_fatal_error_report_looks_up_the_fix_hint_by_parsing_the_traceback(qapp, tmp_path):
+    """Ticket D16: a FATAL run (no FileResult, hence no error_kind to key _FIX_HINTS by)
+    still gets its hint — parsed straight out of the traceback's own last line."""
+    from respmech.ui.screens.run_screen import RunScreen
+    rs = RunScreen(AppState(_settings(str(tmp_path))))
+    rs._fatal_msg = ("Traceback (most recent call last):\n  ...\n"
+                     "respmech.core.io.loaders.DataValidationError: Volume channel is "
+                     "set to column 6, but subj04_short.csv has only 5 columns.")
+    report = rs._error_report(None, {})
+    assert "Where to fix DataValidationError" in report
+    assert "Setup" in report and "channel assignment" in report
+    # an exception type with no hint entry adds nothing (no dangling "Where to fix None:")
+    rs._fatal_msg = "RuntimeError: kaboom"
+    report2 = rs._error_report(None, {})
+    assert "Where to fix" not in report2
+
+
+def test_fatal_log_line_is_short_not_the_full_traceback(qapp, tmp_path):
+    """Ticket D16: `_on_fatal` used to append `traceback.format_exc()` in full to the
+    always-visible log (~20 lines of stack frames for what is usually a data problem).
+    It must now log one summarising line and point at the (still full-detail) error
+    window instead."""
+    from respmech.ui.screens.run_screen import RunScreen
+    rs = RunScreen(AppState(_settings(str(tmp_path))))
+    tb = ("Traceback (most recent call last):\n"
+         "  File \"x.py\", line 1, in <module>\n"
+         "    raise DataValidationError(msg)\n"
+         "respmech.core.io.loaders.DataValidationError: Volume channel is set to "
+         "column 6, but subj04_short.csv has only 5 columns.")
+    rs._on_fatal(tb)
+    log_text = rs.log.toPlainText()
+    assert rs._fatal_msg == tb                       # the FULL trace is still retained…
+    assert log_text.count("\n") < 3                  # …but the LOG got only a short line
+    assert "Volume channel is set to column 6" in log_text
+    assert "see the error window" in log_text
+    assert "File \"x.py\"" not in log_text            # no stack frame lines in the log
 
 
 # -- maximise on startup ----------------------------------------------------

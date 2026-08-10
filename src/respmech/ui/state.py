@@ -4,7 +4,7 @@ Kept free of Qt so it is unit-testable without a display."""
 from __future__ import annotations
 
 from respmech.core.settings import Settings
-from respmech.settingsio.migrate import migrate_file
+from respmech.settingsio.migrate import MigrationReport, migrate_file
 from respmech.settingsio.toml_io import load_toml, save_toml
 
 
@@ -43,11 +43,16 @@ class AppState:
         self.legacy_source_path = None
         self.is_sample = False
 
-    def import_legacy(self, path: str) -> str:
+    def import_legacy(self, path: str) -> MigrationReport:
+        """Returns the structured :class:`MigrationReport` (ticket D16 — the caller used
+        to get only ``report.text()``, the flat machine-readable listing; the UI now
+        needs the mapped/normalised/dropped lists separately to render its own
+        structured dialog). ``report.text()`` still produces that same flat listing, for
+        the dialog's "Save report…" and anything else that wants the raw form."""
         self.settings, report = migrate_file(path)
         self.settings_path = None
         self.legacy_source_path = path
         import os  # noqa: PLC0415
         self.display_name = os.path.splitext(os.path.basename(path))[0]
         self.is_sample = False
-        return report.text()
+        return report

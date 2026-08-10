@@ -2,6 +2,8 @@
 batch error log. Qt-only; no core dependency."""
 from __future__ import annotations
 
+import re
+
 from PySide6.QtCore import Qt, QTimer, QSize
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (QApplication, QDialog, QHBoxLayout, QLabel,
@@ -12,14 +14,51 @@ try:
 except Exception:  # pragma: no cover
     _theme = None
 
+# A Python traceback's last line is ``<dotted.qualified.Name>: message`` (or, for a
+# builtin exception, just ``Name: message`` — a dotted chain of zero dots). Matched
+# against the WHOLE last line: the message half is free text and may itself contain
+# colons, but the type half cannot (an identifier chain), so this can only ever
+# consume up to the first ": " — never eats into the message.
+_LAST_LINE_TYPE_RE = re.compile(r'^([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*): (.+)$')
+
+
+def _last_line(detail: str) -> str:
+    lines = [ln.strip() for ln in str(detail).splitlines() if ln.strip()]
+    return lines[-1] if lines else str(detail).strip()
+
 
 def short_error(detail: str) -> str:
     """Reduce a full traceback (or multi-line message) to a one-line summary —
-    the last non-empty line, which for a Python traceback is ``Type: message``."""
+    the last non-empty line. When that line has the shape ``<Type>: message``
+    (ticket D16 — a Python exception's own str(), e.g.
+    ``respmech.core.io.loaders.DataValidationError: Volume channel is set to
+    column 6, but subj04_short.csv has only 5 columns.``), only the message is
+    returned; the module/class prefix is implementation detail a physiologist
+    reading the status bar has no use for. Any other line is returned unchanged —
+    this is a presentation trim, not a rewrite of what exceptions say."""
     if not detail:
         return "unknown error"
-    lines = [ln.strip() for ln in str(detail).splitlines() if ln.strip()]
-    return lines[-1] if lines else str(detail).strip()
+    line = _last_line(detail)
+    if not line:
+        return str(detail).strip()
+    m = _LAST_LINE_TYPE_RE.match(line)
+    return m.group(2) if m else line
+
+
+def exception_type_name(detail: str) -> str | None:
+    """The bare exception class name from the last line of a traceback (or a lone
+    ``Type: message`` string) — e.g. ``"DataValidationError"`` from
+    ``"respmech.core.io.loaders.DataValidationError: Volume channel is set to
+    column 6, …"``. ``None`` if the last line isn't of that shape. Lets a caller
+    that only has the free-text ``detail`` (not the original exception object —
+    e.g. a fatal error relayed across a QThread as a plain string) still look the
+    kind up in a hint table such as ``run_screen._FIX_HINTS``."""
+    if not detail:
+        return None
+    m = _LAST_LINE_TYPE_RE.match(_last_line(detail))
+    if not m:
+        return None
+    return m.group(1).rsplit(".", 1)[-1]
 
 
 class TextViewerDialog(QDialog):

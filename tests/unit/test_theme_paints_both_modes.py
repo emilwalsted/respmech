@@ -75,6 +75,8 @@ def _all_windows(qapp, tmp_path):
     """One of every top-level window the user can meet, built and shown."""
     from respmech.ui.main_window import MainWindow
     from respmech.ui.dialogs import TextViewerDialog
+    from respmech.ui.migration_report_dialog import MigrationReportDialog
+    from respmech.settingsio.migrate import MigrationReport
     from respmech.ui.startup_dialog import StartupDialog
 
     s = synth_settings(str(tmp_path), data_out={"saveaveragedata": True},
@@ -109,6 +111,9 @@ def _all_windows(qapp, tmp_path):
     windows.update(captured)
     windows["StartupDialog"] = StartupDialog()
     windows["TextViewerDialog"] = TextViewerDialog("Error log", "trace\n" * 20)
+    report = MigrationReport(mapped=["a.b -> c.d"], normalised=["e.f changed meaning"],
+                             dropped=["g.h (unused)"])
+    windows["MigrationReportDialog"] = MigrationReportDialog(report)
     return windows
 
 

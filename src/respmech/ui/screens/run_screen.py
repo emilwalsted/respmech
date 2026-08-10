@@ -21,7 +21,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QMessageBox, QProgressBar,
                                QPushButton, QTableView, QPlainTextEdit, QVBoxLayout, QWidget)
 
-from respmech.ui.dialogs import TextViewerDialog, short_error
+from respmech.ui.dialogs import TextViewerDialog, exception_type_name, short_error
 from respmech.ui.file_rail import FileRail
 from respmech.ui.flow_layout import ElidingLabel, install_flow as _install_flow
 from respmech.ui.manifest import manifest_from_filenames
@@ -50,6 +50,8 @@ _FIX_HINTS = {
     "NoBreathsError": "Preview & QC → Mechanics → Advanced… → 'Signal used to split "
                       "breaths' and the 'Breath peak' thresholds; or re-include excluded "
                       "breaths by clicking them in the Preview & QC channel view.",
+    "DataValidationError": "Setup → channel assignment — the recording's column count "
+                           "or contents do not match the channels configured there.",
 }
 
 
@@ -928,7 +930,12 @@ class RunScreen(QWidget):
 
     def _on_fatal(self, msg):
         self._fatal_msg = msg
-        self._append(f"ERROR: {msg}")
+        # ticket D16: `msg` is the WHOLE traceback.format_exc() — appending it here used to
+        # dump ~20 lines of stack frames and carets into the always-visible log for what is
+        # usually a data problem, not a program crash. The log now gets the one sentence a
+        # physiologist can act on; the full trace is still one click away in the copyable
+        # TextViewerDialog _show_error_window opens from self._fatal_msg once the run ends.
+        self._append(f"ERROR: {short_error(msg)} (full technical detail: see the error window)")
 
     def shutdown(self, wait_ms=5000):
         """Cancel and join a running batch (called from MainWindow.closeEvent) so
@@ -1164,12 +1171,23 @@ class RunScreen(QWidget):
             self._show_error_window(self._error_report(result, failed or {}),
                                     write_failed=write_failed, fatal=fatal)
 
+    def _fatal_fix_hint(self):
+        """The `_FIX_HINTS` entry for `self._fatal_msg`'s own exception type, if any —
+        ticket D16. A fatal traceback has no `FileResult.error_kind` (there is no
+        FileResult; the run never got that far), so the type name is parsed straight out
+        of the traceback's last line instead, the same way `short_error` reads it."""
+        kind = exception_type_name(self._fatal_msg) if self._fatal_msg else None
+        return f"Where to fix {kind}: {_FIX_HINTS[kind]}\n" if kind in _FIX_HINTS else None
+
     def _error_report(self, result, failed):
         parts = []
         if result is None:
             parts.append("The batch run did not complete.\n")
             if self._fatal_msg:
                 parts.append(self._fatal_msg)
+                hint = self._fatal_fix_hint()
+                if hint:
+                    parts.append(hint)
         else:
             if failed:
                 parts.append(f"{len(failed)} file{'s' if len(failed) != 1 else ''} "
@@ -1186,6 +1204,9 @@ class RunScreen(QWidget):
                 if parts:
                     parts.append("")
                 parts.append(self._fatal_msg)
+                hint = self._fatal_fix_hint()
+                if hint:
+                    parts.append(hint)
         return "\n".join(parts).strip()
 
     def _show_error_window(self, text, write_failed=False, fatal=False):

@@ -531,6 +531,49 @@ def test_open_broken_toml_rolls_back_and_keeps_prior(qapp, tmp_path, monkeypatch
     win.close()
 
 
+def test_open_broken_toml_leads_with_a_plain_diagnosis(qapp, tmp_path):
+    """Ticket D16: opening an invalid .toml used to pop the generic "Open analysis
+    failed. The full detail below is copyable." over a 15-line traceback ending inside
+    Python's own tomllib module — the user's mental model is "my analysis file", and the
+    app never says TOML anywhere else in the interface. It must now lead with a
+    plain-language diagnosis (naming the broken FILE, not the parser) and keep the
+    traceback one click away, reusing the D01 collapsed-detail dialog pattern."""
+    from respmech.ui.dialogs import TextViewerDialog
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    bad = tmp_path / "broken.toml"
+    bad.write_text("this is = not valid toml [[[\n")
+    ok = sc.open_analysis(str(bad))
+    assert ok is False
+    assert sc._err_dialog is not None
+    intro = sc._err_dialog.intro_label.text()
+    assert "broken.toml" in intro
+    assert "not a valid analysis file" in intro
+    assert "Your current analysis is unchanged" in intro
+    assert "tomllib" not in intro and "Traceback" not in intro   # no raw parser leakage
+    assert sc._err_dialog.details_btn is not None            # trace is one click away…
+    assert sc._err_dialog.view.isVisibleTo(sc._err_dialog) is False   # …but starts hidden
+    assert "Traceback" in sc._err_dialog.text()               # …and is still the FULL trace
+    win.close()
+
+
+def test_open_missing_toml_keeps_the_generic_surface(qapp, tmp_path):
+    """A load failure that is NOT a malformed-TOML problem (here: the file does not
+    exist — FileNotFoundError, not tomllib.TOMLDecodeError) must keep the ordinary,
+    uncollapsed error surface: the diagnosis-first path is specific to "this file isn't
+    valid TOML", not every possible way opening a file can fail."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    missing = str(tmp_path / "does_not_exist.toml")
+    ok = sc.open_analysis(missing)
+    assert ok is False
+    assert sc._err_dialog is not None
+    assert sc._err_dialog.details_btn is None                # ordinary, uncollapsed layout
+    win.close()
+
+
 def test_open_invalid_analysis_shows_cards_but_warns(qapp, tmp_path):
     """A parseable analysis that fails validation still opens (every card, per
     test_open_mode_shows_conditional_cards_that_apply) but the status reports it invalid."""
