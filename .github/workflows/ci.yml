@@ -204,33 +204,67 @@ jobs:
         working-directory: ${{ runner.temp }}
         run: python -c "import respmech.ui.splash as s; from PySide6.QtWidgets import QApplication; from respmech.ui import theme; from respmech.ui.state import AppState; from respmech.ui.main_window import MainWindow; app=QApplication([]); theme.apply_theme(app); s.make_splash(app); w=MainWindow(AppState()); assert w.tabs.count()==2; print('GUI OK')"
 
-      # Identical pass/fail logic to the win/mac unit step above — keep the two in sync.
+      # TWO pytest invocations, not one — a memory ceiling, not a style choice. The suite's
+      # top-level-widget population grows monotonically through a run (the teardown net
+      # closes but deliberately never deletes — see conftest/CLAUDE.md on the py3.11
+      # segfault), so peak memory scales with suite LENGTH: run #210 measured the single
+      # invocation dying at ~97% after 32 min with exit 143 on this 16 GB runner (an 8 GB
+      # sandbox dies at ~45%). Splitting resets the population halfway and halves the peak.
+      # The win/mac jobs deliberately keep the single big invocation — their platforms
+      # complete it, and it remains the one-process-whole-suite coverage. If either half
+      # here ever hits this again, the real fix is the suite-scaling ticket (widget
+      # population), not a third split.
+      #
+      # Pass/fail logic per half is identical to the win/mac unit step above — keep in sync.
       # The single --deselect is the documented sandbox artefact (CLAUDE.md "Known
       # non-issue: a font-resolution test fails on a minimal Linux sandbox"): Qt's
       # FixedFont fallback resolves to the generic alias "monospace" on fontconfig
       # systems without a real Menlo/Consolas, which is a property of the runner's
       # font inventory, not of the app. win/mac keep full coverage of that test.
-      - name: Unit suite (headless, offscreen Qt)
+      - name: Unit suite 1/2 (test_[a-o]*, headless offscreen Qt)
         run: |
           set +e
-          python -m pytest tests/unit -q --durations=25 \
+          python -m pytest tests/unit/test_[a-o]*.py -q --durations=15 \
             --deselect tests/unit/test_gui.py::test_splash_resolves_fonts_to_installed_families \
-            2>&1 | tee pytest-unit.log
+            2>&1 | tee pytest-unit-1.log
           set -e
-          if grep -qE "[0-9]+ (failed|error)" pytest-unit.log; then
-            echo "::error::real test failures or errors"; exit 1
+          if grep -qE "[0-9]+ (failed|error)" pytest-unit-1.log; then
+            echo "::error::real test failures or errors (half 1)"; exit 1
           fi
-          if ! grep -qE "[0-9]+ passed" pytest-unit.log; then
-            echo "::error::pytest did not reach a passing summary (crashed mid-run?)"; exit 1
+          if ! grep -qE "[0-9]+ passed" pytest-unit-1.log; then
+            echo "::error::pytest did not reach a passing summary in half 1 (crashed mid-run?)"; exit 1
           fi
-          passed=$(grep -oE "[0-9]+ passed" pytest-unit.log | tail -1 | grep -oE "^[0-9]+")
-          skipped=$(grep -oE "[0-9]+ skipped" pytest-unit.log | tail -1 | grep -oE "^[0-9]+" || true)
+          passed=$(grep -oE "[0-9]+ passed" pytest-unit-1.log | tail -1 | grep -oE "^[0-9]+")
+          skipped=$(grep -oE "[0-9]+ skipped" pytest-unit-1.log | tail -1 | grep -oE "^[0-9]+" || true)
           skipped=${skipped:-0}
-          echo "pytest reported ${passed} passed, ${skipped} skipped."
+          echo "half 1: ${passed} passed, ${skipped} skipped."
           if [ "$skipped" -gt $((passed / 10)) ]; then
-            echo "::error::${skipped} tests SKIPPED against ${passed} passed — the suite did not really run (fixture data not found?)"; exit 1
+            echo "::error::${skipped} tests SKIPPED against ${passed} passed in half 1 — the suite did not really run (fixture data not found?)"; exit 1
           fi
-          echo "Unit suite passed (any non-zero exit was a post-run Qt teardown crash)."
+
+      # --ignore-glob (not a positive test_[p-z] glob) so a future file whose first
+      # letter falls outside both patterns lands HERE instead of silently in neither.
+      - name: Unit suite 2/2 (the rest, headless offscreen Qt)
+        run: |
+          set +e
+          python -m pytest tests/unit -q --durations=15 \
+            --ignore-glob='*/test_[a-o]*.py' \
+            2>&1 | tee pytest-unit-2.log
+          set -e
+          if grep -qE "[0-9]+ (failed|error)" pytest-unit-2.log; then
+            echo "::error::real test failures or errors (half 2)"; exit 1
+          fi
+          if ! grep -qE "[0-9]+ passed" pytest-unit-2.log; then
+            echo "::error::pytest did not reach a passing summary in half 2 (crashed mid-run?)"; exit 1
+          fi
+          passed=$(grep -oE "[0-9]+ passed" pytest-unit-2.log | tail -1 | grep -oE "^[0-9]+")
+          skipped=$(grep -oE "[0-9]+ skipped" pytest-unit-2.log | tail -1 | grep -oE "^[0-9]+" || true)
+          skipped=${skipped:-0}
+          echo "half 2: ${passed} passed, ${skipped} skipped."
+          if [ "$skipped" -gt $((passed / 10)) ]; then
+            echo "::error::${skipped} tests SKIPPED against ${passed} passed in half 2 — the suite did not really run (fixture data not found?)"; exit 1
+          fi
+          echo "Unit suite passed in two halves (any non-zero exit was a post-run Qt teardown crash)."
 
   golden:
     name: Numerical golden (synthetic, rtol 1e-9)
