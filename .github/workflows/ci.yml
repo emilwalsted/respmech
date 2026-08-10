@@ -201,55 +201,63 @@ jobs:
         working-directory: ${{ runner.temp }}
         run: python -c "import respmech.ui.splash as s; from PySide6.QtWidgets import QApplication; from respmech.ui import theme; from respmech.ui.state import AppState; from respmech.ui.main_window import MainWindow; app=QApplication([]); theme.apply_theme(app); s.make_splash(app); w=MainWindow(AppState()); assert w.tabs.count()==2; print('GUI OK')"
 
-      # ONE pytest invocation, with swap underneath — the ordering is part of the contract.
-      # Two facts, measured on this runner, force this shape:
-      #   * Memory: the suite's top-level-widget population grows monotonically through a
-      #     run (the teardown net closes but deliberately never deletes — see conftest/
-      #     CLAUDE.md on the py3.11 segfault), so peak memory scales with suite length.
-      #     Run #210 measured the single invocation dying at ~97% after 32 min with exit
-      #     143 on this 16 GB runner (an 8 GB sandbox dies at ~45%).
-      #   * Ordering: splitting the suite into two invocations (run #211) moved two
-      #     reactive tests (test_gui_reactive) into a sequence they had never run in, and
-      #     both failed order-dependently — exactly the passes-alone-fails-in-a-big-run
-      #     class CLAUDE.md documents. The win/mac jobs run one big invocation, so this
-      #     job must too, or a red here stops meaning what it claims to mean.
-      # Swap absorbs the tail of the memory curve without touching the ordering: only the
-      # last few percent of the suite spill, so the cost is a couple of minutes, not a
-      # thrash. If this job ever ooms THROUGH 8 G of swap, the fix is the suite-scaling
-      # ticket (the widget population), not more swap.
-      - name: Swap for the suite's memory tail (see the note on the unit step)
+      # FILE-BY-FILE, deliberately — this job's claim is "every test file is green on
+      # Linux", not "the whole suite survives one process". Four measurements, four walls:
+      #   * One invocation does not fit: the suite's top-level-widget population grows
+      #     monotonically (the teardown net closes but deliberately never deletes — the
+      #     py3.11 segfault note in conftest), so peak memory scales with suite length.
+      #     At 1282 tests, runs #210 and #213 were TERM'd (exit 143) at ~97% after
+      #     ~32 min on this 16 GB runner; an 8 GB sandbox dies at ~45%.
+      #   * Swap is not a cure: #213 carried 8 G of swap and died identically — the
+      #     hosted runner kills on memory PRESSURE, which swap turns into thrash.
+      #   * Halves are not a cure: #211 split the suite in two, which moved the
+      #     test_gui_reactive pair into a novel mid-suite composition and both failed
+      #     order-dependently — the passes-alone-fails-in-a-big-run class CLAUDE.md
+      #     documents. There is no honest composition between per-file and whole-suite.
+      #   * The obvious fix segfaults: an opt-in deleteLater() reap of closed windows in
+      #     the teardown net was built and validated first — it segfaults within four
+      #     tests on py3.12 too, so the conftest's "cannot be validated without shipping
+      #     it" warning stands beyond py3.11. Capping the population for real is the
+      #     suite-scaling ticket, and doing it is what would also cure macOS's 3½-hour
+      #     runs and win back a one-process Linux job.
+      # Per-file runs are the composition ticket sandboxes actually exercise while
+      # iterating, every file's peak stays far below the ceiling, and the pattern is
+      # proven: all 72 files ran green in an 8 GB container before this landed. The
+      # one-process whole-suite claim stays covered by the win/mac jobs, which complete
+      # it. Per-file pass/fail mirrors the win/mac step's summary-grep logic — keep the
+      # two in sync. The --deselect is the documented sandbox artefact (CLAUDE.md "Known
+      # non-issue: a font-resolution test fails on a minimal Linux sandbox"); win/mac
+      # keep that test covered.
+      - name: Unit suite (headless, offscreen Qt, file by file)
         run: |
-          sudo fallocate -l 8G /swapfile && sudo chmod 600 /swapfile
-          sudo mkswap /swapfile && sudo swapon /swapfile
-          free -h
-
-      # Identical pass/fail logic to the win/mac unit step above — keep the two in sync.
-      # The single --deselect is the documented sandbox artefact (CLAUDE.md "Known
-      # non-issue: a font-resolution test fails on a minimal Linux sandbox"): Qt's
-      # FixedFont fallback resolves to the generic alias "monospace" on fontconfig
-      # systems without a real Menlo/Consolas, which is a property of the runner's
-      # font inventory, not of the app. win/mac keep full coverage of that test.
-      - name: Unit suite (headless, offscreen Qt)
-        run: |
-          set +e
-          python -m pytest tests/unit -q --durations=25 \
-            --deselect tests/unit/test_gui.py::test_splash_resolves_fonts_to_installed_families \
-            2>&1 | tee pytest-unit.log
-          set -e
-          if grep -qE "[0-9]+ (failed|error)" pytest-unit.log; then
-            echo "::error::real test failures or errors"; exit 1
+          fails=0; total_passed=0; total_skipped=0
+          : > pytest-unit.log
+          for f in tests/unit/test_*.py; do
+            set +e
+            python -m pytest "$f" -q --durations=5 \
+              --deselect tests/unit/test_gui.py::test_splash_resolves_fonts_to_installed_families \
+              > /tmp/one-file.log 2>&1
+            rc=$?
+            set -e
+            cat /tmp/one-file.log >> pytest-unit.log
+            summary=$(grep -E "[0-9]+ (passed|failed|error|skipped)|no tests ran" /tmp/one-file.log | tail -1)
+            echo "== ${f} :: ${summary:-NO SUMMARY} (exit ${rc})"
+            if grep -qE "[0-9]+ (failed|error)" /tmp/one-file.log; then
+              echo "::error::real test failures or errors in ${f}"; fails=1
+            elif ! grep -qE "[0-9]+ (passed|skipped)" /tmp/one-file.log; then
+              echo "::error::${f} produced no pytest summary (crashed mid-run?)"; fails=1
+            fi
+            p=$(grep -oE "[0-9]+ passed" /tmp/one-file.log | tail -1 | grep -oE "^[0-9]+" || true)
+            s=$(grep -oE "[0-9]+ skipped" /tmp/one-file.log | tail -1 | grep -oE "^[0-9]+" || true)
+            total_passed=$((total_passed + ${p:-0}))
+            total_skipped=$((total_skipped + ${s:-0}))
+          done
+          echo "TOTAL: ${total_passed} passed, ${total_skipped} skipped across all files."
+          if [ "$total_skipped" -gt $((total_passed / 10)) ]; then
+            echo "::error::${total_skipped} tests SKIPPED against ${total_passed} passed — the suite did not really run (fixture data not found?)"; fails=1
           fi
-          if ! grep -qE "[0-9]+ passed" pytest-unit.log; then
-            echo "::error::pytest did not reach a passing summary (crashed mid-run?)"; exit 1
-          fi
-          passed=$(grep -oE "[0-9]+ passed" pytest-unit.log | tail -1 | grep -oE "^[0-9]+")
-          skipped=$(grep -oE "[0-9]+ skipped" pytest-unit.log | tail -1 | grep -oE "^[0-9]+" || true)
-          skipped=${skipped:-0}
-          echo "pytest reported ${passed} passed, ${skipped} skipped."
-          if [ "$skipped" -gt $((passed / 10)) ]; then
-            echo "::error::${skipped} tests SKIPPED against ${passed} passed — the suite did not really run (fixture data not found?)"; exit 1
-          fi
-          echo "Unit suite passed (any non-zero exit was a post-run Qt teardown crash)."
+          if [ "$fails" -ne 0 ]; then exit 1; fi
+          echo "Unit suite passed file by file (per-file exit codes beyond the summaries are Qt teardown noise)."
 
   golden:
     name: Numerical golden (synthetic, rtol 1e-9)
