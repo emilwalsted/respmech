@@ -603,11 +603,20 @@ class _EmgNoiseMixin:
         # Elided: a real recording's filename is far longer than the sample's, and a QLabel's
         # minimum width is its whole text — un-elided it would push the strip (and with it the
         # window's minimum width) arbitrarily wide. The full text stays in the tooltip.
-        # 220 px, not the 320 px default: this read-out shares one line with the toggle, the
-        # picker button, the Auto chip and Advanced, and at 320 px on Windows font metrics the
-        # five together came to 1292 px against a 1258 px page — the strip wrapped to two lines
-        # for a caption whose full text is one hover away.
-        cap = 220
+        # 150 px, not the 320 px default: this read-out shares one line with the toggle, the
+        # picker button, the Auto chip and Advanced, and it is the strip's ONE compressible
+        # item — a FlowLayout places every item at sizeHint, so each fixed caption votes its
+        # full width and only this cap can absorb growth elsewhere. 220 px survived the
+        # 02-08 tuning but re-wrapped the strip on BOTH CI runners by 10-08 (D21's wider
+        # "Auto strength" caption plus macOS button chrome;
+        # test_the_emg_strip_stays_one_line_on_a_laptop). 150 px buys the strip ~70 px —
+        # modelled under Windows metrics (setStretch 145): items 899 + gaps 40 = 939 against
+        # a 1047 px page, where 220 left only 30 px of slack and the runners' wider chrome
+        # ate past it. Chosen over 140 so the whole 'Rest reference: not set' caption still
+        # fits un-elided in a fresh session on real (unstretched) fonts; a real reference
+        # elides as before, one hover away, and
+        # test_the_noise_reference_readout_is_elided_not_unbounded pins it staying visible.
+        cap = 150
         if not n.reference_file:
             _elide(self.noise_ref_readout, "Rest reference: not set", cap)
         elif n.use_expiration or not n.reference_intervals:
