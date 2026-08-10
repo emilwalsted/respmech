@@ -513,8 +513,28 @@ def test_the_campbell_panel_is_readable_at_the_height_it_gets(qapp, tmp_path):
     # ...and the panel names it, so nothing was lost by taking the title off the figure
     box = pv.campbell.parent()
     headers = [w.text() for w in box.findChildren(QLabel)] if box is not None else []
+    # The measurements ride in the assertion message: this guard went red on the Windows
+    # runner only, with a bare '…' that no macOS/Linux run — stretched or not — ever
+    # reproduced, and three fix rounds were aimed by model instead of data. A red here
+    # must carry the geometry that explains WHERE the width went.
+    tl = getattr(box, "_title_label", None) if box is not None else None
+    from PySide6.QtWidgets import QSplitter
+    lower = None
+    w = box
+    while w is not None and lower is None:
+        w = w.parentWidget()
+        if isinstance(w, QSplitter):
+            lower = w
+    diag = (
+        f"box w={box.width() if box is not None else '?'}; "
+        f"title full={tl.fullText()!r} shown={tl.text()!r} w={tl.width()} "
+        f"minHint={tl.minimumSizeHint().width()} hint={tl.sizeHint().width()}; "
+        if tl is not None else "no _title_label on box; ") + (
+        f"splitter sizes={lower.sizes()} collapsible={lower.childrenCollapsible()}; "
+        if lower is not None else "no enclosing splitter found; ") + (
+        f"canvas w={pv.campbell.width()}")
     assert any("Campbell" in h for h in headers), (
-        f"no panel header names the Campbell diagram; found {headers}")
+        f"no panel header names the Campbell diagram; found {headers} — {diag}")
     win.close()
 
 

@@ -269,8 +269,21 @@ def test_form_fields_are_bounded_not_full_width(qapp, tmp_path):
     # the browse-row paths (in/out folder, noise reference) legitimately stay full width —
     # of their own CARD, not the whole window (ticket B05: Setup splits into two columns,
     # so the Input card is now roughly half the window, and a field filling its card's
-    # width no longer fills half the window's own width either)
-    assert sc.in_folder.width() > sc._card_input.width() / 2
+    # width no longer fills half the window's own width either).
+    # The measurements ride in the assertion message: this guard failed on the Windows
+    # runner with the identical 371/825 across two fix rounds aimed by model instead of
+    # data — a red here must say where the card's width actually went (label column,
+    # browse button, wrapper), so the next fix is aimed at the real consumer.
+    from PySide6.QtWidgets import QPushButton
+    from respmech.ui.flow_layout import FormLabel
+    labels = [(l.fullText(), l.width(), l.sizeHint().width())
+              for l in sc._card_input.findChildren(FormLabel)]
+    wrapper = sc.in_folder.parentWidget()
+    browse = [b for b in wrapper.findChildren(QPushButton)] if wrapper else []
+    assert sc.in_folder.width() > sc._card_input.width() / 2, (
+        f"in_folder {sc.in_folder.width()}px on a {sc._card_input.width()}px card — "
+        f"labels (full, w, hint)={labels}; wrapper w={wrapper.width() if wrapper else '?'}; "
+        f"browse w={[b.width() for b in browse]}")
     win.close()
 
 

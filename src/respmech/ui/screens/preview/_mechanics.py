@@ -228,6 +228,16 @@ class _MechanicsMixin:
         # titled_panel()'s docstring for why it must not be allowed to collapse to a
         # bare ellipsis the way the general-purpose default floor allows.
         lower.addWidget(self._titled("Campbell diagram", self.campbell, title_floor_chars=10))
+        # Non-collapsible: a QSplitter's children are collapsible by default, and a
+        # collapsible child can be dragged — or arrive from a restored/derived layout —
+        # BELOW its minimumSizeHint, all the way to nothing. That is the one mechanism by
+        # which a floored header can still render as a bare '…': the Windows runner showed
+        # exactly that (test_the_campbell_panel_is_readable_at_the_height_it_gets, red
+        # #192→#216) while every macOS/Linux run kept the pane wide enough. With collapsing
+        # off, the splitter honours each pane's minimum — the table keeps its scroll-based
+        # small minimum, and the Campbell pane can never be squeezed below the header floor
+        # + margins that keep its name readable.
+        lower.setChildrenCollapsible(False)
         # D12: the diagram is what the user came for, not the number dump beside it — at
         # 3:1 (720/240) a maximised window gave the table 1265 px and the diagram 406x249,
         # a 3x weight difference in favour of the numbers. ~58/42 (matches the stretch

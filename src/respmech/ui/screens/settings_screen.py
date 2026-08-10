@@ -22,7 +22,7 @@ from PySide6.QtCore import Signal, QTimer
 from respmech.core.settings import BreathCountEntry, Settings, SettingsError
 from respmech.ui.dialogs import open_error_dialog, short_error
 from respmech.ui.migration_report_dialog import open_migration_report
-from respmech.ui.flow_layout import ElidingLabel, install_flow
+from respmech.ui.flow_layout import FormLabel, install_flow
 from respmech.ui.help_text import tooltip as _tip
 from respmech.ui.manifest import build_manifest, group_readout, narrow_mask
 from respmech.ui.path_drop import install_path_drop
@@ -455,26 +455,28 @@ class SettingsScreen(QWidget):
         """A labelled form row whose LABEL and FIELD both carry the same tooltip:
         the settings variable path (bold) + a one-line description.
 
-        ``ElidingLabel``, not a plain ``QLabel``: Fusion's QFormLayout grows the FIELD
-        column (see ``test_form_fields_are_bounded_not_full_width``), but a plain
-        QLabel's minimumSizeHint is its full text, so on a font with wider metrics than
-        this app's own reference font (Windows' Segoe UI), the widest label in the form
-        pins the label column at its full width and the deficit comes entirely out of
-        the field next to it — measured: a 371 px "Recordings folder" field on an 825 px
-        card, below the half-card floor the browse row needs. An eliding label can
-        shrink under squeeze instead, so the label column gives ground before the field
-        does; the full label text stays one hover away in the tooltip either way."""
+        ``FormLabel``, not a plain ``QLabel`` — and not a bare ``ElidingLabel`` either:
+        QFormLayout allocates the label COLUMN from the widest label's *sizeHint*
+        whenever there is room, and ElidingLabel only lowers ``minimumSizeHint`` (its
+        sizeHint is still the full text — the right contract for a FlowLayout, the wrong
+        one here). Measured on the Windows runner: swapping QLabel→ElidingLabel changed
+        nothing — the identical 371 px "Recordings folder" field on an 825 px card,
+        below the half-card floor the browse row needs, in runs #192 and #215/#216
+        (``test_form_fields_are_bounded_not_full_width``). FormLabel caps the sizeHint
+        itself (metric-derived, never eliding any current label in practice), so the
+        label column is bounded and the field keeps its half of the card; the full label
+        text stays one hover away in the tooltip either way."""
         tip = _tip(var, desc)
-        lab = ElidingLabel(label); lab.setToolTip(tip)
+        lab = FormLabel(label); lab.setToolTip(tip)
         widget.setToolTip(tip)
         form.addRow(lab, widget)
 
     def _browse_row(self, form, label, line, var, desc, folder):
         """A labelled 'line edit + Browse…' row; the label, the field and its inner
         line edit all carry the variable path + description tooltip. See ``_row()``
-        for why the label is an ``ElidingLabel``."""
+        for why the label is a ``FormLabel``."""
         tip = _tip(var, desc)
-        lab = ElidingLabel(label); lab.setToolTip(tip)
+        lab = FormLabel(label); lab.setToolTip(tip)
         line.setToolTip(tip)
         wrapper = self._with_browse(line, folder=folder)
         wrapper.setToolTip(tip)

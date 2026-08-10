@@ -362,9 +362,21 @@ def test_the_emg_strip_stays_one_line_on_a_laptop(qapp, tmp_path, windows_metric
             rows[-1] = (rows[-1][0], max(rows[-1][1], bottom))
         else:
             rows.append((top, bottom))
+    # Per-item widths ride in the assertion message: this guard went red on the Windows
+    # runner across three fix rounds aimed by a DejaVu-stretch model of Segoe that missed
+    # every time — a red here must carry the real numbers. (With the strip converted to a
+    # squeezing QHBoxLayout this cannot wrap at all; the diagnostics stay for the day
+    # someone reintroduces a wrapping layout here.)
+    names = ("noise_enabled", "btn_set_noise", "noise_ref_readout", "noise_opts",
+             "btn_emg_advanced")
+    diag = "; ".join(
+        f"{n}: hint={getattr(pv, n).sizeHint().width()} w={getattr(pv, n).width()} "
+        f"min={getattr(pv, n).minimumSizeHint().width()}"
+        for n in names if getattr(pv, n).isVisible())
     assert len(rows) == 1, (
         f"the EMG strip wraps to {len(rows)} lines at {_NARROWEST_SCREEN} px — it is spending "
-        f"the graphs' vertical space on options that belong in Advanced")
+        f"the graphs' vertical space on options that belong in Advanced — "
+        f"page w={page.width()}; {diag}")
     win.close()
 
 

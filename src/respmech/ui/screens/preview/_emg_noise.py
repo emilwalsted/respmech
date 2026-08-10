@@ -32,7 +32,7 @@ from respmech.ui.stft_frames import (MIN_STABLE_FRAMES,
                                      stft_frame_count)
 from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
 from respmech.ui import wheel as _wheel
-from respmech.ui.flow_layout import (ElidingLabel, FlowLayout,
+from respmech.ui.flow_layout import (ElidingCheckBox, ElidingLabel, FlowLayout,
                                      elide as _elide, install_flow as _install_flow)
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
@@ -106,15 +106,26 @@ class _EmgNoiseMixin:
 
         # The on/off toggle for EMG-noise processing — the one control the user asked to keep
         # on the tab (it left the Setup screen with the rest of the noise settings).
-        self.noise_enabled = QCheckBox("Reduce EMG noise")
+        # ElidingCheckBox, not QCheckBox: the strip below squeezes instead of wrapping (see
+        # the strip note), so every caption that CAN give way under a wide font must be able
+        # to — the full caption stays one hover away, same contract as the read-out.
+        self.noise_enabled = ElidingCheckBox("Reduce EMG noise", floor_chars=8)
         self.noise_enabled.setToolTip(_help_tip(
             "processing.emg.noise.enabled",
             "Subtract a shared spectral noise profile (built from a rest reference) from every "
             "EMG channel. Pick the reference with 'Set noise profile'; off by default."))
         self.noise_enabled.toggled.connect(self._on_noise_enabled_changed)
-        self.noise_ref_readout = QLabel("")
+        # ElidingLabel with a hard width cap, not a QLabel + one-shot elide(): the strip is a
+        # squeezing row now, so the read-out must RE-elide at whatever width the squeeze
+        # leaves it (a one-shot elide clips instead when the row narrows under it). The
+        # 150 px cap keeps the strip's arithmetic from 10-08-2026 (see _refresh_noise_readout);
+        # the 90 px floor keeps it from vanishing entirely under the hardest squeeze, which
+        # test_the_noise_reference_readout_is_elided_not_unbounded pins.
+        self.noise_ref_readout = ElidingLabel("", mode=Qt.ElideMiddle, floor=90)
+        self.noise_ref_readout.setMaximumWidth(150)
         self.noise_ref_readout.setProperty("status", "muted")
-        self.noise_auto = QCheckBox("Auto strength")
+        # ElidingCheckBox for the same squeeze-not-wrap reason as noise_enabled above.
+        self.noise_auto = ElidingCheckBox("Auto strength", floor_chars=6)
         self.noise_auto.setToolTip(_help_tip(
             "processing.emg.noise.auto_prop",
             "Automatically picks the strongest suppression that still keeps every channel at or "
@@ -127,12 +138,15 @@ class _EmgNoiseMixin:
         self.noise_opts.setObjectName("noiseChip")
         self.noise_opts.setStyleSheet(
             "#noiseChip { border: 1px solid rgba(128, 128, 128, 0.30); border-radius: 8px; }")
-        # tight caption→field pairing (4 px) with a wider gap (10 px) BETWEEN groups so
-        # 'Strength [ ]', 'Keep ≥ [ ]', 'Gate [ ]' read as clusters, not an even bead line.
-        # A FlowLayout, not a QHBoxLayout: a chip built on a plain row is one indivisible item
-        # whose minimum is the SUM of its clusters, and the enclosing strip can only wrap around
-        # it, never inside it (see flow_layout's module docstring).
-        nrow = _install_flow(self.noise_opts, h=10, v=4, margins=(11, 3, 11, 3))
+        # A plain QHBoxLayout now, not the multi-cluster FlowLayout of its 'Strength/Keep ≥/
+        # Gate' days: the chip holds ONE squeezable item (the Auto-strength ElidingCheckBox),
+        # and inside the squeezing strip a FlowLayout would place it at full sizeHint and let
+        # it clip past the chip's own border under a squeeze — a QHBoxLayout passes the
+        # squeeze down so the caption elides instead (the walk-off-the-edge failure mode
+        # test_a_squeezed_chip_wraps_inside_itself_rather_than_off_the_edge documents).
+        nrow = QHBoxLayout(self.noise_opts)
+        nrow.setContentsMargins(11, 3, 11, 3)
+        nrow.setSpacing(10)
         # "Auto strength" names the setting itself now (D21, UI-overhaul): the checkbox used to
         # read plain "Auto" beside a separate dampened "Noise" caption, so the object of "Auto"
         # was never actually written down — the caption is gone, the label carries the meaning.
@@ -159,11 +173,25 @@ class _EmgNoiseMixin:
             "exports.")
         self.btn_emg_advanced.clicked.connect(self._open_emg_advanced)
 
-        # A WRAPPING row, not a QHBoxLayout: these chips together are ~1700 px wide, and a
-        # non-wrapping row's minimum is their SUM, which Qt propagates up as the main window's
-        # minimum width — the window then could not be resized to fit a laptop screen and ran
-        # off the right edge. Wrapping makes the minimum the widest single chip instead.
-        strip = FlowLayout(h=10, v=6)
+        # A SQUEEZING row, not a wrapping one (changed 10-08-2026). The strip was a
+        # FlowLayout from its ~1700 px multi-chip days, when wrapping was what kept the
+        # window's minimum below a laptop screen. With today's five slim members, wrapping
+        # became the failure mode instead: a FlowLayout places every item at full sizeHint
+        # and wraps the moment their sum exceeds the page, so the one-line guarantee
+        # (test_the_emg_strip_stays_one_line_on_a_laptop, Emil 02-08-2026) hung on a pixel
+        # budget re-broken by every caption tweak and every platform's fonts — the Windows
+        # runner wrapped it at caps this file's own comments had already tuned twice, and a
+        # DejaVu-stretch model of Segoe missed by enough to ship two red rounds (#215/#216).
+        # A QHBoxLayout never wraps: under pressure it squeezes the members whose minimum is
+        # below their natural width — the two ElidingCheckBoxes and the capped read-out —
+        # so the row is ONE LINE BY CONSTRUCTION on every font, and the captions give way
+        # (full text one hover away) instead of the graphs losing a row of vertical space.
+        # The page's own minimum stays far below a laptop width: the squeezable members'
+        # floors sum to roughly half the old natural width (the wrap-rather-than-summing
+        # guard still passes and still protects it).
+        strip = QHBoxLayout()
+        strip.setContentsMargins(0, 0, 0, 0)
+        strip.setSpacing(10)
         # The on/off checkbox lives on the STRIP, not inside the noise_opts chip: that chip is
         # disabled whenever noise is off, and a Qt child of a disabled parent cannot be
         # re-enabled — so a checkbox to turn noise ON, placed inside it, would grey itself out
@@ -173,6 +201,9 @@ class _EmgNoiseMixin:
         strip.addWidget(self.noise_ref_readout)
         strip.addWidget(self.noise_opts)
         strip.addWidget(self.btn_emg_advanced)
+        # Spare width parks on the right; without this the layout would stretch the members'
+        # gaps apart and the strip would read as scattered rather than one control group.
+        strip.addStretch(1)
         v.addLayout(strip)
 
         # plots — three rows: raw stack | detail channel on top, the full-width
@@ -600,30 +631,22 @@ class _EmgNoiseMixin:
         """What reference the picker chose, beside the enable toggle. 'Not set' is a real
         state and says so — a ticked 'Reduce EMG noise' with no reference runs nothing."""
         n = self.state.settings.processing.emg.noise
-        # Elided: a real recording's filename is far longer than the sample's, and a QLabel's
-        # minimum width is its whole text — un-elided it would push the strip (and with it the
-        # window's minimum width) arbitrarily wide. The full text stays in the tooltip.
-        # 150 px, not the 320 px default: this read-out shares one line with the toggle, the
-        # picker button, the Auto chip and Advanced, and it is the strip's ONE compressible
-        # item — a FlowLayout places every item at sizeHint, so each fixed caption votes its
-        # full width and only this cap can absorb growth elsewhere. 220 px survived the
-        # 02-08 tuning but re-wrapped the strip on BOTH CI runners by 10-08 (D21's wider
-        # "Auto strength" caption plus macOS button chrome;
-        # test_the_emg_strip_stays_one_line_on_a_laptop). 150 px buys the strip ~70 px —
-        # modelled under Windows metrics (setStretch 145): items 899 + gaps 40 = 939 against
-        # a 1047 px page, where 220 left only 30 px of slack and the runners' wider chrome
-        # ate past it. Chosen over 140 so the whole 'Rest reference: not set' caption still
-        # fits un-elided in a fresh session on real (unstretched) fonts; a real reference
-        # elides as before, one hover away, and
-        # test_the_noise_reference_readout_is_elided_not_unbounded pins it staying visible.
-        cap = 150
+        # setFullText, not a one-shot elide(): the read-out is an ElidingLabel with a 150 px
+        # maximumWidth (set at construction) inside the squeezing strip, so it re-elides
+        # itself to whatever width the row actually leaves it — a fixed-cap elide() clips
+        # instead when the row narrows below the cap. A real recording's filename is far
+        # longer than the sample's; the full text stays one hover away in the tooltip, and
+        # test_the_noise_reference_readout_is_elided_not_unbounded pins both the bound and
+        # the read-out staying visible.
         if not n.reference_file:
-            _elide(self.noise_ref_readout, "Rest reference: not set", cap)
+            self.noise_ref_readout.setFullText("Rest reference: not set")
         elif n.use_expiration or not n.reference_intervals:
-            _elide(self.noise_ref_readout, f"Rest reference: {n.reference_file}, every expiration", cap)
+            self.noise_ref_readout.setFullText(
+                f"Rest reference: {n.reference_file}, every expiration")
         else:
             spans = ", ".join(f"{a:.2f}–{b:.2f} s" for a, b in n.reference_intervals)
-            _elide(self.noise_ref_readout, f"Rest reference: {n.reference_file}, {spans}", cap)
+            self.noise_ref_readout.setFullText(
+                f"Rest reference: {n.reference_file}, {spans}")
 
     def _on_noise_enabled_changed(self, *_):
         if self._loading_noise:
