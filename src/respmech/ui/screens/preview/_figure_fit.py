@@ -202,6 +202,16 @@ def _fit_compact_figure(canvas, ax, *, title=None, legend_kw=None, xlabel_varian
         canvas.figure.set_layout_engine("tight")
     except Exception:                       # pragma: no cover - layout is cosmetic
         pass
+    # Stamp the fitted size HERE, at the fit itself, not only in refit_compact_figure's
+    # loop: a fit at size S is a fit at size S whichever entry point performed it. When
+    # only the refit loop stamped it, the FIRST refit after a direct _fit_compact_figure
+    # call re-ran the whole ladder at the very same size — and on the Windows runner that
+    # single re-decision moved the axes a deterministic 0.0131 of the figure (runs #192 and
+    # #215 measured the identical value, weeks of code apart), which is exactly the drift
+    # test_the_diagnostic_figures_follow_their_panel_in_both_directions guards against.
+    # With the stamp at fit time, a refit at an unchanged size is a no-op from the first
+    # call, on every platform, by construction.
+    ax._rm_last_fit_size = (canvas.width(), canvas.height())
 
 
 def refit_compact_figure(canvas):
