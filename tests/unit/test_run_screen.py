@@ -1204,3 +1204,166 @@ def test_start_checks_temp_output_only_for_a_real_run(qapp, tmp_path):
     _pump_until_thread_done(qapp, rn)
     assert calls == ["checked"]
     win.close()
+
+
+# ---------------------------------------------------------------------------
+# D20 — the status line says nothing at start, and nothing (or the wrong thing)
+# at the end of a real write. See run_screen.py's module docstring / _on_finished
+# for the full rationale.
+# ---------------------------------------------------------------------------
+def test_start_immediately_reports_the_file_count_before_analysis_begins(qapp, tmp_path):
+    """_start() must set a status naming the file count SYNCHRONOUSLY, before the worker
+    thread has even begun — the previous run's leftover status (or "Idle.") must not
+    still be on screen during the silent pre-file phase (shared noise profile / first
+    file load), which measured up to ~1.6s on real data before this ticket."""
+    win = _win(tmp_path); rn = win.run_screen
+    rn.status.setText("Run cancelled — no output written.")     # a previous run's leftover
+    rn._start(write=False)
+    text = rn.status.text()
+    assert text != "Idle."
+    assert text != "Run cancelled — no output written."
+    assert "2 file" in text        # synth_case_A.csv + synth_case_B.csv
+    _pump_until_thread_done(qapp, rn)
+    win.close()
+
+
+def test_stage_progress_sets_status_during_the_silent_pre_phase(qapp, tmp_path):
+    """A 'stage' event (e.g. "building shared noise profile") arriving BEFORE the write
+    heartbeat is active — i.e. during the compute pre-phase — must update the status line.
+    Before this ticket, the stage branch only touched status while the write heartbeat was
+    running, so this exact phase (the one the bug report measured as ~1.6s of silence) left
+    the label unchanged."""
+    from respmech.core.pipeline import ProgressEvent
+    win = _win(tmp_path); rn = win.run_screen
+    assert not rn._heartbeat.isActive()
+    rn._on_progress(ProgressEvent("stage", file=None, message="building shared noise profile"))
+    assert "building shared noise profile" in rn.status.text()
+    win.close()
+
+
+def test_stage_progress_during_writing_still_lets_the_heartbeat_own_the_label(qapp, tmp_path):
+    """Once the write phase's heartbeat is running, its own (more specific) status text
+    must still win over the generic 'stage' text added by this ticket — matching the
+    ticket's explicit instruction to keep the existing heartbeat block intact."""
+    from respmech.core.pipeline import ProgressEvent
+    win = _win(tmp_path); rn = win.run_screen
+    rn._write_clock.restart()
+    rn._heartbeat.start()
+    try:
+        rn._on_progress(ProgressEvent("stage", file="synth_case_A.csv", message="trimming"))
+        assert "Writing output" in rn.status.text()
+        assert "synth_case_A.csv: trimming" not in rn.status.text()
+    finally:
+        rn._heartbeat.stop()
+    win.close()
+
+
+def test_finished_status_names_counts_folder_and_time_for_a_real_write(qapp, tmp_path):
+    """The one outcome the old code said NOTHING about: a normal, successful real-write
+    run. The status line must name what was processed, what was written, where, and how
+    long it took — without looking at the log, a button or a table."""
+    from types import SimpleNamespace as NS
+    win = _win(tmp_path); rn = win.run_screen
+    rn._last_write = True
+    rn._run_settings_snapshot = rn.state.settings
+    rn._fatal_msg = None
+    rn._run_clock.restart()
+    rn._worker = NS(written=[str(tmp_path / "data" / "a.xlsx"),
+                             str(tmp_path / "data" / "b.xlsx"),
+                             str(tmp_path / "diagnostics" / "c.pdf"),
+                             str(tmp_path / "analysis-used.toml"),
+                             str(tmp_path / "run-report.txt")])
+    rn._on_finished(_result_all_ok())
+    text = rn.status.text()
+    assert "Writing output" not in text
+    assert "figures" not in text
+    assert "2 ok" in text and "0 failed" in text
+    assert "5 file" in text
+    assert str(tmp_path) in text
+    win.close()
+
+
+def test_finished_status_for_a_dry_run(qapp, tmp_path):
+    win = _win(tmp_path); rn = win.run_screen
+    rn._last_write = False
+    rn._run_settings_snapshot = rn.state.settings
+    rn._fatal_msg = None
+    rn._run_clock.restart()
+    rn._worker = None
+    rn._on_finished(_result_all_ok())
+    assert rn.status.text() == "Dry run complete — nothing written."
+    win.close()
+
+
+def test_finished_status_when_no_file_could_be_processed(qapp, tmp_path):
+    """Ticket D17's 'every file failed' scenario (_result_all_failed): distinct wording
+    from both the dry-run and the normal-success text, for a real write that produced
+    nothing usable."""
+    win = _win(tmp_path); rn = win.run_screen
+    rn._last_write = True
+    rn._run_settings_snapshot = rn.state.settings
+    rn._fatal_msg = None
+    rn._run_clock.restart()
+    rn._worker = None
+    rn._on_finished(_result_all_failed())
+    assert rn.status.text() == "Finished — no file could be processed; nothing usable was written."
+    win.close()
+
+
+def test_finished_log_lists_what_was_written_grouped_by_category(qapp, tmp_path):
+    """Point 5: the final log block groups what write_batch actually wrote into the same
+    three areas the overwrite-guard dialog already names (data/diagnostics/provenance),
+    so a user scrolling back can see what they got without opening run-report.txt."""
+    from types import SimpleNamespace as NS
+    win = _win(tmp_path); rn = win.run_screen
+    rn._last_write = True
+    rn._run_settings_snapshot = rn.state.settings
+    rn._fatal_msg = None
+    rn._run_clock.restart()
+    rn._worker = NS(written=[str(tmp_path / "data" / "a.xlsx"),
+                             str(tmp_path / "data" / "b.xlsx"),
+                             str(tmp_path / "diagnostics" / "c.pdf"),
+                             str(tmp_path / "analysis-used.toml")])
+    rn._on_finished(_result_all_ok())
+    log = rn.log.toPlainText()
+    assert "Wrote 4 files" in log
+    assert "2 data workbook/CSV files" in log
+    assert "1 diagnostic figure/audio file" in log
+    assert "1 provenance file" in log
+    win.close()
+
+
+def test_finished_log_written_summary_skipped_when_nothing_was_processed(qapp, tmp_path):
+    """Guards against a contradictory log: 'nothing usable was written' status alongside a
+    'Wrote 2 files' block naming only provenance (write_batch still writes
+    analysis-used.toml/run-report.txt even when every file failed)."""
+    from types import SimpleNamespace as NS
+    win = _win(tmp_path); rn = win.run_screen
+    rn._last_write = True
+    rn._run_settings_snapshot = rn.state.settings
+    rn._fatal_msg = None
+    rn._run_clock.restart()
+    rn._worker = NS(written=[str(tmp_path / "analysis-used.toml"),
+                             str(tmp_path / "run-report.txt")])
+    rn._on_finished(_result_all_failed())
+    assert "Wrote" not in rn.log.toPlainText()
+    win.close()
+
+
+def test_end_to_end_real_write_reports_a_complete_finished_status(qapp, tmp_path):
+    """A real _start(write=True) against the synthetic recordings, pumped to completion:
+    the status line must read as finished (not as a stopped write clock), name the file
+    counts, and the log must list what actually landed on disk, matching what this test
+    itself finds under tmp_path afterwards."""
+    win = _win(tmp_path); rn = win.run_screen
+    rn._start(write=True)
+    _pump_until_thread_done(qapp, rn, timeout=60.0)
+    text = rn.status.text()
+    assert text.startswith("Finished:")
+    assert "Writing output" not in text
+    assert "2 ok" in text
+    log = rn.log.toPlainText()
+    assert "Wrote " in log
+    data_files = list((tmp_path / "data").glob("*")) if (tmp_path / "data").is_dir() else []
+    assert f"{len(data_files)} data workbook/CSV file" in log
+    win.close()

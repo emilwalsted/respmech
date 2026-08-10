@@ -75,6 +75,12 @@ class BatchWorker(QObject):
         # so this closes the race to the width of one bytecode op instead of one event-loop
         # tick.
         self._writing = False
+        # D20: the paths write_batch actually wrote, read by RunScreen._on_finished before
+        # self._worker is discarded, so the finished-status line can name what was written
+        # instead of re-deriving a partial guess from the pre-flight plan (which — unlike
+        # this — never covers diagnostics figures or the cohort summary). Stays empty for a
+        # dry run (write_batch is never called) or a run whose write raised before returning.
+        self.written = []
 
     @Slot()
     def cancel(self):
@@ -124,8 +130,8 @@ class BatchWorker(QObject):
                 # with an unhandled exception (no failed/finished signal at all).
                 from respmech.core.pipeline import is_subset_run
                 cohort_outputs = not is_subset_run(self._settings, self._only)
-                write_batch(result, self._settings, self._settings.output.folder,
-                            progress=self._on_event, cohort_outputs=cohort_outputs)
+                self.written = write_batch(result, self._settings, self._settings.output.folder,
+                                           progress=self._on_event, cohort_outputs=cohort_outputs)
             except Exception:
                 self.failed.emit(
                     "Analysis completed, but writing the output failed. Some files may be "

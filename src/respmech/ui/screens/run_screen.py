@@ -327,6 +327,18 @@ class RunScreen(QWidget):
         self._heartbeat = QTimer(self)
         self._heartbeat.setInterval(1000)
         self._heartbeat.timeout.connect(self._tick_write)
+        # D20: a clock over the WHOLE run (compute + write), restarted in _start once the
+        # user's own guard-dialog time (overwrite confirmation etc.) is behind it — unlike
+        # self._write_clock above, which only covers the uninterruptible write phase and
+        # would report the wrong (too short) duration for the finished-status line.
+        # Started here too (not just restarted in _start): QElapsedTimer.elapsed() is
+        # documented as undefined on a timer that was never started, and a handful of
+        # existing tests call _on_finished() directly without going through _start() first
+        # (self-review finding — no crash observed, but an unstarted timer's elapsed() can
+        # read as a large, meaningless value that _fmt_duration then silently clamps to
+        # "0s", a wrong-but-quiet duration rather than an undefined one).
+        self._run_clock = QElapsedTimer()
+        self._run_clock.start()
 
     # -- helpers ------------------------------------------------------------
     def _settings_ok(self):
@@ -1020,6 +1032,10 @@ class RunScreen(QWidget):
                     clear_failed = self._clear_existing_output()
                     self._clear_existing_first = False
         self._only_files = list(only_files) if only_files else None
+        # D20: the whole-run clock starts here — after every guard dialog the user may have
+        # sat on (overwrite confirmation, temp-output warning) — not at the top of _start,
+        # so its elapsed time reflects the run itself, not how long a dialog sat open.
+        self._run_clock.restart()
         self.log.clear(); self.progress.setRange(0, 0)  # busy until first file
         if clear_failed:
             # self-review finding: a silent partial clear would say nothing while leaving
@@ -1055,6 +1071,10 @@ class RunScreen(QWidget):
         # finishes) reuses exactly what produced the result, never a live edit made since.
         self._run_settings_snapshot = copy.deepcopy(self.state.settings)
         self._run_files = self._append_plan(write)      # pre-flight: what will be read/written
+        # D20: the status line said nothing at all at the start of a run — whatever the
+        # PREVIOUS run left behind (including a stale "Run cancelled…") stayed on screen
+        # through the whole silent pre-file phase (shared noise profile + first file load).
+        self._set_status(f"Starting — analysing {len(self._run_files)} file(s)…")
         self._set_running(True)
         self.run_started.emit()
 
@@ -1170,6 +1190,13 @@ class RunScreen(QWidget):
             self._append(f"\n{ev.file}: {ev.message}")
         elif ev.kind == "stage":
             self._append(f"  {ev.message}…")
+            # D20: the silent pre-file phase (shared noise profile, first file load) used to
+            # leave the status label showing whatever the previous file_start/breath event —
+            # or the previous run entirely — had last written, for up to a second and a half
+            # on real data. Set unconditionally; the heartbeat block below (unchanged) then
+            # immediately overwrites this with its own, more specific write-phase text
+            # whenever it is active, so the heartbeat still owns the label during writing.
+            self._set_status(f"{ev.file or 'Batch'}: {ev.message}…")
             if self._heartbeat.isActive():        # keep the heartbeat's label current
                 self._write_stage = ev.message
                 if ev.message.startswith("figures — "):
@@ -1245,6 +1272,15 @@ class RunScreen(QWidget):
 
     def _on_finished(self, result):
         self._heartbeat.stop()                    # end the write-phase heartbeat, any outcome
+        # D20: the write phase's last stage name must never survive as the terminal status —
+        # without this, a run whose success branch had nothing else to say (see below) left
+        # e.g. "Writing output… 23s — figures — Subject04.csv" on screen, a stopped clock
+        # over a finished run that reads as still working.
+        self._write_stage = ""
+        # D20: read before self._worker is discarded a few lines down — the only place this
+        # screen can learn what write_batch actually wrote (BatchWorker.written; empty for a
+        # dry run, or a run whose write raised before returning).
+        written = list(getattr(self._worker, "written", None) or [])
         self._set_running(False)                  # always re-enable first
         fatal = self._fatal_msg is not None
         cancelled = result is None and not fatal
@@ -1284,6 +1320,8 @@ class RunScreen(QWidget):
             self._set_status(f"Run failed — {short_error(self._fatal_msg)}")
         else:
             self.progress.setValue(1)
+            ok_count = len(result.ok_files) if result is not None else 0
+            fail_count = len(result.failed_files) if result is not None else 0
             if self._cancel_requested:
                 # A07: the cancel click landed during the (uninterruptible) write phase, and
                 # the run went on to finish normally. Neither "Run cancelled — no output
@@ -1291,6 +1329,26 @@ class RunScreen(QWidget):
                 # click is simply never acknowledged) is honest here.
                 self._set_status(
                     "Finished writing; the cancel arrived after the analysis, so the output is complete.")
+            elif ok_count == 0:
+                # D20: neither of the two texts below fits a run that finished (not fatal,
+                # not cancelled) but could not actually process anything — checked first
+                # because it can happen for a real write OR a dry run alike, and "nothing
+                # usable was written" is honest either way.
+                self._set_status("Finished — no file could be processed; nothing usable was written.")
+            elif not self._last_write:
+                self._set_status("Dry run complete — nothing written.")
+            else:
+                # D20: this used to be the one outcome this screen said NOTHING about — the
+                # status label simply kept whatever the write phase's last event (or the
+                # previous run entirely) had left on screen. Names what a user actually
+                # needs without opening the log, a table or a button: how many files were
+                # processed/failed, how many files landed on disk, where, and how long it took.
+                elapsed = _fmt_duration(self._run_clock.elapsed() / 1000.0)
+                out = (self._write_target_folder
+                      or (self._run_settings_snapshot or self.state.settings).output.folder or "")
+                self._set_status(
+                    f"Finished: {ok_count} ok, {fail_count} failed — wrote {len(written)} "
+                    f"file{'s' if len(written) != 1 else ''} to {out} in {elapsed}.")
         # a clean real-write run leaves results on disk — offer to open them
         if self._last_write and result is not None and not fatal and not cancelled:
             # D17: a run where every file failed also reaches this "clean" branch (no
@@ -1319,6 +1377,40 @@ class RunScreen(QWidget):
                 n = len(result.average_table)
                 self._append(f"\nAverage breathdata.xlsx ({n} row{'s' if n != 1 else ''}) "
                             "is the file to open first.")
+            # D20: only run-report.txt used to list what a run actually wrote, and nothing
+            # in the app ever opened it — a user scrolling back through the log to see what
+            # they got found only per-file "done" lines, never a final account. Grouped by
+            # the same three areas the overwrite-guard dialog already names (D17's
+            # ``_existing_output_categories``): data workbook/CSV files, diagnostic
+            # figures/audio, and the run's own provenance (analysis-used.toml/run-report.txt).
+            if written and result.ok_files:
+                out_root = (self._write_target_folder
+                           or (self._run_settings_snapshot or self.state.settings).output.folder or "")
+                # relpath's first path component, not a substring search on the full path:
+                # the output folder itself can legitimately contain "data" or "diagnostics"
+                # as a directory name somewhere in its OWN path (e.g. an output folder under
+                # "~/data/study1"), which a substring check would misclassify as this run's
+                # own data/diagnostics subfolder.
+                data_n = fig_n = prov_n = 0
+                for p in written:
+                    try:
+                        head = os.path.relpath(p, out_root).split(os.sep, 1)[0] if out_root else ""
+                    except ValueError:          # different drives on Windows
+                        head = ""
+                    if head == "data":
+                        data_n += 1
+                    elif head == "diagnostics":
+                        fig_n += 1
+                    else:
+                        prov_n += 1
+                self._append(f"\nWrote {len(written)} file{'s' if len(written) != 1 else ''} "
+                             f"to {out_root}:")
+                if data_n:
+                    self._append(f"    • {data_n} data workbook/CSV file{'s' if data_n != 1 else ''}")
+                if fig_n:
+                    self._append(f"    • {fig_n} diagnostic figure/audio file{'s' if fig_n != 1 else ''}")
+                if prov_n:
+                    self._append(f"    • {prov_n} provenance file{'s' if prov_n != 1 else ''}")
         self.btn_rerun.setEnabled(bool(self._last_failed))    # P18: re-run only if something failed
         self.run_finished.emit()
         # surface a copyable error-log window if anything failed
