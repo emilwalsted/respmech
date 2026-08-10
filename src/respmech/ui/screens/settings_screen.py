@@ -381,7 +381,7 @@ class SettingsScreen(QWidget):
         self.btn_carried_clear = QPushButton("Clear")
         self.btn_carried_clear.setProperty("compact", True)
         self.btn_carried_clear.setToolTip(
-            "Remove the exclusions/breath-count overrides/noise reference that belong to "
+            "Remove the exclusions/breath-count overrides/rest reference that belong to "
             "the previous recordings folder.")
         self.btn_carried_clear.clicked.connect(self._clear_carried_banner)
         cb.addWidget(self.btn_carried_keep)
@@ -619,7 +619,7 @@ class SettingsScreen(QWidget):
         self._mark_dirty()   # a picked noise reference is a user edit that lands in the .toml
         self._update_carried_banner()
         where = "every expiration" if use_expiration else "a marked rest span"
-        self._set_status(f"Noise reference set from {file}: {where}.")
+        self._set_status(f"Rest reference set from {file}: {where}.")
 
     def sync_from_preview(self):
         """A Preview-owned edit (mechanics / EMG conditioning / noise) may change what the
@@ -777,7 +777,7 @@ class SettingsScreen(QWidget):
             parts.append("breath-count overrides for "
                          f"{self._named_by_filename(state.breath_count_files)}")
         if state.noise_reference:
-            parts.append("the EMG noise reference")
+            parts.append("the EMG rest reference")
         self.carried_label.setText(
             "This analysis still has " + "; ".join(parts) + " set against a DIFFERENT "
             "recordings folder than the one now loaded. Keep them if you want the same "
@@ -1215,7 +1215,7 @@ class SettingsScreen(QWidget):
         assigned…" status — since B04 made ``_update_disclosure`` end by writing the
         live validation status (there is no longer a separate guidance label for it to
         land on instead), an unconditional second call here would immediately overwrite
-        that message with the generic "Settings valid ✓" the instant the modal closed.
+        that message with the generic "Setup valid ✓" the instant the modal closed.
         Cancelling never reaches ``_apply_channel_mapping``, so nothing else refreshes
         the QC strip/flow_ready/status for the still-unassigned channels without this."""
         self._channel_modal_pending = False
@@ -1535,7 +1535,7 @@ class SettingsScreen(QWidget):
 
     def _all_ok(self):
         """Every setting is valid (core validation + filesystem paths) — drives
-        flow_ready_changed and this screen's own 'Settings valid ✓' status. The Run
+        flow_ready_changed and this screen's own 'Setup valid ✓' status. The Run
         drawer's own primary-action gate (B04) is computed independently, over the same
         shared checks (``ui.validation.channel_collision``/``path_problem``), so the two
         can never disagree about a setting without also disagreeing about a run."""
@@ -1584,7 +1584,7 @@ class SettingsScreen(QWidget):
         rp = getattr(s.processing.emg, "robust_peak", None)
         if rp is not None and rp.enabled and not s.processing.emg.remove_ecg:
             out.append("cardiac-gated peak EMG needs ECG removal on (Preview & QC ▸ "
-                       "› EMG – ECG reduction), or its columns will be blank")
+                       "EMG – ECG reduction), or its columns will be blank")
         # Tests the rate the batch will actually ANALYSE at, not the raw input rate: with
         # 'Resample before analysis' on (Preview & QC ▸ Mechanics ▸ Advanced…), every EMG
         # channel is normalised against the resampled envelope, never the recorded one (see
@@ -2019,7 +2019,7 @@ class SettingsScreen(QWidget):
             return f"Invalid: {problem}"
         # non-fatal science guardrails (shared with the guided-flow completion status)
         note = self._science_note()
-        return f"Valid, but check: {note}." if note else "Settings valid ✓"
+        return f"Valid, but check: {note}." if note else "Setup valid ✓"
 
     def _path_problem(self):
         """Return a human message for the first invalid path, or None if all OK.

@@ -335,7 +335,7 @@ def test_a_different_reference_file_warns_and_relabels_ok(qapp):
     assert dlg.file_warn.isHidden() is False              # not shown -> isVisible() needs a real window
     assert "synth_case_A.csv" in dlg.file_warn.text()
     assert "synth_case_B.csv" in dlg.file_warn.text()
-    assert dlg.btn_ok.text() == "Replace noise reference"
+    assert dlg.btn_ok.text() == "Replace rest reference"
     dlg.deleteLater()
 
 

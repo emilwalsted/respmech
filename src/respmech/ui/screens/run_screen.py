@@ -43,15 +43,15 @@ _ORPHANED_THREADS = []
 # Per-file precondition failures the user can act on, and where the control lives. Keyed
 # by FileResult.error_kind.
 _FIX_HINTS = {
-    "VolumeTrendError": "Preview & QC → Mechanics → Advanced… → 'Trend anchor — minimum "
+    "VolumeTrendError": "Preview & QC ▸ Mechanics ▸ Advanced… ▸ 'Trend anchor — minimum "
                         "breath depth' / 'Trend anchor — absolute threshold (legacy)' "
                         "(or untick 'Correct end-expiratory trend').",
-    "TrimError": "Setup → channel assignment, or 'Invert the flow signal' under "
-                 "Preview & QC → Mechanics → Advanced….",
-    "NoBreathsError": "Preview & QC → Mechanics → Advanced… → 'Signal used to split "
+    "TrimError": "Setup ▸ channel assignment, or 'Invert the flow signal' under "
+                 "Preview & QC ▸ Mechanics ▸ Advanced….",
+    "NoBreathsError": "Preview & QC ▸ Mechanics ▸ Advanced… ▸ 'Signal used to split "
                       "breaths' and the 'Breath peak' thresholds; or re-include excluded "
                       "breaths by clicking them in the Preview & QC channel view.",
-    "DataValidationError": "Setup → channel assignment — the recording's column count "
+    "DataValidationError": "Setup ▸ channel assignment — the recording's column count "
                            "or contents do not match the channels configured there.",
 }
 
@@ -401,7 +401,7 @@ class RunScreen(QWidget):
         self.btn_run.setToolTip(tip)
         self.btn_dry.setToolTip(tip)
         if not ok:
-            self._set_status(f"Settings incomplete: {blockers[0]}")
+            self._set_status(f"Setup incomplete: {blockers[0]}")
             self._incomplete_shown = True
         elif self._incomplete_shown and not busy:
             self._set_status("Ready to run.")     # clear the stale warning once valid
@@ -1074,7 +1074,8 @@ class RunScreen(QWidget):
         # D20: the status line said nothing at all at the start of a run — whatever the
         # PREVIOUS run left behind (including a stale "Run cancelled…") stayed on screen
         # through the whole silent pre-file phase (shared noise profile + first file load).
-        self._set_status(f"Starting — analysing {len(self._run_files)} file(s)…")
+        n = len(self._run_files)
+        self._set_status(f"Starting — analysing {n} file{'s' if n != 1 else ''}…")
         self._set_running(True)
         self.run_started.emit()
 

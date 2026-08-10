@@ -175,7 +175,27 @@ def test_the_preview_strip_shows_which_part_of_the_reference_is_used(qapp, tmp_p
 
     n.reference_file = None
     pv._refresh_noise_readout()
-    assert "no reference" in pv.noise_ref_readout.toolTip().lower()
+    assert "rest reference: not set" in pv.noise_ref_readout.toolTip().lower()
+    pv.shutdown()
+
+
+def test_the_two_auto_checkboxes_are_named_distinctly(qapp, tmp_path):
+    """Ticket D21 (UI-overhaul): the EMG – noise reduction sub-tab and the EMG – ECG
+    reduction sub-tab each have their own 'Auto' checkbox, doing two unrelated things
+    (auto-picking the noise-suppression strength for the current file, versus
+    auto-detecting the ECG-removal parameters for the whole batch from a reference
+    recording). They used to share the bare label 'Auto', with the noise one relying on a
+    separate, easy-to-miss caption ('Noise') to say what it was Auto of. Neither label nor
+    tooltip may collide now."""
+    from respmech.ui.screens.preview_screen import PreviewScreen
+    s = synth_settings(str(tmp_path), remove_ecg=True, noise=True, data_out=_OUT)
+    pv = PreviewScreen(AppState(s))
+    assert pv.noise_auto.text() != pv.ecg_auto_batch.text()
+    assert pv.noise_auto.text() != "Auto"
+    assert pv.ecg_auto_batch.text() != "Auto"
+    assert pv.noise_auto.toolTip() != pv.ecg_auto_batch.toolTip()
+    assert "suppression" in pv.noise_auto.toolTip().lower()
+    assert "batch" in pv.ecg_auto_batch.toolTip().lower()
     pv.shutdown()
 
 

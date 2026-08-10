@@ -58,7 +58,7 @@ _ECG_PROCESSED_TITLE_OFF = "EMG channels — removal is OFF (capture preview)"
 class _BlankableDoubleSpinBox(QDoubleSpinBox):
     """A QDoubleSpinBox that can show an em dash instead of its number without ever
     touching ``value()`` — used for the ECG strip's Min height / Min gap fields while
-    'Auto (whole batch)' governs them at run time (see :meth:`PreviewScreen._update_actions`
+    'Auto-detect for the batch' governs them at run time (see :meth:`PreviewScreen._update_actions`
     gating in screen.py, which calls :meth:`set_blanked` alongside ``setEnabled``).
 
     ``AdvancedDialog``'s ``Field`` already has a similar-looking "shown at the minimum"
@@ -129,7 +129,7 @@ class _EcgMixin:
         # file — Auto-suggest stays a manual, per-file preview aid; this is its unsupervised,
         # whole-batch counterpart (core.pipeline._auto_detect_ecg_settings), now reachable
         # without leaving the GUI to hand-edit a settings.toml.
-        self.ecg_auto_batch = QCheckBox("Auto (whole batch)")
+        self.ecg_auto_batch = QCheckBox("Auto-detect for the batch")
         self.ecg_auto_batch.setToolTip(_help_tip(
             "processing.emg.ecg_auto_detect",
             "Detect the settings below ONCE from a reference file (the first matched file, "
@@ -139,7 +139,7 @@ class _EcgMixin:
             "the run failing — check run-report.txt after a run for a per-file warning."))
         self.ecg_auto_batch.toggled.connect(self._on_ecg_param_changed)
         # _BlankableDoubleSpinBox, not a plain QDoubleSpinBox: these two stay on the strip
-        # (unlike Min width/Window below) while 'Auto (whole batch)' is on, so they are the
+        # (unlike Min width/Window below) while 'Auto-detect for the batch' is on, so they are the
         # ones a user can still read stale numbers off — see _update_actions' set_blanked
         # calls in screen.py.
         self.ecg_min_height = _BlankableDoubleSpinBox()
@@ -195,7 +195,7 @@ class _EcgMixin:
         self.btn_ecg_advanced.clicked.connect(self._open_ecg_advanced)
 
         # Captured once, before AUTO_BATCH_HINT ever overwrites them: _update_actions restores
-        # each widget's own help tooltip when "Auto (whole batch)" is off, rather than leaving
+        # each widget's own help tooltip when "Auto-detect for the batch" is off, rather than leaving
         # it blank (unlike NEEDS_ECG_HINT's widgets above, whose "off" tooltip is empty).
         self._ecg_auto_gated_base_tooltips = {
             w: w.toolTip() for w in (self.ecg_capture_channel, self.ecg_min_height,
@@ -207,7 +207,7 @@ class _EcgMixin:
         strip.addWidget(self.btn_ecg_advanced); strip.addWidget(self.btn_ecg_autosuggest)
         v.addLayout(strip)
 
-        # A persistent one-line caption for 'Auto (whole batch)' — same remedy as
+        # A persistent one-line caption for 'Auto-detect for the batch' — same remedy as
         # _mechanics.py's mech_caption: it used to live only in the transient status bar,
         # where an EMG/noise job finishing a moment later silently erased the one sentence
         # that explained the capture/processed panels below are still showing stale,
@@ -280,7 +280,8 @@ class _EcgMixin:
             # Settings.validate rejects that pair, and the interactive path clears it (see
             # _on_ecg_param_changed) — but LOADING one did not. Measured on Emil's S07.toml,
             # 30-07-2026: the checkbox came up ticked AND disabled, every preview was gated
-            # out with "Settings incomplete", and the mechanics test run died on
+            # out as invalid (the status bar's wording for this was renamed to "Setup
+            # incomplete" by ticket D21), and the mechanics test run died on
             # `SettingsError: processing.emg.ecg_auto_detect requires
             # processing.emg.remove_ecg to be enabled` behind a raw traceback. There was no
             # way to untick the box without re-enabling Remove ECG first.
@@ -308,7 +309,7 @@ class _EcgMixin:
 
     def _set_ecg_caption(self, auto_batch_on):
         """Keep the ECG strip's persistent caption (self.ecg_caption) honest about what
-        'Auto (whole batch)' actually does — see it being added in _build_ecg_tab. Called
+        'Auto-detect for the batch' actually does — see it being added in _build_ecg_tab. Called
         from screen.py's _update_actions, right alongside the enable/blank gating for the
         same fields, so the two can never fall out of step.
 
@@ -322,7 +323,7 @@ class _EcgMixin:
         ref = self.state.settings.processing.emg.ecg_reference_file
         source = f"'{ref}'" if ref else "the batch's first matched file"
         self.ecg_caption.setFullText(
-            f"Auto (whole batch) is on: detector parameters are found automatically at "
+            f"Auto-detect for the batch is on: detector parameters are found automatically at "
             f"run time from {source} and applied to every file. The capture channel, min "
             f"height and min gap above still show the last manual/Auto-suggest values, "
             f"not what the run will use — see run-report.txt afterwards for the per-file "
@@ -395,7 +396,8 @@ class _EcgMixin:
             "ECG removal — advanced", fields,
             {f.key: getattr(e, f.key) for f in fields}, parent=self,
             intro="Detection is driven by the capture channel, Min height and Min gap on the "
-                  "strip. These two shape the template rather than finding the beats.")
+                  "toolbar above the plots. Minimum peak width and Template width below "
+                  "shape the template instead, rather than finding the beats.")
         if dlg.exec() != QDialog.Accepted:
             return
         from respmech.ui.advanced_dialog import apply_values

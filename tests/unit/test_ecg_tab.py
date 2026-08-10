@@ -139,8 +139,14 @@ def test_ecg_auto_batch_caption_survives_a_later_status_overwrite(qapp, tmp_path
     assert pv.ecg_caption.fullText() == ""                       # nothing to say yet
     pv.ecg_auto_batch.setChecked(True)
     caption = pv.ecg_caption.fullText()
-    assert "Auto (whole batch)" in caption
+    assert "Auto-detect for the batch" in caption
     assert "first matched file" in caption                       # no reference file set
+    # ticket D21 (UI-overhaul): the sentence must say ONE parameter set for the WHOLE
+    # batch, never "for every file" in the sense of a per-file re-detection — an earlier
+    # status-line wording ("auto-detects its own parameters ... for every file") read as
+    # the opposite of what the pipeline actually does (one set, derived once, applied to
+    # all). Checked on fullText(), never the elided text(), same as elsewhere in this file.
+    assert "applied to every file" in caption
     # simulate an EMG/noise job finishing a moment later and overwriting the status line
     pv._set_status("EMG result: conditioned (ECG + noise).")
     assert pv.ecg_caption.fullText() == caption                  # untouched

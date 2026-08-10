@@ -32,7 +32,7 @@ from respmech.ui.stft_frames import (MIN_STABLE_FRAMES,
                                      stft_frame_count)
 from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
 from respmech.ui import wheel as _wheel
-from respmech.ui.flow_layout import (ElidingLabel, FlowLayout, cluster as _cluster,
+from respmech.ui.flow_layout import (ElidingLabel, FlowLayout,
                                      elide as _elide, install_flow as _install_flow)
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
@@ -101,7 +101,7 @@ class _EmgNoiseMixin:
         # rounded chip) on a single row, instead of two full-width rows.
         self.btn_set_noise = QPushButton("Set noise profile")
         self.btn_set_noise.setToolTip("Open a picker to mark a rest span across the raw EMG "
-                                      "channels as the shared noise reference for this test.")
+                                      "channels as the shared rest reference for this test.")
         self.btn_set_noise.clicked.connect(self._open_noise_profile_dialog)
 
         # The on/off toggle for EMG-noise processing — the one control the user asked to keep
@@ -114,18 +114,12 @@ class _EmgNoiseMixin:
         self.noise_enabled.toggled.connect(self._on_noise_enabled_changed)
         self.noise_ref_readout = QLabel("")
         self.noise_ref_readout.setProperty("status", "muted")
-        self.noise_auto = QCheckBox("Auto")
+        self.noise_auto = QCheckBox("Auto strength")
         self.noise_auto.setToolTip(_help_tip(
             "processing.emg.noise.auto_prop",
             "Automatically picks the strongest suppression that still keeps every channel at or "
             "above the fidelity target; on by default."))
         self.noise_auto.toggled.connect(self._on_noise_param_changed)
-
-        def _cap(text, tip=""):        # a compact muted caption; full text lives in the tooltip
-            la = QLabel(text); la.setProperty("status", "muted")
-            if tip:
-                la.setToolTip(tip)
-            return la
 
         # noise-reduction params grouped in a subtle rounded chip (active once a
         # reference file is set — _update_actions enables/disables the whole chip)
@@ -139,7 +133,10 @@ class _EmgNoiseMixin:
         # whose minimum is the SUM of its clusters, and the enclosing strip can only wrap around
         # it, never inside it (see flow_layout's module docstring).
         nrow = _install_flow(self.noise_opts, h=10, v=4, margins=(11, 3, 11, 3))
-        nrow.addLayout(_cluster(_cap("Noise", self.noise_auto.toolTip()), self.noise_auto, gap=8))
+        # "Auto strength" names the setting itself now (D21, UI-overhaul): the checkbox used to
+        # read plain "Auto" beside a separate dampened "Noise" caption, so the object of "Auto"
+        # was never actually written down — the caption is gone, the label carries the meaning.
+        nrow.addWidget(self.noise_auto)
         # No "Gate" cluster and no gated-peak chip: the spectral-gate threshold was a straight
         # duplicate of the Advanced modal's "Spectral gate threshold", and the cardiac-gated
         # peak is an output-only add-on nothing on this tab draws — both live in Advanced now.
@@ -309,19 +306,21 @@ class _EmgNoiseMixin:
 
         supp_fields = [
             # Suppression strength and the fidelity target moved here off the strip
-            # (Emil, 02-08-2026): with 'Auto' on — the default — the strength is chosen for
-            # you and the field is inert, so two permanently-visible spin boxes were paying
-            # strip width for a case most runs never enter. 'Auto' itself stays on the strip.
-            Field("prop_decrease", "Suppression strength (when Auto is off)", "float",
+            # (Emil, 02-08-2026): with 'Auto strength' on — the default — the strength is
+            # chosen for you and the field is inert, so two permanently-visible spin boxes
+            # were paying strip width for a case most runs never enter. 'Auto strength'
+            # itself stays on the strip.
+            Field("prop_decrease", "Suppression strength (when Auto strength is off)", "float",
                   "processing.emg.noise.prop_decrease",
-                  "How aggressively to remove noise when Auto is off, from 0 (none) to 1 "
-                  "(maximum); default 0.6. With Auto on, this is overwritten by the strength "
-                  "the run chooses.",
+                  "How aggressively to remove noise when Auto strength is off, from 0 (none) "
+                  "to 1 (maximum); default 0.6. With Auto strength on, this is overwritten by "
+                  "the strength the run chooses.",
                   lo=0.0, hi=1.0, step=0.05, decimals=2),
             Field("fidelity_target", "Fidelity target (Keep ≥)", "float",
                   "processing.emg.noise.fidelity_target",
                   "Smallest fraction of inspiratory EMG power that must survive noise "
-                  "removal, from 0 to 1; default 0.8. This is what Auto optimises against.",
+                  "removal, from 0 to 1; default 0.8. This is what Auto strength optimises "
+                  "against.",
                   lo=0.50, hi=0.99, step=0.05, decimals=2),
         ]
         stft_fields = [
@@ -466,17 +465,18 @@ class _EmgNoiseMixin:
             intro="The RMS window that defines the reported EMG number, optional amplitude "
                   "normalisation, the noise-suppression strength and fidelity target, the "
                   "spectral-gate internals, the gated-peak quality guards, and the "
-                  "diagnostic exports. The strip keeps the noise on/off toggle, the "
-                  "reference picker and Auto.",
+                  "diagnostic exports. The toolbar above the plots keeps the noise on/off "
+                  "toggle, the reference picker and Auto strength.",
             derived=_ms)
-        # 'Auto' owns the suppression strength: with it on the run overwrites whatever is
-        # here, so an edit would silently do nothing. The strip control used to grey out for
-        # exactly this reason; the field kept the behaviour when it moved.
+        # 'Auto strength' owns the suppression strength: with it on the run overwrites
+        # whatever is here, so an edit would silently do nothing. The strip control used to
+        # grey out for exactly this reason; the field kept the behaviour when it moved.
         if bool(n.auto_prop):
             w = dlg.widget("prop_decrease")
             w.setEnabled(False)
-            w.setToolTip("Auto is on, so the run picks the suppression strength — turn Auto "
-                         "off on the strip to set it by hand.")
+            w.setToolTip("Auto strength is on, so the run picks the suppression strength — "
+                         "turn Auto strength off on the toolbar above the plots to set it "
+                         "by hand.")
         if not ecg_on:
             # Same prerequisite the strip control enforced, same words: the gate is built
             # from the heartbeats the ECG stage detects, so without it the columns come
@@ -609,12 +609,12 @@ class _EmgNoiseMixin:
         # for a caption whose full text is one hover away.
         cap = 220
         if not n.reference_file:
-            _elide(self.noise_ref_readout, "· no reference set", cap)
+            _elide(self.noise_ref_readout, "Rest reference: not set", cap)
         elif n.use_expiration or not n.reference_intervals:
-            _elide(self.noise_ref_readout, f"· {n.reference_file}, every expiration", cap)
+            _elide(self.noise_ref_readout, f"Rest reference: {n.reference_file}, every expiration", cap)
         else:
             spans = ", ".join(f"{a:.2f}–{b:.2f} s" for a, b in n.reference_intervals)
-            _elide(self.noise_ref_readout, f"· {n.reference_file}, {spans}", cap)
+            _elide(self.noise_ref_readout, f"Rest reference: {n.reference_file}, {spans}", cap)
 
     def _on_noise_enabled_changed(self, *_):
         if self._loading_noise:
@@ -704,12 +704,15 @@ class _EmgNoiseMixin:
             self.emg_plots.addItem(reg)
 
     def _ensure_noise_label(self):
-        """The small 'noise reference' caption at the band's left edge (D07) — without a
+        """The small 'rest reference' caption at the band's left edge (D07) — without a
         label the dashed band alone doesn't say what it is, and it sits over a channel
-        whose own y-axis title is 'EMG (a.u.)', not 'noise'."""
+        whose own y-axis title is 'EMG (a.u.)', not 'noise'. Named 'rest reference' (ticket
+        D21, UI-overhaul) to match the readout chip beside the toggle — 'noise reference'
+        was ambiguous with the ECG auto-detect reference and the per-file EMG-normalisation
+        reference, two unrelated settings that also carry the word 'reference'."""
         lbl = self._noise_label
         if lbl is None:
-            lbl = pg.TextItem("noise reference", color=pg.mkColor(*NOISE_ACCENT), anchor=(0, 1))
+            lbl = pg.TextItem("rest reference", color=pg.mkColor(*NOISE_ACCENT), anchor=(0, 1))
             f = QFont(); f.setPointSizeF(9.0)
             lbl.setFont(f)
             lbl.textItem.document().setDocumentMargin(0)
@@ -905,7 +908,7 @@ class _EmgNoiseMixin:
         elif data.get("noise_error"):
             applied = "noise conditioning failed — showing ECG-removed"
         else:
-            applied = "no noise reference — raw vs ECG-removed"
+            applied = "no rest reference — raw vs ECG-removed"
         note = " · ECG removal failed (showing raw)" if data.get("ecg_error") else ""
         self._set_status(f"EMG detail (col {col}): {applied}{note} (band 20–250 Hz marked).")
 

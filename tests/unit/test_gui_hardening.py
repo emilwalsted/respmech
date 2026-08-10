@@ -171,6 +171,23 @@ def test_path_problem_shared_helper(qapp, tmp_path):
     assert "input folder" in (path_problem(s) or "")
 
 
+def test_path_problem_names_the_rest_reference_not_a_bare_noise_reference(qapp, tmp_path):
+    """Ticket D21 (UI-overhaul): 'noise reference' is ambiguous — the same word also names
+    the ECG auto-detect reference and the per-file EMG normalisation reference, none of
+    which this check is about. The message must call it what the Preview & QC chip and
+    'Set noise profile' button call it ('rest reference'), and must say where to fix it —
+    there is no control for this anywhere on Setup."""
+    from respmech.ui.validation import path_problem
+    s = synth_settings(str(tmp_path), noise=True, data_out=_DATA_OUT)
+    assert path_problem(s) is None                      # the synthetic reference file exists
+    s.processing.emg.noise.reference_file = "does_not_exist.csv"
+    problem = path_problem(s) or ""
+    assert "rest reference" in problem
+    assert "noise reference" not in problem
+    assert "does_not_exist.csv" in problem
+    assert "Preview & QC" in problem and "EMG – noise reduction" in problem
+
+
 # -- ticket A06: a real write probe, not os.access ------------------------
 def test_path_problem_probe_write_is_off_by_default(qapp, tmp_path, monkeypatch):
     """Settings' live, every-keystroke validation must never touch disk beyond the

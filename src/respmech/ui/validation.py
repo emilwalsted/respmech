@@ -157,7 +157,8 @@ def path_problem(settings, probe_write: bool = False, matches: list | None = Non
         if not os.path.isabs(ref):
             ref = os.path.join(folder, ref)
         if not os.path.isfile(ref):
-            return f"noise reference file not found: {n.reference_file}"
+            return (f"rest reference recording not found: {n.reference_file} "
+                    "(Preview & QC ▸ EMG – noise reduction)")
     if probe_write:
         from respmech.core.io.plan import probe_write_folder
         probe = probe_write_folder(out)

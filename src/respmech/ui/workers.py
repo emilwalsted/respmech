@@ -981,7 +981,7 @@ def stage_noise_fidelity(settings: Settings, cancel_check=None) -> dict:
         # expiration clip. Surface it as a clean, single-line, actionable message (rendered by
         # _on_noise_result -> _FileRunError) instead of a raw traceback. Genuine bugs
         # (IndexError / KeyError / numeric) are NOT caught here and still propagate.
-        name = os.path.basename(ref_path) if ref_path else "the noise reference"
+        name = os.path.basename(ref_path) if ref_path else "the rest reference"
         return {"error": (f"Could not build the noise profile from '{name}' or the input files: "
                           f"{e} Check the flow channel and inverse-flow assignment, or turn off "
                           f"'use expiration' and set explicit reference intervals.")}

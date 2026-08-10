@@ -210,12 +210,12 @@ def test_validate_checks_paths(qapp, tmp_path):
     sc.state.settings.input.folder = str(tmp_path / "nope")
     msg = sc._path_problem()
     assert msg and "input folder" in msg
-    # restore folder; a missing noise reference file is caught when noise is on
+    # restore folder; a missing rest reference recording is caught when noise is on
     sc.state.settings.input.folder = INPUT
     sc.state.settings.processing.emg.noise.enabled = True
     sc.state.settings.processing.emg.noise.reference_file = "not_here.csv"
     msg = sc._path_problem()
-    assert msg and "noise reference file" in msg
+    assert msg and "rest reference recording" in msg
 
 
 # --------------------------------------------------------------------------- #
@@ -299,7 +299,7 @@ def test_analysis_menu_actions_show_feedback_regardless_of_active_tab(qapp, tmp_
     # to be while Preview & QC was the active tab.
     assert "invalid" in win.statusBar().currentMessage().lower()
     win._on_noise_reference_changed("synth_case_A.csv", [[1.0, 2.0]], False)
-    assert "noise reference set" in win.statusBar().currentMessage().lower()
+    assert "rest reference set" in win.statusBar().currentMessage().lower()
     win.close()
 
 

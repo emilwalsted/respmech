@@ -80,10 +80,11 @@ from ._jobs import (_TAB_MECH, _PANELS, _SPIN_TEXT, _KIND_LABEL, _AUTO_KINDS,
                    _Job, _ORPHANED_THREADS, _MAX_ACTIVE, _FileRunError)
 
 
-#: why the manual ECG fields (and Auto-suggest) are inert while "Auto (whole batch)" is on
-AUTO_BATCH_HINT = ("'Auto (whole batch)' is on: these values will be overwritten at run "
-                   "time from the reference file, so editing them (or clicking "
-                   "Auto-suggest) here has no lasting effect. Untick it to edit by hand.")
+#: why the manual ECG fields (and Auto-suggest) are inert while "Auto-detect for the batch" is on
+AUTO_BATCH_HINT = ("Auto-detect for the batch is on: these five settings are re-derived at "
+                   "run time from the first matched recording and applied to every file, so "
+                   "anything you set here (including Auto-suggest) is discarded. Untick it "
+                   "to set them by hand.")
 
 
 class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
@@ -696,7 +697,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # (The gated peak's ECG prerequisite is enforced in the Advanced modal now, where
         # the control moved — its fields open disabled with NEEDS_ECG_GATE_HINT until
         # 'Remove ECG' is on.)
-        # "Auto (whole batch)" itself needs ECG removal on (same requirement Settings.validate
+        # "Auto-detect for the batch" itself needs ECG removal on (same requirement Settings.validate
         # enforces); once checked, the fields it will overwrite at run time grey out — same
         # pattern the noise strength field uses in Advanced, so a manual edit there can't
         # look like it did nothing.
@@ -732,7 +733,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             self._set_status("Noise reduction is on — click 'Set noise profile' to mark a "
                              "rest span in this file.")
         elif has_file and not ok:
-            self._set_status(f"Settings incomplete: {why}")
+            self._set_status(f"Setup incomplete: {why}")
 
     def _invalidate_inflight(self, kinds=None):
         """Bump the token of each targeted kind so any in-flight job for it is dropped by
@@ -911,7 +912,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
                 self._clear_file_panels(include_noise=True)
                 self._blanked_for_invalid = True
             self._clear_panel_overlays(*_PANELS[kind])
-            self._set_status(f"Settings incomplete: {why}")
+            self._set_status(f"Setup incomplete: {why}")
             return
         if self._blanked_for_invalid:
             # The blank was global, so the recovery has to be too. sync_from_settings scopes

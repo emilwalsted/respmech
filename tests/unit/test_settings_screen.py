@@ -519,7 +519,7 @@ def test_every_edit_revalidates_into_the_status_bar(qapp, tmp_path):
     win = MainWindow(AppState(synth_settings(str(tmp_path))))
     sc = win.settings_screen
     sc.samp_freq.setValue(1234)                       # a valid edit
-    assert sc.status.text() == "Settings valid ✓"
+    assert sc.status.text() == "Setup valid ✓"
     sc.in_folder.setText(str(tmp_path / "nope"))      # a filesystem problem
     sc._on_inputs_changed()
     assert "Invalid:" in sc.status.text() and "input folder" in sc.status.text()
@@ -1522,5 +1522,35 @@ def test_duplicate_dialog_asks_when_output_is_not_a_sibling(qapp, tmp_path, monk
     sc.duplicate_for_another_folder()
     assert captured["suggested_output"] == ""       # nothing guessable -> ask, don't assume
     assert sc.in_folder.text() == kept_input         # cancelled -> nothing applied
+    win.close()
+
+
+def test_science_note_navigation_uses_exactly_one_arrow(qapp, tmp_path):
+    """Ticket D21 (UI-overhaul): a screen-navigation hint like 'Preview & QC ▸ EMG – ECG
+    reduction' must carry exactly one arrow. This used to render with two ('Preview & QC ▸
+    › EMG – ECG reduction') because the sentence concatenated its own '▸ ' separator with a
+    sub-tab name that already carries a leading '›' internally (that leading arrow is
+    correct when the name is used alone, e.g. in a tooltip naming just the sub-tab — it is
+    only wrong once another arrow is glued in front of it here).
+
+    Also asserts run_screen's _FIX_HINTS uses the SAME arrow character as this screen: the
+    two used to disagree ('→' vs '▸'), describing the same kind of route in two different
+    symbols."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.screens.run_screen import _FIX_HINTS
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    s = sc.state.settings
+    s.processing.emg.robust_peak.enabled = True
+    s.processing.emg.remove_ecg = False
+    notes = sc._science_notes()
+    gated_peak_notes = [n for n in notes if "cardiac-gated peak" in n]
+    assert len(gated_peak_notes) == 1
+    note = gated_peak_notes[0]
+    assert note.count("▸") == 1, f"expected exactly one ▸ in: {note!r}"
+    assert "›" not in note, f"a sub-tab's own leading arrow leaked into the sentence: {note!r}"
+    for hint in _FIX_HINTS.values():
+        assert "→" not in hint, f"_FIX_HINTS still uses '→' instead of '▸': {hint!r}"
+        assert "▸" in hint
     win.close()
 

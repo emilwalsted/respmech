@@ -31,7 +31,7 @@ never reads settings. That makes "OK" without dragging anything a valid, no-op a
 instead of the picker opening empty and forcing a fresh drag to see what was already
 saved. When ``reference_file`` names a file other than the one the picker was opened on,
 a persistent banner explains that accepting moves the WHOLE test's reference to this
-file, and the accept button is relabelled "Replace noise reference" so the click
+file, and the accept button is relabelled "Replace rest reference" so the click
 describes its own effect.
 """
 from __future__ import annotations
@@ -172,7 +172,7 @@ class NoiseProfileDialog(QDialog):
         self.file_warn.setStyleSheet("#noiseFileWarn { color: %s; font-weight: 600; }" % _fwarn)
         if self._mismatch:
             self.file_warn.setText(
-                f"This test's noise reference is currently {self._reference_file}. Setting "
+                f"This test's rest reference is currently {self._reference_file}. Setting "
                 f"it here moves the whole test's reference to {file_name} — the profile is "
                 "still built once, from this one span, and applied identically to every "
                 "file in the test.")
@@ -291,7 +291,7 @@ class NoiseProfileDialog(QDialog):
         self.btn_cancel = QPushButton("Cancel"); self.btn_cancel.clicked.connect(self.reject)
         # Relabelled when accepting would move the reference off another file (see
         # file_warn above): the click then describes what it actually does.
-        self.btn_ok = QPushButton("Replace noise reference" if self._mismatch
+        self.btn_ok = QPushButton("Replace rest reference" if self._mismatch
                                   else "Set noise profile")
         self.btn_ok.setEnabled(False)
         self.btn_ok.clicked.connect(self.accept)
