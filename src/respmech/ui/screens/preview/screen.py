@@ -503,16 +503,17 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             ov.fit()
 
     @staticmethod
-    def _titled(title, widget, corner=None):
+    def _titled(title, widget, corner=None, *, title_floor_chars=None):
         """A titled panel. ``corner`` is an optional widget pinned to the top-right of
         the title row (e.g. the detail-channel dropdown or the result-channel picker).
+        ``title_floor_chars``: see :func:`respmech.ui.panel.titled_panel`.
 
         Lifted out to :mod:`respmech.ui.panel` (ticket B03) so the Run drawer's "Run log"
         panel can reuse the exact same header treatment instead of a second hand-rolled
         one; this stays as a thin wrapper so every existing ``self._titled(...)`` call
         site here (mechanics/ECG/EMG mixins) is unaffected."""
         from respmech.ui.panel import titled_panel
-        return titled_panel(title, widget, corner)
+        return titled_panel(title, widget, corner, title_floor_chars=title_floor_chars)
 
     def _set_status(self, text):
         self.status.setText(text)

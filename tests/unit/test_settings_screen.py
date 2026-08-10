@@ -179,8 +179,11 @@ def test_entropy_fields_are_named_and_explained_for_what_they_are(qapp, tmp_path
     form = sc.ent_epochs.parentWidget().layout()
     assert isinstance(form, QFormLayout)
 
+    # _row()'s label is an ElidingLabel (CLAUDE.md: never assert on a QLabel's rendered
+    # text() when flow_layout.elide could have shortened it — fullText() is the accessor
+    # that survives regardless of the width this unshown window happens to lay out at).
     epochs_label = form.labelForField(sc.ent_epochs)
-    assert epochs_label.text() == "Template length (m + 1)"
+    assert epochs_label.fullText() == "Template length (m + 1)"
     tip = sc.ent_epochs.toolTip()
     assert epochs_label.toolTip() == tip, "label and field must share the same tooltip"
     assert "processing.entropy.epochs" in tip
@@ -190,7 +193,7 @@ def test_entropy_fields_are_named_and_explained_for_what_they_are(qapp, tmp_path
     assert "2 by convention" not in tip, "the old, wrong claim must not survive verbatim"
 
     tol_label = form.labelForField(sc.ent_tol)
-    assert tol_label.text() == "Tolerance (r), × SD"
+    assert tol_label.fullText() == "Tolerance (r), × SD"
     tol_tip = sc.ent_tol.toolTip()
     assert tol_label.toolTip() == tol_tip
     assert "processing.entropy.tolerance" in tol_tip

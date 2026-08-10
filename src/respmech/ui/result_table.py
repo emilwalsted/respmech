@@ -172,8 +172,39 @@ def configure_result_table(view: QTableView) -> None:
 def resize_result_table(view: QTableView) -> None:
     """Re-fit column widths to the current contents. Call after every
     ``set_dataframe()`` — mirrors the old ``_fill_table``'s implicit resize, now
-    explicit because the model itself doesn't know when a view is done consuming it."""
+    explicit because the model itself doesn't know when a view is done consuming it.
+
+    ``_MAX_SECTION_PX`` exists to stop one pathologically wide CELL VALUE (a long
+    file path, say) from eating the viewport — it was never meant to elide the
+    table's own header identifiers. But ``resizeColumnsToContents()`` applies that
+    same cap while sizing the header too, so on a font whose metrics are wider than
+    the ones the cap was picked against (Windows' Segoe UI against this app's own
+    reference font), a short, ordinary identifier like "poes_tidal_swing" can need
+    more than 220 px and gets clipped right along with a genuinely oversized value —
+    exactly the elision this table exists to prevent (see the module docstring).
+    ``QHeaderView.sectionSizeHint()`` returns each section's width from the HEADER
+    content alone (independent of both the cap and of any cell content — measured:
+    a column with a short header but a very long cell value still hints its short
+    header's width, not the cell's), so it is the floor no column may be resized
+    below; a cell value remains free to be squeezed under the cap, which is the
+    case this cap was built for."""
+    header = view.horizontalHeader()
+    # Reset to the fixed floor first: a cap widened by a PREVIOUS dataframe's
+    # wider headers (below) must not leak into squeezing THIS dataframe's cell
+    # content less than it should be.
+    header.setMaximumSectionSize(_MAX_SECTION_PX)
     view.resizeColumnsToContents()
+    model = view.model()
+    if model is None:
+        return
+    header.setMaximumSectionSize(-1)          # -1, not a large literal: Qt silently
+    floors = [header.sectionSizeHint(c) for c in range(model.columnCount())]
+    # resizeSection() below is itself clamped by maximumSectionSize, so the cap
+    # must already admit the widest header floor before any section is grown.
+    header.setMaximumSectionSize(max([_MAX_SECTION_PX, *floors]))
+    for c, floor in enumerate(floors):
+        if header.sectionSize(c) < floor:
+            header.resizeSection(c, floor)
 
 
 def install_copy_shortcut(view: QTableView) -> QShortcut:

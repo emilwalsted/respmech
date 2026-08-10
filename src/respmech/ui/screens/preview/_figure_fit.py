@@ -210,12 +210,28 @@ def refit_compact_figure(canvas):
     Cheap to call repeatedly and safe to call often: every decision is re-derived from the
     canvas' current size, and _pick_xlabel settles its own reference layout, so the outcome
     does not depend on what the panel was before.
+
+    A re-fit at a SIZE already fitted is skipped rather than repeated: _fit_compact_figure's
+    result is a pure function of (ax, canvas width, canvas height) once ax._rm_full is stashed
+    (width feeds _pick_xlabel's room measurement, height feeds font sizing and title/legend
+    visibility) — so redoing it at an unchanged size can only reproduce the same decision,
+    except matplotlib's tight layout re-measures text extents against the axes' OWN current
+    position each time, and on a real Windows runner that measurement is not bit-for-bit
+    repeatable call to call (this sandbox's Agg renderer reproduces the exact same axes
+    position over 20 repeated calls at a fixed size; Windows measured a 0.0131 drift). A fixed
+    point beats a finer tolerance: never giving the loop the chance to re-measure removes the
+    drift outright rather than chasing it.
     """
     axes = [a for a in canvas.figure.get_axes() if getattr(a, "_rm_full", None) is not None]
     if not axes:
         return
+    size = (canvas.width(), canvas.height())
+    axes = [a for a in axes if getattr(a, "_rm_last_fit_size", None) != size]
+    if not axes:
+        return
     for ax in axes:
         _fit_compact_figure(canvas, ax)
+        ax._rm_last_fit_size = size
     canvas.draw_idle()
 
 

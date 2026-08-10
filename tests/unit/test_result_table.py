@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QTableView
+from PySide6.QtWidgets import QApplication, QTableView
 
 from respmech.ui.result_table import (ResultTableModel, configure_result_table,
                                       install_copy_shortcut, resize_result_table)
@@ -250,6 +250,60 @@ def test_no_header_line_or_numeric_cell_is_elided_at_the_columns_actual_width(qa
         for r in range(model.rowCount()):
             text = model.data(model.index(r, c), Qt.ItemDataRole.DisplayRole)
             assert fm_cell.horizontalAdvance(text) <= width
+
+
+def test_a_header_wider_than_the_cap_still_grows_past_it_but_a_long_cell_value_does_not(qapp):
+    """The Windows-CI defect this guards: ``poes_tidal_swing``'s own header text measured
+    224 px on a real Windows runner's Segoe UI metrics against the 220 px column cap
+    (``_MAX_SECTION_PX``), so the header itself elided — the one thing this table exists
+    to prevent (see the module docstring's "poes_tidal_swing -> oes_tidal_swin" story).
+    ``windows_metrics``' stretch(145) does not reproduce a wide enough header locally on
+    this app's reference font to cross the cap (measured ~147 px, comfortably under 220),
+    so this test forces a much wider font directly — the point is exercising the
+    cap-widening branch in ``resize_result_table``, not modelling any specific platform.
+
+    The cap exists for the OTHER case, a genuinely oversized CELL value (a long file
+    path): that case must still be squeezed, not grown without bound, or the fix would
+    have traded one defect for the regression the cap was originally built to prevent."""
+    app = QApplication.instance()
+    orig = app.font()
+    f = app.font()
+    f.setPointSize(20)          # wide enough that "poes_tidal_swing" alone exceeds 220 px
+    app.setFont(f)
+    try:
+        df = pd.DataFrame({
+            "poes_tidal_swing": [169.96689123456, 12.2],
+            "file": ["a_very_long_synthetic_recording_filename_indeed.csv", "b.csv"],
+        })
+        view = QTableView()
+        view.setFont(app.font())
+        model = ResultTableModel(df)
+        view.setModel(model)
+        configure_result_table(view)
+        resize_result_table(view)
+        header = view.horizontalHeader()
+        fm_header = header.fontMetrics()
+
+        id_line, unit_line = model.headerData(
+            0, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole).split("\n", 1)
+        needed = fm_header.horizontalAdvance(id_line)
+        assert needed > 220, (
+            "test setup didn't actually exceed the cap — this assertion isn't testing "
+            "the branch it claims to")
+        width0 = header.sectionSize(0)
+        assert width0 >= needed, (
+            f"header {id_line!r} needs {needed} px but its column is only {width0} px — "
+            f"the cap-widening fix did not grow it")
+
+        # the long file-path column must still be capped, not grown to match its cell
+        file_width = header.sectionSize(1)
+        fm_cell = view.fontMetrics()
+        cell_needed = fm_cell.horizontalAdvance(df["file"][0])
+        assert cell_needed > file_width, (
+            f"a {cell_needed} px file path fit inside a {file_width} px column — the "
+            f"single-wide-column cap this table was built to enforce is gone")
+    finally:
+        app.setFont(orig)
 
 
 # --------------------------------------------------------------------------- #

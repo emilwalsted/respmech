@@ -13,14 +13,31 @@ content collapses/expands at runtime is exactly the case ``FitScrollArea`` is wr
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QSize, Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtGui import QFontMetrics
+from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget
 
 from respmech.ui.flow_layout import ElidingLabel
 
-
-def titled_panel(title, widget, corner=None):
+def titled_panel(title, widget, corner=None, *, title_floor_chars=None):
     """A titled panel. ``corner`` is an optional widget pinned to the top-right of
-    the title row (e.g. the detail-channel dropdown or the result-channel picker)."""
+    the title row (e.g. the detail-channel dropdown or the result-channel picker).
+
+    ``title_floor_chars``: how many of the title's OWN characters must always survive a
+    squeeze, in place of ``ElidingLabel``'s small general-purpose default floor (24 px,
+    left alone when this is ``None`` — several callers rely on that small floor to let the
+    WHOLE panel shrink, e.g. the fidelity panel regardless of how long its tooltip
+    explanation is). Pass this for a panel whose title is itself the only thing naming a
+    diagram with no other visible label: measured on Windows' wider Segoe UI metrics, the
+    Campbell panel's "Campbell diagram" collapsed all the way to a bare "…" in its splitter
+    pane at the 24 px floor — a header naming nothing is worse than a slightly tighter
+    neighbour.
+
+    The floor is computed ONCE, from the title given here, and does not follow a later
+    ``setFullText()`` (the module docstring's example of a header several panels keep
+    current with a live verdict) — a floor sized for a short opt-in title would go stale
+    against a much longer one set afterwards. No current caller combines the two (the one
+    ``title_floor_chars`` caller, the Campbell panel, never calls ``setFullText`` on its
+    header), but don't pair them without also recomputing the floor from the new text."""
     # The panel's own margin is the single source of air: it keeps the title, the plot
     # and the right-pinned corner widget (channel selectors) all off the panel edge, so
     # nothing butts against the neighbouring panel or the nav.
@@ -31,7 +48,16 @@ def titled_panel(title, widget, corner=None):
     # than even the panel's own STATIC title once the panel sits in a splitter column,
     # and never widens back out when the user gives it more room. This sizes to whatever
     # width it is actually given and always keeps the full text one hover away.
-    lab = ElidingLabel(title); lab.setProperty("status", "muted")
+    if title_floor_chars is None:
+        lab = ElidingLabel(title)
+    else:
+        # Never more than the title itself would need to show in full, so a short title
+        # never elides at all, and a long one still shortens under squeeze, but to a
+        # readable abbreviation rather than a bare ellipsis.
+        fm = QFontMetrics(QApplication.font())
+        floor = fm.averageCharWidth() * min(len(title), title_floor_chars)
+        lab = ElidingLabel(title, floor=floor)
+    lab.setProperty("status", "muted")
     box._title_label = lab          # so a panel can keep its header current
     header.addWidget(lab); header.addStretch(1)
     if corner is not None:

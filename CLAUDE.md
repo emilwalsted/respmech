@@ -168,6 +168,46 @@ unbreakable item whose minimum is still the sum of its contents. Build chips wit
 sets `QSizePolicy.Preferred` + `setHeightForWidth(True)`: under `Maximum` Qt caps the widget
 at its one-line `sizeHint` height and paints the wrapped row outside it.
 
+### Three more Windows-metrics fixes worth reusing (ticket 20260810-1059, ui-overhaul)
+
+- **A `QHeaderView.maximumSectionSize()` cap and a header's own legibility are different
+  budgets, and Qt's `resizeColumnsToContents()` conflates them.** `result_table.py`'s
+  `_MAX_SECTION_PX` exists to stop one pathologically wide CELL VALUE (a long file path)
+  eating the viewport, but the cap also clamps the HEADER text while sizing it, so a font
+  wider than the one the cap was tuned against (Segoe UI vs. this app's reference font) can
+  clip an ordinary column identifier like `poes_tidal_swing` right along with a genuinely
+  oversized value. `QHeaderView.sectionSizeHint(col)` returns a section's width from the
+  HEADER content alone — independent of both the current cap and of any cell content, measured
+  directly (`header.setMaximumSectionSize(-1)` to read it uncapped, `header.resizeSection()` to
+  apply it — `resizeSection` itself still respects whatever cap is currently set, so the cap has
+  to be widened to admit the floor BEFORE calling it). Use that as the floor no column may be
+  resized below; a cell value stays free to be squeezed under the ordinary cap. `resize_result_table()` is the worked example.
+- **`ElidingLabel`'s general-purpose floor (24 px) is too small for a label that is the ONLY
+  thing naming something** (a panel header with no other visible caption). `panel.py`'s
+  `titled_panel()` grew an optional `title_floor_chars` — a floor derived from the title's OWN
+  length (`fontMetrics().averageCharWidth() * min(len(title), title_floor_chars)`), so a short
+  title never elides at all and a long one shortens to a readable abbreviation instead of a
+  bare "…". Left as `None` (the small default) everywhere else on purpose: `titled_panel`'s own
+  fidelity-panel caller relies on the SMALL floor to let that whole panel shrink regardless of
+  how long its tooltip explanation is (`test_fidelity_panel_tooltip_...` asserts
+  `minimumSizeHint().width() <= 24`) — raising the floor globally broke that test. Pass the
+  parameter at the specific call site that needs it, never in the shared default.
+- **A "refit on resize" that re-derives its answer from a PURE function of (content, size) can
+  be made idempotent by skipping the redo, not by re-deriving more carefully.**
+  `_figure_fit.py`'s `refit_compact_figure()` re-measures matplotlib's tight-layout margins on
+  every call, and `TightLayoutEngine.execute()` measures text extents against the axes' CURRENT
+  position — which on this sandbox's Agg renderer reproduces bit-for-bit over 20 repeated calls
+  at a fixed size, but on a real Windows runner is not bit-for-bit repeatable call to call
+  (measured: 0.0131 figure-fraction drift over 20 refits at an unchanged size, against a 0.01
+  budget). Since `_fit_compact_figure`'s decision is provably a pure function of
+  `(ax._rm_full, canvas.width(), canvas.height())` once the stash is set, a refit at a size
+  already fitted can only reproduce the same decision — so `refit_compact_figure` now caches
+  `ax._rm_last_fit_size` and skips the redo when the size matches, rather than trying to out-round
+  Windows' measurement jitter. Cache the FULL size tuple, not just height: `_pick_xlabel`'s room
+  measurement depends on width too, and a first cut of this fix that cached height alone silently
+  skipped legitimate re-fits when only the width changed (caught by
+  `test_the_fidelity_x_label_never_runs_off_its_panel`, which resizes a HORIZONTAL splitter).
+
 ### `_pump_until` in the reactive Preview tests needs two calls, not one
 
 `tests/unit/test_gui_reactive.py`'s `_pump_until(qapp, predicate, timeout)` returns

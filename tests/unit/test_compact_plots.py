@@ -563,7 +563,19 @@ def test_the_noise_tab_divides_into_thirds(qapp, tmp_path):
     chrome+settings to 43% — a fixed cost is a smaller SHARE of a taller window, so this
     raises the total rather than loosening the "roughly a third" invariant itself. See
     memory/respmech-skill-udestaaende.md's B03 entry for the same rule applied the other
-    way (a permanent addition eating into this same budget)."""
+    way (a permanent addition eating into this same budget).
+
+    NOT raised again for the Windows overage reported 10-08-2026 (43.06% vs 0.42 at this
+    same 850 px): unlike the 800->850 move, bumping the height further would not be testing
+    a taller REAL window, it would be testing a window the app never actually opens.
+    ``MainWindow._fit_to_screen``'s own defaults are ``desired_h=820`` — BELOW even this
+    test's current 850 px — so the chrome+settings share on a real Windows machine at the
+    app's actual default size is worse than the 43.06% already measured here, not better.
+    Padding this test's window taller would make the assertion pass while leaving the real,
+    smaller window exactly as cramped. This needs the chrome itself compressed (or its
+    budget re-derived from font height) in the noise tab's own product code — a product
+    decision, not a test-fixture number — and is tracked as open in ticket
+    20260810-1059-ci-fixes.md rather than guessed at here."""
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QSplitter
     win, pv = _noise_tab(qapp, tmp_path, 850)

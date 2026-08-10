@@ -342,8 +342,12 @@ def test_settings_widgets_expose_varpath_and_description_on_hover(qapp, tmp_path
     # its five guards into the EMG Advanced modal (test_advanced_dialog.py)
     # the channel columns have no fields any more: their settings paths moved onto the
     # read-only summary rows, covered exhaustively by test_channel_summary.py
-    # visible labels are human, never the raw variable name
-    labels = {la.text() for la in sc.findChildren(QLabel)}
+    # visible labels are human, never the raw variable name. fullText() where available
+    # (ElidingLabel, built by _row()/_browse_row()): text() only reflects what a resize
+    # event has actually laid out and would silently pass here for the wrong reason on an
+    # unshown window (CLAUDE.md: never assert on a QLabel's rendered text() when
+    # flow_layout.elide could have shortened it).
+    labels = {getattr(la, "fullText", la.text)() for la in sc.findChildren(QLabel)}
     assert "Sampling frequency" in labels
     assert "input.format.sampling_frequency" not in labels
 

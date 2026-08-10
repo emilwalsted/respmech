@@ -223,7 +223,11 @@ class _MechanicsMixin:
         # "Campbell diagram". The header names it at any height and costs the same room the
         # clipped title did; the figure keeps its title only for the export (_export_campbell).
         self._campbell_fitter = _CompactFigureFitter(self.campbell)
-        lower.addWidget(self._titled("Campbell diagram", self.campbell))
+        # title_floor_chars: this header is the ONLY thing naming the diagram (the
+        # figure's own title is deliberately screen-only, see above) — see
+        # titled_panel()'s docstring for why it must not be allowed to collapse to a
+        # bare ellipsis the way the general-purpose default floor allows.
+        lower.addWidget(self._titled("Campbell diagram", self.campbell, title_floor_chars=10))
         # D12: the diagram is what the user came for, not the number dump beside it — at
         # 3:1 (720/240) a maximised window gave the table 1265 px and the diagram 406x249,
         # a 3x weight difference in favour of the numbers. ~58/42 (matches the stretch
