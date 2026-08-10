@@ -165,7 +165,11 @@ jobs:
   smoke-linux:
     name: GUI smoke · ubuntu-latest · py3.12
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 50, not 30: the first cut assumed "Linux is faster than the Windows runner" and set
+    # 30 — run #207 then measured the honest cost (the ~1190-test suite alone is ~30 min;
+    # Windows' whole job is ~32-34 min) and was killed at exactly 30m00s. 50 leaves ~40%
+    # headroom over measured before this ceiling cuts anything but a true hang.
+    timeout-minutes: 50
     env:
       QT_QPA_PLATFORM: offscreen   # headless Qt — no display on the runner
       PYQTGRAPH_QT_LIB: PySide6    # never let pyqtgraph bind PyQt6 (two Qt bindings in one process crash)
