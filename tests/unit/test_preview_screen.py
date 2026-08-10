@@ -1274,6 +1274,13 @@ def test_run_lock_survives_a_file_switch_mid_run(qapp, tmp_path):
 
 
 def test_toggle_breath_is_locked_while_a_run_is_active_and_says_why(qapp, tmp_path):
+    """Self-review finding: PreviewScreen.status is a HIDDEN label (screen.py), and while
+    a run is active MainWindow._on_screen_status suppresses every screen's status_changed
+    except run_screen's own — so a click rejection that only called _set_status would be
+    genuinely invisible to a real user (the exact symptom this ticket exists to fix), even
+    though the underlying exclude_breaths write was correctly blocked. Assert on the actual
+    visible surface (the window status bar), not the internal label, so a regression back
+    to "technically blocked, silently so" fails this test."""
     from respmech.ui.main_window import MainWindow
     s = synth_settings(str(tmp_path))
     win = MainWindow(AppState(s)); pv = win.preview_screen
@@ -1283,7 +1290,8 @@ def test_toggle_breath_is_locked_while_a_run_is_active_and_says_why(qapp, tmp_pa
     pv.set_run_active(True)
     assert pv._toggle_breath(a_breath) is None
     assert s.processing.exclude_breaths == [], "a locked click must never rewrite exclude_breaths"
-    assert "locked" in pv.status.text().lower() and "run" in pv.status.text().lower()
+    bar_msg = win.statusBar().currentMessage().lower()
+    assert "locked" in bar_msg and "run" in bar_msg, "the rejection must reach the VISIBLE status bar"
 
     pv.set_run_active(False)
     pv._toggle_breath(a_breath)                            # ordinary toggle works again

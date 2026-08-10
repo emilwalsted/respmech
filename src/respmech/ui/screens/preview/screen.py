@@ -99,6 +99,17 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
     settings_edited = Signal()
     # emitted to process AND write just the previewed file (P19)
     process_file_requested = Signal(str)
+    # D24: a write action (currently just the breath-toggle click) was rejected because a
+    # run is active. NOT routed through status_changed/_set_status: while a run is active,
+    # MainWindow._on_screen_status suppresses every screen's status EXCEPT run_screen's own
+    # (see its docstring), specifically so a run's progress line isn't stomped by an
+    # unrelated screen's status on a tab switch — but that suppression also swallows THIS
+    # message whole, since its only trigger condition is "a run is active", the exact
+    # window in which it would otherwise be dropped. This is the same "X just happened,
+    # show it now regardless of the active tab" case noise_reference_changed already
+    # exists for (see _on_noise_reference_changed) — reused the pattern instead of
+    # special-casing the shared suppression logic itself.
+    write_action_blocked = Signal(str)
 
     def __init__(self, state):
         super().__init__()

@@ -98,6 +98,12 @@ class MainWindow(QMainWindow):
         # the bar immediately instead — this is an "X just happened" notification, not
         # ongoing per-screen state, so it does not need to wait for a tab switch.
         pv.noise_reference_changed.connect(self._on_noise_reference_changed)
+        # D24: a Preview write action (the breath-toggle click) rejected because a run is
+        # active — forced onto the bar the same way noise_reference_changed's confirmation
+        # is, immediately above, and for the same reason: the run-active bar-ownership rule
+        # a few lines below in _on_screen_status would otherwise swallow it outright, since
+        # "a run is active" is this message's only trigger condition.
+        pv.write_action_blocked.connect(lambda msg: self.statusBar().showMessage(msg))
         # Preview-owned settings (noise/ECG params, breath exclusions) land in the saved
         # .toml too, so a user edit there must dirty the analysis like any Setup edit —
         # the title, the close guard and Save-gating all read the same flag.

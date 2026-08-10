@@ -1212,7 +1212,13 @@ class _MechanicsMixin:
         # LOOKED like it worked (the overlay recoloured immediately) while the running
         # batch, and the results it was about to write, never saw it.
         if self._run_active:
-            self._set_status("Breath selection is locked while a run is in progress.")
+            # _set_status alone would be invisible here: MainWindow suppresses every
+            # non-run_screen status while a run is active (see write_action_blocked's own
+            # docstring in screen.py for why), which is exactly the window this guard fires
+            # in. write_action_blocked is MainWindow's forced-onto-the-bar escape hatch.
+            msg = "Breath selection is locked while a run is in progress."
+            self._set_status(msg)
+            self.write_action_blocked.emit(msg)
             return None
         name = self._selected_filename()
         if not name or breath_no not in self._breath_spans:
