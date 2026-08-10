@@ -161,11 +161,12 @@ jobs:
   smoke-linux:
     name: GUI smoke · ubuntu-latest · py3.12
     runs-on: ubuntu-latest
-    # 50, not 30: the first cut assumed "Linux is faster than the Windows runner" and set
-    # 30 — run #207 then measured the honest cost (the ~1190-test suite alone is ~30 min;
-    # Windows' whole job is ~32-34 min) and was killed at exactly 30m00s. 50 leaves ~40%
+    # 60, arrived at empirically: 30 assumed "Linux beats the Windows runner" and run #207
+    # was killed mid-suite at exactly 30m00s (the ~1280-test suite alone is ~30 min;
+    # Windows' whole job is ~32-34 min). 50 fit the measured runtime; the swap step below
+    # adds a few tail minutes when the suite's memory curve spills, so 60 keeps ~70%
     # headroom over measured before this ceiling cuts anything but a true hang.
-    timeout-minutes: 50
+    timeout-minutes: 60
     env:
       QT_QPA_PLATFORM: offscreen   # headless Qt — no display on the runner
       PYQTGRAPH_QT_LIB: PySide6    # never let pyqtgraph bind PyQt6 (two Qt bindings in one process crash)
@@ -200,67 +201,55 @@ jobs:
         working-directory: ${{ runner.temp }}
         run: python -c "import respmech.ui.splash as s; from PySide6.QtWidgets import QApplication; from respmech.ui import theme; from respmech.ui.state import AppState; from respmech.ui.main_window import MainWindow; app=QApplication([]); theme.apply_theme(app); s.make_splash(app); w=MainWindow(AppState()); assert w.tabs.count()==2; print('GUI OK')"
 
-      # TWO pytest invocations, not one — a memory ceiling, not a style choice. The suite's
-      # top-level-widget population grows monotonically through a run (the teardown net
-      # closes but deliberately never deletes — see conftest/CLAUDE.md on the py3.11
-      # segfault), so peak memory scales with suite LENGTH: run #210 measured the single
-      # invocation dying at ~97% after 32 min with exit 143 on this 16 GB runner (an 8 GB
-      # sandbox dies at ~45%). Splitting resets the population halfway and halves the peak.
-      # The win/mac jobs deliberately keep the single big invocation — their platforms
-      # complete it, and it remains the one-process-whole-suite coverage. If either half
-      # here ever hits this again, the real fix is the suite-scaling ticket (widget
-      # population), not a third split.
-      #
-      # Pass/fail logic per half is identical to the win/mac unit step above — keep in sync.
+      # ONE pytest invocation, with swap underneath — the ordering is part of the contract.
+      # Two facts, measured on this runner, force this shape:
+      #   * Memory: the suite's top-level-widget population grows monotonically through a
+      #     run (the teardown net closes but deliberately never deletes — see conftest/
+      #     CLAUDE.md on the py3.11 segfault), so peak memory scales with suite length.
+      #     Run #210 measured the single invocation dying at ~97% after 32 min with exit
+      #     143 on this 16 GB runner (an 8 GB sandbox dies at ~45%).
+      #   * Ordering: splitting the suite into two invocations (run #211) moved two
+      #     reactive tests (test_gui_reactive) into a sequence they had never run in, and
+      #     both failed order-dependently — exactly the passes-alone-fails-in-a-big-run
+      #     class CLAUDE.md documents. The win/mac jobs run one big invocation, so this
+      #     job must too, or a red here stops meaning what it claims to mean.
+      # Swap absorbs the tail of the memory curve without touching the ordering: only the
+      # last few percent of the suite spill, so the cost is a couple of minutes, not a
+      # thrash. If this job ever ooms THROUGH 8 G of swap, the fix is the suite-scaling
+      # ticket (the widget population), not more swap.
+      - name: Swap for the suite's memory tail (see the note on the unit step)
+        run: |
+          sudo fallocate -l 8G /swapfile && sudo chmod 600 /swapfile
+          sudo mkswap /swapfile && sudo swapon /swapfile
+          free -h
+
+      # Identical pass/fail logic to the win/mac unit step above — keep the two in sync.
       # The single --deselect is the documented sandbox artefact (CLAUDE.md "Known
       # non-issue: a font-resolution test fails on a minimal Linux sandbox"): Qt's
       # FixedFont fallback resolves to the generic alias "monospace" on fontconfig
       # systems without a real Menlo/Consolas, which is a property of the runner's
       # font inventory, not of the app. win/mac keep full coverage of that test.
-      - name: Unit suite 1/2 (test_[a-o]*, headless offscreen Qt)
+      - name: Unit suite (headless, offscreen Qt)
         run: |
           set +e
-          python -m pytest tests/unit/test_[a-o]*.py -q --durations=15 \
+          python -m pytest tests/unit -q --durations=25 \
             --deselect tests/unit/test_gui.py::test_splash_resolves_fonts_to_installed_families \
-            2>&1 | tee pytest-unit-1.log
+            2>&1 | tee pytest-unit.log
           set -e
-          if grep -qE "[0-9]+ (failed|error)" pytest-unit-1.log; then
-            echo "::error::real test failures or errors (half 1)"; exit 1
+          if grep -qE "[0-9]+ (failed|error)" pytest-unit.log; then
+            echo "::error::real test failures or errors"; exit 1
           fi
-          if ! grep -qE "[0-9]+ passed" pytest-unit-1.log; then
-            echo "::error::pytest did not reach a passing summary in half 1 (crashed mid-run?)"; exit 1
+          if ! grep -qE "[0-9]+ passed" pytest-unit.log; then
+            echo "::error::pytest did not reach a passing summary (crashed mid-run?)"; exit 1
           fi
-          passed=$(grep -oE "[0-9]+ passed" pytest-unit-1.log | tail -1 | grep -oE "^[0-9]+")
-          skipped=$(grep -oE "[0-9]+ skipped" pytest-unit-1.log | tail -1 | grep -oE "^[0-9]+" || true)
+          passed=$(grep -oE "[0-9]+ passed" pytest-unit.log | tail -1 | grep -oE "^[0-9]+")
+          skipped=$(grep -oE "[0-9]+ skipped" pytest-unit.log | tail -1 | grep -oE "^[0-9]+" || true)
           skipped=${skipped:-0}
-          echo "half 1: ${passed} passed, ${skipped} skipped."
+          echo "pytest reported ${passed} passed, ${skipped} skipped."
           if [ "$skipped" -gt $((passed / 10)) ]; then
-            echo "::error::${skipped} tests SKIPPED against ${passed} passed in half 1 — the suite did not really run (fixture data not found?)"; exit 1
+            echo "::error::${skipped} tests SKIPPED against ${passed} passed — the suite did not really run (fixture data not found?)"; exit 1
           fi
-
-      # --ignore-glob (not a positive test_[p-z] glob) so a future file whose first
-      # letter falls outside both patterns lands HERE instead of silently in neither.
-      - name: Unit suite 2/2 (the rest, headless offscreen Qt)
-        run: |
-          set +e
-          python -m pytest tests/unit -q --durations=15 \
-            --ignore-glob='*/test_[a-o]*.py' \
-            2>&1 | tee pytest-unit-2.log
-          set -e
-          if grep -qE "[0-9]+ (failed|error)" pytest-unit-2.log; then
-            echo "::error::real test failures or errors (half 2)"; exit 1
-          fi
-          if ! grep -qE "[0-9]+ passed" pytest-unit-2.log; then
-            echo "::error::pytest did not reach a passing summary in half 2 (crashed mid-run?)"; exit 1
-          fi
-          passed=$(grep -oE "[0-9]+ passed" pytest-unit-2.log | tail -1 | grep -oE "^[0-9]+")
-          skipped=$(grep -oE "[0-9]+ skipped" pytest-unit-2.log | tail -1 | grep -oE "^[0-9]+" || true)
-          skipped=${skipped:-0}
-          echo "half 2: ${passed} passed, ${skipped} skipped."
-          if [ "$skipped" -gt $((passed / 10)) ]; then
-            echo "::error::${skipped} tests SKIPPED against ${passed} passed in half 2 — the suite did not really run (fixture data not found?)"; exit 1
-          fi
-          echo "Unit suite passed in two halves (any non-zero exit was a post-run Qt teardown crash)."
+          echo "Unit suite passed (any non-zero exit was a post-run Qt teardown crash)."
 
   golden:
     name: Numerical golden (synthetic, rtol 1e-9)
