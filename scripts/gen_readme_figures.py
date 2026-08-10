@@ -159,6 +159,22 @@ def _breath_exclusion(fr, sig, path, excluded=4):
 # UI screenshots (offscreen Qt)
 # --------------------------------------------------------------------------- #
 def _screenshots(settings, result, filename):
+    """Grab the three UI screenshots against the CURRENT app shape.
+
+    UI-overhaul rewrote the surface this function drives (tickets B01-B03): the file combo
+    that used to sit on Preview & QC is gone (replaced by ``FileRail``, which silently
+    adopts the sample's one file as the selection on its first ``set_manifest()``, so no
+    explicit selection call is needed here any more — see ``FileRail.set_manifest``'s own
+    docstring), and Run & results is no longer a third tab: it is a drawer embedded in
+    Preview & QC, expanded automatically when a run starts (``RunScreen._set_running``).
+    Driving a real dry run (rather than hand-feeding ``result`` into ``_on_finished``) means
+    this stays correct through any future change to what a run does on completion, one
+    fewer place to keep in sync with ``run_screen.py`` by hand — and mirrors
+    ``tools/capture_screens.py``'s proven approach (ticket Z01), which captures the same
+    drawer this way.
+    """
+    import time
+
     from PySide6.QtWidgets import QApplication, QScrollArea
     from respmech.ui import theme
     from respmech.ui.state import AppState
@@ -177,10 +193,10 @@ def _screenshots(settings, result, filename):
     win.settings_screen.findChild(QScrollArea).verticalScrollBar().setValue(0); pump()
     win.grab().save(f"{OUT}/setup.png")
 
-    # Preview & QC (Mechanics) with the Campbell + per-breath table populated
+    # Preview & QC (Mechanics), with the Campbell + per-breath table populated.
     win.tabs.setCurrentIndex(1)
     pv = win.preview_screen
-    pv.refresh_files(); pv.file_combo.setCurrentText(filename)
+    pv.refresh_files()
     pv._preview(); pump()
     pv._on_batch_result(result)
     for i in range(pv.subtabs.count()):
@@ -189,17 +205,20 @@ def _screenshots(settings, result, filename):
     pump(8)
     win.grab().save(f"{OUT}/preview-mechanics.png")
 
-    # Run & results, populated from the batch
-    win.tabs.setCurrentIndex(2)
+    # Run & results: the drawer folded under Preview & QC (ticket B03), captured via a
+    # real dry run against the same sample so the drawer's auto-expand fires and the run
+    # log/results carry genuine content rather than a hand-assembled stand-in.
     rs = win.run_screen
-    rs.refresh_actions()
-    rs.log.appendPlainText("Batch run — output written to the chosen folder.\n")
-    rs.log.appendPlainText(f"  processed  {filename}")
-    rs._on_finished(result)
-    rs._set_status("Batch complete — results written to the output folder.")
+    finished = []
+    rs.run_finished.connect(lambda: finished.append(1))
+    rs._start(write=False)
+    end = time.monotonic() + 60
+    while not finished and time.monotonic() < end:
+        app.processEvents()
+        time.sleep(0.05)
     pump(8)
     win.grab().save(f"{OUT}/run.png")
-    print("screenshots: setup, preview-mechanics, run")
+    print(f"screenshots: setup, preview-mechanics, run (dry run finished: {bool(finished)})")
 
 
 def main():

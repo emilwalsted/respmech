@@ -95,7 +95,8 @@ respmech run settings.toml
 respmech run settings.toml --dry-run
 ```
 
-The GUI offers the same workflow interactively: **Setup** (recordings, channel mapping,
-what to save) → **Preview & QC** (breath segmentation, Campbell loops, and dedicated tabs
-to tune EMG ECG-reduction and noise-reduction against the live signal) → **Run & results**
-(batch progress and per-file status).
+The GUI offers the same workflow interactively, across two tabs: **Setup** (recordings,
+channel mapping, what to save) and **Preview & QC** (breath segmentation, Campbell loops,
+and dedicated subtabs to tune EMG ECG-reduction and noise-reduction against the live
+signal). **Run & results** (batch progress and per-file status) is a drawer under Preview
+& QC's file list, not a separate screen — it opens itself the moment a run starts.

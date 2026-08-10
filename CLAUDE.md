@@ -12,7 +12,9 @@ by breath** and computes: respiratory mechanics (timing, VT, VE, oesophageal/
 gastric/transdiaphragmatic pressures, PTP), **work of breathing** (Campbell
 diagram, J and J·min⁻¹), **diaphragm EMG** (RMS + integrated, optional ECG
 removal + spectral noise reduction) and **sample entropy**. v2 is a **PySide6
-desktop app** (`respmech-gui`) with Setup → Preview & QC → Run screens, plus a
+desktop app** (`respmech-gui`) with two tabs, **Setup** and **Preview & QC**
+(a `File`/`View`/`Help` menu bar sits above them), plus a **Run & results**
+drawer folded under Preview & QC's file rail (no longer a third tab), and a
 CLI (`respmech run/validate/migrate`). Settings are declarative **TOML**.
 
 ## Layout / correctness
@@ -29,6 +31,29 @@ CLI (`respmech run/validate/migrate`). Settings are declarative **TOML**.
   claim a Linux ticket sandbox can make locally, ~15 min), and the numerical
   golden on ubuntu. Every job carries `timeout-minutes` — a hung Qt test used to
   burn a runner for the 6 h default. Runs on every branch.
+
+### Two different screenshot tools — do not confuse them (found 10-08-2026)
+
+`scripts/gen_readme_figures.py` is the **canonical generator for the 7 images in
+`docs/img/`** that `README.md` embeds by name (`setup.png`, `preview-mechanics.png`,
+`run.png`, `campbell.png`, `drift.png`, `emg-stages.png`, `breath-exclusion.png`): the
+three UI screenshots plus four matplotlib feature figures drawn straight from the core
+diagnostic plot writers against the app's own onboarding sample, so they can never drift
+from what the app actually computes. Run it locally (`python scripts/gen_readme_figures.py`,
+offscreen Qt, deterministic) whenever a UI or figure change should be reflected in the
+README.
+
+`tools/capture_screens.py` is a separate, broader tool (added for
+`.github/workflows/screenshots.yml`, on-demand, real Windows/macOS runners): it captures
+every screen AND dialog (10 shots) in both themes, meant for a wider documentation/QA
+sweep, not for producing the README's own curated seven. It has no matplotlib feature
+figures and writes different filenames (`01_setup.png` etc.).
+
+Both scripts drive the same `MainWindow`, so both break the same way when the UI's shape
+changes underneath them (found via `gen_readme_figures.py`'s `_screenshots()` crashing on
+a `file_combo` attribute removed by ticket B02, and a `win.tabs.setCurrentIndex(2)` that
+silently no-ops since ticket B03 folded Run & results into a drawer instead of a third
+tab) — fix BOTH if you change how a screen is reached, selected, or driven headlessly.
 
 ### CI showing red does not always mean a test failed (found 07-08-2026)
 

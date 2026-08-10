@@ -12,9 +12,10 @@ LabChart) breath by breath, and calculates:
 * **diaphragm EMG** — RMS envelope, ECG-artefact removal, spectral noise reduction
 * **Sample Entropy**<sup>[1](#sampenref1),[2](#sampenref2)</sup> (e.g. of diaphragm EMG)
 
-Version 2 is a desktop application with a guided setup, a live preview/QC screen and a batch
-runner. The physiology is a faithful port of the original v1 code and is locked by
-golden/characterisation tests — see [Correctness](#correctness).
+Version 2 is a desktop application with a guided setup, a live preview/QC screen, and a batch
+runner that opens as a drawer right where you're looking. The physiology is a faithful port of
+the original v1 code and is locked by golden/characterisation tests — see
+[Correctness](#correctness).
 
 ![RespMech — Setup](docs/img/setup.png)
 
@@ -58,20 +59,26 @@ ready-made synthetic recording — the one shown in the figures below, complete 
 heartbeat artefact on the EMG and a little volume drift, so every step has something to
 demonstrate.
 
-Three screens, in the order you work:
+Two tabs:
 
-| Screen | What you do |
+| Tab | What you do |
 |---|---|
-| **Setup** | Point at your recordings, map the data columns to channels, choose what to save. Assign channels visually from the data if you prefer. Settings validate as you type — the status bar flags anything inconsistent. |
-| **Preview & QC** | See the analysis on one file *before* running the batch: breath segmentation, the Campbell loop and the per-breath table, and dedicated tabs to tune **EMG – ECG reduction** and **EMG – noise reduction** against the live signal. Click a breath to exclude it. |
-| **Run & results** | Run the batch, watch progress per file, review the per-file status and averaged metrics, and open the output folder. |
+| **Setup** | Point at your recordings, map the data columns to channels — RespMech suggests roles from the file's own column names, or assign them visually from the data if you prefer — and choose what to save. Settings validate as you type — the status bar flags anything inconsistent. |
+| **Preview & QC** | See the analysis on one file *before* running the batch: breath segmentation, the Campbell loop and the per-breath table, and dedicated subtabs to tune **EMG – ECG reduction** and **EMG – noise reduction** against the live signal. Click a breath to exclude it. |
 
-![RespMech — Preview & QC](docs/img/preview-mechanics.png)
+**Run & results** is a drawer, not a third tab: a compact "Run & results ▸" bar sits below Preview
+& QC's file list on every subtab, and opens into the batch's progress, per-file status, averaged
+metrics and output folder — it opens itself the moment you start a run, so you never have to
+remember to check it.
+
+![RespMech — Preview & QC, with Run & results open](docs/img/preview-mechanics.png)
 
 Settings are stored as a declarative **TOML** *analysis* file (no longer an executable `.py`).
 Open, save and switch between analyses — including your recently opened files — from the
 **Analysis** menu in the header, which is available on every screen; RespMech marks unsaved
-edits in the title bar and asks before discarding them.
+edits in the title bar and asks before discarding them. The same actions, plus keyboard
+shortcuts, live in the window's **File** menu, alongside **View** (jump to a tab) and **Help**
+(documentation, website, About).
 
 ## Command line
 
@@ -183,7 +190,7 @@ Everything lands in the output folder you choose:
 Use the diagnostic figures (or the Preview screen) to spot breaths to exclude — e.g. IC
 manoeuvres or coughs — then exclude them by clicking them in Preview.
 
-![RespMech — Run & results](docs/img/run.png)
+![RespMech — the Run & results drawer, expanded after a run](docs/img/run.png)
 
 ## Correctness
 
