@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDou
                                QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
                                QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
                                QScrollArea, QSpinBox, QVBoxLayout, QWidget)
-from PySide6.QtCore import Signal, QTimer
+from PySide6.QtCore import Signal, QTimer, Qt
 
 from respmech.core.settings import BreathCountEntry, Settings, SettingsError
 from respmech.ui.dialogs import open_error_dialog, short_error
@@ -689,8 +689,15 @@ class SettingsScreen(QWidget):
         """A Preview-owned edit (mechanics / EMG conditioning / noise) may change what the
         Setup channel summary and the 'You will get' line say — integrate_from_flow drives
         the 'Volume: derived from flow' row, normalisation drives the normalised-EMG-sheet
-        deliverable — so refresh both when Preview signals an edit."""
-        self._refresh_channel_view(force=True)
+        deliverable — so refresh both when Preview signals an edit.
+
+        No ``force``: every Preview-owned input this depends on already sits in
+        ``_channel_view_signature`` (``integrate_from_flow`` explicitly, since D28), so the
+        normal signature check already rebuilds when something relevant changed and skips
+        the ~47 ms re-render (measured) on every other keystroke that doesn't touch it.
+        Should a future Preview-owned field feed the summary, add it to the signature
+        instead of reintroducing the bypass."""
+        self._refresh_channel_view()
         self._update_save_preview()
 
     # -- helpers ------------------------------------------------------------
@@ -1193,10 +1200,23 @@ class SettingsScreen(QWidget):
     def open_sample_analysis(self):
         """P23: generate a small synthetic recording, wire a ready analysis around it,
         and open it in full mode — a no-setup door for first-time users. Returns True on
-        success. The sample lives in a temp folder (throwaway)."""
+        success. The sample lives in a temp folder (throwaway).
+
+        The first call in a process is a synchronous ~1 s stall (measured: mostly the
+        lazy import of the compute/reader stack, not the small CSV write itself, and a
+        one-off cost — later calls are two orders of magnitude faster) with nothing
+        threaded, so a wait cursor plus a status line is enough to say something is
+        happening instead of the window appearing to freeze."""
         import tempfile  # noqa: PLC0415
         from respmech.core.sample import write_sample_recording, build_sample_settings  # noqa: PLC0415
+        self._set_status("Building the sample recording…")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
+            # processEvents() lives INSIDE the try (not between it and setOverrideCursor
+            # above): pumping the event loop can in principle surface an exception from an
+            # unrelated queued callback, and that must still hit the finally below —
+            # nothing between a successful setOverrideCursor and the finally is unguarded.
+            QApplication.processEvents()   # paint the status text and cursor before the stall
             base = os.path.join(tempfile.gettempdir(), "respmech_sample")
             desc = write_sample_recording(os.path.join(base, "input"))
             # the sample carries an ECG artefact and EMG noise, so the ready analysis
@@ -1219,6 +1239,11 @@ class SettingsScreen(QWidget):
         except Exception:                       # noqa: BLE001
             self._report_error("Explore sample data", traceback.format_exc())
             return False
+        finally:
+            # the except branch above opens a non-modal error dialog (_report_error) — a
+            # wait cursor still hanging over the window behind it would be worse than the
+            # freeze this exists to fix.
+            QApplication.restoreOverrideCursor()
 
     def confirm_discard_changes(self, title="RespMech", question="Save them before closing?"):
         """Offer to save before an action that would drop unsaved edits. Returns True to

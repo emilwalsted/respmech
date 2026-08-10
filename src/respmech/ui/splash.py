@@ -221,11 +221,27 @@ def make_splash(app=None, width: int = 780, height: int = 460):
     SVG support is unavailable)."""
     try:
         from PySide6.QtSvg import QSvgRenderer
-        from PySide6.QtGui import QPixmap, QPainter
+        from PySide6.QtGui import QPixmap, QPainter, QColor, QFont
         from PySide6.QtCore import QByteArray, QRectF, Qt
         from PySide6.QtWidgets import QSplashScreen
     except Exception:                                    # pragma: no cover
         return None
+
+    class _ClickSafeSplash(QSplashScreen):
+        """A ``QSplashScreen`` whose default click-to-dismiss is disabled.
+
+        The window modality above already blocks input to anything BEHIND the
+        splash, but the base class's own ``mousePressEvent`` still hides the splash
+        ITSELF on any click — a habit users have with a static "loading" image.
+        There is nothing behind it worth revealing until the window is built, so a
+        click here must be a no-op rather than a route to an empty screen (measured:
+        a click part-way through the build left both splash and window invisible
+        until the window was ready). QSplashScreen only wires dismissal through
+        ``mousePressEvent`` (no other input handler hides it), so overriding just
+        this one is sufficient — a double-click still arrives as press-release-
+        dblclick-release, and the leading press is swallowed the same way."""
+        def mousePressEvent(self, event):   # noqa: N802 - Qt override, swallow the click
+            pass
 
     _resolve_svg_fonts()     # use installed families so Qt's SVG renderer never warns
 
@@ -266,9 +282,21 @@ def make_splash(app=None, width: int = 780, height: int = 460):
     painter.end()
     pm.setDevicePixelRatio(dpr)
 
-    splash = QSplashScreen(pm)
+    splash = _ClickSafeSplash(pm)
     splash.setWindowFlag(Qt.WindowStaysOnTopHint, True)
     # application-modal so nothing (incl. the main window being built) can take
     # focus or cover the splash before it is finished
     splash.setWindowModality(Qt.ApplicationModal)
+    # progress text, bottom-centered just above the widget's own edge. An explicit,
+    # small pixel size (matching the SVG footer's own 13px credit/URL text) rather
+    # than whatever the OS/Qt default application font happens to be — make_splash
+    # runs BEFORE theme.apply_theme sets the app-wide font, and a larger default
+    # (an 11-13pt system font, larger still under accessibility text-scaling) would
+    # eat into the ~20px gap between QSplashScreen's own bottom-aligned text and the
+    # footer line the SVG already draws at y=footer_y-16. Setting it here keeps the
+    # gap fixed and predictable regardless of the platform's default font.
+    msg_font = QFont(_FONT)
+    msg_font.setPixelSize(13)
+    splash.setFont(msg_font)
+    splash.showMessage("Starting…", Qt.AlignHCenter | Qt.AlignBottom, QColor(_TEXT))
     return splash

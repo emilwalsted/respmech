@@ -161,6 +161,63 @@ def test_make_splash_renders_a_pixmap(qapp):
     assert not sp.pixmap().isNull()
 
 
+def test_splash_click_does_not_hide_it(qapp):
+    """Ticket D28: the base QSplashScreen hides itself on any mouse press — a habit
+    users have with a static "loading" image — which used to leave both splash and
+    (not-yet-shown) window invisible mid-build. A click must now be a no-op."""
+    from PySide6.QtCore import QPointF, QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+    from respmech.ui.splash import make_splash
+    sp = make_splash(qapp)
+    sp.show()
+    qapp.processEvents()
+    assert sp.isVisible()
+    pt = QPointF(sp.width() / 2, sp.height() / 2)
+    ev = QMouseEvent(QEvent.MouseButtonPress, pt, Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+    QApplication.sendEvent(sp, ev)
+    qapp.processEvents()
+    assert sp.isVisible()          # still up — the click was swallowed
+    sp.close()
+
+
+def test_splash_shows_a_starting_message(qapp, monkeypatch):
+    """Ticket D28: a static plaque with no progress text is indistinguishable from a
+    hang. ``make_splash`` must call ``showMessage`` with legible (near-white) text over
+    the dark motif — checked by intercepting the call, since QSplashScreen exposes no
+    public getter for the message it is currently showing."""
+    from PySide6.QtGui import QColor
+    from PySide6.QtWidgets import QSplashScreen
+    from respmech.ui.splash import make_splash, _TEXT
+    calls = []
+    monkeypatch.setattr(QSplashScreen, "showMessage",
+                        lambda self, *a, **k: calls.append((a, k)))
+    sp = make_splash(qapp)
+    assert sp is not None
+    assert len(calls) == 1
+    args, _kwargs = calls[0]
+    assert args[0] == "Starting…"
+    assert QColor(args[2]) == QColor(_TEXT)          # legible over the dark veil
+    # an explicit, small pixel size — not whatever the OS default app font happens to
+    # be at this point (make_splash runs before theme.apply_theme sets it) — so the
+    # message's height near the bottom edge stays predictable and clear of the SVG's
+    # own footer text (self-review finding, ticket D28)
+    assert sp.font().pixelSize() == 13
+
+
+# -- startup reveal timing (app.py) ------------------------------------------
+def test_reveal_delay_is_the_remaining_floor_or_zero():
+    """Ticket D28: the splash floor is topped up to a minimum rather than added as a
+    further fixed wait — 0 once building the window alone already spent the floor,
+    otherwise exactly the remainder of it. Pure/Qt-free, so no qapp fixture needed."""
+    from respmech.ui.app import _reveal_delay_ms
+    assert _reveal_delay_ms(0, floor_ms=1200) == 1200
+    assert _reveal_delay_ms(700, floor_ms=1200) == 500
+    assert _reveal_delay_ms(1200, floor_ms=1200) == 0
+    assert _reveal_delay_ms(1600, floor_ms=1200) == 0     # built slower than the floor -> no wait
+    assert _reveal_delay_ms(1199, floor_ms=1200) == 1
+
+
 # -- per-panel error card + copyable trace ----------------------------------
 def test_failed_job_shows_panel_error_with_copyable_detail(qapp, tmp_path):
     from PySide6.QtCore import QThread

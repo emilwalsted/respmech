@@ -897,3 +897,61 @@ def test_sample_analysis_is_labelled_everywhere(qapp, isolated_prefs):
     assert sc.state.is_sample is False
     assert not _shown(sc.sample_banner)
     win.close()
+
+
+def test_open_sample_analysis_shows_a_busy_cursor_while_building(qapp, monkeypatch):
+    """Ticket D28: building the sample recording is a synchronous ~1 s stall (mostly a
+    lazy import, measured), previously with no status text or wait cursor, so the window
+    appeared to freeze. Intercepts the synchronous build call to check the wait cursor and
+    status text are up WHILE it runs, and the cursor is gone again once the call returns."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+    import respmech.core.sample as sample_mod
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    real_write = sample_mod.write_sample_recording
+    seen = {}
+
+    def _spy(*a, **k):
+        cur = QApplication.overrideCursor()
+        seen["shape"] = cur.shape() if cur is not None else None
+        seen["status"] = sc.status.text()
+        return real_write(*a, **k)
+    monkeypatch.setattr(sample_mod, "write_sample_recording", _spy)
+    assert sc.open_sample_analysis() is True
+    assert seen["shape"] == Qt.WaitCursor
+    assert seen["status"] == "Building the sample recording…"
+    assert QApplication.overrideCursor() is None      # restored once the call returns
+    win.close()
+
+
+def test_open_sample_analysis_restores_the_cursor_even_when_building_fails(qapp, monkeypatch):
+    """The except branch opens a non-modal error dialog — a wait cursor still hanging
+    over the window behind it would be worse than the freeze this feature exists to
+    fix, so the restore must happen in a finally, not only on the success path.
+
+    Self-review finding (ticket D28): a version of this test that only checked the
+    cursor was gone AFTER the call would pass just as well if the whole busy-cursor
+    feature had been reverted (no cursor is ever set -> trivially None afterwards).
+    Capturing the shape INSIDE the failing call proves the cursor really was up when
+    the exception hit, so this genuinely exercises the finally path, not just its
+    absence."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+    import respmech.core.sample as sample_mod
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    seen = {}
+
+    def _boom(*a, **k):
+        cur = QApplication.overrideCursor()
+        seen["shape"] = cur.shape() if cur is not None else None
+        raise RuntimeError("synthetic failure")
+    monkeypatch.setattr(sample_mod, "write_sample_recording", _boom)
+    assert sc.open_sample_analysis() is False
+    assert seen["shape"] == Qt.WaitCursor      # the cursor really was up when it failed
+    assert QApplication.overrideCursor() is None
+    assert "Explore sample data failed" in sc.status.text()
+    win.close()

@@ -1594,3 +1594,30 @@ def test_science_note_navigation_uses_exactly_one_arrow(qapp, tmp_path):
         assert "▸" in hint
     win.close()
 
+
+# ---------------------------------------------------------------------------
+# UI-overhaul ticket D28 — sync_from_preview no longer forces a rebuild
+# ---------------------------------------------------------------------------
+def test_sync_from_preview_skips_the_rebuild_when_the_signature_is_unchanged(qapp, tmp_path):
+    """A Preview-owned edit that does NOT touch anything in _channel_view_signature (e.g.
+    an ECG conditioning spinbox, which fires settings_edited once per step) must not
+    re-render the channel summary — that used to cost ~47 ms (measured) on every step of
+    an unrelated slider, via a bare force=True. A field that IS in the signature
+    (integrate_from_flow) must still trigger a rebuild."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(str(tmp_path))))
+    sc = win.settings_screen
+    sc.from_state()                       # first render, populates the signature cache
+    calls = []
+    real = sc.channel_summary.show_mapping
+    sc.channel_summary.show_mapping = lambda *a, **k: (calls.append(1), real(*a, **k))[1]
+
+    sc.sync_from_preview()                # nothing changed -> must be skipped
+    assert calls == []
+
+    sc.state.settings.processing.volume.integrate_from_flow = \
+        not sc.state.settings.processing.volume.integrate_from_flow
+    sc.sync_from_preview()                # a signature field changed -> must rebuild
+    assert calls == [1]
+    win.close()
+
