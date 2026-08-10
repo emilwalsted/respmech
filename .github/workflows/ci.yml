@@ -32,10 +32,24 @@ jobs:
     name: GUI smoke · ${{ matrix.os }} · py${{ matrix.python-version }}
     strategy:
       fail-fast: false   # let every OS/version combo report, don't cancel siblings on first red
-      matrix:
-        os: [windows-latest, macos-latest]
-        python-version: ["3.11", "3.12"]   # numba/librosa wheels lag the newest Python; 3.13 excluded on purpose
+      # Full 4-way (2 OS × 2 Python) where the verdict gates a merge or a release:
+      # master pushes, PRs, manual dispatch. Feature-branch pushes (the chained-ticket
+      # cadence: 3–8 commits/day) run ONE Python per OS instead — the failure axis this
+      # matrix exists for is the OS (fonts/encoding/paths), not the Python minor, and
+      # halving the macOS demand is what keeps the account's macOS runner queue from
+      # starving: measured 10-08-2026, runs were queued 10 deep with ~8 h verdict
+      # latency, each carrying two multi-hour macOS jobs.
+      # (3.13 stays excluded on purpose: numba/librosa wheels lag the newest Python.)
+      matrix: ${{ (github.event_name != 'push' || github.ref == 'refs/heads/master') && fromJSON('{"os":["windows-latest","macos-latest"],"python-version":["3.11","3.12"]}') || fromJSON('{"os":["windows-latest","macos-latest"],"python-version":["3.12"]}') }}
     runs-on: ${{ matrix.os }}
+    # A hung Qt test used to burn a runner for the full 6 h default (three runs hit it
+    # 06–07-08-2026, D13 era). Ceilings are generous against the honest runtime —
+    # macOS legitimately runs long (the per-test GUI teardown is priciest there and
+    # grows with the suite: ~47 min green 05-08, ~3 h by 10-08), so these only cut
+    # true hangs, never slow-but-passing runs. If a green macOS run ever nears 4 h,
+    # the fix is profiling the teardown cost (see --durations in the unit step), not
+    # raising this number.
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 240 || 90 }}
     env:
       QT_QPA_PLATFORM: offscreen   # headless Qt — no display on the runner
       PYQTGRAPH_QT_LIB: PySide6    # never let pyqtgraph bind PyQt6 (two Qt bindings in one process crash)
@@ -138,9 +152,82 @@ jobs:
           fi
           echo "Unit suite passed (any non-zero exit was a post-run Qt teardown crash)."
 
+  # The fast first verdict, and the job every Claude ticket can reproduce EXACTLY:
+  # ticket sandboxes are Linux, so "the suite is green in my sandbox" and "smoke-linux
+  # is green" are the same claim. It exists so a portability break surfaces in
+  # ~15 minutes on every push instead of hours later in the win/mac queue — the
+  # win/mac matrix above remains the portability proof (fonts/encoding/paths differ);
+  # a green here does NOT imply a green there.
+  smoke-linux:
+    name: GUI smoke · ubuntu-latest · py3.12
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      QT_QPA_PLATFORM: offscreen   # headless Qt — no display on the runner
+      PYQTGRAPH_QT_LIB: PySide6    # never let pyqtgraph bind PyQt6 (two Qt bindings in one process crash)
+      PYTHONIOENCODING: utf-8      # match the win/mac jobs so output is comparable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Qt offscreen system libraries
+        run: sudo apt-get update -q && sudo apt-get install -y -q libegl1 libxkbcommon0
+
+      - name: Install (gui + dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[gui,dev]"
+
+      # Same neutral-cwd reasoning as the win/mac steps above.
+      - name: Import smoke (fail fast on a bad import / missing dep)
+        working-directory: ${{ runner.temp }}
+        run: python -c "import respmech, respmech.ui.app, respmech.ui.main_window, respmech.ui.theme, respmech.ui.splash, respmech.cli.__main__; print('import OK')"
+
+      - name: CLI entry point resolves
+        working-directory: ${{ runner.temp }}
+        run: respmech --version
+
+      - name: GUI constructs headless (MainWindow + themed splash)
+        working-directory: ${{ runner.temp }}
+        run: python -c "import respmech.ui.splash as s; from PySide6.QtWidgets import QApplication; from respmech.ui import theme; from respmech.ui.state import AppState; from respmech.ui.main_window import MainWindow; app=QApplication([]); theme.apply_theme(app); s.make_splash(app); w=MainWindow(AppState()); assert w.tabs.count()==2; print('GUI OK')"
+
+      # Identical pass/fail logic to the win/mac unit step above — keep the two in sync.
+      # The single --deselect is the documented sandbox artefact (CLAUDE.md "Known
+      # non-issue: a font-resolution test fails on a minimal Linux sandbox"): Qt's
+      # FixedFont fallback resolves to the generic alias "monospace" on fontconfig
+      # systems without a real Menlo/Consolas, which is a property of the runner's
+      # font inventory, not of the app. win/mac keep full coverage of that test.
+      - name: Unit suite (headless, offscreen Qt)
+        run: |
+          set +e
+          python -m pytest tests/unit -q --durations=25 \
+            --deselect tests/unit/test_gui.py::test_splash_resolves_fonts_to_installed_families \
+            2>&1 | tee pytest-unit.log
+          set -e
+          if grep -qE "[0-9]+ (failed|error)" pytest-unit.log; then
+            echo "::error::real test failures or errors"; exit 1
+          fi
+          if ! grep -qE "[0-9]+ passed" pytest-unit.log; then
+            echo "::error::pytest did not reach a passing summary (crashed mid-run?)"; exit 1
+          fi
+          passed=$(grep -oE "[0-9]+ passed" pytest-unit.log | tail -1 | grep -oE "^[0-9]+")
+          skipped=$(grep -oE "[0-9]+ skipped" pytest-unit.log | tail -1 | grep -oE "^[0-9]+" || true)
+          skipped=${skipped:-0}
+          echo "pytest reported ${passed} passed, ${skipped} skipped."
+          if [ "$skipped" -gt $((passed / 10)) ]; then
+            echo "::error::${skipped} tests SKIPPED against ${passed} passed — the suite did not really run (fixture data not found?)"; exit 1
+          fi
+          echo "Unit suite passed (any non-zero exit was a post-run Qt teardown crash)."
+
   golden:
     name: Numerical golden (synthetic, rtol 1e-9)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
