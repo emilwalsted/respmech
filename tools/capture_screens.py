@@ -102,7 +102,12 @@ for i in range(pv.subtabs.count()):
     shoot(win, names.get(i, f"0x_preview_{i}"))
 
 # --- Run & results (dry run: computes everything, writes nothing) -----------
-win.tabs.setCurrentIndex(2)
+# Run & results is a drawer under Preview & QC (ticket B03), not a third tab — there is
+# no tabs index 2 to select. Land explicitly on Preview & QC's Mechanics subtab so the
+# shot is deterministic regardless of which subtab the loop above left current on.
+win.tabs.setCurrentIndex(1)
+pv.subtabs.setCurrentIndex(0)
+pump(0.3)
 rn = win.run_screen
 pump(0.5)
 finished = []
@@ -120,8 +125,22 @@ except Exception as e:  # noqa: BLE001
 shoot(win, "05_run_results")
 
 # --- Dialogs ----------------------------------------------------------------
+# Patch BOTH QDialog.exec and AdvancedDialog.exec, not just the base class: the
+# Mechanics Advanced dialog is opened with modal=False, and AdvancedDialog.exec()
+# (ticket D13) never calls super().exec() in that case — it shows itself and runs its
+# own QEventLoop instead (see its own docstring for why: QDialog.exec() forces
+# WA_ShowModal unconditionally, which a genuinely non-modal dialog must not accept). A
+# patch that only replaces QDialog.exec therefore never intercepts THAT dialog: it pops
+# up for real and blocks forever, since nothing here simulates closing it. Same gotcha,
+# same fix, as CLAUDE.md documents for the app's own test suite (test_dialog_fits_screen.py
+# / test_theme_paints_both_modes.py) — patch the MOST DERIVED class an opener actually
+# builds. Confirmed by reproducing the hang locally before this fix (offscreen, >15 min,
+# 99% CPU, stuck immediately after "05_run_results").
+from respmech.ui.advanced_dialog import AdvancedDialog
+
 captured = {}
 orig_exec = QDialog.exec
+orig_advanced_exec = AdvancedDialog.exec
 
 
 def fake_exec(self):
@@ -144,6 +163,7 @@ def snap_dialog(key, name):
 win.tabs.setCurrentIndex(1)
 pump(0.5)
 QDialog.exec = fake_exec
+AdvancedDialog.exec = fake_exec
 try:
     pv._open_mech_advanced()
     snap_dialog("Mechanics — advanced", "06_dlg_mech_advanced")
@@ -161,6 +181,7 @@ try:
     snap_dialog(key, "10_dlg_channel_setup")
 finally:
     QDialog.exec = orig_exec
+    AdvancedDialog.exec = orig_advanced_exec
 
 # --- Startup chooser (its own window; shown last so it cannot block) --------
 from respmech.ui.startup_dialog import StartupDialog

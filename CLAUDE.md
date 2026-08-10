@@ -45,9 +45,10 @@ README.
 
 `tools/capture_screens.py` is a separate, broader tool (added for
 `.github/workflows/screenshots.yml`, on-demand, real Windows/macOS runners): it captures
-every screen AND dialog (10 shots) in both themes, meant for a wider documentation/QA
-sweep, not for producing the README's own curated seven. It has no matplotlib feature
-figures and writes different filenames (`01_setup.png` etc.).
+the startup dialog, both tabs (Preview & QC's 3 subtabs each get their own shot), the Run
+& results drawer and 5 more dialogs — 11 shots in both themes — meant for a wider
+documentation/QA sweep, not for producing the README's own curated seven. It has no
+matplotlib feature figures and writes different filenames (`01_setup.png` etc.).
 
 Both scripts drive the same `MainWindow`, so both break the same way when the UI's shape
 changes underneath them (found via `gen_readme_figures.py`'s `_screenshots()` crashing on
