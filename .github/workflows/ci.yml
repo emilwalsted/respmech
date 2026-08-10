@@ -30,17 +30,21 @@ defaults:
 jobs:
   smoke:
     name: GUI smoke · ${{ matrix.os }} · py${{ matrix.python-version }}
+    # TEMPORARY (Emil, 10-08-2026): win/mac smoke runs on master pushes, PRs and manual
+    # dispatch only — NOT on feature-branch pushes — until the five Windows-metrics
+    # layout guards red on ui-overhaul are fixed (test_compact_plots ×3,
+    # test_result_table, test_settings_screen; see CLAUDE.md's protocol section).
+    # While they are known-red, a per-push win/mac matrix is a failure mail per push
+    # and hours of queued macOS runners for verdicts everyone already knows.
+    # smoke-linux below still runs on EVERY push as the fast gate. Flip back by
+    # deleting this `if:` once those five are green (a branch can always get a win/mac
+    # verdict on demand via workflow_dispatch meanwhile).
+    if: github.event_name != 'push' || github.ref == 'refs/heads/master'
     strategy:
       fail-fast: false   # let every OS/version combo report, don't cancel siblings on first red
-      # Full 4-way (2 OS × 2 Python) where the verdict gates a merge or a release:
-      # master pushes, PRs, manual dispatch. Feature-branch pushes (the chained-ticket
-      # cadence: 3–8 commits/day) run ONE Python per OS instead — the failure axis this
-      # matrix exists for is the OS (fonts/encoding/paths), not the Python minor, and
-      # halving the macOS demand is what keeps the account's macOS runner queue from
-      # starving: measured 10-08-2026, runs were queued 10 deep with ~8 h verdict
-      # latency, each carrying two multi-hour macOS jobs.
-      # (3.13 stays excluded on purpose: numba/librosa wheels lag the newest Python.)
-      matrix: ${{ (github.event_name != 'push' || github.ref == 'refs/heads/master') && fromJSON('{"os":["windows-latest","macos-latest"],"python-version":["3.11","3.12"]}') || fromJSON('{"os":["windows-latest","macos-latest"],"python-version":["3.12"]}') }}
+      matrix:
+        os: [windows-latest, macos-latest]
+        python-version: ["3.11", "3.12"]   # numba/librosa wheels lag the newest Python; 3.13 excluded on purpose
     runs-on: ${{ matrix.os }}
     # A hung Qt test used to burn a runner for the full 6 h default (three runs hit it
     # 06–07-08-2026, D13 era). Ceilings are generous against the honest runtime —
