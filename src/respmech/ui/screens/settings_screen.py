@@ -472,15 +472,34 @@ class SettingsScreen(QWidget):
         form.addRow(lab, widget)
 
     def _browse_row(self, form, label, line, var, desc, folder):
-        """A labelled 'line edit + Browse…' row; the label, the field and its inner
-        line edit all carry the variable path + description tooltip. See ``_row()``
-        for why the label is a ``FormLabel``."""
+        """A labelled 'line edit + Browse…' row: label ABOVE, field + Browse below,
+        spanning the card's full width.
+
+        A SPANNING row, not a (label, field) form row — decided on run #217's numbers.
+        In the form's shared label column, the path field gets what the widest label
+        leaves it, and on the Windows runner's substituted font the labels measured
+        228-270 px sizeHint (≈14 px per character — far past every metric-derived cap
+        tried: the hint cap at 24 average chars computed 276 there and never bit), which
+        squeezed the field to 367 px on an 825 px card, below the half-card floor
+        test_form_fields_are_bounded_not_full_width holds it to. A path is the one field
+        on this form whose useful width IS the card's width (the test's own comment:
+        'the browse-row paths legitimately stay full width — of their own CARD'), so the
+        row now takes the card's width by construction: no label column arithmetic on any
+        font can squeeze it again, and the label keeps its full wording instead of
+        gambling on elision thresholds. The label, the field and its inner line edit all
+        carry the variable path + description tooltip, same as every ``_row()``."""
         tip = _tip(var, desc)
         lab = FormLabel(label); lab.setToolTip(tip)
         line.setToolTip(tip)
         wrapper = self._with_browse(line, folder=folder)
         wrapper.setToolTip(tip)
-        form.addRow(lab, wrapper)
+        stack = QWidget()
+        col = QVBoxLayout(stack)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(2)
+        col.addWidget(lab)
+        col.addWidget(wrapper)
+        form.addRow(stack)
 
     def _spin(self, allow_zero=False):
         s = QSpinBox(); s.setRange(0 if allow_zero else 1, 9999); return s
