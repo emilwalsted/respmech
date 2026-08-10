@@ -43,12 +43,14 @@ jobs:
       matrix: ${{ (github.event_name != 'push' || github.ref == 'refs/heads/master') && fromJSON('{"os":["windows-latest","macos-latest"],"python-version":["3.11","3.12"]}') || fromJSON('{"os":["windows-latest","macos-latest"],"python-version":["3.12"]}') }}
     runs-on: ${{ matrix.os }}
     # A hung Qt test used to burn a runner for the full 6 h default (three runs hit it
-    # 06–07-08-2026, D13 era). Ceilings are generous against the honest runtime —
-    # macOS legitimately runs long (the per-test GUI teardown is priciest there and
-    # grows with the suite: ~47 min green 05-08, ~3 h by 10-08), so these only cut
-    # true hangs, never slow-but-passing runs. If a green macOS run ever nears 4 h,
-    # the fix is profiling the teardown cost (see --durations in the unit step), not
-    # raising this number.
+    # 06–07-08-2026, D13 era). Ceilings are generous against the honest runtime, so they
+    # only cut true hangs, never slow-but-passing runs. macOS's own comment used to say
+    # "if a green macOS run ever nears 4 h, the fix is profiling the teardown cost, not
+    # raising this number" — run #218 (10-08-2026, 1285 tests) then hit exactly that
+    # ceiling mid-suite, and the fix was accordingly NOT a bigger number: macOS now runs
+    # the suite file-by-file (see its unit step below), which sheds the accumulation cost
+    # that grew ~47 min (05-08) into >4 h. 240 stays as a pure hang guard far above the
+    # file-by-file runtime; Windows completes its single invocation in ~45-55 min.
     timeout-minutes: ${{ matrix.os == 'macos-latest' && 240 || 90 }}
     env:
       QT_QPA_PLATFORM: offscreen   # headless Qt — no display on the runner
@@ -112,7 +114,13 @@ jobs:
         run: python3 tools/check_changelog.py --warnings-only
         continue-on-error: true
 
+      # Windows keeps the ONE-PROCESS whole-suite invocation — it is the last platform
+      # that completes it (~45-55 min at 1285 tests), and that single big run is the
+      # ordering-contract coverage every other job now forgoes (Linux went file-by-file
+      # for memory, macOS below for time). If Windows ever stops completing it, the
+      # suite-scaling ticket is overdue, not another per-OS carve-out.
       - name: Unit suite (headless, offscreen Qt)
+        if: runner.os != 'macOS'
         run: |
           # PySide6 can crash at interpreter shutdown on headless CI (macOS Abort trap 6 /
           # Windows segfault 139) AFTER every test has already passed — worker QThreads and
@@ -151,6 +159,48 @@ jobs:
             echo "::error::${skipped} tests SKIPPED against ${passed} passed — the suite did not really run (fixture data not found?)"; exit 1
           fi
           echo "Unit suite passed (any non-zero exit was a post-run Qt teardown crash)."
+
+      # macOS runs FILE-BY-FILE, same shape and same reasoning as smoke-linux below,
+      # measured onto this platform by run #218 (10-08-2026): the one-process suite's
+      # per-test teardown cost grows with the accumulated widget population, and at
+      # 1285 tests macOS crossed its own 4 h ceiling mid-suite — ~47 min green on
+      # 05-08, >4 h five days later. The accumulation tax IS the runtime on macOS
+      # (Linux's file-by-file run cut 32 min to ~14), so shedding it per file is what
+      # returns a verdict in under an hour. The one-process ordering-contract coverage
+      # stays on Windows above, which completes it; the real cure remains the
+      # suite-scaling ticket (cap the widget population), after which this can fold
+      # back into the single invocation. No --deselect here: macOS has a real Menlo,
+      # so the font-resolution test runs (the deselect on smoke-linux is that job's
+      # sandbox artefact, not this one's).
+      - name: Unit suite (headless, offscreen Qt, file by file)
+        if: runner.os == 'macOS'
+        run: |
+          fails=0; total_passed=0; total_skipped=0
+          : > pytest-unit.log
+          for f in tests/unit/test_*.py; do
+            set +e
+            python -m pytest "$f" -q --durations=5 > /tmp/one-file.log 2>&1
+            rc=$?
+            set -e
+            cat /tmp/one-file.log >> pytest-unit.log
+            summary=$(grep -E "[0-9]+ (passed|failed|error|skipped)|no tests ran" /tmp/one-file.log | tail -1)
+            echo "== ${f} :: ${summary:-NO SUMMARY} (exit ${rc})"
+            if grep -qE "[0-9]+ (failed|error)" /tmp/one-file.log; then
+              echo "::error::real test failures or errors in ${f}"; fails=1
+            elif ! grep -qE "[0-9]+ (passed|skipped)" /tmp/one-file.log; then
+              echo "::error::${f} produced no pytest summary (crashed mid-run?)"; fails=1
+            fi
+            p=$(grep -oE "[0-9]+ passed" /tmp/one-file.log | tail -1 | grep -oE "^[0-9]+" || true)
+            s=$(grep -oE "[0-9]+ skipped" /tmp/one-file.log | tail -1 | grep -oE "^[0-9]+" || true)
+            total_passed=$((total_passed + ${p:-0}))
+            total_skipped=$((total_skipped + ${s:-0}))
+          done
+          echo "TOTAL: ${total_passed} passed, ${total_skipped} skipped across all files."
+          if [ "$total_skipped" -gt $((total_passed / 10)) ]; then
+            echo "::error::${total_skipped} tests SKIPPED against ${total_passed} passed — the suite did not really run (fixture data not found?)"; fails=1
+          fi
+          if [ "$fails" -ne 0 ]; then exit 1; fi
+          echo "Unit suite passed file by file (per-file exit codes beyond the summaries are Qt teardown noise)."
 
   # The fast first verdict, and the job every Claude ticket can reproduce EXACTLY:
   # ticket sandboxes are Linux, so "the suite is green in my sandbox" and "smoke-linux
