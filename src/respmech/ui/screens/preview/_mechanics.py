@@ -74,6 +74,40 @@ def _parse_breath_counts(text, entry_cls, folder=None):
             out.append(entry_cls(fpart.strip(), cnt, folder))
     return out
 
+def _analysis_rate(resample, resample_to_frequency, native_frequency):
+    """The sampling rate segmentation actually runs at: the pre-analysis resample target
+    when it is on, otherwise the recording's own rate. The SAME rule as ``fs_eff`` in
+    ``Settings.validate()`` (settings.py) and the resample applied in ``pipeline.py`` —
+    reproduced here rather than imported, since both of those operate on a committed
+    ``Settings``/dataframe while this reads live, uncommitted dialog values."""
+    return resample_to_frequency if (resample and resample_to_frequency > 0) else native_frequency
+
+
+def _buffer_debounce_seconds(buffer_samples, resample, resample_to_frequency,
+                             native_frequency):
+    """The analysis-rate duration a segmentation debounce of ``buffer_samples`` samples
+    corresponds to. Returns None if the analysis rate is not known yet (e.g. a dialog
+    opened before Setup ▸ Input's sampling frequency is filled in)."""
+    fs_eff = _analysis_rate(resample, resample_to_frequency, native_frequency)
+    if not fs_eff:
+        return None
+    return buffer_samples / fs_eff
+
+
+def _buffer_debounce_hint(buffer_samples, resample, resample_to_frequency, native_frequency):
+    """The 'N samples ≈ X.XX s at Y Hz' line shown beside the Breath-separation debounce
+    field (D29/UI-overhaul) — the debounce is stored and edited in samples (unaffected by
+    a later resample), but samples alone hide how long it actually holds the boundary at
+    the rate the run analyses at, which is the ONE thing about this setting that changes
+    with the recording."""
+    secs = _buffer_debounce_seconds(buffer_samples, resample, resample_to_frequency,
+                                    native_frequency)
+    if secs is None:
+        return f"{buffer_samples} samples (sampling rate not set yet)."
+    fs_eff = _analysis_rate(resample, resample_to_frequency, native_frequency)
+    return f"{buffer_samples} samples ≈ {secs:.2f} s at {fs_eff:g} Hz."
+
+
 # Per-file errors that mean "this recording cannot support this step", not "something
 # broke". The mech preview lands them softly and explains them in the status line, so the
 # batch panel must not also paint a hard 'Test run failed' card over the same thing.
@@ -613,10 +647,22 @@ class _MechanicsMixin:
                            "Target rate (Hz). Keep ≥ ~1000 Hz with EMG channels present.",
                            lo=1, hi=1_000_000, step=100, suffix=" Hz",
                            depends_on="resample")),
-            ("seg", Field("buffer", "Breath-separation buffer", "int",
+            ("seg", Field("buffer", "Breath-separation debounce", "int",
                           "processing.segmentation.buffer",
-                          "Guard samples added around each detected breath boundary.",
-                          lo=0, hi=100_000, step=10)),
+                          "How long the flow must stay reversed before a phase boundary "
+                          "is accepted, suppresses spurious boundaries from noise near "
+                          "zero flow.",
+                          lo=0, hi=100_000, step=10,
+                          # Stored and edited in samples (an existing analysis's TOML is
+                          # unaffected), but samples alone hide how long that debounce
+                          # actually holds at the rate the run analyses at — the ONE thing
+                          # about this setting that changes with the recording (D29). The
+                          # note is this dialog's *opening* value; _refresh_buffer_hint
+                          # below keeps it live as buffer/resample/resample_to_frequency
+                          # are edited.
+                          note=_buffer_debounce_hint(
+                              seg.buffer, samp.resample, samp.resample_to_frequency,
+                              s.input.format.sampling_frequency))),
             ("peak", Field("height", "Breath peak — minimum height", "float",
                            "processing.segmentation.peak.height",
                            "Minimum peak height for breath detection (volume-based).",
@@ -767,6 +813,27 @@ class _MechanicsMixin:
                                    "suit ordinary recordings.",
                              derived=_trend_hint, modal=False, on_apply=_commit,
                              derived_debounce_ms=250)
+
+        def _refresh_buffer_hint(*_args):
+            """Keep the debounce note (built above from this dialog's OPENING values)
+            reading the analysis rate the user is actually staging, not the one the dialog
+            opened with — the whole reason D29 asked for a live line rather than a static
+            one. Trivial arithmetic, so unlike _trend_hint this runs synchronously on
+            every edit, no debounce timer needed."""
+            lbl = dlg.note("buffer")
+            if lbl is None:
+                return
+            v = dlg.values()
+            lbl.setText(_buffer_debounce_hint(
+                v["buffer"], v["resample"], v["resample_to_frequency"],
+                s.input.format.sampling_frequency))
+
+        for _key in ("buffer", "resample", "resample_to_frequency"):
+            _sig = getattr(dlg.widget(_key), "valueChanged", None) \
+                or getattr(dlg.widget(_key), "toggled", None)
+            if _sig is not None:
+                _sig.connect(_refresh_buffer_hint)
+
         if dlg.exec() != QDialog.Accepted:
             return
         _commit(dlg.edited_values())          # see AdvancedDialog.edited_values

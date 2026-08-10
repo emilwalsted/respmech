@@ -38,7 +38,7 @@ _FRIENDLY_SETTINGS_ERRORS = {
         "Breath-splitting signal must be Flow or Volume (Preview & QC ▸ Mechanics ▸ "
         "Advanced… ▸ Breath detection)",
     "processing.segmentation.buffer must be an integer":
-        "Breath-separation buffer must be a whole number of samples (Preview & QC ▸ "
+        "Breath-separation debounce must be a whole number of samples (Preview & QC ▸ "
         "Mechanics ▸ Advanced… ▸ Breath detection)",
     "processing.wob.calc_from must be 'average' or 'individual'":
         "Work of breathing source must be Average or Individual (Preview & QC ▸ "

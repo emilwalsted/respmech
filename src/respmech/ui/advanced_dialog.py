@@ -178,6 +178,11 @@ class AdvancedDialog(QDialog):
             self._derived_timer.setInterval(derived_debounce_ms)
             self._derived_timer.timeout.connect(self._refresh_derived_now)
         self._widgets = {}
+        #: static note labels, keyed by field key (only present for fields whose Field.note
+        #: was non-empty) — exposed via note() so a caller can turn a static hint into a
+        #: live one by reaching in and updating its text on the widget signals it cares
+        #: about, without this class needing to know what "live" means for every field.
+        self._notes = {}
         self.cards = []
         # A grip is the affordance, not the mechanism: the dialog is resizable because its
         # layout minimum is small (see section_flow), and the grip is how the user is told.
@@ -214,6 +219,7 @@ class AdvancedDialog(QDialog):
                     hint = WrapLabel(f.note)
                     hint.setProperty("status", "muted")
                     card.add_note(hint)
+                    self._notes[f.key] = hint
                 if f.depends_on is not None:
                     # the depended-on checkbox must have been built already (earlier in
                     # ``fields``); a field naming a later or unknown key is a caller bug.
@@ -444,6 +450,14 @@ class AdvancedDialog(QDialog):
 
     def widget(self, key):
         return self._widgets[key]
+
+    def note(self, key):
+        """The static note label built for ``key`` (see Field.note), or None if that field
+        was built without one. A caller wanting a note that tracks live edits gets its
+        initial text for free from Field.note and updates this label's text itself on
+        whichever widget signals it cares about — this dialog has no opinion on what
+        "live" means for any given field."""
+        return self._notes.get(key)
 
 
 def apply_values(target, values):

@@ -367,6 +367,75 @@ def test_mech_ok_commits_and_cancel_changes_nothing(qapp, tmp_path, accept, monk
     pv.shutdown()
 
 
+def test_buffer_field_is_labelled_debounce_and_tooltip_drops_the_padding_wording(
+        qapp, tmp_path, monkeypatch):
+    """D29 (UI-overhaul): the field was renamed from 'Breath-separation buffer' to
+    'Breath-separation debounce', and its tooltip no longer describes padding around a
+    breath boundary (the code looks FORWARD, it does not add guard samples around one) —
+    but the TOML key it names must still be there, since that is how a control keeps
+    saying which settings variable it writes even after label text changes."""
+    from respmech.ui.section_flow import WrapLabel
+    pv = _preview(qapp, tmp_path)
+    seen = {}
+
+    def edit(d):
+        seen["tooltip"] = d.widget("buffer").toolTip()
+        seen["labels"] = {lab.text() for lab in d.findChildren(WrapLabel)}
+
+    _mech_stub(monkeypatch, edit)
+    pv._open_mech_advanced()
+    tip = seen["tooltip"].lower()
+    assert "guard" not in tip and "padding" not in tip and "added around" not in tip
+    assert "processing.segmentation.buffer" in seen["tooltip"]
+    assert "Breath-separation debounce" in seen["labels"]
+    assert "Breath-separation buffer" not in seen["labels"]
+    pv.shutdown()
+
+
+def test_buffer_note_shows_the_derived_seconds_and_updates_live(qapp, tmp_path, monkeypatch):
+    """D29: samples alone hide how long the debounce actually holds at the rate the run
+    analyses at, so the field grew a note beside it — '200 samples ≈ 0.20 s at 1000 Hz' for
+    the synthetic fixture's settings (1000 Hz, no resample, buffer=200) — that must update
+    as the user edits buffer/resample/resample_to_frequency, not just show the value the
+    dialog opened with."""
+    pv = _preview(qapp, tmp_path)
+    assert pv.state.settings.input.format.sampling_frequency == 1000
+    assert pv.state.settings.processing.segmentation.buffer == 200
+    seen = {}
+
+    def edit(d):
+        seen["opened"] = d.note("buffer").text()
+        d.widget("buffer").setValue(800)
+        seen["after_buffer_edit"] = d.note("buffer").text()
+        d.widget("resample").setChecked(True)
+        d.widget("resample_to_frequency").setValue(100)
+        seen["after_resample_edit"] = d.note("buffer").text()
+
+    _mech_stub(monkeypatch, edit, accept=False)
+    pv._open_mech_advanced()
+    assert seen["opened"] == "200 samples ≈ 0.20 s at 1000 Hz."
+    assert seen["after_buffer_edit"] == "800 samples ≈ 0.80 s at 1000 Hz."
+    assert seen["after_resample_edit"] == "800 samples ≈ 8.00 s at 100 Hz."
+    pv.shutdown()
+
+
+def test_buffer_debounce_seconds_is_a_pure_rate_conversion():
+    """D29's derivation, tested Qt-free against the ticket's own worked example: 800
+    samples is 0.80 s at the recording's native 1000 Hz, or 4.00 s if resampled to 200 Hz —
+    the effective-rate rule matches Settings.validate()'s fs_eff (resample target when
+    resample is on and positive, else the native rate)."""
+    from respmech.ui.screens.preview._mechanics import (_buffer_debounce_hint,
+                                                         _buffer_debounce_seconds)
+    assert _buffer_debounce_seconds(800, False, 200, 1000) == pytest.approx(0.80)
+    assert _buffer_debounce_seconds(800, True, 200, 1000) == pytest.approx(4.00)
+    # resample ticked but no target yet (0, the field's un-set state before Setup runs):
+    # falls back to the native rate rather than dividing by zero.
+    assert _buffer_debounce_seconds(800, True, 0, 1000) == pytest.approx(0.80)
+    assert _buffer_debounce_seconds(800, False, 200, None) is None
+    assert _buffer_debounce_hint(800, False, 200, 1000) == "800 samples ≈ 0.80 s at 1000 Hz."
+    assert _buffer_debounce_hint(800, True, 200, 1000) == "800 samples ≈ 4.00 s at 200 Hz."
+
+
 def test_resample_off_by_default_and_hz_field_follows_the_checkbox(qapp, tmp_path, monkeypatch):
     """A fresh analysis has resampling off (P1 bug: it must stay off until the user opts in,
     and be genuinely toggleable). The 'Resample to' Hz field is meaningless while the

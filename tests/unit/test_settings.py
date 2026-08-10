@@ -106,6 +106,19 @@ def test_auto_threshold_round_trips_as_an_absent_key():
     assert Settings.from_dict(s.to_dict()).processing.volume.trend_peak_min_height == 0.5
 
 
+def test_segmentation_buffer_still_writes_as_samples():
+    """D29 (UI-overhaul) renamed the GUI label/tooltip to 'Breath-separation debounce' and
+    added a derived seconds hint, but explicitly did NOT touch storage: the TOML key stays
+    ``buffer``, and the value stays samples, not seconds — an unedited analysis must write
+    the exact same number it always has."""
+    from respmech.settingsio.toml_io import dumps_toml
+    assert "buffer = 800" in dumps_toml(Settings())
+    s = Settings()
+    s.processing.segmentation.buffer = 200
+    assert "buffer = 200" in dumps_toml(s)
+    assert Settings.from_dict(s.to_dict()).processing.segmentation.buffer == 200
+
+
 def _trend_settings(**vol):
     d = _minimal()
     d["schema_version"] = SCHEMA_VERSION
