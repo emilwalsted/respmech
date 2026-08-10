@@ -47,9 +47,16 @@ def _loader():
     return lambda p: load_raw_matrix(Settings(), p)
 
 
-def _dialog(initial=None, files=None):
+def _dialog(initial=None, files=None, suggest_from_names=False):
+    """``suggest_from_names`` defaults OFF here (unlike the dialog's own default): the
+    shared synth fixture's header (time,EMG1..3,flow,volume,poes,pgas,pdi,ENT1..3, see
+    tests/golden/input/synth_case_*.csv) is made of the REAL role names, so leaving
+    ticket D27's name-based seeding on by default would auto-fill every test in this file
+    that opens a dialog with an empty mapping, whether or not it is testing that feature.
+    Tests for the seeding feature itself opt back in explicitly."""
     from respmech.ui.channel_setup_dialog import ChannelSetupDialog
-    return ChannelSetupDialog(files or _files(), 1000, initial=initial, loader=_loader())
+    return ChannelSetupDialog(files or _files(), 1000, initial=initial, loader=_loader(),
+                              suggest_from_names=suggest_from_names)
 
 
 # --------------------------------------------------------------------------- #
@@ -531,7 +538,7 @@ def test_reopening_an_already_derived_analysis_does_not_uncheck_on_open(qapp):
     must not be mistaken for that same edit and cleared right back off."""
     from respmech.ui.channel_setup_dialog import ChannelSetupDialog
     dlg = ChannelSetupDialog(_files(), 1000, initial={}, loader=_loader(),
-                             integrate_from_flow=True)
+                             integrate_from_flow=True, suggest_from_names=False)
     assert dlg._volume_from_flow.isChecked()
 
 
@@ -611,6 +618,170 @@ def test_dialog_uses_dark_plot_background_in_dark_mode(qapp, monkeypatch):
     dlg = _dialog()
     name = dlg._plots[0].backgroundBrush().color().name().lower()
     assert name == theme._PLOT_DARK["bg"].lower()
+
+
+# --------------------------------------------------------------------------- #
+# ticket D27: seeding a fresh dialog's dropdowns from the file's own column names
+# --------------------------------------------------------------------------- #
+def test_a_fresh_dialog_is_seeded_from_the_synth_fixtures_own_header(qapp):
+    """The exact shape of the ticket's bug report, run against this file's real fixture
+    (time,EMG1-3,flow,volume,poes,pgas,pdi,ENT1-3): opening with no initial mapping at all
+    pre-fills every recognisable column instead of leaving all eight on "(unused)"."""
+    dlg = _dialog(suggest_from_names=True)
+    assert dlg.selected_mapping() == {"flow": 5, "volume": 6, "poes": 7, "pgas": 8,
+                                      "pdi": 9, "emg": [2, 3, 4], "entropy": []}
+    assert dlg._ok_btn.isEnabled()                    # all four required roles landed
+
+
+def test_seeding_is_skipped_when_a_saved_mapping_is_passed(qapp):
+    """'Kun stien hvor initial er tom' — a caller with an existing mapping (even a partial
+    one) behaves exactly as before: no name-based seeding, no suggestion badges."""
+    dlg = _dialog(initial={"flow": 5}, suggest_from_names=True)
+    assert dlg.selected_mapping()["poes"] is None      # NOT seeded from the header, though
+                                                        # "poes" is the real column 7 name
+    assert dlg._suggested == set()
+
+
+def test_seeded_rows_are_marked_suggested_until_touched(qapp):
+    dlg = _dialog(suggest_from_names=True)
+    assert dlg._suggested == {4, 5, 6, 7, 8, 1, 2, 3}   # every seeded column, 0-based
+    for i in (4, 5, 6, 7, 8, 1, 2, 3):
+        assert dlg._suggested_labels[i] is not None
+        assert dlg._suggested_labels[i].isVisibleTo(dlg)
+    assert "8 columns pre-filled from the column names, check them." in dlg.info.text()
+    _set_role(dlg, 4, "")                               # the user edits this row (unassigns it)
+    assert 4 not in dlg._suggested
+    assert dlg._suggested_labels[4].isVisibleTo(dlg) is False
+    assert dlg._role_of(4) == ""                        # the edit itself took effect
+
+
+def test_the_suggestion_footnote_disappears_once_every_row_is_reviewed(qapp):
+    dlg = _dialog(suggest_from_names=True)
+    for i in (4, 5, 6, 7, 8, 1, 2, 3):
+        _set_role(dlg, i, "")                           # touch every seeded row (unassign it)
+    assert dlg._suggested == set()
+    assert "pre-filled" not in dlg.info.text()
+
+
+def test_stealing_a_single_role_also_dismisses_the_displaced_columns_badge(qapp):
+    """_on_role_changed's collision handling silently resets a DIFFERENT column's combo
+    back to "(unused)" — that column must lose its "suggested" mark too, or the row would
+    say "suggested" next to a role it no longer carries."""
+    dlg = _dialog(suggest_from_names=True)
+    assert 4 in dlg._suggested                         # column 5 (idx 4) starts as flow
+    _set_role(dlg, 3, "flow")                          # steal Flow onto a different column
+    assert dlg._role_of(4) == ""                       # displaced back to unused
+    assert 4 not in dlg._suggested
+    assert dlg._suggested_labels[4].isVisibleTo(dlg) is False
+
+
+def test_ticking_derive_from_flow_dismisses_a_displaced_volume_suggestion(qapp):
+    dlg = _dialog(suggest_from_names=True)
+    assert 5 in dlg._suggested                         # column 6 (idx 5) starts as volume
+    dlg._volume_from_flow.setChecked(True)              # clears the suggested Volume column
+    assert dlg._role_of(5) == ""
+    assert 5 not in dlg._suggested
+    assert dlg._suggested_labels[5].isVisibleTo(dlg) is False
+
+
+def test_seeding_never_touches_the_time_column_or_entropy(qapp):
+    dlg = _dialog(suggest_from_names=True)
+    assert dlg._combos[0] is None and 0 not in dlg._suggested
+    assert dlg.selected_mapping()["entropy"] == []      # entropy is never seeded from a name
+    for box in dlg._entropy_boxes:
+        assert box is None or not box.isChecked()
+
+
+def test_ambiguous_or_number_only_names_are_never_seeded(qapp):
+    """A per-file loader that reports header-less, comma-decimal-fragment names (this
+    ticket's own bug report) must leave the dialog exactly as blank as it always was."""
+    import numpy as np
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+    names = ["0,0000", "0,2000", "0,3000", "0,4000"]
+    data = (np.zeros((50, 4)), names)
+    dlg = ChannelSetupDialog(["A"], 1000, loader=lambda p: data, suggest_from_names=True)
+    assert dlg.selected_mapping() == {"flow": None, "volume": None, "poes": None,
+                                      "pgas": None, "pdi": None, "emg": [], "entropy": []}
+    assert dlg._suggested == set()
+    assert "pre-filled" not in dlg.info.text()
+
+
+def test_a_single_role_claimed_by_two_columns_is_left_unseeded_for_both(qapp):
+    """Two columns both named 'flow' is itself a form of ambiguity, at the batch level
+    rather than within one name — silently picking one would be exactly the kind of guess
+    this ticket's suggestion feature must never make."""
+    import numpy as np
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+    names = ["time", "Flow A", "Flow B", "poes", "pgas", "pdi"]
+    data = (np.zeros((50, 6)), names)
+    dlg = ChannelSetupDialog(["A"], 1000, loader=lambda p: data, suggest_from_names=True)
+    m = dlg.selected_mapping()
+    assert m["flow"] is None                           # neither Flow A nor Flow B is guessed
+    assert (m["poes"], m["pgas"], m["pdi"]) == (4, 5, 6)   # the unambiguous ones still seed
+    assert dlg._suggested == {3, 4, 5}                  # only the unambiguous columns are marked
+
+
+def test_suggest_from_names_false_disables_seeding_even_with_an_empty_initial(qapp):
+    dlg = _dialog(suggest_from_names=False)
+    assert dlg.selected_mapping() == {"flow": None, "volume": None, "poes": None,
+                                      "pgas": None, "pdi": None, "emg": [], "entropy": []}
+    assert dlg._suggested == set()
+
+
+@pytest.mark.parametrize("m", [
+    {},
+    None,
+    {"flow": None, "volume": None, "poes": None, "pgas": None, "pdi": None,
+     "emg": [], "entropy": []},                          # _current_channel_mapping()'s own shape
+])
+def test_mapping_names_no_role_treats_all_placeholder_shapes_as_empty(qapp, m):
+    """Self-review finding: a dict with every key present but every value falsy is truthy
+    as a Python object, so a bare `not initial` check would treat SettingsScreen's own
+    ``_current_channel_mapping()`` — what `initial=None` resolves to on the dialog's
+    ordinary, everyday open path (the "Assign channels from data…" button) — as "an
+    existing mapping" and silently disable seeding on the one path a real user actually
+    takes most often."""
+    from respmech.ui.channel_setup_dialog import _mapping_names_no_role
+    assert _mapping_names_no_role(m) is True
+
+
+def test_mapping_names_no_role_is_false_once_anything_is_set(qapp):
+    from respmech.ui.channel_setup_dialog import _mapping_names_no_role
+    assert _mapping_names_no_role({"flow": 5}) is False
+    assert _mapping_names_no_role({"flow": None, "emg": [2]}) is False
+    assert _mapping_names_no_role({"flow": None, "entropy": [3]}) is False
+
+
+def test_seeding_fires_through_settings_screens_own_open_channel_setup_default_path(qapp, monkeypatch):
+    """The regression this self-review finding fixes, driven end to end through the REAL
+    call site a user actually clicks — SettingsScreen.btn_assign_channels calls
+    ``_open_channel_setup()`` with no argument, which resolves ``initial`` from
+    ``_current_channel_mapping()``, NOT a literal ``{}``. Before the fix, this made seeding
+    unreachable outside the one guided auto-open call site that happens to pass ``{}``
+    explicitly."""
+    import respmech.ui.channel_setup_dialog as csd
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.in_folder.setText(INPUT); sc.in_files.setText("synth_case_*.csv")
+    sc.samp_freq.setValue(1000)
+    sc._on_inputs_changed()
+    ch = sc.state.settings.input.channels
+    assert (ch.flow, ch.volume, ch.poes, ch.pgas, ch.pdi) == (None, None, None, None, None)
+
+    real_cls = csd.ChannelSetupDialog
+
+    def _build(*a, **k):
+        dlg = real_cls(*a, **k)
+        assert dlg._suggested, "the everyday open path must seed from the synth fixture's header"
+        dlg.exec = lambda: QDialog.Accepted
+        return dlg
+    monkeypatch.setattr(csd, "ChannelSetupDialog", _build)
+
+    assert sc._open_channel_setup() is True            # the button's own call shape: no argument
+    ch = sc.state.settings.input.channels
+    assert (ch.flow, ch.volume, ch.poes, ch.pgas, ch.pdi) == (5, 6, 7, 8, 9)
+    win.close()
 
 
 # --------------------------------------------------------------------------- #
@@ -695,7 +866,11 @@ def test_flow_only_rig_reaches_all_ok_and_can_save_via_the_real_dialog(qapp, mon
     real_cls = csd.ChannelSetupDialog
 
     def _build(*a, **k):
-        dlg = real_cls(*a, **k)
+        # ticket D27: this scenario is specifically a rig with NO volume channel — the
+        # synth fixture's header names a real "volume" column, so name-based seeding
+        # would auto-assign it and defeat the very premise being tested. Turned off here,
+        # not in production: SettingsScreen's own call site keeps the real default.
+        dlg = real_cls(*a, suggest_from_names=False, **k)
         _set_role(dlg, 4, "flow"); _set_role(dlg, 6, "poes")
         _set_role(dlg, 7, "pgas"); _set_role(dlg, 8, "pdi")
         assert dlg._volume_from_flow.isChecked()          # auto-suggested: no volume column
@@ -1153,7 +1328,11 @@ def test_semicolon_csv_reaches_ok_via_the_real_dialog(qapp, monkeypatch, tmp_pat
     real_cls = csd.ChannelSetupDialog
 
     def _build(*a, **k):
-        dlg = real_cls(*a, **k)
+        # ticket D27: this fixture's header-less rows are already rejected by the
+        # name-based lookup's own numeric guard (see column_stack._looks_numeric), so
+        # turning seeding off here changes nothing observable — done anyway to keep this
+        # test decoupled from that unrelated feature, same as the sibling test above.
+        dlg = real_cls(*a, suggest_from_names=False, **k)
         matrix, _names = dlg._cache[dlg._files[dlg._file_idx]]
         # the bug this ticket fixes: every column read as all-NaN under the wrong decimal
         assert not np.isnan(matrix).all(axis=0).any()
@@ -1255,7 +1434,7 @@ def test_channel_role_labels_are_descriptive(qapp):
 # ---------------------------------------------------------------------------
 def test_banner_names_excluded_files_when_given(qapp):
     from respmech.ui.channel_setup_dialog import ChannelSetupDialog
-    dlg = ChannelSetupDialog(_files(), 1000, loader=_loader(),
+    dlg = ChannelSetupDialog(_files(), 1000, loader=_loader(), suggest_from_names=False,
                              excluded=[("odd_one.csv", 8), ("also_odd.csv", 11)])
     text = None
     for w in dlg.findChildren(type(dlg.info)):
@@ -1274,7 +1453,7 @@ def test_banner_names_an_unreadable_excluded_file_without_literal_none(qapp):
     all carries columns=None (manifest.py's FileEntry), and the banner used to format that
     as the literal string 'brokenfile.csv (None cols)' — a bare f-string over None."""
     from respmech.ui.channel_setup_dialog import ChannelSetupDialog
-    dlg = ChannelSetupDialog(_files(), 1000, loader=_loader(),
+    dlg = ChannelSetupDialog(_files(), 1000, loader=_loader(), suggest_from_names=False,
                              excluded=[("brokenfile.csv", None), ("odd_one.csv", 8)])
     text = next(w.text() for w in dlg.findChildren(type(dlg.info)) if "applied to all" in w.text())
     assert "None" not in text
@@ -1285,7 +1464,7 @@ def test_banner_names_an_unreadable_excluded_file_without_literal_none(qapp):
 
 def test_banner_says_nothing_extra_without_excluded_files(qapp):
     from respmech.ui.channel_setup_dialog import ChannelSetupDialog
-    dlg = ChannelSetupDialog(_files(), 1000, loader=_loader())
+    dlg = ChannelSetupDialog(_files(), 1000, loader=_loader(), suggest_from_names=False)
     banners = [w.text() for w in dlg.findChildren(type(dlg.info)) if "applied to all" in w.text()]
     assert len(banners) == 1
     assert "not shown here" not in banners[0]

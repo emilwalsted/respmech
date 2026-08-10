@@ -100,13 +100,93 @@ def role_color(pal, role):
     return pal["separator"]                     # unused -> de-emphasised
 
 
+def _is_blank_or_placeholder(name):
+    """True for an empty header or one of pandas' own artefacts ("__index", "Unnamed: 3")
+    — shared by ``name_suffix`` (below) and the name-based role lookup (ticket D27), so the
+    two can never disagree about what counts as "no real name"."""
+    name = (name or "").strip()
+    return not name or name.startswith("__") or name.lower().startswith("unnamed")
+
+
 def name_suffix(names, i):
     """The source header for column i, shown after the generic index (e.g. ' · flow'),
     or '' when the file had no usable name for it."""
     name = names[i].strip() if i < len(names) else ""
-    if not name or name.startswith("__") or name.lower().startswith("unnamed"):
+    if _is_blank_or_placeholder(name):
         return ""
     return f"  ·  {name}"
+
+
+def _looks_numeric(name):
+    """True when ``name`` is nothing but a number — the column-index or first-data-row
+    names pandas invents for a file with no real header row (ticket D27's own bug
+    report: 'fragments of the first data row', not a channel name). Tries both '.' and
+    ',' as the decimal point, since a header-less EU-formatted export (';'-separated,
+    comma-decimal) produces comma-decimal fragments that plain ``float()`` would not
+    recognise as numeric and could otherwise slip through as a "real" name."""
+    name = (name or "").strip()
+    if not name:
+        return False
+    for candidate in (name, name.replace(",", ".")):
+        try:
+            float(candidate)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+#: role key -> case-insensitive substrings in a column's own header name that suggest it
+#: (ticket D27). Every alternative is a recognised physiological abbreviation, not a
+#: guess — e.g. "edi" (electrical activity of the diaphragm) for emg, "di" for pdi.
+NAME_ROLE_KEYWORDS = {
+    "flow": ("flow",),
+    "volume": ("volume", "vol"),
+    "poes": ("poes", "pes", "oes"),
+    "pgas": ("pgas", "pga", "gastric"),
+    "pdi": ("pdi", "di"),
+    "emg": ("emg", "edi"),
+}
+
+
+def infer_role_from_name(name):
+    """The single role a column's own header name suggests, or "" when nothing matches or
+    more than one role matches equally well.
+
+    Case-insensitive substring containment against ``NAME_ROLE_KEYWORDS``. A name can
+    contain more than one role's keyword — e.g. "edi" contains pdi's short alias "di" as a
+    literal substring — so ties are broken by preferring the LONGER keyword match (emg's
+    "edi", 3 characters, over pdi's "di", 2): the more specific alias wins outright. Only a
+    genuine tie at the longest length (two DIFFERENT roles matched by keywords of the same
+    length) is reported as ambiguous — never guessed, per ticket D27."""
+    if _is_blank_or_placeholder(name) or _looks_numeric(name):
+        return ""
+    low = name.strip().lower()
+    best_role, best_len = "", 0
+    for role, keywords in NAME_ROLE_KEYWORDS.items():
+        role_len = max((len(kw) for kw in keywords if kw in low), default=0)
+        if role_len == 0:
+            continue
+        if role_len > best_len:
+            best_role, best_len = role, role_len
+        elif role_len == best_len and role != best_role:
+            best_role = ""                       # a tie between two DIFFERENT roles
+    return best_role
+
+
+def infer_roles_from_names(names):
+    """{column index: role} for every column (column 0, the time axis, is never included)
+    whose own header name suggests exactly one role — see ``infer_role_from_name``. Used to
+    seed the channel-assignment dialog's dropdowns for a brand-new analysis with no saved
+    mapping to seed from instead."""
+    out = {}
+    for i, name in enumerate(names):
+        if i == 0:
+            continue
+        role = infer_role_from_name(name)
+        if role:
+            out[i] = role
+    return out
 
 
 class ColumnStack(QWidget):

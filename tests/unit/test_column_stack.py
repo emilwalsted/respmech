@@ -11,6 +11,7 @@ import pytest
 from PySide6.QtWidgets import QLabel
 
 from respmech.ui.column_stack import (ASSIGNABLE, ColumnStack, ROLE_NAMES, ROLES,
+                                      infer_role_from_name, infer_roles_from_names,
                                       name_suffix, role_color)
 from respmech.ui.plot_axis import MinPitchAxis
 
@@ -171,3 +172,71 @@ def test_entropy_is_not_a_dropdown_role(qapp):
 ])
 def test_name_suffix_hides_the_unhelpful(qapp, names, i, expect):
     assert name_suffix(names, i) == expect
+
+
+# -- D27: seeding the channel-assignment dialog from the file's own column names ------
+@pytest.mark.parametrize("name, expect", [
+    ("flow", "flow"), ("Flow (L/s)", "flow"),                    # case-insensitive, extra text
+    ("volume", "volume"), ("Vol", "volume"), ("VOLUME (L)", "volume"),
+    ("poes", "poes"), ("Pes", "poes"), ("oesophageal", "poes"),
+    ("pgas", "pgas"), ("pga", "pgas"), ("Gastric pressure", "pgas"),
+    ("pdi", "pdi"), ("di", "pdi"),
+    ("emg1", "emg"), ("EMG2", "emg"), ("EMG3", "emg"),
+    ("edi", "emg"),               # a recognised diaphragm-EMG alias, NOT pdi's "di" it contains
+    ("time", ""), ("ENT1", ""),   # no keyword matches at all
+    ("", ""), ("   ", ""), ("__index", ""), ("Unnamed: 3", ""),   # blank/placeholder
+])
+def test_infer_role_from_name(qapp, name, expect):
+    assert infer_role_from_name(name) == expect
+
+
+@pytest.mark.parametrize("name", [
+    "0", "12", "-3.5", "3,5",       # a bare number, '.' or ',' decimal
+    "0,0000", "1,2500",             # header-less EU export: comma-decimal data row as header
+])
+def test_infer_role_from_name_rejects_numbers(qapp, name):
+    """The bug report this ticket fixes: a header-less export gives pandas' own
+    number-like fragments as column 'names', which must never be treated as real ones."""
+    assert infer_role_from_name(name) == ""
+
+
+@pytest.mark.parametrize("name", [
+    "flowpoes",          # "flow" (4, flow) and "poes" (4, poes) -- an equally long tie
+    "pdi_edi",           # "pdi" (3, pdi) and "edi" (3, emg) -- also tied, not resolved by length
+])
+def test_infer_role_from_name_is_ambiguous_not_guessed(qapp, name):
+    assert infer_role_from_name(name) == ""
+
+
+def test_infer_roles_from_names_matches_the_tickets_own_example(qapp):
+    """The exact reproduction from the ticket: a 9-column CSV whose header names every
+    channel. Column 0 (time) is never assignable and must be skipped."""
+    names = "time,flow,volume,poes,pgas,pdi,emg1,emg2,emg3".split(",")
+    assert infer_roles_from_names(names) == {
+        1: "flow", 2: "volume", 3: "poes", 4: "pgas", 5: "pdi",
+        6: "emg", 7: "emg", 8: "emg",
+    }
+
+
+def test_infer_roles_from_names_matches_the_real_synth_fixture_header(qapp):
+    """tests/golden/input/synth_case_*.csv's actual header — the fixture every dialog test
+    in test_channel_setup.py loads. ENT1-3 (entropy-only columns) suggest nothing, since
+    entropy is never seeded from a name."""
+    names = "time,EMG1,EMG2,EMG3,flow,volume,poes,pgas,pdi,ENT1,ENT2,ENT3".split(",")
+    assert infer_roles_from_names(names) == {
+        1: "emg", 2: "emg", 3: "emg", 4: "flow", 5: "volume", 6: "poes", 7: "pgas", 8: "pdi",
+    }
+
+
+def test_infer_roles_from_names_skips_a_headerless_export(qapp):
+    """No real header row: pandas' own fragments of the first data row become the column
+    'names' (comma-decimal, ';'-separated EU export) — none of them may seed anything."""
+    names = ["0,0000", "0,2000", "0,3000", "0,4000"]
+    assert infer_roles_from_names(names) == {}
+
+
+def test_infer_roles_from_names_never_returns_column_zero(qapp):
+    """Column 0 is the time axis and is never assignable in the dialog, even in the
+    unlikely case its own name happened to look like a role."""
+    names = ["flow", "flow"]           # column 0 named "flow" too
+    assert infer_roles_from_names(names) == {1: "flow"}

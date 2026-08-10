@@ -25,7 +25,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayou
 
 from respmech.ui import wheel as _wheel
 from respmech.ui.column_stack import (REQUIRED, REQUIRED_LABELS, ROLES, SINGLE, ColumnStack,
-                                      as_2d, name_suffix as _name_suffix,
+                                      as_2d, infer_roles_from_names,
+                                      name_suffix as _name_suffix,
                                       plot_palette, role_color)
 
 try:
@@ -103,6 +104,25 @@ def _no_files_readable_message(nfiles, failures):
     return f"None of the {nfiles} matching files could be read. {name}: {detail}"
 
 
+def _mapping_names_no_role(m):
+    """True when a channel-mapping dict asserts NOTHING — no column claims any role.
+
+    Covers both an absent mapping (``None``/``{}``) AND the shape
+    ``SettingsScreen._current_channel_mapping()`` always returns for a never-configured
+    analysis: ``{'flow': None, 'volume': None, ..., 'emg': [], 'entropy': []}`` — every key
+    present, every value falsy. That dict is truthy as a Python object (it has 7 keys), so
+    a bare ``not m`` check would treat it as "an existing mapping" and defeat ticket D27's
+    name-based seeding on the dialog's ordinary, everyday open path (the "Assign channels
+    from data…" button always calls ``_open_channel_setup(initial=None)``, which fills
+    ``initial`` from that very method) — seeding would then only ever fire from the one
+    call site that happens to pass a literal ``{}`` (the guided auto-open), a real bug
+    found in self-review of this ticket, verified against ``settings_screen.py``."""
+    if not m:
+        return True
+    return (not any(m.get(r) for r in ("flow", "volume", "poes", "pgas", "pdi"))
+            and not m.get("emg") and not m.get("entropy"))
+
+
 class ChannelSetupDialog(QDialog):
     """Assign each raw data column to a physiological role, across a batch of files.
 
@@ -131,10 +151,22 @@ class ChannelSetupDialog(QDialog):
     (``_on_volume_from_flow_toggled``) — because the core loader (``core/io/loaders.py``)
     gives ``integrate_from_flow`` priority over an assigned column when both are set, so
     leaving both on would silently ignore whichever the user set second, the exact
-    silent-wrongness this ticket exists to close."""
+    silent-wrongness this ticket exists to close.
+
+    ``suggest_from_names`` (ticket D27, default on): when ``initial`` names no role at all
+    — either because it is falsy, or because every one of its values is (see
+    ``_mapping_names_no_role``: a never-configured analysis' saved mapping is a dict with
+    all 7 keys present but every value ``None``/``[]``, which is truthy as a Python object)
+    — seed the dropdowns from a conservative, case-insensitive lookup in the file's own
+    column names instead of leaving every row on "(unused)" — see
+    ``column_stack.infer_roles_from_names``. Only that one path is touched: a caller WITH
+    an existing mapping behaves exactly as before, and the entropy checkboxes are never
+    seeded this way. A seeded row is marked "suggested" in its header
+    (:meth:`_build_header`) until the user edits that row, so a guess can never look like a
+    confirmed choice."""
 
     def __init__(self, files, fs, initial=None, loader=None, parent=None, excluded=None,
-                integrate_from_flow=False):
+                integrate_from_flow=False, suggest_from_names=True):
         super().__init__(parent)
         self.setModal(True)
         # Opening size, clamped to the screen in showEvent. The HEIGHT is content-derived
@@ -179,6 +211,35 @@ class ChannelSetupDialog(QDialog):
         self.setWindowTitle("Assign channels — " + os.path.basename(self._files[start]))
 
         initial = initial or {}
+        # ticket D27: only a brand-new analysis (no saved mapping at all) gets seeded from
+        # the file's own column names. A single SINGLE-role (flow/volume/poes/pgas/pdi)
+        # inferred for more than one column is itself a form of ambiguity -- at the batch
+        # level, not just within one name -- so that role is left unseeded for every column
+        # that claimed it, rather than silently picking one.
+        self._suggested = set()                # 0-based column indices still marked "suggested"
+        self._suggested_labels = []             # index-aligned with self._combos
+        if suggest_from_names and _mapping_names_no_role(initial):
+            inferred = infer_roles_from_names(self._names)
+            single_hits, emg_cols = {}, []
+            for col0, role in inferred.items():
+                col1 = col0 + 1
+                if role == "emg":
+                    emg_cols.append(col1)
+                else:
+                    single_hits.setdefault(role, []).append(col1)
+            seeded = {}
+            seeded_cols = set()
+            for role, cols in single_hits.items():
+                if len(cols) == 1:
+                    seeded[role] = cols[0]
+                    seeded_cols.add(cols[0] - 1)
+            if emg_cols:
+                seeded["emg"] = emg_cols
+                seeded_cols.update(c - 1 for c in emg_cols)
+            if seeded_cols:
+                initial = seeded
+                self._suggested = seeded_cols
+        self._suggested_count = len(self._suggested)     # frozen: the footnote's wording
         preselect = self._roles_from_mapping(initial)      # column index -> role key
         has_volume_col = "volume" in preselect.values()
 
@@ -315,6 +376,7 @@ class ChannelSetupDialog(QDialog):
         dropdown."""
         if i == 0:
             self._combos.append(None); self._entropy_boxes.append(None)
+            self._suggested_labels.append(None)
             note = QLabel("time axis — not assignable"); note.setProperty("status", "muted")
             head.addWidget(note)
             return
@@ -325,6 +387,15 @@ class ChannelSetupDialog(QDialog):
         combo.currentIndexChanged.connect(lambda _idx, ci=i: self._on_role_changed(ci))
         self._combos.append(combo)
         head.addWidget(combo)
+        # ticket D27: a role seeded from the column's own name must never LOOK confirmed —
+        # this tag disappears (see _on_role_changed) the moment the user touches the row.
+        if i in self._suggested:
+            tag = QLabel("suggested"); tag.setProperty("status", "info")
+            tag.setToolTip("Guessed from the column name — check it.")
+            self._suggested_labels.append(tag)
+            head.addWidget(tag)
+        else:
+            self._suggested_labels.append(None)
         # Independent of the dropdown by construction — which is the whole point. Sample
         # entropy may be computed on any column, including one that already carries flow or
         # a pressure, so there is no conflict to resolve and no cross-column rule to get
@@ -452,8 +523,19 @@ class ChannelSetupDialog(QDialog):
         combo = self._combos[col_index]
         return "" if combo is None else _ROLES[combo.currentIndex()][0]   # None == the time column
 
+    def _dismiss_suggestion(self, col_index):
+        """Ticket D27: a role seeded from the column's own name must stop looking like a
+        guess the instant this row is touched — by the user directly, or (from
+        ``_on_role_changed``'s collision handling below) displaced by an edit made
+        elsewhere. Safe to call on a column that was never suggested."""
+        self._suggested.discard(col_index)
+        label = self._suggested_labels[col_index]
+        if label is not None:
+            label.setVisible(False)
+
     def _on_role_changed(self, col_index):
         role = self._role_of(col_index)
+        self._dismiss_suggestion(col_index)
         if role in _SINGLE:                         # enforce one-column-per single role
             for j, combo in enumerate(self._combos):
                 if combo is not None and j != col_index and self._role_of(j) == role:
@@ -461,6 +543,7 @@ class ChannelSetupDialog(QDialog):
                     combo.setCurrentIndex(0)        # (unused)
                     combo.blockSignals(False)
                     self._recolor(j)
+                    self._dismiss_suggestion(j)
         # ticket D02: a real Volume column now exists, so a still-ticked "derive from
         # flow" checkbox would silently win over it at run time (core/io/loaders.py gives
         # integrate_from_flow priority over an assigned column) — the exact kind of
@@ -495,6 +578,7 @@ class ChannelSetupDialog(QDialog):
                     combo.setCurrentIndex(0)            # (unused)
                     combo.blockSignals(False)
                     self._recolor(i)
+                    self._dismiss_suggestion(i)
         self._refresh_info()
 
     def _missing_required(self):
@@ -538,6 +622,13 @@ class ChannelSetupDialog(QDialog):
         # is still editing and might act on it.
         for note in self._kept_notes():
             text += f"  ·  {note}"
+        # ticket D27: named while ANY seeded row is still unreviewed — in both branches, for
+        # the same reason as the kept-role note above — and disappears on its own once every
+        # seeded row has been touched (self._suggested shrinks in _dismiss_suggestion).
+        if self._suggested:
+            n = self._suggested_count
+            text += (f"  ·  {n} column{'s' if n != 1 else ''} pre-filled from the column "
+                    "names, check them.")
         self.info.setText(text)
         if getattr(self, "_ok_btn", None) is not None:
             self._ok_btn.setEnabled(not missing and volume_ok)
