@@ -24,7 +24,7 @@ from respmech.ui.dialogs import open_error_dialog, short_error
 from respmech.ui.migration_report_dialog import open_migration_report
 from respmech.ui.flow_layout import install_flow
 from respmech.ui.help_text import tooltip as _tip
-from respmech.ui.manifest import build_manifest, narrow_mask
+from respmech.ui.manifest import build_manifest, group_readout, narrow_mask
 from respmech.ui.path_drop import install_path_drop
 from respmech.ui.section_flow import install_sections
 from respmech.ui.startup_dialog import LEGACY_FILTER, OPEN_FILTER, TOML_FILTER
@@ -264,6 +264,19 @@ class SettingsScreen(QWidget):
         self._row(fo, "Group files by", self.group_regex, "output.group_regex",
                   "How files are grouped (subject / condition) for the by-group summary. Leave blank to use "
                   "the leading filename token; or enter a regular expression whose first capture group is the key.")
+        # D19: a live read-out of what the pattern above ACTUALLY does, computed from the
+        # matched files' basenames alone (no data read, instant regardless of folder
+        # size) — before this, the only way to see whether a group pattern worked was to
+        # run the whole batch and open the written "By group" sheet in Excel, and a
+        # PARTIALLY matching pattern silently pooled the non-matching files into "(all)"
+        # with nothing on screen to distinguish that from a clean grouping. Same banner/
+        # status-property convention as ``format_readout`` above; see
+        # ``_update_group_readout``.
+        self.group_readout = QLabel(""); self.group_readout.setWordWrap(True)
+        self.group_readout.setProperty("banner", True)
+        self.group_readout.setProperty("status", "muted")
+        fo.addRow("", self.group_readout)
+        self._output_form = fo   # so _update_group_readout can hide the row when empty
         self.save_preview = QLabel(""); self.save_preview.setWordWrap(True)
         self.save_preview.setProperty("banner", True)
         self.save_preview.setProperty("status", "info")
@@ -714,6 +727,10 @@ class SettingsScreen(QWidget):
         self._sync_widgets()
         self.to_state()
         self._mark_dirty()
+        # D19: covers group_regex specifically -- the matched file list is unchanged (no
+        # need to rebuild self._manifest, unlike _on_inputs_changed), but the PATTERN
+        # just did, and the read-out must reflect it the moment the field is committed.
+        self._update_group_readout()
         self.settings_changed.emit()
         self._update_disclosure()   # last, so this screen's own validation status wins
 
@@ -952,6 +969,32 @@ class SettingsScreen(QWidget):
             # rebuild entirely.
             self._refresh_channel_view(force=True)
         self._update_qc()   # self._manifest just (re)built — the QC strip must never lag it
+        self._update_group_readout()   # D19: same reason — the matched file list may have changed
+
+    def _update_group_readout(self):
+        """D19: refresh the live "Group files by" read-out from the currently matched
+        batch. Called both here (piggy-backing on ``_update_format_readout``, which just
+        rebuilt ``self._manifest`` — the matched file list may have changed) and from
+        ``_on_field_changed`` (the pattern field itself was edited; no manifest rebuild
+        needed, the file list is unchanged).
+
+        Uses ``included_files`` (the majority column-count files), not every matched
+        file: a column-count outlier is already excluded from the batch before grouping
+        ever runs — ``build_cohort_summary`` only ever sees the files that made it into
+        ``average_table`` — so counting an outlier here would show a group composition
+        the run itself could never produce."""
+        m = getattr(self, "_manifest", None)
+        filenames = [f.filename for f in m.included_files] if m is not None else []
+        status, text = group_readout(filenames, self.state.settings)
+        lab = self.group_readout
+        lab.setText(text)
+        lab.setProperty("status", status)
+        lab.style().unpolish(lab); lab.style().polish(lab)
+        # Same convention as format_readout above: hide the row entirely rather than
+        # leave an empty banner-shaped gap when there is nothing to say yet.
+        form = getattr(self, "_output_form", None)
+        if form is not None:
+            form.setRowVisible(lab, bool(text))
 
     def _set_status(self, text):
         self.status.setText(text)

@@ -6,7 +6,8 @@ import os
 import pytest
 
 from respmech.settingsio.migrate import migrate_dict
-from respmech.ui.manifest import Manifest, build_manifest, narrow_mask
+from respmech.core.settings import Settings
+from respmech.ui.manifest import Manifest, build_manifest, group_readout, narrow_mask
 
 from _helpers import write_delim as _write_delim, write_xlsx as _write_xlsx
 
@@ -430,3 +431,58 @@ def test_manifest_with_no_matching_files_is_empty(tmp_path):
     s = _settings(str(tmp_path), "*.nope")
     m = build_manifest(str(tmp_path), "*.nope", s)
     assert m.files == () and m.majority_columns is None
+
+
+# --------------------------------------------------------------------------- #
+# group_readout (ticket D19: a live pre-run read-out of what "Group files by" does)
+# --------------------------------------------------------------------------- #
+_GROUP_FILES = ["P01_rest.csv", "P01_60W.csv", "P02_120W.csv"]
+
+
+def test_group_readout_is_empty_and_muted_for_no_files():
+    status, text = group_readout([], Settings())
+    assert status == "muted" and text == ""
+
+
+def test_group_readout_with_blank_pattern_uses_the_leading_token_default():
+    """No ``output.group_regex`` set: falls back to ``core.summary.group_key``'s own
+    default (the leading filename token), which the ticket's own worked example gives
+    as P01, P01, P02 -- two groups."""
+    status, text = group_readout(_GROUP_FILES, Settings())
+    assert status == "info"
+    assert "3 files" in text and "2 groups" in text
+    assert "P01 (2)" in text and "P02 (1)" in text
+
+
+def test_group_readout_warns_and_names_the_files_a_partial_pattern_pools_as_all():
+    """The ticket's own worked example: ``_([a-z]+)\\.csv`` matches P01_rest.csv (key
+    'rest') but neither P01_60W.csv nor P02_120W.csv (digits/uppercase aren't [a-z]) --
+    both pool into "(all)", and the read-out must say so and name them, not just quietly
+    report '2 groups' as if nothing were wrong."""
+    s = Settings()
+    s.output.group_regex = r"_([a-z]+)\.csv"
+    status, text = group_readout(_GROUP_FILES, s)
+    assert status == "warn"
+    assert "(all)" in text
+    assert "P01_60W.csv" in text and "P02_120W.csv" in text
+    assert "P01_rest.csv" not in text   # the one file that DID match must not be named as a straggler
+
+
+def test_group_readout_reports_a_clear_error_for_an_invalid_pattern_without_crashing():
+    """An unparsable regex must not silently fall back to pooling everything as "(all)"
+    the way core.summary.group_key itself does (that fallback exists so a bad pattern
+    never crashes a RUN, and stays untouched) -- the read-out re-validates independently
+    so it can show the user re.error's own message instead."""
+    s = Settings()
+    s.output.group_regex = "[unclosed"
+    status, text = group_readout(_GROUP_FILES, s)
+    assert status == "error"
+    assert text and "unterminated" in text.lower()   # re.error's own wording for this pattern
+
+
+def test_group_readout_truncates_a_large_group_count_like_named_list_does():
+    names = [f"P{n:02d}_rest.csv" for n in range(1, 9)]   # 8 distinct leading tokens
+    status, text = group_readout(names, Settings(), limit=6)
+    assert status == "info"
+    assert "8 files" in text and "8 groups" in text
+    assert "+2 more" in text

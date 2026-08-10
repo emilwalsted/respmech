@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (QCheckBox, QFileDialog, QHBoxLayout, QLabel, QMes
 from respmech.ui.dialogs import TextViewerDialog, exception_type_name, short_error
 from respmech.ui.file_rail import FileRail
 from respmech.ui.flow_layout import ElidingLabel, install_flow as _install_flow
-from respmech.ui.manifest import manifest_from_filenames
+from respmech.ui.manifest import group_readout, manifest_from_filenames
 from respmech.ui.panel import titled_panel
 from respmech.ui.result_table import ResultTableModel, configure_result_table, resize_result_table
 from respmech.ui.validation import blockers as _shared_blockers, matching_files, path_problem
@@ -576,6 +576,19 @@ class RunScreen(QWidget):
                      f"'{s.input.files}' in {s.input.folder}{subset}")
         for f in files:
             self._append(f"    • {os.path.basename(f)}")
+
+        # D19: the SAME grouping read-out Setup shows live under "Group files by",
+        # registered here before the run instead of only being visible afterwards by
+        # opening the written "By group" sheet. Built from this resolved ``files`` list's
+        # basenames rather than Setup's own (manifest-filtered, outlier-excluding)
+        # equivalent -- rebuilding a full Manifest here would mean re-probing every
+        # file's column count during what is otherwise a data-free pre-flight step; the
+        # two agree for the common case of a batch with no column-count outliers, and a
+        # batch WITH outliers already gets its own separate caution elsewhere in this
+        # same plan (D01/B01's manifest cautions, surfaced on Setup, not duplicated here).
+        _gr_status, gr_text = group_readout([os.path.basename(f) for f in files], s)
+        if gr_text:
+            self._append(f"Grouping: {gr_text}")
 
         from respmech.core.io.plan import plan_outputs
         cohort_outputs = not self._safe_is_subset_run(self._only_files)

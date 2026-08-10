@@ -23,9 +23,11 @@ not require a live ``QApplication``, but a test wanting total isolation can pass
 from __future__ import annotations
 
 import os
+import re
 from collections import Counter
 from dataclasses import dataclass
 
+from respmech.core.summary import group_key
 from respmech.ui.validation import matching_files
 
 
@@ -153,6 +155,61 @@ def manifest_from_filenames(folder, paths):
                               ext=os.path.splitext(p)[1].lower())
                     for p in paths)
     return Manifest(folder=folder, mask="", files=entries)
+
+
+def _short_list(names, limit):
+    """'name, name, +N more' -- the same truncation style as
+    ``SettingsScreen._named_list``, generalised to plain filename strings (that one takes
+    ``FileEntry`` objects)."""
+    shown = ", ".join(names[:limit])
+    extra = len(names) - limit
+    if extra > 0:
+        shown += f", +{extra} more"
+    return shown
+
+
+def group_readout(filenames, settings, limit=6):
+    """The live "Group files by" readout Setup shows directly under the field (ticket
+    D19), and the same line ``run_screen._append_plan`` repeats in the dry-run plan, so
+    the grouping a study will get is known BEFORE a run instead of only being visible
+    afterwards by opening the written cohort summary.
+
+    Computed from FILENAMES ALONE (no data is read, so this is instant regardless of
+    folder size) via :func:`respmech.core.summary.group_key` -- the SAME function
+    :func:`respmech.core.summary.build_cohort_summary` calls at write time, so what this
+    says is exactly what will land in the "By group" sheet. ``core.summary`` is
+    deliberately left untouched (its own ``except re.error`` fallback must go on quietly
+    pooling a bad pattern into ``"(all)"`` rather than crashing a run -- see the ticket):
+    this function independently re-validates the pattern with its own ``re.compile`` so
+    it can show the user ``re.error``'s own message instead of that silent fallback.
+
+    Returns ``(status, text)`` -- ``status`` is one of ``"muted"|"info"|"warn"|"error"``,
+    matching this codebase's banner-label convention
+    (``settings_screen._update_format_readout``); ``text`` is ``""`` when there is
+    nothing to say yet (no files matched), which the caller can use to hide the row
+    entirely (``QFormLayout.setRowVisible``, as the format read-out already does)."""
+    n = len(filenames)
+    if n == 0:
+        return "muted", ""
+    regex = getattr(getattr(settings, "output", None), "group_regex", None) if settings else None
+    if regex:
+        try:
+            re.compile(regex)
+        except re.error as e:
+            return "error", f"Invalid pattern: {e}"
+    keys = [group_key(f, settings) for f in filenames]
+    unmatched = [f for f, k in zip(filenames, keys) if k == "(all)"]
+    if unmatched:
+        return "warn", (f"{len(unmatched)} file{'s' if len(unmatched) != 1 else ''} do not "
+                        f"match — they will be pooled as (all): {_short_list(unmatched, limit)}")
+    counts = Counter(keys)
+    groups = sorted(counts)
+    parts = [f"{g} ({counts[g]})" for g in groups[:limit]]
+    extra = len(groups) - limit
+    if extra > 0:
+        parts.append(f"+{extra} more")
+    return "info", (f"{n} file{'s' if n != 1 else ''} → {len(groups)} group"
+                    f"{'s' if len(groups) != 1 else ''} · " + " · ".join(parts))
 
 
 def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=None,
