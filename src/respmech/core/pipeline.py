@@ -402,12 +402,12 @@ def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=
 
     if cfg.auto_prop:
         # Gather active/quiet EMG across the test (capped) to choose prop ONCE.
-        act, qui, cap, unreadable = [], [], 40000, []
+        act, qui, cap, unreadable, last_exc = [], [], 40000, [], None
         for fi in files:
             try:
                 emg_full, ins, ex = _emg_segmented(os.path.abspath(fi), s, cache=cache,
                                                    cancel_check=cancel_check)
-            except Exception:
+            except Exception as e:
                 # D18 point 2: a file that cannot be read cannot contribute to a profile
                 # it cannot be read for either. Skip it here so it fails normally, as an
                 # ordinary per-file error, in run_batch's own main loop below (which has
@@ -417,6 +417,7 @@ def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=
                 # 40000-sample cap (and so never reach a bad file sorted late) or hit it
                 # first (and abort), making a batch's success depend on file order.
                 unreadable.append(os.path.basename(fi))
+                last_exc = e
                 continue
             act.append(emg_full[ins]); qui.append(emg_full[ex])
             if sum(len(a) for a in act) >= cap:
@@ -426,11 +427,21 @@ def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=
             # through would hand an empty list to np.concatenate below, which raises a
             # bare "need at least one array to concatenate" -- naming no file and no
             # cause, i.e. strictly worse than the abort this ticket exists to fix. Name
-            # what actually happened instead.
-            raise ValueError(
-                "Could not auto-select the noise reduction strength (auto_prop): none of "
-                f"the {len(files)} batch file{'s' if len(files) != 1 else ''} could be "
-                f"read ({', '.join(unreadable)}).")
+            # what actually happened instead, and -- second self-review finding, found by
+            # a regression this surfaced in ui/workers.py's stage_noise_fidelity (which
+            # has no per-file loop of its own to fall back into; it calls this function
+            # directly and depends on catching a TrimError/DataValidationError BY TYPE
+            # to build its own friendly message) -- preserve `last_exc`'s TYPE the same
+            # way ``_reference_noise_clip`` does, rather than always raising a bare
+            # ValueError that such a type-keyed caller cannot recognise.
+            msg = ("Could not auto-select the noise reduction strength (auto_prop): none of "
+                  f"the {len(files)} batch file{'s' if len(files) != 1 else ''} could be "
+                  f"read ({', '.join(unreadable)}): {last_exc}")
+            try:
+                wrapped = type(last_exc)(msg)
+            except TypeError:
+                wrapped = ValueError(msg)
+            raise wrapped from last_exc
         if unreadable:
             # Self-review finding (10-08-2026): the skip above was otherwise completely
             # silent -- no warning, no progress event -- so a batch could complete having

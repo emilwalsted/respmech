@@ -577,21 +577,28 @@ class RunScreen(QWidget):
         for f in files:
             self._append(f"    • {os.path.basename(f)}")
 
+        from respmech.core.io.plan import plan_outputs
+        cohort_outputs = not self._safe_is_subset_run(self._only_files)
+
         # D19: the SAME grouping read-out Setup shows live under "Group files by",
         # registered here before the run instead of only being visible afterwards by
         # opening the written "By group" sheet. Built from this resolved ``files`` list's
-        # basenames rather than Setup's own (manifest-filtered, outlier-excluding)
-        # equivalent -- rebuilding a full Manifest here would mean re-probing every
-        # file's column count during what is otherwise a data-free pre-flight step; the
-        # two agree for the common case of a batch with no column-count outliers, and a
-        # batch WITH outliers already gets its own separate caution elsewhere in this
-        # same plan (D01/B01's manifest cautions, surfaced on Setup, not duplicated here).
-        _gr_status, gr_text = group_readout([os.path.basename(f) for f in files], s)
-        if gr_text:
-            self._append(f"Grouping: {gr_text}")
+        # basenames -- the SAME set ``run_batch`` actually iterates, unlike Setup's own
+        # manifest-derived list before its self-review fix (10-08-2026) mistakenly
+        # narrowed it to a UI-side "majority column count" subset; see
+        # ``group_readout``'s and ``SettingsScreen._update_group_readout``'s docstrings
+        # for that history. Shown only when a cohort summary will actually be written --
+        # the same ``save_average and cohort_outputs`` gate ``plan_outputs``/
+        # ``write_batch`` use below (self-review fix: the line used to appear
+        # unconditionally, describing a "By group" sheet that a subset re-run or
+        # save_average=False would never write, directly under an output list that
+        # correctly listed no such file -- contradicting this method's own "never a
+        # black box" rationale).
+        if s.output.data.save_average and cohort_outputs:
+            _gr_status, gr_text = group_readout([os.path.basename(f) for f in files], s)
+            if gr_text:
+                self._append(f"Grouping: {gr_text}")
 
-        from respmech.core.io.plan import plan_outputs
-        cohort_outputs = not self._safe_is_subset_run(self._only_files)
         plan = plan_outputs(s, files, cohort_outputs=cohort_outputs)
         self._last_plan = plan
         self.btn_show_plan.setEnabled(True)

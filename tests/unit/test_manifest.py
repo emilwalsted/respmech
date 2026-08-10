@@ -466,6 +466,31 @@ def test_group_readout_warns_and_names_the_files_a_partial_pattern_pools_as_all(
     assert "(all)" in text
     assert "P01_60W.csv" in text and "P02_120W.csv" in text
     assert "P01_rest.csv" not in text   # the one file that DID match must not be named as a straggler
+    assert "2 files do not match" in text   # plural
+
+
+def test_group_readout_warns_with_correct_singular_grammar_for_one_straggler():
+    """Self-review fix (10-08-2026): the info branch already got singular/plural right
+    ('1 file -> 1 group'); the warn branch's message did not ('1 file do not match')."""
+    s = Settings()
+    s.output.group_regex = r"_([a-z]+)\.csv"
+    status, text = group_readout(["P01_rest.csv", "P02_60W.csv"], s)
+    assert status == "warn"
+    assert "1 file does not match" in text
+
+
+def test_group_readout_does_not_warn_when_a_files_own_leading_token_is_the_all_sentinel():
+    """Self-review fix (10-08-2026): under the DEFAULT (blank-pattern) grouping,
+    core.summary.group_key's leading-token fallback returns the token verbatim and never
+    itself produces the literal string "(all)" -- that string is only ever a SENTINEL
+    from the regex branch's own "nothing matched" fallback. A file coincidentally named
+    so its leading token happens to spell "(all)" must therefore be reported as a normal,
+    successfully-grouped file, not as a straggler from a pattern that (with no regex set)
+    does not even exist."""
+    status, text = group_readout(["(all)_rest.csv", "(all)_60W.csv"], Settings())
+    assert status == "info"
+    assert "do not match" not in text
+    assert "(all) (2)" in text   # the group name IS the string "(all)", correctly reported
 
 
 def test_group_readout_reports_a_clear_error_for_an_invalid_pattern_without_crashing():
@@ -480,9 +505,35 @@ def test_group_readout_reports_a_clear_error_for_an_invalid_pattern_without_cras
     assert text and "unterminated" in text.lower()   # re.error's own wording for this pattern
 
 
+def test_group_readout_reports_an_invalid_pattern_even_with_no_files_matched_yet():
+    """Self-review fix (10-08-2026): the pattern is now validated BEFORE the no-files
+    check. An unparsable regex is knowable without any files at all, and a user who has
+    typed one deserves to be told, rather than getting silence indistinguishable from
+    'nothing scanned yet' -- the original ordering reported "muted"/"" here."""
+    s = Settings()
+    s.output.group_regex = "[unclosed"
+    status, text = group_readout([], s)
+    assert status == "error"
+    assert "unterminated" in text.lower()
+
+
 def test_group_readout_truncates_a_large_group_count_like_named_list_does():
     names = [f"P{n:02d}_rest.csv" for n in range(1, 9)]   # 8 distinct leading tokens
-    status, text = group_readout(names, Settings(), limit=6)
+    status, text = group_readout(names, Settings(), group_limit=6)
     assert status == "info"
     assert "8 files" in text and "8 groups" in text
     assert "+2 more" in text
+
+
+def test_group_readout_truncates_the_straggler_list_separately_from_the_group_list():
+    """file_limit (stragglers, a filename list) and group_limit (group summaries, short
+    'NAME (n)' tokens) are independent -- a batch that produces few groups but many
+    straggler filenames should truncate the filenames at file_limit regardless of
+    group_limit."""
+    names = [f"P{n:02d}.dat" for n in range(1, 6)]   # none of these end in .csv -> all "(all)"
+    s = Settings()
+    s.output.group_regex = r"\.csv$"
+    status, text = group_readout(names, s, file_limit=2)
+    assert status == "warn"
+    assert "5 files do not match" in text
+    assert "+3 more" in text

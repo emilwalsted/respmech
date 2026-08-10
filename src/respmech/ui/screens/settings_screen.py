@@ -978,15 +978,27 @@ class SettingsScreen(QWidget):
         ``_on_field_changed`` (the pattern field itself was edited; no manifest rebuild
         needed, the file list is unchanged).
 
-        Uses ``included_files`` (the majority column-count files), not every matched
-        file: a column-count outlier is already excluded from the batch before grouping
-        ever runs — ``build_cohort_summary`` only ever sees the files that made it into
-        ``average_table`` — so counting an outlier here would show a group composition
-        the run itself could never produce."""
+        Uses ``self._manifest.files`` -- EVERY matched file, not ``included_files`` (the
+        UI's own majority-column-count subset). Self-review fix (10-08-2026): the first
+        version of this method used ``included_files``, reasoning that a column-count
+        outlier "is already excluded from the batch before grouping ever runs" -- that is
+        false. ``core.pipeline.run_batch`` iterates the FULL matched file list with no
+        column-count pre-filter at all (``included_files``/``outliers`` is a manifest
+        concept the UI computes for its OWN cautions; the core run path has never heard
+        of it). Verified end to end: a batch with one column-count outlier showed a clean
+        "info" read-out on Setup while the real run pooled that same file into "(all)" in
+        the written "By group" sheet -- a false all-clear in exactly the scenario this
+        feature exists to catch. Using every matched file instead means this can show a
+        FALSE WARNING for a file that would separately fail to load entirely (and so
+        never reach the written summary either way) -- an accepted, conservative
+        trade-off: overwarning about a file that will fail anyway is far cheaper than
+        silently mis-reporting one that will actually be grouped as "(all)"."""
         m = getattr(self, "_manifest", None)
-        filenames = [f.filename for f in m.included_files] if m is not None else []
+        filenames = [f.filename for f in m.files] if m is not None else []
         status, text = group_readout(filenames, self.state.settings)
-        lab = self.group_readout
+        lab = getattr(self, "group_readout", None)
+        if lab is None:
+            return
         lab.setText(text)
         lab.setProperty("status", status)
         lab.style().unpolish(lab); lab.style().polish(lab)

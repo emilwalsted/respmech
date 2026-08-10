@@ -132,20 +132,29 @@ def test_every_file_failing_in_auto_prop_raises_a_clear_error(tmp_path):
     which raises a bare 'need at least one array to concatenate' naming no file and no
     cause -- worse than the batch-aborting bug D18 exists to fix in the first place.
     ``_emg_segmented`` (what the collection loop calls per file) is patched to always
-    fail, so every batch file hits that path, while the shared reference clip is built
-    via the (unpatched) explicit-``reference_intervals`` branch of
-    ``_reference_noise_clip``, which does not call ``_emg_segmented`` at all -- this
-    isolates "the collection loop itself has nothing to work with" from "the reference
-    file is unreadable" (already covered above), matching how this can happen for real
-    (e.g. a mis-assigned/inverted flow channel fails every file's breath segmentation
-    while the reference clip, built more permissively, still succeeds)."""
+    raise ``TrimError`` (the real-world trigger this docstring already names: a
+    mis-assigned/inverted flow channel fails every file's breath segmentation), so every
+    batch file hits that path, while the shared reference clip is built via the
+    (unpatched) explicit-``reference_intervals`` branch of ``_reference_noise_clip``,
+    which does not call ``_emg_segmented`` at all -- this isolates "the collection loop
+    itself has nothing to work with" from "the reference file is unreadable" (already
+    covered above)."""
+    from respmech.core.compute import TrimError
+
     indir, good_names = _make_batch(tmp_path, n_good=3)
     settings = _settings(indir, tmp_path / "out", reference_file=good_names[0])
     settings.processing.emg.noise.use_expiration = False
     settings.processing.emg.noise.reference_intervals = [[0.0, 1.0]]
 
-    with patch("respmech.core.pipeline._emg_segmented", side_effect=RuntimeError("boom")):
-        with pytest.raises(ValueError, match="auto_prop"):
+    with patch("respmech.core.pipeline._emg_segmented",
+              side_effect=TrimError("flow never crosses zero")):
+        # A second self-review fix (10-08-2026, made while fixing D19): the original type
+        # is preserved (not flattened to a bare ValueError) precisely because
+        # ui/workers.py's stage_noise_fidelity has no per-file fallback of its own and
+        # depends on catching TrimError/DataValidationError BY TYPE to build its own
+        # friendly message -- verified broken and then fixed via
+        # tests/unit/test_gui_interactive.py::test_noise_fidelity_trim_error_returns_clean_error_dict.
+        with pytest.raises(TrimError, match="auto_prop"):
             run_batch(settings)
 
 

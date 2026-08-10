@@ -27,7 +27,6 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
-from respmech.core.summary import group_key
 from respmech.ui.validation import matching_files
 
 
@@ -159,8 +158,12 @@ def manifest_from_filenames(folder, paths):
 
 def _short_list(names, limit):
     """'name, name, +N more' -- the same truncation style as
-    ``SettingsScreen._named_list``, generalised to plain filename strings (that one takes
-    ``FileEntry`` objects)."""
+    ``SettingsScreen._named_by_filename``/``_named_list`` (a near-duplicate kept here,
+    not imported from there: this module must stay importable without pulling in
+    ``settings_screen.py`` or Qt at all -- see the module docstring above -- and those
+    two take ``FileEntry``/differently-shaped inputs). ``limit`` matches
+    ``_named_by_filename``'s own default (3) when called on a filename list below, so a
+    caution never grows unboundedly long over a large batch."""
     shown = ", ".join(names[:limit])
     extra = len(names) - limit
     if extra > 0:
@@ -168,7 +171,7 @@ def _short_list(names, limit):
     return shown
 
 
-def group_readout(filenames, settings, limit=6):
+def group_readout(filenames, settings, file_limit=3, group_limit=6):
     """The live "Group files by" readout Setup shows directly under the field (ticket
     D19), and the same line ``run_screen._append_plan`` repeats in the dry-run plan, so
     the grouping a study will get is known BEFORE a run instead of only being visible
@@ -176,36 +179,72 @@ def group_readout(filenames, settings, limit=6):
 
     Computed from FILENAMES ALONE (no data is read, so this is instant regardless of
     folder size) via :func:`respmech.core.summary.group_key` -- the SAME function
-    :func:`respmech.core.summary.build_cohort_summary` calls at write time, so what this
-    says is exactly what will land in the "By group" sheet. ``core.summary`` is
-    deliberately left untouched (its own ``except re.error`` fallback must go on quietly
-    pooling a bad pattern into ``"(all)"`` rather than crashing a run -- see the ticket):
-    this function independently re-validates the pattern with its own ``re.compile`` so
-    it can show the user ``re.error``'s own message instead of that silent fallback.
+    :func:`respmech.core.summary.build_cohort_summary` calls at write time, so a given
+    pattern groups a given filename identically here and in the written workbook.
+    ``core.summary`` is deliberately left untouched (its own ``except re.error``
+    fallback must go on quietly pooling a bad pattern into ``"(all)"`` rather than
+    crashing a run -- see the ticket): this function independently re-validates the
+    pattern with its own ``re.compile`` so it can show the user ``re.error``'s own
+    message instead of that silent fallback. Note the ONE thing this cannot promise:
+    when every file lands in a single group, ``build_cohort_summary`` writes NO "By
+    group" sheet at all (nothing to compare) -- this read-out still reports that single
+    group rather than claiming there is nothing to say, which is deliberate (silence
+    here would be indistinguishable from "no files matched yet"), but callers showing
+    this text should not assume a "By group" sheet is coming just because this is
+    non-empty.
+
+    Callers must pass filenames from the SAME set ``core.pipeline.run_batch`` will
+    actually iterate (self-review fix, 10-08-2026): passing a narrower, pre-filtered
+    list -- e.g. only a UI-side "majority column count" subset -- can silently hide a
+    file that the real run WILL process and group into "(all)", giving a false all-clear
+    for exactly the situation this read-out exists to catch. See
+    ``SettingsScreen._update_group_readout`` for the concrete history of that mistake.
 
     Returns ``(status, text)`` -- ``status`` is one of ``"muted"|"info"|"warn"|"error"``,
     matching this codebase's banner-label convention
     (``settings_screen._update_format_readout``); ``text`` is ``""`` when there is
     nothing to say yet (no files matched), which the caller can use to hide the row
-    entirely (``QFormLayout.setRowVisible``, as the format read-out already does)."""
-    n = len(filenames)
-    if n == 0:
-        return "muted", ""
+    entirely (``QFormLayout.setRowVisible``, as the format read-out already does).
+
+    The pattern is validated BEFORE the no-files check, not after: an unparsable regex
+    is worth reporting even before any folder is chosen (self-review fix -- the reverse
+    order left an invalid pattern silently unreported whenever nothing had matched yet,
+    which is exactly the "typed something objectively wrong" case a live read-out should
+    not be quiet about)."""
+    from respmech.core.summary import group_key   # lazy (self-review fix, 10-08-2026): a
+    # module-level import here would drag core.summary's pandas/numpy import onto this
+    # Qt-free module's own import, and settings_screen.py imports THIS module at its own
+    # top level -- so a module-level import here silently pulled pandas onto the app's
+    # synchronous GUI startup path, failing tests/unit/test_startup_imports.py (which
+    # exists precisely to catch this). ui/workers.py is already deferred exactly the same
+    # way, 150 lines below, for the identical reason -- see build_manifest's docstring.
     regex = getattr(getattr(settings, "output", None), "group_regex", None) if settings else None
     if regex:
         try:
             re.compile(regex)
         except re.error as e:
             return "error", f"Invalid pattern: {e}"
+    n = len(filenames)
+    if n == 0:
+        return "muted", ""
     keys = [group_key(f, settings) for f in filenames]
-    unmatched = [f for f, k in zip(filenames, keys) if k == "(all)"]
+    # Self-review fix (10-08-2026): gated on `regex` being set. group_key's DEFAULT
+    # (blank-pattern) path is the leading filename token, returned verbatim -- it never
+    # falls back to the literal string "(all)" itself. Only the regex branch's
+    # no-match/no-groups fallback can produce that sentinel. Without this guard, a file
+    # whose own leading token happens to BE the string "(all)" (e.g. "(all)_rest.csv")
+    # would wrongly trigger the warning below about a pattern that, under the default
+    # grouping, does not even exist.
+    unmatched = [f for f, k in zip(filenames, keys) if k == "(all)"] if regex else []
     if unmatched:
-        return "warn", (f"{len(unmatched)} file{'s' if len(unmatched) != 1 else ''} do not "
-                        f"match — they will be pooled as (all): {_short_list(unmatched, limit)}")
+        verb = "does" if len(unmatched) == 1 else "do"
+        return "warn", (f"{len(unmatched)} file{'s' if len(unmatched) != 1 else ''} {verb} not "
+                        f"match — they will be pooled as (all): "
+                        f"{_short_list(unmatched, file_limit)}")
     counts = Counter(keys)
     groups = sorted(counts)
-    parts = [f"{g} ({counts[g]})" for g in groups[:limit]]
-    extra = len(groups) - limit
+    parts = [f"{g} ({counts[g]})" for g in groups[:group_limit]]
+    extra = len(groups) - group_limit
     if extra > 0:
         parts.append(f"+{extra} more")
     return "info", (f"{n} file{'s' if n != 1 else ''} → {len(groups)} group"
