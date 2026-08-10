@@ -351,7 +351,13 @@ def _reference_noise_clip(settings, s, cache=None, cancel_check=None):
     is never merely skipped: it IS the shared noise reference, so if it cannot be read
     the profile cannot be built at all (D18 point 3). The failure is re-raised naming
     the reference file in plain English, since the underlying loader error may not
-    mention it at all (e.g. a bare ``EmptyDataError`` for a 0-byte file)."""
+    mention it at all (e.g. a bare ``EmptyDataError`` for a 0-byte file) -- but the
+    ORIGINAL exception type is preserved where possible (falling back to ``ValueError``
+    only when the type itself refuses a single-message constructor): callers such as
+    ``ui/workers.py``'s ``stage_noise_fidelity`` and ``ui/screens/run_screen.py``'s
+    fix-hint lookup key their handling off ``DataValidationError``/``TrimError``/
+    ``FileNotFoundError`` specifically, and a bare ``ValueError`` here would silently
+    fall through both (self-review finding, 10-08-2026)."""
     ns_cfg = settings.processing.emg.noise
     ref = ns_cfg.reference_file
     if not ref:
@@ -369,7 +375,12 @@ def _reference_noise_clip(settings, s, cache=None, cancel_check=None):
             parts = [emg_ecg[int(t0 * fs):int(t1 * fs)] for t0, t1 in ns_cfg.reference_intervals]
             clip = np.concatenate(parts, axis=0)
     except Exception as e:
-        raise ValueError(f"Could not read the noise reference file '{ref}': {e}") from e
+        msg = f"Could not read the noise reference file '{ref}': {e}"
+        try:
+            wrapped = type(e)(msg)
+        except TypeError:
+            wrapped = ValueError(msg)
+        raise wrapped from e
     return clip
 
 
@@ -391,7 +402,7 @@ def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=
 
     if cfg.auto_prop:
         # Gather active/quiet EMG across the test (capped) to choose prop ONCE.
-        act, qui, cap = [], [], 40000
+        act, qui, cap, unreadable = [], [], 40000, []
         for fi in files:
             try:
                 emg_full, ins, ex = _emg_segmented(os.path.abspath(fi), s, cache=cache,
@@ -405,10 +416,31 @@ def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=
                 # independent of where the bad file sorts: the old code could reach the
                 # 40000-sample cap (and so never reach a bad file sorted late) or hit it
                 # first (and abort), making a batch's success depend on file order.
+                unreadable.append(os.path.basename(fi))
                 continue
             act.append(emg_full[ins]); qui.append(emg_full[ex])
             if sum(len(a) for a in act) >= cap:
                 break
+        if not act:
+            # Self-review finding (10-08-2026): if EVERY file failed above, falling
+            # through would hand an empty list to np.concatenate below, which raises a
+            # bare "need at least one array to concatenate" -- naming no file and no
+            # cause, i.e. strictly worse than the abort this ticket exists to fix. Name
+            # what actually happened instead.
+            raise ValueError(
+                "Could not auto-select the noise reduction strength (auto_prop): none of "
+                f"the {len(files)} batch file{'s' if len(files) != 1 else ''} could be "
+                f"read ({', '.join(unreadable)}).")
+        if unreadable:
+            # Self-review finding (10-08-2026): the skip above was otherwise completely
+            # silent -- no warning, no progress event -- so a batch could complete having
+            # quietly chosen its shared noise-reduction strength from fewer files than
+            # the user thinks it did.
+            warnings.warn(
+                f"auto_prop: {len(unreadable)} of {len(files)} file"
+                f"{'s' if len(unreadable) != 1 else ''} could not be read and were "
+                f"excluded from noise-reduction-strength selection: "
+                f"{', '.join(unreadable)}")
         active = np.concatenate(act, axis=0)[:cap]
         quiet = np.concatenate(qui, axis=0)[:cap]
         prop, report = noiselib.select_prop_decrease(
