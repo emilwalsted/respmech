@@ -59,6 +59,23 @@ def _result_with_failure():
                            ok_files={"synth_case_A.csv": ok})
 
 
+def _result_all_failed():
+    """Ticket D17: every file in the batch failed — the run still 'finished' (no fatal
+    message, not cancelled), but produced nothing usable."""
+    bad = SimpleNamespace(error="TrimError: too few breaths", breaths_table=None)
+    return SimpleNamespace(files={"synth_case_A.csv": bad},
+                           failed_files={"synth_case_A.csv": bad},
+                           ok_files={})
+
+
+def _result_all_ok():
+    ok_a = SimpleNamespace(error=None, breaths_table=pd.DataFrame({"vt": [0.5, 0.6]}))
+    ok_b = SimpleNamespace(error=None, breaths_table=pd.DataFrame({"vt": [0.4]}))
+    return SimpleNamespace(files={"synth_case_A.csv": ok_a, "synth_case_B.csv": ok_b},
+                           failed_files={},
+                           ok_files={"synth_case_A.csv": ok_a, "synth_case_B.csv": ok_b})
+
+
 # --------------------------------------------------------------------------- #
 # P20/B02 — per-file results (file rail) + drill-back
 # --------------------------------------------------------------------------- #
@@ -236,6 +253,138 @@ def test_open_output_button_starts_disabled(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(synth_settings(tmp_path))); rn = win.run_screen
     assert not rn.btn_open.isEnabled()                        # enabled only after a real write
+    win.close()
+
+
+# ---------------------------------------------------------------------------
+# D17 — output-folder honesty after a failed/mixed/re-run batch
+# ---------------------------------------------------------------------------
+def test_open_output_folder_stays_disabled_when_every_file_failed(qapp, tmp_path):
+    """A batch where every file fails still 'finishes' (no fatal message, not cancelled),
+    but writes nothing usable — the old guard only checked for the ABSENCE of a fatal
+    error, not the PRESENCE of anything to open."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(tmp_path))); rn = win.run_screen
+    rn._last_write = True
+    rn._run_settings_snapshot = rn.state.settings
+    rn._fatal_msg = None
+    rn._on_finished(_result_all_failed())
+    assert not rn.btn_open.isEnabled()
+    win.close()
+
+
+def test_open_output_folder_enabled_when_at_least_one_file_succeeded(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(tmp_path))); rn = win.run_screen
+    rn._last_write = True
+    rn._run_settings_snapshot = rn.state.settings
+    rn._fatal_msg = None
+    rn._on_finished(_result_with_failure())            # one ok, one failed
+    assert rn.btn_open.isEnabled()
+    win.close()
+
+
+def test_overwrite_split_distinguishes_replaced_from_remaining(qapp, tmp_path):
+    """A run restricted (via the input mask) to just synth_case_B.csv must not claim it
+    will replace synth_case_A.csv's own results from an earlier, wider run."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(tmp_path)
+    win = MainWindow(AppState(s)); rn = win.run_screen
+    data = tmp_path / "data"; data.mkdir()
+    (data / "synth_case_A.csv.breathdata.xlsx").write_text("x")   # from an earlier, wider run
+    (data / "synth_case_B.csv.breathdata.xlsx").write_text("x")
+    (data / "Average breathdata.xlsx").write_text("x")
+    (tmp_path / "run-report.txt").write_text("x")
+    (tmp_path / "analysis-used.toml").write_text("x")
+    replaced, remaining = rn._overwrite_split(["synth_case_B.csv"])
+    assert replaced == 4    # B's own workbook + Average + the two provenance files
+    assert remaining == 1   # A's own workbook, untouched by a B-only run
+    win.close()
+
+
+def test_overwrite_prompt_text_names_both_counts(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(tmp_path)
+    win = MainWindow(AppState(s)); rn = win.run_screen
+    data = tmp_path / "data"; data.mkdir()
+    (data / "synth_case_A.csv.breathdata.xlsx").write_text("x")
+    (data / "synth_case_B.csv.breathdata.xlsx").write_text("x")
+    (data / "Average breathdata.xlsx").write_text("x")
+    (tmp_path / "run-report.txt").write_text("x")
+    (tmp_path / "analysis-used.toml").write_text("x")
+    existing = rn._existing_output()
+    text = rn._overwrite_prompt_text(existing, ["synth_case_B.csv"])
+    assert "4" in text and "1" in text
+    assert "replaced" in text and "remain" in text
+    win.close()
+
+
+def test_error_window_closes_after_a_subsequent_clean_run(qapp, tmp_path):
+    """A run that failed leaves the copyable error window open; a LATER run that finishes
+    clean must close it rather than leave a stale complaint on screen."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(tmp_path))); rn = win.run_screen
+    rn._last_write = True
+    rn._run_settings_snapshot = rn.state.settings
+    rn._fatal_msg = None
+    rn._on_finished(_result_with_failure())          # one file failed -> error window opens
+    assert rn._error_dialog is not None
+    rn._on_finished(_result_all_ok())                 # a later, clean run
+    assert rn._error_dialog is None
+    win.close()
+
+
+def test_clear_first_checkbox_removes_stale_files_before_a_real_run(qapp, tmp_path):
+    """Ticking 'Clear previous results first' (simulated by stubbing _confirm_overwrite,
+    same pattern the routing tests above use) and then running leaves data/ and
+    diagnostics/ holding only the just-finished run's own files, not a mix of fresh
+    output and whatever an earlier, differently-scoped run left behind. The deletion
+    itself must happen in the UI layer before the worker thread starts, never inside
+    core.io.writers.write_batch (shared with the CLI)."""
+    win = _win(tmp_path); rn = win.run_screen
+    data = tmp_path / "data"; data.mkdir()
+    stale = data / "subj_from_a_different_run.csv.breathdata.xlsx"
+    stale.write_text("stale")
+    diagnostics = tmp_path / "diagnostics"; diagnostics.mkdir()
+    stale_fig = diagnostics / "subj_from_a_different_run.csv - stale.pdf"
+    stale_fig.write_text("stale")
+    (tmp_path / "analysis-used.toml").write_text("x")     # provenance: never deleted directly
+
+    def _confirm(existing):
+        rn._clear_existing_first = True
+        return True
+    rn._confirm_overwrite = _confirm
+
+    rn._start(write=True)
+    _pump_until_thread_done(qapp, rn)
+    assert not stale.exists()
+    assert not stale_fig.exists()
+    assert (tmp_path / "analysis-used.toml").exists()      # rewritten by the run, not just gone
+    assert (data / "synth_case_A.csv.breathdata.xlsx").exists()
+    assert (data / "synth_case_B.csv.breathdata.xlsx").exists()
+    win.close()
+
+
+def test_clear_existing_output_touches_only_data_and_diagnostics(qapp, tmp_path):
+    """A direct, isolated test of the deletion itself (ticket D17): only files directly
+    under data/ and diagnostics/ are removed — root provenance files, subfolders and
+    anything outside the output folder are left exactly as they are."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(tmp_path))); rn = win.run_screen
+    data = tmp_path / "data"; data.mkdir()
+    (data / "a.xlsx").write_text("x")
+    diagnostics = tmp_path / "diagnostics"; diagnostics.mkdir()
+    (diagnostics / "b.pdf").write_text("x")
+    (tmp_path / "analysis-used.toml").write_text("x")
+    (tmp_path / "run-report.txt").write_text("x")
+    nested_dir = data / "nested"; nested_dir.mkdir()
+    nested_file = nested_dir / "inner.xlsx"; nested_file.write_text("x")
+    rn._clear_existing_output()
+    assert not (data / "a.xlsx").exists()
+    assert not (diagnostics / "b.pdf").exists()
+    assert (tmp_path / "analysis-used.toml").exists()
+    assert (tmp_path / "run-report.txt").exists()
+    assert nested_file.exists()             # a subfolder's own contents, never recursed into
     win.close()
 
 

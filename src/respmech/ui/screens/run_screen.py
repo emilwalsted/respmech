@@ -18,8 +18,9 @@ import tempfile
 
 from PySide6.QtCore import Qt, Signal, QThread, QTimer, QUrl, QElapsedTimer
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QMessageBox, QProgressBar,
-                               QPushButton, QTableView, QPlainTextEdit, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QFileDialog, QHBoxLayout, QLabel, QMessageBox,
+                               QProgressBar, QPushButton, QTableView, QPlainTextEdit,
+                               QVBoxLayout, QWidget)
 
 from respmech.ui.dialogs import TextViewerDialog, exception_type_name, short_error
 from respmech.ui.file_rail import FileRail
@@ -129,6 +130,10 @@ class RunScreen(QWidget):
         # exact same file list and can never quietly disagree.
         self._matched_files = []
         self._matched_files_key = None
+        # D17: set by _confirm_overwrite's "Clear previous results first" checkbox, read
+        # and acted on by _start (never inside the dialog itself, so a cancelled dialog
+        # can never delete anything).
+        self._clear_existing_first = False
         self._build()
         # Called inline, NOT deferred via QTimer.singleShot(0, ...): that was tried first
         # (self-review finding: this resolves the real matched file list and calls
@@ -671,6 +676,64 @@ class RunScreen(QWidget):
                     cats.append(f"{n} {label}{'s' if n != 1 else ''}")
         return cats
 
+    def _existing_output_files(self):
+        """Every existing result file in the output folder, as a path relative to it — the
+        same shape ``core.io.plan.plan_outputs`` writes into ``Plan.all_paths()``. Ticket
+        D17's overwrite guard intersects this against a run's own planned outputs so it can
+        tell the user which existing files it would actually replace versus leave behind,
+        instead of a blanket "will be overwritten" that used to include files a narrower
+        run's mask or settings never even touch."""
+        out = (self.state.settings.output.folder or "").strip()
+        rels = []
+        if not out or not os.path.isdir(out):
+            return rels
+        for name in ("analysis-used.toml", "run-report.txt"):
+            if os.path.isfile(os.path.join(out, name)):
+                rels.append(name)
+        for sub in ("data", "diagnostics"):
+            d = os.path.join(out, sub)
+            if os.path.isdir(d):
+                rels.extend(f"{sub}/{n}" for n in os.listdir(d)
+                           if os.path.isfile(os.path.join(d, n)))
+        return rels
+
+    def _overwrite_split(self, files):
+        """(replaced, remaining) — how many of the output folder's EXISTING result files a
+        run over ``files`` would actually replace, versus how many belong to an earlier run
+        with a different mask/settings and would be left exactly as they are (ticket D17).
+        Compares against ``core.io.plan.plan_outputs`` for ``files`` — the SAME planner the
+        commitment sheet and the pre-flight log already read — so this can never name a
+        different set of paths than what the run itself is about to attempt."""
+        from respmech.core.io.plan import plan_outputs
+        existing = set(self._existing_output_files())
+        try:
+            planned = set(plan_outputs(self.state.settings, files, cohort_outputs=True).all_paths())
+        except Exception:                      # noqa: BLE001 - display-only, never fatal
+            planned = set()
+        return len(existing & planned), len(existing - planned)
+
+    def _clear_existing_output(self):
+        """Ticket D17's "Clear previous results first" checkbox, acted on: remove every
+        FILE directly under ``data/`` and ``diagnostics/`` — never anything else, never a
+        subfolder — before the worker thread starts. Lives here in the UI layer, not
+        ``core.io.writers.write_batch``, which the CLI shares and must never start deleting
+        files on its own initiative; only ever called from ``_start`` after
+        ``_confirm_overwrite`` has returned with the checkbox ticked."""
+        out = (self.state.settings.output.folder or "").strip()
+        if not out:
+            return
+        for sub in ("data", "diagnostics"):
+            d = os.path.join(out, sub)
+            if not os.path.isdir(d):
+                continue
+            for name in os.listdir(d):
+                p = os.path.join(d, name)
+                if os.path.isfile(p):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+
     def _safe_is_subset_run(self, only_files) -> bool:
         """``core.pipeline.is_subset_run``, guarded: it re-lists the input folder
         (``os.listdir``), which — like the very same check inside ``BatchWorker.run``
@@ -688,19 +751,50 @@ class RunScreen(QWidget):
         except OSError:
             return False
 
-    def _confirm_overwrite(self, existing) -> bool:
+    def _overwrite_prompt_text(self, existing, files) -> str:
+        """The full-run overwrite dialog's body text (ticket D17), split out from
+        ``_confirm_overwrite`` so its content — which of the existing result files THIS
+        run would actually replace versus leave behind — can be tested without driving the
+        modal itself. Replaces the old blanket "will be overwritten", which named every
+        existing file regardless of whether the run about to start would ever touch it."""
         from datetime import datetime
         newest, count = existing
         when = datetime.fromtimestamp(newest).strftime("%Y-%m-%d %H:%M")
         out = self.state.settings.output.folder
+        replaced, remaining = self._overwrite_split(files)
         cats = self._existing_output_categories()
         detail = "; ".join(cats) if cats else f"{count} result file{'s' if count != 1 else ''}"
-        ans = QMessageBox.question(
-            self, "Output folder already has results",
-            f"{out}\n\nalready contains {detail}, from a run on {when}.\n\n"
-            "Running now will overwrite them. Continue?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        return ans == QMessageBox.Yes
+        if remaining:
+            split_txt = (f"{replaced} existing result file{'s' if replaced != 1 else ''} will "
+                        f"be replaced by this run; {remaining} from an earlier run will "
+                        "remain — not touched by the current settings.")
+        else:
+            split_txt = f"All {replaced} will be replaced by this run."
+        return f"{out}\n\nalready contains {detail}, from a run on {when}.\n\n{split_txt}\n\nContinue?"
+
+    def _confirm_overwrite(self, existing) -> bool:
+        """The full-run overwrite guard (ticket D17). Offers "Clear previous results
+        first" (``self._clear_existing_first``, read and acted on by ``_start`` — never
+        here, so a cancelled dialog can never delete anything)."""
+        s = self.state.settings
+        files = matching_files(s.input.folder, s.input.files)
+        text = self._overwrite_prompt_text(existing, files)
+        self._clear_existing_first = False
+        box = QMessageBox(self)
+        box.setWindowTitle("Output folder already has results")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(text)
+        checkbox = QCheckBox("Clear previous results first (removes everything currently in "
+                            "data/ and diagnostics/ before this run starts)")
+        box.setCheckBox(checkbox)
+        yes = box.addButton(QMessageBox.StandardButton.Yes)
+        box.addButton(QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        box.exec()
+        if box.clickedButton() is not yes:
+            return False
+        self._clear_existing_first = checkbox.isChecked()
+        return True
 
     def _cohort_output_names(self) -> str:
         """The cohort-level output names to mention in subset-write UI text, joined into one
@@ -872,7 +966,8 @@ class RunScreen(QWidget):
         if write:
             existing = self._existing_output()
             if existing:
-                if self._safe_is_subset_run(only_files):
+                is_subset = self._safe_is_subset_run(only_files)
+                if is_subset:
                     names = [os.path.basename(f) for f in only_files]
                     confirmed = self._confirm_overwrite_subset(names)
                 else:
@@ -880,6 +975,13 @@ class RunScreen(QWidget):
                 if not confirmed:
                     self._set_status("Run cancelled — existing results kept.")
                     return
+                # D17: only ever fires for a full run whose dialog checkbox was ticked —
+                # the subset dialog has no such checkbox, and deliberately never clears
+                # anything (a subset write's whole point is to leave the rest of the
+                # study's results alone).
+                if not is_subset and self._clear_existing_first:
+                    self._clear_existing_output()
+                    self._clear_existing_first = False
         self._only_files = list(only_files) if only_files else None
         self.log.clear(); self.progress.setRange(0, 0)  # busy until first file
         self._fatal_msg = None
@@ -1145,7 +1247,12 @@ class RunScreen(QWidget):
                     "Finished writing; the cancel arrived after the analysis, so the output is complete.")
         # a clean real-write run leaves results on disk — offer to open them
         if self._last_write and result is not None and not fatal and not cancelled:
-            self.btn_open.setEnabled(True)
+            # D17: a run where every file failed also reaches this "clean" branch (no
+            # fatal message, not cancelled) but wrote nothing usable to open — Open
+            # output folder must require actual output, not just the absence of a fatal
+            # error crossing the batch as a whole.
+            if result.ok_files:
+                self.btn_open.setEnabled(True)
             report = self._run_report_path()
             if report:
                 self._last_report_path = report                # B03: resolved once, not re-read live
@@ -1170,6 +1277,13 @@ class RunScreen(QWidget):
         if failed or self._fatal_msg:
             self._show_error_window(self._error_report(result, failed or {}),
                                     write_failed=write_failed, fatal=fatal)
+        elif self._error_dialog is not None:
+            # D17: a run that finishes clean must not leave an earlier, now-superseded
+            # run's error window still open on screen — _show_error_window only ever
+            # replaces it when THIS run has something to show, which a clean run never does.
+            self._error_dialog.close()
+            self._error_dialog.deleteLater()
+            self._error_dialog = None
 
     def _fatal_fix_hint(self):
         """The `_FIX_HINTS` entry for `self._fatal_msg`'s own exception type, if any —
