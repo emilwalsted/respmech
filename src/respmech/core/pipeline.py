@@ -258,10 +258,23 @@ def _auto_detect_ecg_settings(settings, s, allfiles, progress=None, cache=None):
         path = os.path.abspath(allfiles[0])
     _emit(progress, ProgressEvent(
         "stage", message=f"auto-detecting ECG settings from {os.path.basename(path)}"))
-    load_result = _load(path, s)
-    raw_emg = load_result[6]                                  # keep native dtype for _ecg_remove
-    fs = s.input.format.samplingfrequency
-    sug = emglib.suggest_ecg_settings(np.asarray(raw_emg, dtype=float), fs)
+    try:
+        load_result = _load(path, s)
+        raw_emg = load_result[6]                              # keep native dtype for _ecg_remove
+        fs = s.input.format.samplingfrequency
+        sug = emglib.suggest_ecg_settings(np.asarray(raw_emg, dtype=float), fs)
+    except Exception as e:
+        # D18 point 4: this reads exactly ONE file, so there is no "skip and continue"
+        # available the way the auto_prop collection loop below has. A file that EXISTS
+        # (the isfile check above already handles a missing one) but cannot be read as
+        # data must not abort the whole batch over the single reference file. Fall back
+        # to the already-configured manual ECG settings -- left untouched below, since
+        # this path returns before mutating them -- with a warning, so an unsupervised
+        # run still produces output.
+        warnings.warn(
+            f"{os.path.basename(path)}: ecg_auto_detect could not read this reference "
+            f"file ({e}) -- falling back to the configured manual ECG settings.")
+        return None
 
     s.processing.emg.column_detect = int(sug["detect_channel"])
     s.processing.emg.minheight = float(sug["ecg_min_height"])
@@ -332,22 +345,31 @@ def _emg_segmented(path, s, cache=None, cancel_check=None):
 
 
 def _reference_noise_clip(settings, s, cache=None, cancel_check=None):
-    """Build the EMG-free noise reference clip (multichannel) once per test."""
+    """Build the EMG-free noise reference clip (multichannel) once per test.
+
+    Unlike ``_build_noise_set``'s ``auto_prop`` collection loop, a file that fails here
+    is never merely skipped: it IS the shared noise reference, so if it cannot be read
+    the profile cannot be built at all (D18 point 3). The failure is re-raised naming
+    the reference file in plain English, since the underlying loader error may not
+    mention it at all (e.g. a bare ``EmptyDataError`` for a 0-byte file)."""
     ns_cfg = settings.processing.emg.noise
     ref = ns_cfg.reference_file
     if not ref:
         raise ValueError("processing.emg.noise.reference_file is required when noise reduction is enabled")
     path = os.path.join(s.input.inputfolder, ref)
     fs = s.input.format.samplingfrequency
-    # Prefer expiration-based reference (many STFT frames -> stable estimate). Explicit
-    # intervals are used only when use_expiration is False (a deliberate override).
-    if ns_cfg.use_expiration or not ns_cfg.reference_intervals:
-        emg_full, ins, ex = _emg_segmented(path, s, cache=cache, cancel_check=cancel_check)
-        clip = emg_full[ex]   # diaphragm-quiet expiration of the rest reference
-    else:
-        _load_result, emg_ecg, _diag = _load_and_ecg(path, s, cache=cache, cancel_check=cancel_check)
-        parts = [emg_ecg[int(t0 * fs):int(t1 * fs)] for t0, t1 in ns_cfg.reference_intervals]
-        clip = np.concatenate(parts, axis=0)
+    try:
+        # Prefer expiration-based reference (many STFT frames -> stable estimate). Explicit
+        # intervals are used only when use_expiration is False (a deliberate override).
+        if ns_cfg.use_expiration or not ns_cfg.reference_intervals:
+            emg_full, ins, ex = _emg_segmented(path, s, cache=cache, cancel_check=cancel_check)
+            clip = emg_full[ex]   # diaphragm-quiet expiration of the rest reference
+        else:
+            _load_result, emg_ecg, _diag = _load_and_ecg(path, s, cache=cache, cancel_check=cancel_check)
+            parts = [emg_ecg[int(t0 * fs):int(t1 * fs)] for t0, t1 in ns_cfg.reference_intervals]
+            clip = np.concatenate(parts, axis=0)
+    except Exception as e:
+        raise ValueError(f"Could not read the noise reference file '{ref}': {e}") from e
     return clip
 
 
@@ -371,8 +393,19 @@ def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=
         # Gather active/quiet EMG across the test (capped) to choose prop ONCE.
         act, qui, cap = [], [], 40000
         for fi in files:
-            emg_full, ins, ex = _emg_segmented(os.path.abspath(fi), s, cache=cache,
-                                               cancel_check=cancel_check)
+            try:
+                emg_full, ins, ex = _emg_segmented(os.path.abspath(fi), s, cache=cache,
+                                                   cancel_check=cancel_check)
+            except Exception:
+                # D18 point 2: a file that cannot be read cannot contribute to a profile
+                # it cannot be read for either. Skip it here so it fails normally, as an
+                # ordinary per-file error, in run_batch's own main loop below (which has
+                # its own guard) -- instead of aborting the whole batch before a single
+                # file has actually been processed. This also makes the outcome
+                # independent of where the bad file sorts: the old code could reach the
+                # 40000-sample cap (and so never reach a bad file sorted late) or hit it
+                # first (and abort), making a batch's success depend on file order.
+                continue
             act.append(emg_full[ins]); qui.append(emg_full[ex])
             if sum(len(a) for a in act) >= cap:
                 break
@@ -553,7 +586,13 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                 # file fine. Warn per file (never fail the run) so an unsupervised batch
                 # leaves a visible trail of files worth revisiting -- the same detection_quality
                 # check robust_peak already uses, just evaluated unconditionally here.
-                if settings.processing.emg.ecg_auto_detect and ecg_diag is not None:
+                # ``result.ecg_auto_report is not None`` (not just the settings flag, D18
+                # point 4): when the auto-detect reference file itself could not be read,
+                # ``_auto_detect_ecg_settings`` falls back to the manual settings and
+                # returns ``None`` -- the flag is still on, but there is no reference
+                # file's name left to quote below, and the fallback already warned once.
+                if (settings.processing.emg.ecg_auto_detect and ecg_diag is not None
+                        and result.ecg_auto_report is not None):
                     _peaks = np.asarray(ecg_diag["peaks_s"], float)
                     if _peaks.size == 0:
                         warnings.warn(
