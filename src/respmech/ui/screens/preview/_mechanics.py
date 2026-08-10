@@ -313,6 +313,18 @@ class _MechanicsMixin:
         self.qc_overview.setToolTip(
             "Quality overview of the CURRENTLY PREVIEWED file's most recent test run — "
             "not a batch summary. See the file rail for every file's exclusion count.")
+        # D23 (UI-overhaul): the analysis window, at a PERSISTENT spot beside the QC chip —
+        # not the shared status line (main_window.py connects every screen's status_changed
+        # to one bar, so a Setup/EMG message lands a moment later and silently overwrites
+        # whatever Mechanics last said there). The mechanics channel stack's time axis reads
+        # time SINCE the analysis window starts (zero-based), while the EMG tabs read the
+        # file's own untrimmed clock — this line names the window so both are readable.
+        self.mech_window_label = QLabel("")
+        self.mech_window_label.setProperty("status", "muted")
+        self.mech_window_label.setToolTip(
+            "The window of the recording actually analysed, after trimming to whole "
+            "breaths. The Mechanics channel stack's time axis is zero at the start of "
+            "this window; the EMG tabs show the file's own untrimmed clock.")
         self.btn_export_fig = QPushButton("Export Campbell…")
         self.btn_export_fig.setEnabled(False)          # enabled once a diagram is drawn
         self.btn_export_fig.setToolTip("Save the Campbell diagram as a PNG or PDF.")
@@ -323,7 +335,10 @@ class _MechanicsMixin:
         self.btn_process_file.setEnabled(False)
         self.btn_process_file.setToolTip("Run and write output for the previewed file only.")
         self.btn_process_file.clicked.connect(self._process_this_file)
-        bar.addWidget(self.qc_overview); bar.addStretch(1)
+        bar.addWidget(self.qc_overview)
+        bar.addSpacing(10)
+        bar.addWidget(self.mech_window_label)
+        bar.addStretch(1)
         bar.addWidget(self.btn_process_file); bar.addWidget(self.btn_export_fig)
         return band
 
@@ -343,6 +358,7 @@ class _MechanicsMixin:
         self.qc_overview.setProperty("status", "muted")
         self.qc_overview.style().unpolish(self.qc_overview)
         self.qc_overview.style().polish(self.qc_overview)
+        self.mech_window_label.setText("")
         self.btn_process_file.setEnabled(False)
 
     def _qc_overview_not_assessed(self, detail):
@@ -391,6 +407,26 @@ class _MechanicsMixin:
         self.qc_overview.setProperty("status", status)
         self.qc_overview.style().unpolish(self.qc_overview)
         self.qc_overview.style().polish(self.qc_overview)
+
+    def _set_analysis_window(self, data):
+        """D23 (UI-overhaul): word the trim window at the persistent spot beside the QC
+        chip, from the same ``stage_mechanics_preview`` dict the mechanics stack itself is
+        drawn from — ``startix``/``endix`` are indices into the file's own untrimmed
+        arrays (``core.compute.trim``), and ``emg_flow`` is that untrimmed flow, so its
+        length is the file's total duration regardless of whether trimming succeeded.
+        Purely presentational: no computed value is read or changed here."""
+        fs = data.get("fs")
+        if not fs:
+            self.mech_window_label.setText("")
+            return
+        start_s = data["startix"] / fs
+        end_s = data["endix"] / fs
+        total_s = len(data.get("emg_flow", ())) / fs
+        trimmed_s = max(0.0, total_s - (end_s - start_s))
+        text = f"Analysis window {start_s:.2f}–{end_s:.2f} s of {total_s:.2f} s"
+        if trimmed_s > 0.005:                          # hide a rounding-only "0.00 s trimmed"
+            text += f" ({trimmed_s:.2f} s trimmed)"
+        self.mech_window_label.setText(text)
 
     # -- P17 crosshair + figure export -------------------------------------
     def _on_mech_mouse_moved(self, evt):
@@ -808,6 +844,7 @@ class _MechanicsMixin:
         t = data["t"]
         series = data["series"]
         self._trim_offset_s = data["startix"] / data["fs"]  # trimmed span -> absolute EMG time
+        self._set_analysis_window(data)                      # D23: persistent trim-window label
         self._breaths = list(data["spans"])
         # Drop the click-to-toggle maps NOW, not just on a file switch (_reset_breath_state):
         # a same-file settings edit re-dispatches 'mech' WITHOUT going through a file switch,
@@ -854,8 +891,14 @@ class _MechanicsMixin:
             self._limit_x(p, t[:len(y)])          # can't zoom/pan past the data
             self._channel_plots.append(p)
         # x-values on the bottom channel only; y-zoom is NOT shared — flow, volume and the
-        # pressures are different units, so a common y-range would flatten most of them
-        self._style_channel_stack(self.plots, self._channel_plots, link_y=False)
+        # pressures are different units, so a common y-range would flatten most of them.
+        # D23 (UI-overhaul): labelled distinctly from the EMG/ECG stacks' "Time (s)" — this
+        # axis is zero-based on the TRIMMED analysis window (``t = data["t"]`` above), while
+        # the EMG tabs plot the file's own untrimmed clock (see ``_render_raw_stack``'s
+        # ``np.arange(emg.shape[0]) / fs``). Same label on two different clocks let a user
+        # read a time on this stack, switch tabs, and land on the wrong breath.
+        self._style_channel_stack(self.plots, self._channel_plots, link_y=False,
+                                  time_label="Time from analysis start (s)")
         # P17: one crosshair line per channel, hidden until the cursor enters the stack
         self._crosshair_lines = []
         for p in self._channel_plots:

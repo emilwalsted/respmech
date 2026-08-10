@@ -793,6 +793,102 @@ def test_mech_caption_survives_render_and_toggle(qapp, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# D23 (UI-overhaul) — the mechanics time axis names which clock it shows, and the
+# analysis window sits at a persistent spot beside the QC chip
+# ---------------------------------------------------------------------------
+def test_mechanics_axis_names_the_trimmed_window_not_the_raw_file_clock(qapp, tmp_path):
+    """The Mechanics stack's x-axis is zero-based on the TRIMMED analysis window
+    (``t = data["t"]`` in ``_render_preview_stage1``), while the EMG raw stack is
+    zero-based on the file's own untrimmed start (``_render_raw_stack``) — both used
+    to be labelled the plain, ambiguous 'Time (s)'. This asserts the mechanics stack
+    no longer claims that label, so a user cannot land on the wrong breath after
+    reading a time on one stack and looking for it on the other."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_mechanics_preview
+    s = synth_settings(tmp_path)
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    data = stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv"))
+    assert data["startix"] > 0                        # confirms this fixture actually trims
+    pv._render_preview(data)
+    mech_label = pv._channel_plots[-1].getAxis("bottom").labelText
+    assert mech_label != "Time (s)"
+    assert "analysis start" in mech_label.lower()
+    win.close()
+
+
+def test_mechanics_axis_relabel_leaves_the_emg_raw_clock_alone(qapp, tmp_path):
+    """The EMG raw stack plots the file's own untrimmed clock, so its bottom axis is
+    already correct — only the Mechanics stack needed relabelling."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(tmp_path)
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    assert pv._emg_raw_subplots, "synth_case_A must carry EMG channels for this assertion"
+    assert pv._emg_raw_subplots[-1].getAxis("bottom").labelText == "Time (s)"
+    win.close()
+
+
+def test_analysis_window_label_names_the_files_actual_trim(qapp, tmp_path):
+    """The persistent label beside the QC chip must report THIS file's real trim
+    (startix/endix/fs from the same staging dict the stack is drawn from), not a
+    placeholder — matched against independently recomputed values, never a literal."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_mechanics_preview
+    s = synth_settings(tmp_path)
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    data = stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv"))
+    pv._render_preview(data)
+    fs = data["fs"]
+    start_s, end_s = data["startix"] / fs, data["endix"] / fs
+    text = pv.mech_window_label.text()
+    assert "Analysis window" in text
+    assert f"{start_s:.2f}" in text
+    assert f"{end_s:.2f}" in text
+    assert start_s > 0 and "trimmed)" in text          # this fixture trims from the start
+    win.close()
+
+
+def test_analysis_window_label_survives_a_status_message_from_another_screen(qapp, tmp_path):
+    """The label lives in its own widget beside the QC chip, not the shared status bar
+    every screen's ``status_changed`` feeds (main_window.py) — unlike the trim window's
+    old only home, a transient status line the ticket found overwritten mid-session by
+    Setup's own message. A later status update, from Setup or from Mechanics itself,
+    must not erase it."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(tmp_path)
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    before = pv.mech_window_label.text()
+    assert before
+    win.settings_screen._set_status("Unrelated Setup-screen message")
+    pv._set_status("Unrelated Mechanics status update")
+    assert pv.mech_window_label.text() == before
+    win.close()
+
+
+def test_switching_to_an_unloadable_file_also_clears_the_analysis_window_label(qapp, tmp_path, monkeypatch):
+    """Same nulstillingsdiscipline as the QC chip (see
+    test_switching_to_an_unloadable_file_leaves_qc_chip_and_process_button_reset):
+    a file switch clears the analysis-window label before any job says whether the
+    new file even loads, and a load failure must leave it cleared."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.screens.preview import _mechanics
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    pv._refresh_files(); pv.file_rail.select_index(0)
+    pv._preview()
+    assert pv.mech_window_label.text()                 # a valid render populated it
+
+    monkeypatch.setattr(_mechanics, "stage_mechanics_preview",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("cannot read file")))
+    pv.file_rail.select_index(1)
+    assert pv.mech_window_label.text() == ""
+    pv._preview()                                        # fails; never reaches _render_preview
+    assert pv.mech_window_label.text() == ""
+    win.close()
+
+
+# ---------------------------------------------------------------------------
 # D22 (UI-overhaul) — the per-breath table names its WOB source, only when it matters
 # ---------------------------------------------------------------------------
 def test_wob_table_note_names_the_average_source_and_clears_for_individual(qapp, tmp_path):
