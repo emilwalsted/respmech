@@ -140,6 +140,21 @@ def test_degenerate_breath_end_to_end_batch_continues(tmp_path):
     assert len(result.ok_files["good.csv"].breaths_table) > 0
 
 
+def test_degenerate_breath_error_is_a_valueerror():
+    """Same family as TrimError / NoBreathsError, so the batch catches it per file
+    rather than aborting the run."""
+    assert issubclass(DegenerateBreathError, ValueError)
+
+
+def test_degenerate_breath_error_has_a_run_screen_fix_hint():
+    """DegenerateBreathError is a per-file precondition failure exactly like its
+    siblings (TrimError, NoBreathsError, ...), so it must be keyed in run_screen's
+    _FIX_HINTS the same way — otherwise a failed run shows the raw message with no
+    'Where to fix' line (self-review finding, D25)."""
+    from respmech.ui.screens.run_screen import _FIX_HINTS
+    assert "DegenerateBreathError" in _FIX_HINTS
+
+
 # --- no core/ message may leak a v1-only settings key --------------------------
 
 _PKG_DIR = Path(respmech.__file__).parent
@@ -187,7 +202,10 @@ def _legacy_dict_keys(path):
                 and any(isinstance(op, (ast.In, ast.NotIn)) for op in node.ops):
             keys.add(node.left.value)
         elif isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant) \
-                and isinstance(node.slice.value, str):
+                and isinstance(node.slice.value, str) and isinstance(node.ctx, ast.Load):
+            # ctx=Load only: a WRITE subscript (``new["wob"] = {...}``) names a v2 target
+            # key, not something read FROM the legacy dict, and must not be treated as
+            # legacy vocabulary (self-review finding, D25).
             keys.add(node.slice.value)
     return keys
 
@@ -229,7 +247,7 @@ def test_core_messages_never_leak_a_legacy_settings_key():
     legacy_only = _legacy_only_keys()
     assert "inverseflow" in legacy_only and "avgresamplingobs" in legacy_only  # sanity
     offenders = []
-    for path in sorted(_CORE_DIR.glob("*.py")):
+    for path in sorted(_CORE_DIR.rglob("*.py")):
         for text in _raised_message_texts(path):
             for key in legacy_only:
                 if key in text:

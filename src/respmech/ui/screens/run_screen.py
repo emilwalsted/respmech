@@ -53,6 +53,9 @@ _FIX_HINTS = {
                       "breaths by clicking them in the Preview & QC channel view.",
     "DataValidationError": "Setup ▸ channel assignment — the recording's column count "
                            "or contents do not match the channels configured there.",
+    "DegenerateBreathError": "Preview & QC ▸ Mechanics ▸ Advanced… ▸ Breath detection "
+                             "(peak thresholds / breath-separation buffer); or exclude "
+                             "the breath by clicking it in the Preview & QC channel view.",
 }
 
 
