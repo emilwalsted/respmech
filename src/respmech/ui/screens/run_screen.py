@@ -709,19 +709,32 @@ class RunScreen(QWidget):
         try:
             planned = set(plan_outputs(self.state.settings, files, cohort_outputs=True).all_paths())
         except Exception:                      # noqa: BLE001 - display-only, never fatal
-            planned = set()
+            # self-review finding: an empty `planned` here would report "0 replaced, all
+            # will remain" — reassuring wording for a confirmation dialog that exists
+            # specifically to warn the user before an overwrite. On the rare planning
+            # failure, assume the WORST (everything existing is at risk) rather than the
+            # most comfortable answer.
+            planned = set(existing)
         return len(existing & planned), len(existing - planned)
 
-    def _clear_existing_output(self):
+    def _clear_existing_output(self) -> int:
         """Ticket D17's "Clear previous results first" checkbox, acted on: remove every
         FILE directly under ``data/`` and ``diagnostics/`` — never anything else, never a
         subfolder — before the worker thread starts. Lives here in the UI layer, not
         ``core.io.writers.write_batch``, which the CLI shares and must never start deleting
         files on its own initiative; only ever called from ``_start`` after
-        ``_confirm_overwrite`` has returned with the checkbox ticked."""
+        ``_confirm_overwrite`` has returned with the checkbox ticked.
+
+        Returns the number of files that could NOT be removed (a locked file, a permission
+        wall) — self-review finding: a bare ``except OSError: pass`` left a partial clear
+        completely silent, which is exactly the kind of dishonesty this ticket exists to
+        stop. The caller (``_start``) surfaces a non-zero count in the log/status rather
+        than letting the user believe "Clear previous results first" fully succeeded when
+        it did not."""
         out = (self.state.settings.output.folder or "").strip()
         if not out:
-            return
+            return 0
+        failed = 0
         for sub in ("data", "diagnostics"):
             d = os.path.join(out, sub)
             if not os.path.isdir(d):
@@ -732,7 +745,8 @@ class RunScreen(QWidget):
                     try:
                         os.remove(p)
                     except OSError:
-                        pass
+                        failed += 1
+        return failed
 
     def _safe_is_subset_run(self, only_files) -> bool:
         """``core.pipeline.is_subset_run``, guarded: it re-lists the input folder
@@ -776,8 +790,10 @@ class RunScreen(QWidget):
         """The full-run overwrite guard (ticket D17). Offers "Clear previous results
         first" (``self._clear_existing_first``, read and acted on by ``_start`` — never
         here, so a cancelled dialog can never delete anything)."""
-        s = self.state.settings
-        files = matching_files(s.input.folder, s.input.files)
+        # self-review finding: this used to re-glob the input folder directly instead of
+        # reusing the screen's own memoised match list — the ONE glob this screen is
+        # supposed to perform (see _cached_matching_files' own docstring).
+        files = self._cached_matching_files()
         text = self._overwrite_prompt_text(existing, files)
         self._clear_existing_first = False
         box = QMessageBox(self)
@@ -963,6 +979,7 @@ class RunScreen(QWidget):
             self._set_status("Run cancelled — output folder is under the system temp directory.")
             return
         # overwrite guard: a real run into a folder that already holds results asks first
+        clear_failed = 0
         if write:
             existing = self._existing_output()
             if existing:
@@ -980,10 +997,19 @@ class RunScreen(QWidget):
                 # anything (a subset write's whole point is to leave the rest of the
                 # study's results alone).
                 if not is_subset and self._clear_existing_first:
-                    self._clear_existing_output()
+                    clear_failed = self._clear_existing_output()
                     self._clear_existing_first = False
         self._only_files = list(only_files) if only_files else None
         self.log.clear(); self.progress.setRange(0, 0)  # busy until first file
+        if clear_failed:
+            # self-review finding: a silent partial clear would say nothing while leaving
+            # stale files behind — exactly the dishonesty D17 exists to stop. Logged here
+            # (after the clear, before the pre-flight plan) rather than via _set_status,
+            # which the very next progress event would immediately overwrite.
+            self._append(f"NOTE: {clear_failed} file{'s' if clear_failed != 1 else ''} in "
+                         "data/ or diagnostics/ could not be removed before this run "
+                         "(permission denied or file in use) — they may still be present "
+                         "alongside this run's own output.")
         self._fatal_msg = None
         self._last_write = write
         self._last_result = None
@@ -1250,9 +1276,12 @@ class RunScreen(QWidget):
             # D17: a run where every file failed also reaches this "clean" branch (no
             # fatal message, not cancelled) but wrote nothing usable to open — Open
             # output folder must require actual output, not just the absence of a fatal
-            # error crossing the batch as a whole.
-            if result.ok_files:
-                self.btn_open.setEnabled(True)
+            # error crossing the batch as a whole. Set UNCONDITIONALLY (never only when
+            # true): found in self-review as a real bug — a run that enables this button
+            # leaves it enabled forever if a LATER run in the same session reaches this
+            # branch with an empty ok_files, since a merely conditional `if ok_files:
+            # setEnabled(True)` never turns it back off.
+            self.btn_open.setEnabled(bool(result.ok_files))
             report = self._run_report_path()
             if report:
                 self._last_report_path = report                # B03: resolved once, not re-read live

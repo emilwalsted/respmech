@@ -284,6 +284,23 @@ def test_open_output_folder_enabled_when_at_least_one_file_succeeded(qapp, tmp_p
     win.close()
 
 
+def test_open_output_folder_is_reset_by_a_later_all_failed_run(qapp, tmp_path):
+    """Self-review regression: a run that once enabled Open output folder must not leave
+    it enabled forever — a LATER run in the same session that produces nothing usable
+    must turn it back off, not just skip re-enabling it (a merely conditional
+    ``if ok_files: setEnabled(True)`` never does)."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(tmp_path))); rn = win.run_screen
+    rn._last_write = True
+    rn._run_settings_snapshot = rn.state.settings
+    rn._fatal_msg = None
+    rn._on_finished(_result_all_ok())
+    assert rn.btn_open.isEnabled()
+    rn._on_finished(_result_all_failed())
+    assert not rn.btn_open.isEnabled()
+    win.close()
+
+
 def test_overwrite_split_distinguishes_replaced_from_remaining(qapp, tmp_path):
     """A run restricted (via the input mask) to just synth_case_B.csv must not claim it
     will replace synth_case_A.csv's own results from an earlier, wider run."""
@@ -385,6 +402,46 @@ def test_clear_existing_output_touches_only_data_and_diagnostics(qapp, tmp_path)
     assert (tmp_path / "analysis-used.toml").exists()
     assert (tmp_path / "run-report.txt").exists()
     assert nested_file.exists()             # a subfolder's own contents, never recursed into
+    win.close()
+
+
+def test_clear_existing_output_counts_files_it_could_not_remove(qapp, tmp_path, monkeypatch):
+    """The return value (self-review regression): a file that raises OSError on removal
+    must be counted, not silently ignored — the caller uses this count to tell the user
+    a clear was only partial rather than staying quiet about it."""
+    import os as _os
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(tmp_path))); rn = win.run_screen
+    data = tmp_path / "data"; data.mkdir()
+    (data / "removable.xlsx").write_text("x")
+    stubborn = data / "stubborn.xlsx"; stubborn.write_text("x")
+    real_remove = _os.remove
+
+    def _flaky_remove(path, *a, **k):
+        if _os.path.abspath(path) == _os.path.abspath(stubborn):
+            raise OSError("permission denied")
+        return real_remove(path, *a, **k)
+    monkeypatch.setattr(_os, "remove", _flaky_remove)
+    failed = rn._clear_existing_output()
+    assert failed == 1
+    assert not (data / "removable.xlsx").exists()
+    assert stubborn.exists()                # the one file the mock refused to remove
+    win.close()
+
+
+def test_clear_first_reports_when_a_file_cannot_be_removed(qapp, tmp_path):
+    """A partial clear (one file locked/permission-denied) must say so in the run log
+    rather than silently leaving the user to believe everything was cleared before this
+    run started (self-review regression)."""
+    win = _win(tmp_path); rn = win.run_screen
+    data = tmp_path / "data"; data.mkdir()
+    (tmp_path / "analysis-used.toml").write_text("x")   # existing output -> overwrite guard fires
+    rn._confirm_overwrite = lambda existing: (setattr(rn, "_clear_existing_first", True), True)[1]
+    rn._clear_existing_output = lambda: 2               # simulate two files that would not budge
+    rn._start(write=True)
+    _pump_until_thread_done(qapp, rn)
+    assert "2 files" in rn.log.toPlainText()
+    assert "could not be removed" in rn.log.toPlainText()
     win.close()
 
 
