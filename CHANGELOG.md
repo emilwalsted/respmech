@@ -105,6 +105,19 @@ identical output.
   The stack now labels its own channels, units and crosshair readout, and keeps a persistent
   label naming the current analysis window (start time, duration, trimmed length) on its time
   axis
+- The Campbell diagram preview now matches the orientation of the figure RespMech actually
+  writes to disk — volume on the x-axis (inverted), pressure on the y-axis — instead of showing
+  it the other way round on screen. The legend moved to the corner the swap leaves empty, the
+  diagram gets a larger share of its panel (roughly 1.4:1 against the results table instead of
+  3:1), and the work-of-breathing annotation now keeps its own, readable colour against both
+  themes instead of sharing the loop's colour
+- Keyboard and accessibility fixes on Preview & QC: Page Up/Page Down no longer switch the
+  loaded file while you are scrolling a focused table with them — file navigation now has its
+  own dedicated shortcuts (shown using the current platform's own key names) — checkboxes and
+  radio buttons (including Output's ten save-format boxes and the EMG channel picker) now show
+  a visible focus ring when reached by keyboard, disabled fields read with clearly higher
+  contrast than before, and several previously unlabelled controls (the file steppers, the file
+  rail, the plot/table panels) now have accessible names
 - During a run, Preview & QC's own write actions ("Process & write this file", clicking a breath
   to exclude it) are now locked too, not just Setup and the Analysis menu — with a status-bar
   message confirming why, that reaches the visible bar even while a run's own progress message
