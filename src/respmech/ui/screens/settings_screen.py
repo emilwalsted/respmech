@@ -55,6 +55,23 @@ class SettingsScreen(QWidget):
         self._save_preview_warm = False   # see _update_save_preview
         self._manifest = None         # last-built ui.manifest.Manifest for the current folder/mask
         self._manifest_cache = {}     # (path, mtime, size)-keyed probe memo, reused across builds
+        # D26: whether the sampling-frequency FIELD currently holds a value written by
+        # _probe_and_apply_file_settings (drives the "detected from the time column" marker),
+        # and, when that detection overwrote a DIFFERENT value the field already had, the
+        # (previous, detected) pair the persistent read-out warns about. Cleared the moment
+        # the user edits the field themselves (_on_sampling_frequency_changed) or a fresh
+        # analysis loads (from_state). ``_samp_freq_detection_folder`` records which folder
+        # the detection was actually made against; self-review found the two flags above
+        # otherwise survive UNCHANGED across a folder/mask edit or "Duplicate for another
+        # recordings folder…" (neither routes through from_state or a manual samp_freq
+        # edit), so a probe result from folder A kept re-appearing as a warning against
+        # folder B's completely different, unprobed data. _update_format_readout is the
+        # one place that rebuilds for every folder-changing path (including duplicate's own
+        # direct call), so it self-heals this by clearing all three the moment the folder it
+        # reads no longer matches the one recorded here — see there.
+        self._samp_freq_from_detection = False
+        self._samp_freq_detection_note = None
+        self._samp_freq_detection_folder = None
         self._build()
         self.from_state()
         self._wire_reactivity()
@@ -98,6 +115,14 @@ class SettingsScreen(QWidget):
                   "Filename or wildcard mask picking which recordings to load, e.g. *.txt; defaults to *.* (all files).")
         self._row(f, "Sampling frequency", self.samp_freq, "input.format.sampling_frequency",
                   "Samples recorded per second, in hertz (Hz); required, and must match the acquisition system (e.g. 2000).")
+        # D26: a persistent, dimmed provenance marker for the field just above — set by
+        # _probe_and_apply_file_settings whenever it writes the field from the time column,
+        # cleared the moment the user edits the field by hand. setRowVisible keeps it from
+        # leaving an empty gap the rest of the time (same idiom as format_readout below).
+        self.samp_freq_detected_label = QLabel("Detected from the time column.")
+        self.samp_freq_detected_label.setProperty("status", "muted")
+        f.addRow("", self.samp_freq_detected_label)
+        f.setRowVisible(self.samp_freq_detected_label, False)
         # P28: a live read-out of what was actually detected in the chosen recordings.
         self.format_readout = QLabel("")
         self.format_readout.setWordWrap(True)
@@ -537,6 +562,13 @@ class SettingsScreen(QWidget):
         prev, self._loading = self._loading, True
         try:
             s = self.state.settings
+            # D26: a value loaded from a saved/new analysis was not detected in THIS
+            # session, so any leftover marker/note from a previous analysis must not
+            # survive onto it.
+            self._samp_freq_from_detection = False
+            self._samp_freq_detection_note = None
+            self._samp_freq_detection_folder = None
+            self._update_samp_freq_marker()
             self.in_folder.setText(s.input.folder)
             self.in_files.setText(s.input.files)
             self.samp_freq.setValue(s.input.format.sampling_frequency or 2000)
@@ -750,9 +782,19 @@ class SettingsScreen(QWidget):
         mismatch caution) reflects the value just set — see the wiring comment in
         ``_wire_reactivity``. Runs AFTER ``_on_field_changed`` has already synced
         ``to_state()``, so this reads the NEW value; the fields/folder/mask themselves are
-        unchanged, so the current mask is exactly what was already scanned."""
+        unchanged, so the current mask is exactly what was already scanned.
+
+        D26: this only ever fires on a REAL edit — ``_probe_and_apply_file_settings``'s own
+        ``setValue()`` runs with ``self._loading`` True, so the guard above already screens
+        it out. A real edit here means the user has just acted on (or overridden) whatever
+        the field showed, so the "detected from the time column" marker and the persistent
+        mismatch note both go stale and are cleared before the read-out is rebuilt."""
         if self._loading:
             return
+        self._samp_freq_from_detection = False
+        self._samp_freq_detection_note = None
+        self._samp_freq_detection_folder = None
+        self._update_samp_freq_marker()
         self._update_format_readout()
 
     def _on_inputs_changed(self, *_):
@@ -902,6 +944,16 @@ class SettingsScreen(QWidget):
         if lab is None:
             return
         folder = self.in_folder.text().strip()
+        # D26 self-review fix: this is the ONE place that rebuilds for every folder-changing
+        # path (see the __init__ comment on _samp_freq_detection_folder) — a probe result
+        # recorded against a DIFFERENT folder than the one now being read is stale and must
+        # not be shown as if it were about this folder's (unprobed) data.
+        if (self._samp_freq_detection_folder is not None
+                and self._samp_freq_detection_folder != folder):
+            self._samp_freq_from_detection = False
+            self._samp_freq_detection_note = None
+            self._samp_freq_detection_folder = None
+            self._update_samp_freq_marker()
         mask = raw_mask if raw_mask is not None else self.state.settings.input.files
         status, text = "muted", ""
         self._manifest = None
@@ -948,6 +1000,18 @@ class SettingsScreen(QWidget):
                     parts.append(self._header_warning_note(m))
                 if m.mask_narrowed_from:
                     parts.append(self._narrowed_note(m))
+                # D26: the field just got overwritten by _probe_and_apply_file_settings
+                # with a DIFFERENT value than it held before — by the time this method
+                # runs, to_state() has already synced the new value into settings, so
+                # Manifest.settings_fs matches the just-detected rate and freq_mismatches
+                # (below) can no longer see the change that just happened, only future
+                # disagreements. This note is the one place that change itself is told,
+                # and it stays until the user edits the field (_samp_freq_detection_note
+                # is cleared there, not here) — see _probe_and_apply_file_settings.
+                if self._samp_freq_detection_note is not None:
+                    prev_fs, new_fs = self._samp_freq_detection_note
+                    parts.append(f"time column implies {new_fs} Hz "
+                                 f"(the field said {prev_fs} Hz)")
                 # B01 self-review fix (05-08-2026): status now follows Manifest.is_clean
                 # exactly, so it can never disagree with the QC strip's own gate on the
                 # same manifest — the original condition listed outliers/narrowing/no-
@@ -955,6 +1019,8 @@ class SettingsScreen(QWidget):
                 # mismatch (same column count, wrong rate) showed this label as "info"
                 # while the QC strip correctly said "warn" for the identical scan.
                 status = "info" if m.is_clean else "warn"
+                if self._samp_freq_detection_note is not None:
+                    status = "warn"
                 text = " · ".join(parts)
         lab.setText(text)
         lab.setProperty("status", status)
@@ -1375,12 +1441,20 @@ class SettingsScreen(QWidget):
         is detected earlier now, in _open_channel_setup via _detect_decimal, before the
         picker reads anything (ticket D03) — see that method's docstring for why it moved.
         The file mask is kept single-pattern separately by _normalize_mask. Returns a short
-        human summary of what was set."""
+        human summary of what was set.
+
+        D26: this used to be the ONLY trace of the detection — a status-line word that a
+        busy Preview refresh (~460 ms later, measured) routinely overwrote before anyone
+        read it, leaving no record on screen of where the field's value came from, or that
+        it had just changed under the user's hand. Records that provenance on ``self`` so
+        the persistent read-out (_update_format_readout) and the "detected from the time
+        column" marker beside the field (_update_samp_freq_marker) can both show it."""
         from respmech.ui.workers import detect_sampling_frequency, load_raw_matrix
         if not files:
             return ""
         ref = files[0]
         parts = []
+        previous_fs = self.samp_freq.value()
         prev, self._loading = self._loading, True
         try:
             try:                                     # sampling frequency from the (col 0) time axis
@@ -1392,9 +1466,25 @@ class SettingsScreen(QWidget):
                 self.state.settings.input.format.sampling_frequency = fs
                 self.samp_freq.setValue(fs)
                 parts.append(f"{fs} Hz")
+                self._samp_freq_from_detection = True
+                self._samp_freq_detection_note = (previous_fs, fs) if fs != previous_fs else None
+                self._samp_freq_detection_folder = self.in_folder.text().strip()
+                self._update_samp_freq_marker()
         finally:
             self._loading = prev
         return ", ".join(parts)
+
+    def _update_samp_freq_marker(self):
+        """Show/hide the dimmed "Detected from the time column." row beside the sampling-
+        frequency field, purely from ``self._samp_freq_from_detection`` — see its own
+        comment in __init__ for when that is set/cleared."""
+        lab = getattr(self, "samp_freq_detected_label", None)
+        form = getattr(self, "_input_form", None)
+        if lab is None:
+            return
+        lab.setVisible(self._samp_freq_from_detection)
+        if form is not None:
+            form.setRowVisible(lab, self._samp_freq_from_detection)
 
     def _valid_input_files(self):
         """Sorted paths of files matching the input mask that are loadable data files with a

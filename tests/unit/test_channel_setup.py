@@ -988,6 +988,97 @@ def test_probe_detects_sampling_frequency_from_the_time_column(qapp, tmp_path):
     win.close()
 
 
+def test_probe_detected_frequency_mismatch_is_shown_persistently_and_marks_the_field(qapp, tmp_path):
+    """Ticket D26: the field's previous value (2000 Hz, what the user set) and the just-
+    detected value (500 Hz, from the time column) must BOTH survive on screen once the
+    channel-setup flow finishes applying the probe — not just for the ~460 ms the old
+    status-line note lived before Preview's refresh overwrote it. _apply_channel_mapping
+    is what a real 'OK' in the picker calls after the probe (_open_channel_setup), and it
+    is what rebuilds the read-out via _on_inputs_changed — so this drives the same path a
+    real channel-setup OK does, rather than calling _update_format_readout directly."""
+    import numpy as np
+    from respmech.ui.main_window import MainWindow
+    n = 400; t = np.arange(n) / 500.0               # a real 500 Hz seconds time axis
+    rows = "\n".join(f"{t[i]:.6f},1,2,3,4" for i in range(n))
+    (tmp_path / "rec.csv").write_text("time,f,p,g,d\n" + rows + "\n")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv"); sc.samp_freq.setValue(2000)
+    sc._on_inputs_changed()
+    files = sc._valid_input_files()
+    sc._probe_and_apply_file_settings(files)
+    assert sc.samp_freq.value() == 500
+    assert sc._input_form.isRowVisible(sc.samp_freq_detected_label)
+    sc._apply_channel_mapping({"flow": 2, "volume": None, "poes": 3, "pgas": 4, "pdi": 5,
+                               "emg": [], "entropy": []})
+    text = sc.format_readout.text()
+    assert "500" in text and "2000" in text
+    assert sc.format_readout.property("status") == "warn"
+    win.close()
+
+
+def test_probe_detected_frequency_marker_and_note_clear_on_manual_edit(qapp, tmp_path):
+    """The 'detected from the time column' marker and the persistent mismatch note both
+    exist to be superseded the moment the user acts on them — editing the field by hand
+    must clear both, or a stale note would keep claiming provenance for a value the user
+    just chose themselves. Self-review finding: the field's value after the probe is
+    already 500, so a same-value setValue(500) would not even emit valueChanged and the
+    test would pass regardless of whether the real signal wiring is connected at all
+    (verified: it still passed with samp_freq.valueChanged disconnected). Editing to a
+    genuinely DIFFERENT value and relying on nothing but the real signal (no direct
+    handler calls) actually exercises the production wiring this test is named for."""
+    import numpy as np
+    from respmech.ui.main_window import MainWindow
+    n = 400; t = np.arange(n) / 500.0
+    rows = "\n".join(f"{t[i]:.6f},1,2,3,4" for i in range(n))
+    (tmp_path / "rec.csv").write_text("time,f,p,g,d\n" + rows + "\n")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv"); sc.samp_freq.setValue(2000)
+    sc._on_inputs_changed()
+    sc._probe_and_apply_file_settings(sc._valid_input_files())
+    sc._apply_channel_mapping({"flow": 2, "volume": None, "poes": 3, "pgas": 4, "pdi": 5,
+                               "emg": [], "entropy": []})
+    assert sc._input_form.isRowVisible(sc.samp_freq_detected_label)
+    assert "implies" in sc.format_readout.text()
+    sc.samp_freq.setValue(750)   # the user edits the field by hand, to a genuinely new value
+    assert not sc._input_form.isRowVisible(sc.samp_freq_detected_label)
+    assert "implies" not in sc.format_readout.text()
+    win.close()
+
+
+def test_probe_detected_frequency_note_does_not_leak_into_a_different_folder(qapp, tmp_path):
+    """Self-review finding (two independent reviewers): a probe result recorded for folder
+    A used to survive UNCHANGED once the user pointed the Recordings folder at a completely
+    different folder B, without ever re-running the channel picker — neither _on_inputs_
+    changed (the ordinary folder-edit handler) nor "Duplicate for another recordings
+    folder..." reset the D26 state, so folder B's read-out kept quoting folder A's probe
+    numbers as if they were about folder B's (entirely unprobed) data, alongside whatever
+    genuine caution folder B's own data actually deserved. Reproduces the folder-edit half
+    of that report end to end via _on_inputs_changed (the same handler a real Recordings-
+    folder edit fires)."""
+    import numpy as np
+    from respmech.ui.main_window import MainWindow
+    a = tmp_path / "a"; a.mkdir()
+    n = 400; t = np.arange(n) / 500.0                # folder A: a real 500 Hz time axis
+    rows = "\n".join(f"{t[i]:.6f},1,2,3,4" for i in range(n))
+    (a / "rec.csv").write_text("time,f,p,g,d\n" + rows + "\n")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(a)); sc.in_files.setText("*.csv"); sc.samp_freq.setValue(2000)
+    sc._on_inputs_changed()
+    sc._probe_and_apply_file_settings(sc._valid_input_files())
+    sc._apply_channel_mapping({"flow": 2, "volume": None, "poes": 3, "pgas": 4, "pdi": 5,
+                               "emg": [], "entropy": []})
+    assert "implies" in sc.format_readout.text()          # folder A's mismatch is shown
+
+    b = tmp_path / "b"; b.mkdir()                    # folder B: unrelated, clean data
+    (b / "other.csv").write_text("time,f,p,g,d\n0.000,1,2,3,4\n0.001,1,2,3,4\n")
+    sc.in_folder.setText(str(b))
+    sc._on_inputs_changed()                            # the ordinary folder-edit handler
+    text = sc.format_readout.text()
+    assert "implies" not in text                        # folder A's stale note must not leak in
+    assert not sc._input_form.isRowVisible(sc.samp_freq_detected_label)
+    win.close()
+
+
 def test_probe_and_apply_file_settings_never_touches_decimal(qapp, tmp_path):
     """Ticket D03: _probe_and_apply_file_settings handles the sampling frequency ONLY now —
     decimal detection moved to _detect_decimal, called earlier from _open_channel_setup.
