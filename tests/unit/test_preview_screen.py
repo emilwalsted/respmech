@@ -840,11 +840,33 @@ def test_analysis_window_label_names_the_files_actual_trim(qapp, tmp_path):
     pv._render_preview(data)
     fs = data["fs"]
     start_s, end_s = data["startix"] / fs, data["endix"] / fs
-    text = pv.mech_window_label.text()
+    text = pv.mech_window_label.fullText()
     assert "Analysis window" in text
     assert f"{start_s:.2f}" in text
     assert f"{end_s:.2f}" in text
     assert start_s > 0 and "trimmed)" in text          # this fixture trims from the start
+    win.close()
+
+
+def test_analysis_window_label_does_not_claim_a_trim_that_failed(qapp, tmp_path):
+    """stage_mechanics_preview's TrimError fallback hands back startix=0, endix=len(flow)
+    — the WHOLE untrimmed file, not a real window — because no breath could be segmented
+    (self-review of this ticket: feeding those into the normal formula reads as a
+    successful 0.00-<total> s trim, while the QC chip is simultaneously reporting the
+    failure right next to it). The label must say the trim failed, not silently omit the
+    '(… trimmed)' clause and look like an ordinary, successful, un-trimmed recording."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_mechanics_preview
+    s = synth_settings(tmp_path)
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    data = dict(stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv")))
+    total_s = len(data["emg_flow"]) / data["fs"]
+    data["startix"], data["endix"], data["trim_error"] = 0, len(data["emg_flow"]), "no breaths"
+    pv._render_preview_stage1(data)
+    text = pv.mech_window_label.fullText()
+    assert "could not trim" in text.lower()
+    assert "analysis window" not in text.lower()        # must not read as an ordinary success
+    assert f"{total_s:.2f}" in text
     win.close()
 
 
@@ -858,11 +880,11 @@ def test_analysis_window_label_survives_a_status_message_from_another_screen(qap
     s = synth_settings(tmp_path)
     win = MainWindow(AppState(s)); pv = win.preview_screen
     _render_mech(pv, s)
-    before = pv.mech_window_label.text()
+    before = pv.mech_window_label.fullText()
     assert before
     win.settings_screen._set_status("Unrelated Setup-screen message")
     pv._set_status("Unrelated Mechanics status update")
-    assert pv.mech_window_label.text() == before
+    assert pv.mech_window_label.fullText() == before
     win.close()
 
 
@@ -877,14 +899,14 @@ def test_switching_to_an_unloadable_file_also_clears_the_analysis_window_label(q
     win = MainWindow(AppState(s)); pv = win.preview_screen
     pv._refresh_files(); pv.file_rail.select_index(0)
     pv._preview()
-    assert pv.mech_window_label.text()                 # a valid render populated it
+    assert pv.mech_window_label.fullText()              # a valid render populated it
 
     monkeypatch.setattr(_mechanics, "stage_mechanics_preview",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("cannot read file")))
     pv.file_rail.select_index(1)
-    assert pv.mech_window_label.text() == ""
+    assert pv.mech_window_label.fullText() == ""
     pv._preview()                                        # fails; never reaches _render_preview
-    assert pv.mech_window_label.text() == ""
+    assert pv.mech_window_label.fullText() == ""
     win.close()
 
 

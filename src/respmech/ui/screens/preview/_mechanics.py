@@ -319,12 +319,14 @@ class _MechanicsMixin:
         # whatever Mechanics last said there). The mechanics channel stack's time axis reads
         # time SINCE the analysis window starts (zero-based), while the EMG tabs read the
         # file's own untrimmed clock — this line names the window so both are readable.
-        self.mech_window_label = QLabel("")
+        # ElidingLabel (not a plain QLabel), given the stretch this band's addStretch(1)
+        # used to hold: a plain, non-stretching QHBoxLayout item hands its sizeHint straight
+        # to the window's minimum width, and this text's length varies with the recording
+        # (self-review of this ticket flagged the same narrow-window overflow class this
+        # codebase already hit once with the header subtitle, see flow_layout.ElidingLabel).
+        self.mech_window_label = ElidingLabel("")
         self.mech_window_label.setProperty("status", "muted")
-        self.mech_window_label.setToolTip(
-            "The window of the recording actually analysed, after trimming to whole "
-            "breaths. The Mechanics channel stack's time axis is zero at the start of "
-            "this window; the EMG tabs show the file's own untrimmed clock.")
+        self.mech_window_label.setToolTip(self._MECH_WINDOW_TOOLTIP)
         self.btn_export_fig = QPushButton("Export Campbell…")
         self.btn_export_fig.setEnabled(False)          # enabled once a diagram is drawn
         self.btn_export_fig.setToolTip("Save the Campbell diagram as a PNG or PDF.")
@@ -337,10 +339,14 @@ class _MechanicsMixin:
         self.btn_process_file.clicked.connect(self._process_this_file)
         bar.addWidget(self.qc_overview)
         bar.addSpacing(10)
-        bar.addWidget(self.mech_window_label)
-        bar.addStretch(1)
+        bar.addWidget(self.mech_window_label, 1)   # takes the stretch the plain addStretch(1) used to
         bar.addWidget(self.btn_process_file); bar.addWidget(self.btn_export_fig)
         return band
+
+    _MECH_WINDOW_TOOLTIP = (
+        "The window of the recording actually analysed, after trimming to whole "
+        "breaths. The Mechanics channel stack's time axis is zero at the start of "
+        "this window; the EMG tabs show the file's own untrimmed clock.")
 
     def _process_this_file(self):
         name = self._previewed_file or self._selected_filename()
@@ -358,7 +364,8 @@ class _MechanicsMixin:
         self.qc_overview.setProperty("status", "muted")
         self.qc_overview.style().unpolish(self.qc_overview)
         self.qc_overview.style().polish(self.qc_overview)
-        self.mech_window_label.setText("")
+        self.mech_window_label.setFullText("")
+        self.mech_window_label.setToolTip(self._MECH_WINDOW_TOOLTIP)
         self.btn_process_file.setEnabled(False)
 
     def _qc_overview_not_assessed(self, detail):
@@ -417,16 +424,27 @@ class _MechanicsMixin:
         Purely presentational: no computed value is read or changed here."""
         fs = data.get("fs")
         if not fs:
-            self.mech_window_label.setText("")
+            self.mech_window_label.setFullText("")
+            self.mech_window_label.setToolTip(self._MECH_WINDOW_TOOLTIP)
             return
-        start_s = data["startix"] / fs
-        end_s = data["endix"] / fs
         total_s = len(data.get("emg_flow", ())) / fs
-        trimmed_s = max(0.0, total_s - (end_s - start_s))
-        text = f"Analysis window {start_s:.2f}–{end_s:.2f} s of {total_s:.2f} s"
-        if trimmed_s > 0.005:                          # hide a rounding-only "0.00 s trimmed"
-            text += f" ({trimmed_s:.2f} s trimmed)"
-        self.mech_window_label.setText(text)
+        if data.get("trim_error"):
+            # No breath could be segmented (see stage_mechanics_preview's TrimError
+            # fallback, which hands back startix=0/endix=len(flow) — the WHOLE file, not
+            # a real window). Self-review of this ticket flagged that feeding those into
+            # the normal formula below reads as a successful trim to 0.00-<total> s,
+            # while the QC chip is simultaneously reporting the failure right next to it.
+            text = (f"Showing the raw, untrimmed file ({total_s:.2f} s) — "
+                    "could not trim to whole breaths")
+        else:
+            start_s = data["startix"] / fs
+            end_s = data["endix"] / fs
+            trimmed_s = max(0.0, total_s - (end_s - start_s))
+            text = f"Analysis window {start_s:.2f}–{end_s:.2f} s of {total_s:.2f} s"
+            if trimmed_s > 0.005:                       # hide a rounding-only "0.00 s trimmed"
+                text += f" ({trimmed_s:.2f} s trimmed)"
+        self.mech_window_label.setFullText(text)
+        self.mech_window_label.setToolTip(self._MECH_WINDOW_TOOLTIP)
 
     # -- P17 crosshair + figure export -------------------------------------
     def _on_mech_mouse_moved(self, evt):
