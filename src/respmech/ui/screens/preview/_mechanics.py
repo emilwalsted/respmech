@@ -202,7 +202,12 @@ class _MechanicsMixin:
         configure_result_table(self.table)
         # a table squeezed to one visible row is as useless as a flattened graph
         _theme.set_plot_floor(self.table)
-        lower.addWidget(self.table)
+        # D22 (UI-overhaul): titled, like the Campbell panel beside it, so the header can
+        # name the work-of-breathing source (see _set_wob_table_note) — otherwise nothing
+        # on screen says that the five wob* columns are one whole-file value repeated on
+        # every row when "Work of breathing from" is Average (the default).
+        self._table_panel = self._titled("Per-breath results", self.table)
+        lower.addWidget(self._table_panel)
         self.campbell = FigureCanvasQTAgg(Figure(figsize=(4, 4)))
         self.campbell.setAccessibleName("Campbell diagram")   # C02: named for QAccessible/screen readers
         # A matplotlib canvas reports a 10 px minimum, so it was the one Preview graph with
@@ -1405,6 +1410,7 @@ class _MechanicsMixin:
                 # is a single shared label that the EMG/ECG jobs overwrite moments later,
                 # which would leave a blank table and Campbell explaining nothing.
                 self._table_model.set_dataframe(None)
+                self._set_wob_table_note(None)
                 self.campbell.figure.clear(); self.campbell.draw()
                 self._forget_campbell()   # the export must not resurrect a cleared diagram
                 for p in _PANELS["batch"]:
@@ -1442,6 +1448,31 @@ class _MechanicsMixin:
     def _fill_table(self, df):
         self._table_model.set_dataframe(df)
         resize_result_table(self.table)
+        self._set_wob_table_note(df)
+
+    def _set_wob_table_note(self, df):
+        """Name the work-of-breathing source in the table's own header (D22,
+        UI-overhaul), so a reader can see — without opening Advanced… — that the five
+        wob* columns (``wobtotal``, ``wob_in_total``, ``wob_ex_total``, ``wob_in_ela``,
+        ``wob_in_res``) are one whole-file value repeated on every row whenever
+        "Work of breathing from" is Average (``processing.wob.calc_from``, default). The
+        DataFrame's own column names are never touched — only this panel's title text —
+        so the golden-pinned result tables are unaffected.
+        """
+        calc_from = self.state.settings.processing.wob.calc_from
+        if calc_from == "average" and df is not None and "wobtotal" in getattr(df, "columns", ()):
+            try:
+                val = float(df["wobtotal"].iloc[0])
+                text = (f"Per-breath results — work of breathing: {val:.2f} J·min⁻¹, "
+                        "computed from the averaged breath, same on every row "
+                        "(Advanced… → Work of breathing)")
+            except (TypeError, ValueError, IndexError):
+                text = ("Per-breath results — work of breathing computed from the "
+                        "averaged breath, same on every row "
+                        "(Advanced… → Work of breathing)")
+        else:
+            text = "Per-breath results"
+        self._table_panel._title_label.setFullText(text)
 
     def _forget_campbell(self):
         """Drop the cached breaths and disable the export whenever the figure is cleared.

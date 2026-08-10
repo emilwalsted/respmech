@@ -42,6 +42,38 @@ def test_display_for_falls_back_to_the_column_identifier():
     assert quantities.display_for("vt") == "vt"
 
 
+def test_units_sheet_notes_the_wob_source_on_wob_columns_only():
+    """D22 (UI-overhaul): the Units sheet's Note column names the work-of-breathing
+    source ('averaged breath' vs 'individual breaths') on the wob* columns only — the
+    only columns whose meaning depends on processing.wob.calc_from. Every other
+    column's Note stays blank, so a reader is never told something is a whole-file
+    average when it is not."""
+    from respmech.core.io.writers import _units_df
+    s = synth_settings("")
+    # "file"/"breath_no" resolve to no unit at all (quantities.unit_for) and so never
+    # become a row here (units_map keeps only columns with a real unit) — unaffected by
+    # this change, just not a column this assertion can check a blank Note on.
+    cols = ["file", "breath_no", "wobtotal", "wob_in_total", "vt"]
+    by_col = _units_df(cols, s).set_index("Column")
+    assert "average" in by_col.loc["wobtotal", "Note"].lower()
+    assert "average" in by_col.loc["wob_in_total", "Note"].lower()
+    assert by_col.loc["vt", "Note"] == ""
+    assert "file" not in by_col.index
+
+    s.processing.wob.calc_from = "individual"
+    by_col2 = _units_df(cols, s).set_index("Column")
+    assert "individual" in by_col2.loc["wobtotal", "Note"].lower()
+
+
+def test_units_sheet_note_column_is_blank_without_settings():
+    """``settings`` is optional (kept for the signature's own sake — nothing in this
+    codebase calls _units_df without it); a caller that omits it gets an empty Note
+    column rather than a crash."""
+    from respmech.core.io.writers import _units_df
+    df = _units_df(["wobtotal", "vt"])
+    assert list(df["Note"]) == ["", ""]
+
+
 # --------------------------------------------------------------------------- #
 # P8 / P15 — cohort summary + grouping
 # --------------------------------------------------------------------------- #
@@ -255,6 +287,21 @@ def test_provenance_names_sample_entropy_only_when_it_is_computed(tmp_path):
     s.processing.entropy.epochs = 3
     rows = dict(_provenance_rows(s, datetime(2026, 7, 11)).values)
     assert rows["Sample entropy"] == "m = 2, r = 0.1 × SD"
+
+
+def test_provenance_names_the_wob_source(tmp_path):
+    """D22 (UI-overhaul): the same average/individual choice the Preview & QC table's
+    own header now names (see test_wob_table_note_* in test_preview_screen.py) also
+    lands in the written file's Provenance sheet, always present (unlike Sample
+    entropy, calc_from is never unset)."""
+    from respmech.core.io.writers import _provenance_rows
+    s = synth_settings(tmp_path)
+    rows = dict(_provenance_rows(s, datetime(2026, 7, 11)).values)
+    assert rows["Work of breathing"] == "averaged breath"
+
+    s.processing.wob.calc_from = "individual"
+    rows = dict(_provenance_rows(s, datetime(2026, 7, 11)).values)
+    assert rows["Work of breathing"] == "individual breaths"
 
 
 # ---------------------------------------------------------------------------

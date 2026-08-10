@@ -38,9 +38,35 @@ def _version_df():
         index=[0]).T.rename(columns={0: "Version info"})
 
 
-def _units_df(columns):
+def _wob_mode_text(settings):
+    """The work-of-breathing source, in the two words used everywhere this is named
+    (D22, UI-overhaul: the Preview & QC table header, the Provenance row and the Units
+    Note below all say the SAME thing, deliberately, per the ticket's own wording —
+    'let the same qualification follow' — rather than each inventing its own phrasing
+    that could drift out of sync on a future edit)."""
+    return ("averaged breath" if settings.processing.wob.calc_from == "average"
+           else "individual breaths")
+
+
+def _units_df(columns, settings=None):
+    """Unit per column, plus a Note that names the work-of-breathing source on the
+    wob* columns (D22, UI-overhaul) — the only columns whose meaning changes with a
+    setting the sheet would otherwise say nothing about (a reader opening this sheet
+    to check units has no other way to learn that ``wobtotal`` et al. are one
+    whole-file value repeated on every breath in the per-file breathdata sheet, or —
+    in the cross-file Average breathdata sheet — that every file's own value came from
+    the same source). ``settings`` is optional: callers that only need units (there
+    are none left in this codebase, kept for the signature's own sake) get an empty
+    Note column instead of a crash."""
     um = _units.units_map(columns)
-    return pd.DataFrame({"Column": list(um.keys()), "Unit": list(um.values())})
+    note = {}
+    if settings is not None:
+        wob_desc = _wob_mode_text(settings)
+        for c in um:
+            if str(c).lower().startswith("wob"):
+                note[c] = f"Work of breathing from: {wob_desc}"
+    return pd.DataFrame({"Column": list(um.keys()), "Unit": list(um.values()),
+                         "Note": [note.get(c, "") for c in um.keys()]})
 
 
 def _provenance_rows(settings, when):
@@ -53,6 +79,11 @@ def _provenance_rows(settings, when):
             ("Sampling frequency (Hz)", ip.format.sampling_frequency),
             ("Breath separation", f"{settings.processing.segmentation.method}, "
                                   f"buffer {settings.processing.segmentation.buffer}"),
+            # D22 (UI-overhaul): the same "average vs individual" choice that makes the
+            # Preview & QC table's wob* columns either one repeated value or real
+            # per-breath variation — named here so it survives into the written file,
+            # not only on screen.
+            ("Work of breathing", _wob_mode_text(settings)),
             ("Drift correction", settings.processing.volume.correct_drift),
             ("EMG normalisation", settings.processing.emg.normalization)]
     if ip.channels.entropy:
@@ -95,7 +126,7 @@ def _write_xlsx(df: pd.DataFrame, path: str, settings=None, when=None, extra_she
     not the workbook); the extra sheets are additive context for a reader."""
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         df.to_excel(writer, sheet_name="Data", index=False)
-        _units_df(df.columns).to_excel(writer, sheet_name="Units", index=False)
+        _units_df(df.columns, settings).to_excel(writer, sheet_name="Units", index=False)
         for name, edf in (extra_sheets or {}).items():
             edf.to_excel(writer, sheet_name=name, index=False)
         if settings is not None:

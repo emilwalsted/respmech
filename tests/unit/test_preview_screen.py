@@ -199,7 +199,9 @@ def test_mechanics_splitter_gives_the_diagram_more_room_than_before(qapp):
     from respmech.ui.main_window import MainWindow
     s = synth_settings("")
     win = MainWindow(AppState(s)); pv = win.preview_screen
-    lower = pv.table.parentWidget()
+    # D22 (UI-overhaul) wrapped the table in a titled panel (like the Campbell diagram
+    # beside it), so the splitter's direct child is now that panel, not the table itself.
+    lower = pv._table_panel.parentWidget()
     table_w, diagram_w = lower.sizes()
     assert diagram_w > 0
     ratio = table_w / diagram_w
@@ -787,6 +789,96 @@ def test_mech_caption_survives_render_and_toggle(qapp, tmp_path):
     cap = pv.mech_caption.fullText().lower()
     assert ", 1 excluded" in cap
     assert "click a shaded breath to include/exclude" in cap   # the instruction still there
+    win.close()
+
+
+# ---------------------------------------------------------------------------
+# D22 (UI-overhaul) — the per-breath table names its WOB source, only when it matters
+# ---------------------------------------------------------------------------
+def test_wob_table_note_names_the_average_source_and_clears_for_individual(qapp, tmp_path):
+    """When 'Work of breathing from' is Average (the default) every wobtotal-family
+    column in the per-breath table repeats one whole-file value; before this ticket
+    nothing on screen said so. The table's own titled-panel header (D22) now names it,
+    and the note disappears the moment the setting is switched to Individual, where the
+    numbers genuinely vary breath to breath."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+
+    assert s.processing.wob.calc_from == "average"        # the default this ticket covers
+    result = run_batch(s, only_files=["synth_case_A.csv"])
+    pv._on_batch_result(result)
+    title = pv._table_panel._title_label.fullText().lower()
+    assert "work of breathing" in title
+    assert "averaged breath" in title
+    assert "advanced" in title                            # points at where the setting lives
+
+    s.processing.wob.calc_from = "individual"
+    result2 = run_batch(s, only_files=["synth_case_A.csv"])
+    pv._on_batch_result(result2)
+    title2 = pv._table_panel._title_label.fullText()
+    assert title2 == "Per-breath results"                  # base title, no WOB qualification
+    win.close()
+
+
+def test_wob_table_note_clears_on_a_soft_precondition_error(qapp, tmp_path):
+    """A soft per-file error (e.g. NoBreathsError) clears the table via the REAL
+    _on_batch_result path (not by calling _set_wob_table_note directly, which would
+    pass even if the wiring at the _SOFT_FILE_ERRORS branch in _mechanics.py were ever
+    deleted) — the header note must clear with it, or a stale 'averaged breath'
+    qualification would describe a table that no longer has any rows. Self-review
+    finding, 10-08-2026: the first version of this test only checked the helper in
+    isolation."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch, BatchResult, FileResult
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    result = run_batch(s, only_files=["synth_case_A.csv"])
+    pv._on_batch_result(result)
+    assert "work of breathing" in pv._table_panel._title_label.fullText().lower()
+
+    soft = BatchResult(files={"synth_case_A.csv": FileResult(
+        file="synth_case_A.csv", error="NoBreathsError: no breaths found",
+        error_kind="NoBreathsError")})
+    pv._on_batch_result(soft)
+    assert pv.table.model().rowCount() == 0                # the table really did clear
+    assert pv._table_panel._title_label.fullText() == "Per-breath results"
+    win.close()
+
+
+def test_wob_table_note_survives_an_empty_but_column_bearing_table(qapp, tmp_path):
+    """All breaths in a file can end up excluded without raising NoBreathsError (that
+    fires earlier, at breath separation) — the breaths table can still come back with
+    zero rows but the wobtotal column present. ``df['wobtotal'].iloc[0]`` must not
+    raise on that; self-review finding, 10-08-2026 (the defensive except-branch existed
+    but nothing exercised it)."""
+    import pandas as pd
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    empty = pd.DataFrame({"wobtotal": pd.Series([], dtype=float)})
+    pv._set_wob_table_note(empty)                            # must not raise
+    text = pv._table_panel._title_label.fullText().lower()
+    assert "work of breathing" in text and "advanced" in text
+    win.close()
+
+
+def test_wob_table_note_shows_a_nan_wobtotal_plainly(qapp, tmp_path):
+    """The core deliberately writes NaN into wob* columns when a detector is
+    unreliable rather than an inflated number (see result_table.py's
+    _format_display docstring) — the note must render that plainly, not crash."""
+    import pandas as pd
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    df = pd.DataFrame({"wobtotal": [float("nan")]})
+    pv._set_wob_table_note(df)                               # must not raise
+    assert "work of breathing" in pv._table_panel._title_label.fullText().lower()
     win.close()
 
 
