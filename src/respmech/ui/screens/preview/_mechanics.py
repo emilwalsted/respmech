@@ -366,6 +366,7 @@ class _MechanicsMixin:
         self.qc_overview.style().polish(self.qc_overview)
         self.mech_window_label.setFullText("")
         self.mech_window_label.setToolTip(self._MECH_WINDOW_TOOLTIP)
+        self._process_ready = False
         self.btn_process_file.setEnabled(False)
 
     def _qc_overview_not_assessed(self, detail):
@@ -923,7 +924,11 @@ class _MechanicsMixin:
             ln = p.addLine(x=0, pen=pg.mkPen(pal["separator"], width=1, style=Qt.DashLine))
             ln.hide()
             self._crosshair_lines.append(ln)
-        self.btn_process_file.setEnabled(True)       # a file is loaded → can process just it
+        # D24: gated jointly with _run_active — a file switch mid-run (allowed; only the
+        # WRITE actions are locked, see set_run_active) reaches this same render path and
+        # must not silently re-enable the button a running batch has locked.
+        self._process_ready = True
+        self.btn_process_file.setEnabled(not self._run_active)
 
     def _render_preview_stage2(self, data):
         """Breath overlays on the mechanics stack — the single most expensive
@@ -1199,6 +1204,16 @@ class _MechanicsMixin:
                 return
 
     def _toggle_breath(self, breath_no):
+        # D24: the single funnel both the Mechanics-stack click (_on_plot_clicked above)
+        # and every EMG plot's click handler (_emg_noise._toggle_from_emg_click) call
+        # through — one guard here covers both. A click during a run used to silently
+        # rewrite exclude_breaths without ever touching the batch that is already reading
+        # a frozen deepcopy of the settings taken at _start() (run_screen.py) — the click
+        # LOOKED like it worked (the overlay recoloured immediately) while the running
+        # batch, and the results it was about to write, never saw it.
+        if self._run_active:
+            self._set_status("Breath selection is locked while a run is in progress.")
+            return None
         name = self._selected_filename()
         if not name or breath_no not in self._breath_spans:
             return None

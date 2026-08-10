@@ -229,11 +229,19 @@ class MainWindow(QMainWindow):
         # needs locking too — otherwise Open/New could swap the settings out from under
         # the running worker, which is exactly what disabling the screen prevents.
         self.analysis_btn.setEnabled(False)
+        # D24 (UI-overhaul): Preview & QC used to enforce none of this — a breath-exclusion
+        # click or "Process & write this file" during a batch looked like it worked while
+        # silently missing the run entirely. Unlike Settings above, this is NOT a whole-
+        # screen disable (B04 already reversed that pattern once elsewhere): graphs, zoom
+        # and file navigation stay live, only the write actions lock. See
+        # PreviewScreen.set_run_active's own docstring.
+        self.preview_screen.set_run_active(True)
         self._run_active = True
 
     def _on_run_finished(self):
         self.settings_screen.setEnabled(True)
         self.analysis_btn.setEnabled(True)
+        self.preview_screen.set_run_active(False)
         self._run_active = False
         # Hand the bar straight to Run's OWN last message (its outcome — "Run failed — …",
         # "Finished writing…" — is exactly what the user is looking at right after a run,

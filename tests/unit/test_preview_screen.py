@@ -1230,4 +1230,63 @@ def test_a_click_during_the_async_stage1_to_stage2_gap_cannot_toggle_a_stale_bre
     excl = {b for e in s.processing.exclude_breaths
             if e.file == "synth_case_A.csv" for b in e.breaths}
     assert a_breath_no not in excl, "no exclusion may have been written from a stale-window click"
+
+
+# --------------------------------------------------------------------------- #
+# D24 (UI-overhaul) — the run lock reaches Preview & QC's own write actions.
+# Before this ticket only Setup (+ the header Analysis menu) locked on run_started; a
+# breath-exclusion click or "Process & write this file" during a batch looked like it
+# worked while the running batch (already holding a frozen deepcopy of the settings taken
+# at RunScreen._start) never saw it. Action-level, not a whole-surface lock — see B04's
+# reversal of exactly that pattern, referenced in PreviewScreen.set_run_active's docstring.
+# --------------------------------------------------------------------------- #
+def test_run_lock_disables_process_button_without_disabling_the_whole_screen(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    assert pv.btn_process_file.isEnabled() is True        # a valid render enabled it
+
+    pv.set_run_active(True)
+    assert pv.btn_process_file.isEnabled() is False
+    assert pv.isEnabled() is True, "the surface itself must stay reachable — B04"
+    assert pv.file_rail.isEnabled() is True
+
+    pv.set_run_active(False)
+    assert pv.btn_process_file.isEnabled() is True, "a diagram is still loaded — restored, not left off"
+    win.close()
+
+
+def test_run_lock_survives_a_file_switch_mid_run(qapp, tmp_path):
+    """A file switch mid-run is allowed (graphs/rail stay live) and re-renders the
+    Mechanics stack via the same path that normally re-enables 'Process & write this
+    file' for the newly loaded file. That render must not silently defeat the lock."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    pv.set_run_active(True)
+    assert pv.btn_process_file.isEnabled() is False
+
+    _render_mech(pv, s)                                    # simulates the live re-render a file switch triggers
+    assert pv.btn_process_file.isEnabled() is False, "the run lock must survive a mid-run render"
+    win.close()
+
+
+def test_toggle_breath_is_locked_while_a_run_is_active_and_says_why(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+
+    pv.set_run_active(True)
+    assert pv._toggle_breath(a_breath) is None
+    assert s.processing.exclude_breaths == [], "a locked click must never rewrite exclude_breaths"
+    assert "locked" in pv.status.text().lower() and "run" in pv.status.text().lower()
+
+    pv.set_run_active(False)
+    pv._toggle_breath(a_breath)                            # ordinary toggle works again
+    assert len(s.processing.exclude_breaths) == 1
+    win.close()
     win.close()

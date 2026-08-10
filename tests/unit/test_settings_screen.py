@@ -539,6 +539,30 @@ def test_run_lock_covers_the_header_analysis_menu(qapp, tmp_path):
     win.close()
 
 
+def test_run_lock_also_gates_preview_write_actions_not_the_whole_preview_screen(qapp, tmp_path):
+    """D24 (UI-overhaul): before this ticket, only Setup (+ the header Analysis menu)
+    locked on run_started — Preview & QC's own write actions ("Process & write this file",
+    breath-exclusion clicks) stayed live and silently missed a running batch. Unlike
+    Setup, Preview & QC is NOT disabled wholesale (B04 already reversed a whole-tab lock
+    once for looking identical to unlocked and closing too much) — only
+    ``btn_process_file`` closes; the screen itself, its file rail and its plots stay
+    reachable through the same run_started/run_finished wiring settings_screen uses."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_mechanics_preview
+    win = MainWindow(AppState(synth_settings(str(tmp_path)))); pv = win.preview_screen
+    data = stage_mechanics_preview(win.state.settings, os.path.join(INPUT, "synth_case_A.csv"))
+    pv._render_preview(data)
+    assert pv.btn_process_file.isEnabled() is True
+
+    win._on_run_started()
+    assert pv.btn_process_file.isEnabled() is False
+    assert pv.isEnabled() is True and pv.file_rail.isEnabled() is True
+
+    win._on_run_finished()
+    assert pv.btn_process_file.isEnabled() is True
+    win.close()
+
+
 # --------------------------------------------------------------------------- #
 # B01: the batch manifest — the read-out and QC strip reflect the WHOLE folder, not
 # just the first matching file

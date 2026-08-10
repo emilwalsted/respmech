@@ -991,6 +991,16 @@ class RunScreen(QWidget):
     # -- run lifecycle ------------------------------------------------------
     def _start(self, write: bool, only_files=None):
         if self._thread is not None or self._write_thread is not None:
+            # D24: this used to be a silent no-op. The buttons that normally reach here
+            # (Run/Dry-run, "Process & write this file") are already disabled while busy
+            # (refresh_actions()/PreviewScreen.set_run_active — see main_window's
+            # run_started/run_finished wiring), so a live click cannot land here under
+            # ordinary use. But a queued click delivered right on the busy/idle boundary,
+            # or a future caller that skips the button, must not vanish without a trace —
+            # see D24's ticket for two concrete cases (a Preview breath-exclusion click and
+            # "Process & write this file") that used to look like they worked while a run
+            # silently ignored them.
+            self._set_status("A run is already in progress.")
             return
         ok, why = self._settings_ok()
         if not ok:

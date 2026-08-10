@@ -162,6 +162,17 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._raw_label_y = None
         self._detail_label_y = None
         self._result_label_y = None
+        # D24 (UI-overhaul): whether a batch is currently running (set by MainWindow via
+        # set_run_active, wired to RunScreen's run_started/run_finished) and whether the
+        # currently previewed file has a drawn diagram to write ("Process & write this
+        # file" is only ever meaningful with both true). Kept as two separate flags rather
+        # than folding the run-lock straight into btn_process_file.setEnabled(...) at each
+        # call site, because a file switch mid-run (allowed — B04: the graphs/rail keep
+        # working, only the WRITE actions are gated) re-renders the Mechanics stack and
+        # would otherwise silently re-enable the button through the normal "file loaded"
+        # path in _mechanics._render_preview_stage1.
+        self._run_active = False
+        self._process_ready = False
         self._build()
         # render dispatch by job kind (built after _build so the methods exist)
         self._RENDER = {
@@ -518,6 +529,29 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         second, conflicting sizing mechanism on top of it."""
         self._run_drawer = run_screen_widget
         self.layout().addWidget(self._run_drawer)
+
+    def set_run_active(self, active):
+        """D24 (UI-overhaul): while a batch is running, lock the WRITE actions this screen
+        offers, not the whole surface — MainWindow calls this from RunScreen's
+        run_started/run_finished (a run started via the drawer's own Run/Dry-run buttons,
+        via "Process & write this file", or via a write-elsewhere retry all funnel through
+        those two signals, so one call site here covers all three).
+
+        Deliberately NOT ``self.setEnabled(False)``: ticket B04 already reversed a
+        whole-surface lock once (it silently disabled a tab whose stylesheet made
+        "disabled" and "enabled" look identical, and it closed browsing/zooming the user
+        had every reason to keep doing mid-run). Graphs, zoom and file navigation stay
+        live; only ``btn_process_file`` (gated jointly with ``_process_ready``, the "is
+        there actually a diagram to write" flag — see its own docstring on why the two
+        can't be merged) and breath-toggle clicks (``_toggle_breath`` itself checks
+        ``_run_active`` — it is the single funnel both the Mechanics-stack click and every
+        EMG plot's click handler call through) are closed, each with a reason a user who
+        clicks anyway can actually read."""
+        self._run_active = active
+        self.btn_process_file.setEnabled(self._process_ready and not active)
+        self.btn_process_file.setToolTip(
+            "Locked while a run is in progress." if active
+            else "Run and write output for the previewed file only.")
 
     # -- file list (reactive) ----------------------------------------------
     def refresh_files(self):

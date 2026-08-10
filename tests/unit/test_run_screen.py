@@ -495,6 +495,27 @@ def test_write_elsewhere_button_stays_disabled_after_a_fatal_run_with_no_result(
     win.close()
 
 
+def test_start_while_a_run_is_already_active_sets_a_status_message(qapp, tmp_path):
+    """D24: this guard used to be a silent no-op — a call reaching _start while a batch
+    (or a write-elsewhere retry) is already in flight vanished without a trace. The buttons
+    that normally reach here are already disabled while busy, so this is a second line of
+    defence, but a queued click delivered right on the busy/idle boundary — or a future
+    caller that skips the button — must say why nothing happened."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(synth_settings(tmp_path))); rn = win.run_screen
+    rn._thread = object()                 # any non-None sentinel — _start only checks identity
+    rn._start(write=True)
+    assert "already in progress" in rn.status.text().lower()
+    rn._thread = None
+
+    rn._set_status("Ready to run.")       # reset, then prove the write_thread path too
+    rn._write_thread = object()
+    rn._start(write=True)
+    assert "already in progress" in rn.status.text().lower()
+    rn._write_thread = None
+    win.close()
+
+
 def test_a_new_run_is_refused_while_write_elsewhere_is_in_flight(qapp, tmp_path):
     """refresh_actions()/_start() must treat self._write_thread exactly like self._thread —
     a review finding: without this, a 'write elsewhere' retry and a fresh run could drive
