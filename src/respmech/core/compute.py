@@ -219,7 +219,8 @@ def trim(timecol, flow, volume, poes, pgas, pdi, emgcolumns, settings):
         raise TrimError(
             "Could not trim data to whole breaths: the flow signal never crosses "
             "zero as required (data must start in late expiration and end in early "
-            "inspiration). Check the flow channel / inverseflow setting.")
+            "inspiration). Check the Flow channel assignment on Setup, or 'Invert the "
+            "flow signal' under Preview & QC ▸ Mechanics ▸ Advanced… ▸ Volume.")
     # Start at the first INSPIRATION sample (flow strictly < 0), not the first
     # non-positive one: a recording that begins at rest (flow == 0) would otherwise set
     # startix = 0, leaving the leading expiration in place — then the first breath begins
@@ -232,7 +233,8 @@ def trim(timecol, flow, volume, poes, pgas, pdi, emgcolumns, settings):
         raise TrimError(
             "Could not trim data to whole breaths: computed an empty range "
             "(the recording does not start in late expiration and end in early "
-            "inspiration). Check the flow channel / inverseflow setting.")
+            "inspiration). Check the Flow channel assignment on Setup, or 'Invert the "
+            "flow signal' under Preview & QC ▸ Mechanics ▸ Advanced… ▸ Volume.")
     return (timecol[startix:endix], flow[startix:endix], volume[startix:endix],
             poes[startix:endix], pgas[startix:endix], pdi[startix:endix],
             emgcolumns[startix:endix], startix, endix)
@@ -275,24 +277,39 @@ def ignorebreaths(curfile, settings):
     return d[curfile] if curfile in d else []
 
 
+class DegenerateBreathError(ValueError):
+    """Raised when a detected breath's inspiration and expiration phases cannot be
+    joined into one breath (a precondition failure, not a bug): typically an
+    incomplete breath right at the start or end of a recording."""
+
+
 def _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols, filename):
-    return OrderedDict([
-        ('number', breathcnt),
-        ('name', 'Breath #' + str(breathcnt)),
-        ('expiration', exp),
-        ('inspiration', insp),
-        ('time', np.concatenate((insp["time"], exp["time"])).squeeze()),
-        ('flow', np.concatenate((insp["flow"], exp["flow"])).squeeze()),
-        ('volume', np.concatenate((insp["volume"], exp["volume"])).squeeze()),
-        ('poes', np.concatenate((insp["poes"], exp["poes"])).squeeze()),
-        ('pgas', np.concatenate((insp["pgas"], exp["pgas"])).squeeze()),
-        ('pdi', np.concatenate((insp["pdi"], exp["pdi"])).squeeze()),
-        ('breathcnt', breathcnt),
-        ('ignored', ignored),
-        ('entcols', entcols),
-        ('emgcols', emgcols),
-        ('filename', filename),
-    ])
+    try:
+        return OrderedDict([
+            ('number', breathcnt),
+            ('name', 'Breath #' + str(breathcnt)),
+            ('expiration', exp),
+            ('inspiration', insp),
+            ('time', np.concatenate((insp["time"], exp["time"])).squeeze()),
+            ('flow', np.concatenate((insp["flow"], exp["flow"])).squeeze()),
+            ('volume', np.concatenate((insp["volume"], exp["volume"])).squeeze()),
+            ('poes', np.concatenate((insp["poes"], exp["poes"])).squeeze()),
+            ('pgas', np.concatenate((insp["pgas"], exp["pgas"])).squeeze()),
+            ('pdi', np.concatenate((insp["pdi"], exp["pdi"])).squeeze()),
+            ('breathcnt', breathcnt),
+            ('ignored', ignored),
+            ('entcols', entcols),
+            ('emgcols', emgcols),
+            ('filename', filename),
+        ])
+    except ValueError as e:
+        raise DegenerateBreathError(
+            f"Breath #{breathcnt} in {filename} is degenerate (its inspiration and "
+            f"expiration phases could not be joined into one breath) and cannot be "
+            f"analysed. This usually happens at an incomplete breath right at the "
+            f"start or end of a recording — exclude it in Preview & QC, or check the "
+            f"breath-separation settings under Preview & QC ▸ Mechanics ▸ Advanced… ▸ "
+            f"Breath detection.") from e
 
 
 def _phase_dicts(sl_in, sl_ex, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns):
@@ -498,8 +515,9 @@ def calculateaveragebreaths(breaths, settings):
             except Exception:
                 raise ValueError(
                     "Could not resample breath #" + str(breath["number"]) +
-                    ". Inspect 'avgresamplingobs' (flow separation) or peak settings "
-                    "(volume separation) and breath separation.")
+                    ": it is too short to average. Check Preview & QC ▸ Mechanics ▸ "
+                    "Advanced… ▸ Breath detection (peak thresholds / breath-separation "
+                    "buffer), or exclude this breath in Preview & QC.")
     return (np.mean(volumein, axis=1), np.mean(volumeex, axis=1),
             np.mean(poesin, axis=1), np.mean(poesex, axis=1))
 
