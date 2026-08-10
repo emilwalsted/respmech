@@ -50,7 +50,12 @@ def _single_local_path(mime, folder=False):
         return None
     if folder and os.path.exists(path) and not os.path.isdir(path):
         return None
-    return path
+    # Native separators before the path reaches a field or the settings. QUrl.toLocalFile()
+    # returns forward slashes on EVERY platform — including Windows ('C:/Users/…') — while
+    # everything downstream (prefs, carried-folder matching, the user's own eyes) expects
+    # the OS's native form. Measured on the Windows CI runner 10-08-2026: five path-drop
+    # tests failed on exactly this, 'C:/Users/…' != 'C:\\Users\\…'; a no-op on macOS/Linux.
+    return os.path.normpath(path)
 
 
 class PathDropFilter(QObject):

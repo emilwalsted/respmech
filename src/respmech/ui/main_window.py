@@ -9,6 +9,8 @@ Qt dependencies. A status bar mirrors each screen's status line.
 """
 from __future__ import annotations
 
+import os
+
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu,
@@ -492,7 +494,10 @@ class MainWindow(QMainWindow):
         path = urls[0].toLocalFile()
         if not path.casefold().endswith((".toml", ".py")):
             return None
-        return path
+        # Native separators, same reasoning as path_drop._single_local_path: toLocalFile()
+        # says 'C:/Users/…' on Windows, and this path flows into open_analysis, the recents
+        # menu and the window title — all places a Windows user reads it. No-op elsewhere.
+        return os.path.normpath(path)
 
     def dragEnterEvent(self, event):
         if self._dropped_analysis_path(event.mimeData()) is not None:
