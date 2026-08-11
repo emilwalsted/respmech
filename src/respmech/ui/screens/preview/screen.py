@@ -1164,6 +1164,19 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             self._noise_has_result = True   # the fidelity panel now holds a current result
         self._update_actions(status=False)
 
+    def closeEvent(self, ev):
+        """Self-cleanup for a ``PreviewScreen`` closed WITHOUT a ``MainWindow`` around it
+        (point 6 durability). Qt never delivers ``closeEvent`` to a child widget when its
+        PARENT window closes — that is exactly why ``MainWindow.closeEvent`` orchestrates
+        ``shutdown()`` explicitly rather than relying on this — so this override only fires
+        when a ``PreviewScreen`` is itself the top-level widget being closed: standalone in
+        a test (15 of them, per the point 6 investigation), or any future composition
+        without a ``MainWindow``. ``shutdown()`` is safe to call twice (its job sets and
+        plot containers are already empty on a second pass), so a screen that is BOTH
+        orchestrated by a parent's closeEvent AND later closed directly stays safe."""
+        self.shutdown()
+        super().closeEvent(ev)
+
     def shutdown(self, wait_ms=5000):
         """Cancel and join every worker thread (current + draining). Called from
         MainWindow.closeEvent so nothing is destroyed while still running.

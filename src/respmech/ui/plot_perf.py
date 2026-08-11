@@ -181,6 +181,18 @@ def close_plots(container) -> None:
             p.close()                      # drops ctrlMenu + submenus, closes axes, drops vb ref
         except Exception:               # noqa: BLE001 — see docstring
             pass
+    # A bare pg.PlotWidget's own close() is not idempotent: it unconditionally runs
+    # ``self.plotItem.close(); self.plotItem = None`` (pyqtgraph 0.14's own source), so
+    # calling it a SECOND time on an already-closed one raises AttributeError on
+    # ``None.close()`` — silently caught below either way, but this skips the call
+    # outright rather than relying on that catch, since callers now legitimately close
+    # the same container twice (point 6 durability: an idempotent owner shutdown() may
+    # run once via orchestration and once via a later direct close()). A
+    # GraphicsLayoutWidget/GraphicsLayout has no ``plotItem`` attribute, so this never
+    # skips those — GraphicsView.close() is already safe to call twice (it only clears
+    # an already-empty scene and re-nulls already-None references).
+    if getattr(container, "plotItem", "sentinel") is None:
+        return
     try:
         container.close()                  # GraphicsView.close(): scene().clear() etc.
     except Exception:               # noqa: BLE001 — see docstring
