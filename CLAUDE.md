@@ -228,6 +228,20 @@ this ticket targeted is gone.
 See ticket `20260811-0910-ci-tests.md` (claude-ops) for the full investigation, every
 measured number, and the review passes for both fixes.
 
+**Re-verified 11-08-2026 (ticket `20260811-1232-flere-ci-fixes.md`, claude-ops), don't
+re-litigate a third time.** A follow-up ticket asked for exactly the ruled-out
+mid-session-`.clear()` fix above, unaware Point 6 had already been closed by a
+different mechanism. Rebuilt it (a `plot_perf.release_plot_items()` helper, called
+immediately before all 9 relevant `GraphicsLayoutWidget.clear()` sites — the same set
+listed in the "RULED OUT" paragraph above) and re-ran the exact same
+`RESPMECH_NET_CENSUS` measurement against the CURRENT 276 baseline (not the old 3,797
+one the original ruling-out used): **276 both with and without, exact match, 57/57
+tests unchanged.** Confirms the ruling-out was not an artefact of the pre-`ColumnStack`
+-fix baseline. The experimental code was discarded (not committed) for the same reason
+the original attempt was: no measured benefit, and keeping it would be complexity
+without justification. If a future ticket proposes this again, point it here rather
+than repeating the experiment.
+
 ## Dev environment — check which interpreter you are actually running
 
 `respmech-gui` is a console script, and on a machine with more than one environment it may
