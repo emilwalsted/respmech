@@ -187,8 +187,16 @@ jobs:
             echo "== ${f} :: ${summary:-NO SUMMARY} (exit ${rc})"
             if grep -qE "[0-9]+ (failed|error)" /tmp/one-file.log; then
               echo "::error::real test failures or errors in ${f}"; fails=1
+              # Print the actual failure, not just the count: on a platform-only red
+              # this job log is ALL the evidence there is (run #226's one macOS-only
+              # failure left its traceback in a file nothing uploaded). sed -nE works
+              # on both BSD (macOS) and GNU (Linux) sed — keep it that way.
+              echo "--- failure details from ${f} ---"
+              sed -nE '/^=+ (FAILURES|ERRORS)/,$p' /tmp/one-file.log | head -120
             elif ! grep -qE "[0-9]+ (passed|skipped)" /tmp/one-file.log; then
               echo "::error::${f} produced no pytest summary (crashed mid-run?)"; fails=1
+              echo "--- last 40 lines of ${f}'s output ---"
+              tail -40 /tmp/one-file.log
             fi
             p=$(grep -oE "[0-9]+ passed" /tmp/one-file.log | tail -1 | grep -oE "^[0-9]+" || true)
             s=$(grep -oE "[0-9]+ skipped" /tmp/one-file.log | tail -1 | grep -oE "^[0-9]+" || true)
@@ -294,8 +302,16 @@ jobs:
             echo "== ${f} :: ${summary:-NO SUMMARY} (exit ${rc})"
             if grep -qE "[0-9]+ (failed|error)" /tmp/one-file.log; then
               echo "::error::real test failures or errors in ${f}"; fails=1
+              # Print the actual failure, not just the count: on a platform-only red
+              # this job log is ALL the evidence there is (run #226's one macOS-only
+              # failure left its traceback in a file nothing uploaded). sed -nE works
+              # on both BSD (macOS) and GNU (Linux) sed — keep it that way.
+              echo "--- failure details from ${f} ---"
+              sed -nE '/^=+ (FAILURES|ERRORS)/,$p' /tmp/one-file.log | head -120
             elif ! grep -qE "[0-9]+ (passed|skipped)" /tmp/one-file.log; then
               echo "::error::${f} produced no pytest summary (crashed mid-run?)"; fails=1
+              echo "--- last 40 lines of ${f}'s output ---"
+              tail -40 /tmp/one-file.log
             fi
             p=$(grep -oE "[0-9]+ passed" /tmp/one-file.log | tail -1 | grep -oE "^[0-9]+" || true)
             s=$(grep -oE "[0-9]+ skipped" /tmp/one-file.log | tail -1 | grep -oE "^[0-9]+" || true)
