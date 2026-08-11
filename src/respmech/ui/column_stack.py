@@ -312,6 +312,20 @@ class ColumnStack(QWidget):
     def viewports(self):
         return [p.viewport() for p in self.plots]
 
+    def closeEvent(self, ev):
+        """Self-cleanup for a ``ColumnStack`` closed WITHOUT a ``MainWindow`` around it
+        (point 6 durability). Qt never delivers ``closeEvent`` to a child widget when its
+        PARENT window closes — ``MainWindow.closeEvent`` (via ``ChannelSummary.close_plots``)
+        and ``ChannelSetupDialog``'s ``finished`` signal both orchestrate ``close_plots()``
+        explicitly for that reason, so this override only fires when a ``ColumnStack`` is
+        itself the top-level widget being closed: standalone in a test (17 of them, per the
+        point 6 investigation), or any future composition without a ``MainWindow`` or
+        ``ChannelSetupDialog`` around it. ``close_plots()`` is safe to call twice
+        (``self.plots`` is already ``[]`` on a second pass), so a stack that is BOTH
+        orchestrated by an owner's cleanup AND later closed directly stays safe."""
+        self.close_plots()
+        super().closeEvent(ev)
+
     def close_plots(self) -> None:
         """Release every embedded ``PlotWidget``'s own context menus (``plot_perf``'s
         documented ``PlotItem``/``ViewBox`` cleanup), then drop them from ``self.plots``.

@@ -242,6 +242,41 @@ the original attempt was: no measured benefit, and keeping it would be complexit
 without justification. If a future ticket proposes this again, point it here rather
 than repeating the experiment.
 
+**Made durable 11-08-2026 (ticket `20260811-1735-test-durability-og-cleanup.md`,
+claude-ops): cleanup moved from ONE orchestrator to each plot-owning widget itself.**
+Both fixes above only ran when `MainWindow.closeEvent` orchestrated them — `PreviewScreen`,
+`RunScreen` and `ColumnStack` had no `closeEvent` of their own, so any composition without
+a `MainWindow` bypassed cleanup entirely. Real, not hypothetical: 15 tests construct
+`PreviewScreen` standalone, 7 `RunScreen`, 17 `ColumnStack`. Qt never delivers `closeEvent`
+to a child widget when its PARENT window closes (that is exactly why the orchestration
+exists), so each now has its own `closeEvent` that calls its EXISTING cleanup function —
+`PreviewScreen.closeEvent` → `self.shutdown()`, `RunScreen.closeEvent` → `self.shutdown()`,
+`ColumnStack.closeEvent` → `self.close_plots()` — then `super().closeEvent(ev)`. This only
+changes behaviour for widgets closed WITHOUT a `MainWindow` around them: an embedded child
+still gets cleaned up exclusively via `MainWindow.closeEvent`'s explicit orchestration, so
+the `test_gui_interactive.py` 276-QMenu baseline is unaffected (re-measured: 276, 57/57
+unchanged). Idempotence came for free: `shutdown()`/`close_plots()` already empty their own
+job sets and plot containers on first call, so a widget that is both orchestrated by a
+parent AND later closed directly survives cleanup running twice without a guard flag —
+verified directly (`win.close(); win.close()` and the standalone equivalents never raise).
+
+The invariant is now also a NAMED regression test, not just a memory:
+`tests/unit/test_plot_cleanup_contract.py` — one guard per type
+(`PreviewScreen`/`RunScreen`/`ColumnStack`/`MainWindow`), each constructing the widget
+standalone with a representative small render (a real mechanics render for `PreviewScreen`,
+a real small synthetic write for `RunScreen`, a real `build()` for `ColumnStack`), closing
+it, and asserting the top-level `QMenu` census returns to its pre-construction baseline —
+except `MainWindow`'s guard, which asserts a small ceiling (15) above the legitimate 6-menu
+baseline (its own File/Edit/Help bar) rather than 0, since a `MainWindow` is closed but
+deliberately never deleted in this suite. `RunScreen`'s guard checks thread-joining
+(`_write_thread` back to `None`), not `QMenu` census — `grep` confirms it owns no
+`PlotWidget`/`GraphicsLayoutWidget` at all, so its point 6 exposure was always the OTHER
+hazard `shutdown()` guards against (a `QThread` destroyed while running aborts the
+process), never menu accumulation. py3.11 stress-verified separately from the named
+suite (offscreen, this sandbox): 300 `ColumnStack` and 60 `PreviewScreen`
+construct/render/close/close cycles, zero errors — the two paths that actually touch
+pyqtgraph's C++ objects, the segfault-prone class on this interpreter.
+
 ## Dev environment — check which interpreter you are actually running
 
 `respmech-gui` is a console script, and on a machine with more than one environment it may

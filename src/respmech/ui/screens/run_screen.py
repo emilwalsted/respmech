@@ -1137,6 +1137,19 @@ class RunScreen(QWidget):
         # TextViewerDialog _show_error_window opens from self._fatal_msg once the run ends.
         self._append(f"ERROR: {short_error(msg)} (full technical detail: see the error window)")
 
+    def closeEvent(self, ev):
+        """Self-cleanup for a ``RunScreen`` closed WITHOUT a ``MainWindow`` around it (point
+        6 durability). Qt never delivers ``closeEvent`` to a child widget when its PARENT
+        window closes — ``MainWindow.closeEvent`` orchestrates ``shutdown()`` explicitly for
+        that reason — so this override only fires when a ``RunScreen`` is itself the
+        top-level widget being closed: standalone in a test (7 of them, per the point 6
+        investigation), or any future composition without a ``MainWindow``. ``shutdown()``
+        is safe to call twice (``self._worker``/``self._thread``/``self._write_thread`` are
+        already ``None`` on a second pass), so a screen that is BOTH orchestrated by a
+        parent's closeEvent AND later closed directly stays safe."""
+        self.shutdown()
+        super().closeEvent(ev)
+
     def shutdown(self, wait_ms=5000):
         """Cancel and join a running batch (called from MainWindow.closeEvent) so
         the worker thread is never destroyed while running."""
