@@ -109,3 +109,79 @@ def tune_widget(plot_widget) -> None:
         tune(plot_widget.getPlotItem())
     except Exception:               # noqa: BLE001 — see tune()
         pass
+
+
+def close_plots(container) -> None:
+    """Release every ``PlotItem`` a plot container holds, via pyqtgraph's OWN
+    ``PlotItem.close()``/``ViewBox.setMenuEnabled(False)`` — the library's documented
+    cleanup path ("Most of this crap is needed to avoid PySide trouble", see
+    ``PlotItem.close()``'s own comment), not a hand-rolled sweep of already-closed
+    windows from outside. Handles a bare ``PlotWidget`` (one ``PlotItem`` via
+    ``getPlotItem()``) and a ``GraphicsLayoutWidget``/``GraphicsLayout`` (0..N
+    ``PlotItem``s in ``.ci.items``).
+
+    Why this exists: each ``PlotItem`` unconditionally builds its own context menu (one
+    ``QMenu`` plus six submenus) and each ``ViewBox`` its own ``ViewBoxMenu`` — eagerly,
+    at construction, whether or not the app ever shows them. Preview & QC's GUI tests
+    never delete a closed ``MainWindow`` (deleting one segfaults on Python 3.11 — see
+    ``tests/unit/conftest.py``), so those menus accumulated for the life of the test
+    session: ~130 parentless QMenus per closed window, measured 6,137 QMenus after just
+    57 GUI-heavy tests (RESPMECH_NET_CENSUS, point 6). An earlier attempt to fix this by
+    reaping already-closed windows from OUTSIDE (a generic ``deleteLater`` +
+    ``sendPostedEvents(DeferredDelete)`` sweep over ``app.topLevelWidgets()``) segfaulted
+    nondeterministically on py3.11 and was never committed. This function instead closes
+    each plot's OWN internals, in order, at the moment ITS OWNER is shutting down — no
+    sweep over unrelated, possibly half-torn-down objects. Verified on py3.11.15
+    offscreen: 360 open/close cycles, zero errors, zero surviving QMenus (see the ticket
+    for the measured before/after).
+
+    Order matters: ``ViewBox.setMenuEnabled(False)`` must run BEFORE ``PlotItem.close()``
+    (which drops the item's own reference to its view box), and both must run BEFORE the
+    container's own ``.close()`` (``GraphicsView.close()`` calls ``scene().clear()``,
+    which invalidates any ``PlotItem``/``ViewBox`` still attached to the scene — closing
+    the container first raises ``RuntimeError: Signal source has been deleted`` on the
+    now-dead C++ objects underneath).
+
+    Call this ONCE, when the container's owning screen is genuinely shutting down
+    (``MainWindow.closeEvent``), never mid-session: afterwards every ``PlotItem`` in the
+    container is closed (``ctrlMenu``/axes/view box gone) and the container itself is
+    unusable. Never raises: a plot that fails to release its menus is a memory-growth
+    nuisance, not a reason to abort the rest of teardown.
+
+    Deliberately does NOT call ``ViewBox.close()`` (which additionally calls
+    ``unregister()``, dropping the view box from pyqtgraph's class-level
+    ``ViewBox.AllViews``/``NamedViews`` registries): both are ``weakref.WeakKeyDictionary``/
+    ``WeakValueDictionary``, so a view box left registered there is not kept alive by it —
+    a bookkeeping leftover, not a memory leak, and not worth the extra call.
+    """
+    if container is None:
+        return
+    plot_items = []
+    try:
+        get_plot_item = getattr(container, "getPlotItem", None)
+        if callable(get_plot_item):
+            pi = get_plot_item()
+            if pi is not None:
+                plot_items.append(pi)
+        else:
+            ci = getattr(container, "ci", None)
+            items = getattr(ci, "items", None) if ci is not None else None
+            if items:
+                plot_items.extend(list(items.keys()))
+    except Exception:               # noqa: BLE001 — see docstring
+        pass
+    for p in plot_items:
+        try:
+            vb = p.getViewBox()
+            if vb is not None:
+                vb.setMenuEnabled(False)   # drops the ViewBoxMenu (ViewBox._applyMenuEnabled)
+        except Exception:               # noqa: BLE001 — see docstring
+            pass
+        try:
+            p.close()                      # drops ctrlMenu + submenus, closes axes, drops vb ref
+        except Exception:               # noqa: BLE001 — see docstring
+            pass
+    try:
+        container.close()                  # GraphicsView.close(): scene().clear() etc.
+    except Exception:               # noqa: BLE001 — see docstring
+        pass

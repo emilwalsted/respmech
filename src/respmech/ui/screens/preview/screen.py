@@ -1198,6 +1198,14 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._draining.clear()
         self._active.clear()
         self._reaping.clear()
+        # Release every PlotItem's own menus (point 6): no worker can still be writing
+        # into a plot once every job above has been joined, so this is the first safe
+        # moment to close them. See plot_perf.close_plots() for why this is closed here,
+        # at each plot's OWN shutdown, rather than reaped from outside by conftest.py's
+        # cross-window sweep after the fact.
+        for _container in (self.plots, self.ecg_capture_plot, self.ecg_processed_plots,
+                            self.emg_raw_plots, self.emg_result_plots, self.emg_plots):
+            plot_perf.close_plots(_container)
 
     def panel_busy(self, key):
         ov = self._overlays.get(key)

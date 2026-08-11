@@ -106,3 +106,48 @@ def test_tune_never_raises():
     plot_perf.tune(object())
     plot_perf.tune_widget(None)
     plot_perf.tune_widget(object())
+
+
+class _BrokenContainer:
+    """A container whose own .close() raises -- the last line of close_plots() must
+    survive that too, not just a plot item's own close()."""
+    def close(self):
+        raise RuntimeError("boom")
+
+
+def test_close_plots_never_raises():
+    """Same contract as test_tune_never_raises() above, for close_plots() (point 6):
+    called from PreviewScreen.shutdown(), where a plot that fails to release its menus is
+    a memory-growth nuisance, not a reason to abort the rest of teardown."""
+    plot_perf.close_plots(None)
+    plot_perf.close_plots(object())        # neither getPlotItem() nor .ci -> no plot_items
+    plot_perf.close_plots(_BrokenContainer())
+
+
+def test_close_plots_on_a_real_widget(qapp):
+    """Not a stub: builds a real GraphicsLayoutWidget with real PlotItems (mirroring how
+    PreviewScreen actually uses it) and asserts every PlotItem's ctrlMenu is dropped -- the
+    same invariant
+    test_preview_screen.py::test_closing_the_window_closes_the_mechanics_stacks_current_plot_items
+    checks end-to-end through a real MainWindow, pinned here at the unit level."""
+    glw = pg.GraphicsLayoutWidget()
+    items = [glw.addPlot(row=i, col=0) for i in range(3)]
+    assert all(p.ctrlMenu is not None for p in items)
+
+    plot_perf.close_plots(glw)
+
+    assert all(p.ctrlMenu is None for p in items)
+
+
+def test_close_plots_on_a_plot_widget(qapp):
+    """Same as above for the other container shape close_plots() handles: a bare
+    PlotWidget, whose single PlotItem comes via getPlotItem() rather than .ci.items."""
+    pw = pg.PlotWidget()
+    item = pw.getPlotItem()
+    assert item.ctrlMenu is not None
+
+    plot_perf.close_plots(pw)
+
+    assert item.ctrlMenu is None
+
+    assert item.ctrlMenu is None

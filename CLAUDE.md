@@ -127,6 +127,63 @@ The protocol, after **every** push:
    green: "suite green locally; CI not checked" is honest and lets the next session
    check. Never report a ticket done while its run shows a failed job.
 
+### Point 6 (suite scaling) — partial fix landed (`plot_perf.close_plots`, 11-08-2026); the dominant leak source is still open
+
+`tests/unit/conftest.py` never deletes a closed `MainWindow` — deleting one segfaults
+nondeterministically on Python 3.11 (see the reaper comment in
+`_close_top_level_windows`), so every pyqtgraph `PlotItem`/`ViewBox` a window ever built
+kept its own auto-constructed context menu alive for the life of the test session:
+`PlotItem.__init__` unconditionally builds one `ctrlMenu` + six submenus, `ViewBox.__init__`
+one `ViewBoxMenu`, both EAGERLY at construction — measured (`RESPMECH_NET_CENSUS`) at
+6,137 surviving `QMenu`s after just 57 GUI-heavy tests (`test_gui_interactive.py`), the
+root of macOS CI's multi-hour wall and the sandbox's mid-suite OOM.
+
+**What's fixed:** `PreviewScreen.shutdown()` (called from `MainWindow.closeEvent`) now
+closes every `PlotItem` its containers CURRENTLY hold, via pyqtgraph's own documented
+cleanup — `ViewBox.setMenuEnabled(False)` then `PlotItem.close()` per item, then the
+container's own `.close()` — see `ui/plot_perf.py::close_plots()`. This is a
+fundamentally different, much lower-risk shape than the earlier "reap already-closed
+windows from outside" attempt that segfaulted (`deleteLater()` +
+`sendPostedEvents(DeferredDelete)` swept over `app.topLevelWidgets()`, never committed,
+only its diagnostics did — commit 9f2339c): closing each plot's OWN internals at the
+moment ITS OWNER shuts down touches only live, fully-valid objects, never something
+another test's teardown may have half-torn-down already. Verified safe: 360 synthetic
+open/close cycles + the full existing GUI suite subset touching these screens, zero
+crashes, on py3.11.15 (the exact segfault-class interpreter) offscreen.
+
+**Order matters and is load-bearing, not stylistic:** `setMenuEnabled(False)` must run
+BEFORE `PlotItem.close()` (which drops the item's reference to its view box), and both
+before the container's `.close()` — `GraphicsView.close()` calls `scene().clear()`,
+which invalidates any `PlotItem`/`ViewBox` still attached; closing the container first
+raises `RuntimeError: Signal source has been deleted` on the now-dead C++ objects.
+
+**What's still leaking — the DOMINANT source, not yet fixed:** roughly a dozen call
+sites re-render a panel mid-session by calling `<container>.clear()` then rebuilding
+with fresh `addPlot()` calls (`screen.py` ×2 blocks, `_mechanics.py` ×3,
+`_emg_noise.py` ×2, `_ecg.py` ×1 — file switches, settings changes, tab redraws all hit
+this). pyqtgraph's `GraphicsLayout.removeItem()` (what `.clear()` calls per item) only
+drops the item from the scene and the layout's own `.items` dict — it does **not** call
+`.close()` on it, so the discarded `PlotItem`'s `ctrlMenu`/`ViewBoxMenu` are orphaned but
+still fully alive, and by the time `close_plots()` runs at final shutdown they are no
+longer reachable via `container.ci.items` to close. Measured on the reference file: this
+fix alone reduces surviving `QMenu`s from 6,137 to 3,797 (~38%), not to zero — the
+remaining ~62% comes from every render BEFORE the window's last one. Fixing this
+properly means calling something like `plot_perf.close_plots()`'s inner loop (menu
+closing only, WITHOUT closing the container itself, since it needs to stay usable for
+the next `addPlot()`) immediately before each of those ~12 `.clear()` calls — a larger,
+more invasive change across four files that a future ticket should scope and verify on
+its own, not bundle into a shutdown-time fix.
+
+**Also NOT covered:** `column_stack.py`'s `ColumnStack` widget (used by
+`channel_setup_dialog.py`'s modal and `channel_summary.py`'s Setup-screen widget) builds
+its own `PlotWidget`s and already calls `plot.setMenuEnabled(False)` — which drops the
+`ViewBoxMenu` but NOT the 7-`QMenu` `ctrlMenu` `PlotItem.__init__` builds unconditionally
+regardless. A separate leak source, same underlying pyqtgraph mechanism, no shared
+container list to close it from yet.
+
+See ticket `20260811-0910-ci-tests.md` (claude-ops) for the full investigation,
+before/after numbers, and the two independent review passes.
+
 ## Dev environment — check which interpreter you are actually running
 
 `respmech-gui` is a console script, and on a machine with more than one environment it may
