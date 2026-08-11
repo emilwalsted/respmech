@@ -262,13 +262,25 @@ def test_a_header_wider_than_the_cap_still_grows_past_it_but_a_long_cell_value_d
     so this test forces a much wider font directly — the point is exercising the
     cap-widening branch in ``resize_result_table``, not modelling any specific platform.
 
+    The font size is GROWN UNTIL MEASURED past the cap, never fixed: the first cut
+    hard-coded 20 pt as "wide enough" and became the only macOS-red test in run #226 —
+    macOS maps points at 72 logical dpi (Linux/Windows use 96), so 20 pt is a 20 px em
+    there and ``poes_tidal_swing`` measured under the 220 px cap, failing the setup
+    precondition below. A pixel-ish precondition must be established by measurement in
+    the same run, like every other metrics assertion in this file (see CLAUDE.md).
+
     The cap exists for the OTHER case, a genuinely oversized CELL value (a long file
     path): that case must still be squeezed, not grown without bound, or the fix would
     have traded one defect for the regression the cap was originally built to prevent."""
+    from PySide6.QtGui import QFontMetrics
     app = QApplication.instance()
     orig = app.font()
     f = app.font()
-    f.setPointSize(20)          # wide enough that "poes_tidal_swing" alone exceeds 220 px
+    size = 20
+    f.setPointSize(size)
+    while QFontMetrics(f).horizontalAdvance("poes_tidal_swing") <= 220 and size < 72:
+        size += 4
+        f.setPointSize(size)
     app.setFont(f)
     try:
         df = pd.DataFrame({
