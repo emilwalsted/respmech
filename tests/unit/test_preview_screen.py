@@ -1387,3 +1387,23 @@ def test_closing_the_window_closes_setups_channel_summary_plots(qapp, tmp_path):
         "PreviewScreen.shutdown() alone could never reach"
     )
     win.close()                                            # idempotent: a second close must not raise
+
+
+def test_closing_the_window_with_no_channels_assigned_does_not_raise(qapp):
+    """MainWindow.closeEvent's new call to channel_summary.close_plots() is wrapped in a
+    bare except (matching the existing preview_screen/run_screen shutdown calls it sits
+    beside), so a raise there would be silently swallowed rather than failing a test --
+    this exercises the ChannelSummary.stack is None path (no channels assigned, no input
+    file: ChannelSummary.show_mapping() leaves self.stack unset, see its own text-only
+    fallback) directly through the real close path, not just at the ChannelSummary/
+    ColumnStack unit level, so a future attribute rename on this call chain cannot hide
+    behind the except forever."""
+    from respmech.core.settings import Settings
+    from respmech.ui.main_window import MainWindow
+
+    win = MainWindow(AppState(Settings()))
+    assert win.settings_screen.channel_summary.stack is None, (
+        "a brand-new, empty Settings() should leave no channels assigned -- if this ever "
+        "fails, the test above is exercising the wrong path"
+    )
+    win.close()                                            # must not raise, and must reach shutdown
