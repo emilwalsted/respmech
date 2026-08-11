@@ -314,6 +314,13 @@ class ChannelSetupDialog(QDialog):
         self._preselect = preselect
         self._stack = ColumnStack(self._fs, header_factory=self._build_header)
         self._stack.build(matrix0, self._names, roles=preselect)
+        # Release the stack's own PlotWidget context menus whenever this dialog closes,
+        # by whichever path (OK, Cancel, the window's own close button) — QDialog emits
+        # `finished` for all three, unlike closeEvent, which only fires for the last one.
+        # See ChannelSummary.close_plots()'s docstring: an undiscarded ColumnStack stays
+        # reachable (via this dialog, for as long as a caller keeps it referenced) rather
+        # than becoming garbage, so nothing but an explicit close ever releases it.
+        self.finished.connect(lambda _result: self._stack.close_plots())
         self._plots, self._curves, self._headers = (self._stack.plots, self._stack.curves,
                                                     self._stack.headers)
         scroll.setWidget(self._stack)

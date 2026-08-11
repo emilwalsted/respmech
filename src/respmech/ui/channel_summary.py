@@ -130,6 +130,8 @@ class ChannelSummary(QWidget):
         self._box.addWidget(self._empty)
 
     def _clear(self):
+        if self.stack is not None:
+            self.stack.close_plots()   # see close_plots()'s own docstring below
         while self._box.count():
             item = self._box.takeAt(0)
             w = item.widget()
@@ -137,6 +139,32 @@ class ChannelSummary(QWidget):
                 w.setParent(None)
         self.rows = []
         self.stack = None
+
+    def close_plots(self) -> None:
+        """Release the CURRENT ``ColumnStack``'s embedded plots' own context menus,
+        without rebuilding the empty state ``_clear()`` leaves behind — call this when the
+        window that owns this widget is closing, not when the mapping merely changes
+        (``_clear()``, called from ``show_mapping()``, already covers that case).
+
+        Every column of the previewed file gets its own ``pg.PlotWidget()`` in
+        :meth:`show_mapping` (via ``ColumnStack.build``), each with a context menu built
+        eagerly at construction. Nothing closes these on a normal redraw or file switch —
+        ``_clear()`` above now does — but the LAST ``ColumnStack`` built before the owning
+        window closes is never rebuilt, so nothing ever calls ``_clear()`` again for it.
+        Preview & QC's screen has an explicit ``shutdown()`` for exactly this; this is its
+        counterpart for Setup's channel summary — see ``MainWindow.closeEvent``, which
+        calls both. Measured 11-08-2026 (point 6, ticket 20260811-0910): this was the
+        SOLE remaining leak source after Preview & QC's own shutdown-time fix landed — a
+        bare, freshly-built ``MainWindow`` that renders nothing at all still measured 83
+        surviving ``QMenu``s after ``close()`` (0 with both fixes), because unlike a
+        discarded mid-session PlotItem (which becomes unreachable garbage a `gc.collect()`
+        eventually reclaims on its own), these stay REACHABLE via
+        ``self.channel_summary.stack.plots`` for as long as the (closed but, on Python
+        3.11, deliberately never deleted) window exists — never garbage at all, so no
+        amount of collection ever frees them without this call.
+        """
+        if self.stack is not None:
+            self.stack.close_plots()
 
     def show_mapping(self, channels, *, matrix=None, names=None, fs=1000,
                      integrate_from_flow=False):

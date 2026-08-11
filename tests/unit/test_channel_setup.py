@@ -94,6 +94,28 @@ def test_dialog_has_a_control_and_plot_per_column(qapp):
                                       "pgas": None, "pdi": None, "emg": [], "entropy": []}
 
 
+# -- plot cleanup (point 6, ticket 20260811-0910) -----------------------------------------
+def test_closing_the_dialog_closes_its_plots(qapp):
+    """Each column's PlotWidget builds its own ctrlMenu eagerly at construction
+    (ColumnStack.build) and nothing used to release it when the dialog closed -- unlike
+    Setup's channel summary (ChannelSummary.close_plots(), the dominant instance of this
+    same gap), this dialog is normally short-lived, but a caller that keeps a reference
+    around (as this test does) would otherwise hold the same leak. QDialog emits
+    ``finished`` for accept(), reject() AND the window's own close button alike, unlike
+    closeEvent, which only fires for the last of the three -- see the connection in
+    ChannelSetupDialog.__init__.
+
+    The PlotItem references are captured BEFORE reject(), not re-fetched via
+    ``PlotWidget.getPlotItem()`` afterwards -- see test_column_stack.py's
+    ``test_close_plots_closes_every_embedded_plotitem_and_empties_the_list`` for why a
+    closed PlotWidget's own ``getPlotItem()`` returns ``None``, not a readable PlotItem."""
+    dlg = _dialog()
+    plot_items = [p.getPlotItem() for p in dlg._stack.plots]
+    assert plot_items and all(pi.ctrlMenu is not None for pi in plot_items)
+    dlg.reject()
+    assert all(pi.ctrlMenu is None for pi in plot_items)
+
+
 def test_dialog_lists_valid_files_and_defaults_to_first(qapp):
     files = _files()
     dlg = _dialog(files=files)

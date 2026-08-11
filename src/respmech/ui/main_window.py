@@ -705,4 +705,11 @@ class MainWindow(QMainWindow):
                 screen.shutdown()
             except Exception:               # pragma: no cover - best-effort teardown
                 pass
+        # Setup's channel summary builds its own PlotWidgets (ColumnStack) outside
+        # Preview & QC's shutdown() — see ChannelSummary.close_plots()'s docstring for why
+        # this is the dominant point 6 leak source once the above was fixed.
+        try:
+            self.settings_screen.channel_summary.close_plots()
+        except Exception:               # pragma: no cover - best-effort teardown
+            pass
         super().closeEvent(ev)

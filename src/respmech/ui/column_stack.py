@@ -17,6 +17,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 import pyqtgraph as pg
 
+from respmech.ui import plot_perf
 from respmech.ui.plot_axis import MinPitchAxis
 
 try:
@@ -310,3 +311,24 @@ class ColumnStack(QWidget):
 
     def viewports(self):
         return [p.viewport() for p in self.plots]
+
+    def close_plots(self) -> None:
+        """Release every embedded ``PlotWidget``'s own context menus (``plot_perf``'s
+        documented ``PlotItem``/``ViewBox`` cleanup), then drop them from ``self.plots``.
+
+        Each ``PlotWidget()`` built in :meth:`build` constructs its own ``ctrlMenu`` (one
+        ``QMenu`` plus six submenus) EAGERLY at construction, whether or not it is ever
+        shown — ``setMenuEnabled(False)`` above only drops the ``ViewBoxMenu``, not this.
+        Unlike Preview & QC's stacked plots (``plot_perf.close_plots``'s own docstring),
+        NOTHING ever closed these: a ``ColumnStack`` instance is discarded either by
+        ``ChannelSummary`` rebuilding its reading (a fresh mapping, a new file) or by the
+        window that owns it going away — and in both cases the discarded instance stays
+        fully REACHABLE (via ``ChannelSummary.stack`` until overwritten, or via the
+        channel-assignment dialog's own ``self._stack`` for as long as the dialog exists),
+        so it is never garbage a collector could reclaim on its own; only an explicit
+        ``.close()`` releases the menus. Call this whenever a ``ColumnStack`` is about to
+        be discarded, never mid-use — each ``PlotWidget`` is unusable afterwards.
+        """
+        for p in self.plots:
+            plot_perf.close_plots(p)
+        self.plots = []
