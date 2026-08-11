@@ -29,127 +29,43 @@ identical output.
 
 <!-- changelog-skip bfe68a8 maintainer-only doc/screenshot regeneration script, no app behaviour changed -->
 <!-- changelog-skip f2c0a46 internal refactor: preview_screen.py split into a package, no behaviour change -->
+<!-- changelog-skip 2e6f9e9 review-pass hardening of the durability fix already described in the memory bullet; no separate user-visible behaviour -->
+<!-- changelog-skip 7bbe097 self-review polish of D25's error handling; the user-visible wording behaviour is already described in the errors bullet -->
 
-- The app now has two tabs, not three. Run & results lives in a collapsible drawer under the
-  shared file list ("FileRail") inside Preview & QC, and expands itself automatically whenever
-  a run starts. Setup and Preview & QC share the same searchable, filterable file list,
-  replacing the old dropdown on one screen and the separate results table on the other
-- Every screen and action is reachable at all times now — the old "reveal one Setup card at a
-  time" guided flow and the tab-locking that kept Preview & QC and Run out of reach until Setup
-  validated are both gone. Only the action itself (Run, "Process & write this file", clicking a
-  breath) is ever disabled, and the reason is always spelled out as a full sentence next to the
-  control it blocks — on Setup's status strip and on Run's "commitment sheet" above the Run
-  button, both reading from the same underlying check so they can never disagree
-- Setup gained a real menu bar (File, View, Help) alongside its existing "Analysis" button —
-  New/Open/Save/Save as/Get started/Explore with sample data/Duplicate for another recordings
-  folder are available from both, and an offline About box documents the version, licence and
-  citation without needing a browser
-- Setup is now two columns — recording setup (input, channels) on the left, output and cohort
-  summary on the right — instead of every card stacked full-width
-- A batch of recordings now gets one consistent read: RespMech inspects the matched files up
-  front and shows a single verdict for column count, sampling frequency and (for LabChart
-  exports) header-preamble warnings, instead of Setup silently assuming the first file speaks
-  for the whole folder while a separate, stricter check could quietly exclude other files
-  without ever saying so. A file whose column count or detected sampling frequency disagrees
-  with the rest of the batch is now named, not dropped without comment
-- The channel setup dialog now suggests roles from a file's own column headers (flow, volume,
-  oesophageal/gastric/transdiaphragmatic pressure, EMG) when nothing is saved yet, clearly
-  marked "suggested" until you touch that row. European CSVs using a comma decimal separator
-  are now detected and applied automatically before the channel picker ever reads the file,
-  instead of showing scrambled values. And a file that turns out to be missing a required
-  channel — a flow-only rig with no volume trace — no longer blocks the channel dialog from
-  being confirmed at all; it explains what is optional and lets you proceed
-- Breath exclusions, breath-count overrides and the EMG noise reference are now remembered per
-  recordings folder, not just per filename — pointing the same analysis at a new subject's
-  folder that happens to reuse a LabChart export name no longer silently carries the previous
-  subject's choices over. Setup shows a keep-or-clear banner for carried-over settings, Preview
-  shades a carried-over exclusion, and the file list marks it
-- Drag-and-drop: the Recordings folder and Output folder fields on Setup accept a file or
-  folder dragged from Finder/Explorer (with native path separators handled either way), the
-  main window accepts a dropped `.toml`/`.py` analysis (behind the same unsaved-changes prompt
-  as every other way of opening one), and a packaged build now opens RespMech directly when you
-  double-click a `.toml` analysis file
-- Opening a fresh analysis is friendlier: a startup chooser offers New analysis, Open, Explore
-  with sample data and Get started, all available again later from the menu;
-  "Duplicate for another recordings folder…" clones the current settings for a new subject in
-  the same multi-subject study and offers to keep or clear the carried-over settings described
-  above; and a spurious "folder does not exist yet" warning when writing into a fresh
-  temp/sample output folder is gone
-- The splash screen and the built-in sample analysis no longer make you wait for nothing —
-  RespMech now warms its compute core in the background while the splash is still showing
-  instead of after, and the sample analysis loads without an artificial delay
-- Errors explain themselves. A LabChart export whose header preamble confuses the column count
-  now says so in plain language instead of a raw traceback; an unreadable file in a batch no
-  longer aborts the entire run — it is named and skipped, and the run continues with the rest;
-  and error dialogs across Setup and Run lead with a plain-language diagnosis, when RespMech has
-  one, with the full traceback tucked behind a "Details" toggle instead of shown by default.
-  Validation messages throughout Setup and Run now name the actual on-screen control to fix,
-  never an internal settings key
-- Run & results no longer overstates what happened. The output folder button and its
-  confirmation no longer claim files were written when a run partly or fully failed; a
-  cancelled run's progress reflects the real state of the write phase instead of finishing as
-  if nothing was interrupted; and the same output plan that Run's dry-run/commitment sheet
-  shows before you click Run is now the exact plan the writer executes afterwards, so the
-  preview can no longer promise something the run doesn't deliver. Re-running a subset of files
-  (after fixing one) never rebuilds or overwrites the whole study's cohort summary output — only
-  a full run does
-- Preview & QC and Run now share one table implementation for both the per-breath table and the
-  averaged results table, gained a single consistent vocabulary for the app's own parts across
-  every panel and tooltip, and the status bar now has one clear owner per tab instead of the
-  last-touched panel silently overwriting another panel's message; Run's own status line no
-  longer sits blank at the very start or the very end of a run
-- The Mechanics preview stack no longer freezes the interface while it redraws — rendering now
-  happens in stages, so the busy indicator keeps animating and clicks are not queued up behind a
-  frozen window — and on a short screen its channel stack now gives way instead of forcing a
-  scroll, with the QC verdict band pinned outside the scrolled area so it always stays visible.
-  The stack now labels its own channels, units and crosshair readout, and keeps a persistent
-  label naming the current analysis window (start time, duration, trimmed length) on its time
-  axis
-- The Campbell diagram preview now matches the orientation of the figure RespMech actually
-  writes to disk — volume on the x-axis (inverted), pressure on the y-axis — instead of showing
-  it the other way round on screen. The legend moved to the corner the swap leaves empty, the
-  diagram gets a larger share of its panel (roughly 1.4:1 against the results table instead of
-  3:1), and the work-of-breathing annotation now keeps its own, readable colour against both
-  themes instead of sharing the loop's colour
-- Keyboard and accessibility fixes on Preview & QC: Page Up/Page Down no longer switch the
-  loaded file while you are scrolling a focused table with them — file navigation now has its
-  own dedicated shortcuts (shown using the current platform's own key names) — checkboxes and
-  radio buttons (including Output's ten save-format boxes and the EMG channel picker) now show
-  a visible focus ring when reached by keyboard, disabled fields read with clearly higher
-  contrast than before, and several previously unlabelled controls (the file steppers, the file
-  rail, the plot/table panels) now have accessible names
-- During a run, Preview & QC's own write actions ("Process & write this file", clicking a breath
-  to exclude it) are now locked too, not just Setup and the Analysis menu — with a status-bar
-  message confirming why, that reaches the visible bar even while a run's own progress message
-  would otherwise take priority
-- The "Advanced…" settings dialogs gained a third button, Apply, that commits your edits without
-  closing the dialog; the Mechanics tab's Advanced dialog can now stay open (non-modal) while
-  you watch its live breath count update against the plot behind it, and it no longer risks
-  hanging open forever if the window it belongs to is closed or destroyed without going through
-  its own OK/Cancel/✕
-- On the EMG tabs: the noise-profile picker and the Detail band now show the actual signal a
-  noise profile is built from instead of a stale one; the fidelity-frontier chart draws real
-  data and explains what its metric means; the "Advanced…" button and dialog for EMG
-  conditioning now lead with the RMS window, the setting that matters most; ECG Auto (whole
-  batch) preview no longer shows numbers left over from a previous file; the ECG tab shows a
-  suppression number and every panel title says plainly whether it is showing raw or processed
-  data; and the two rest-span guards that used to disagree are now a single check, with the
-  core's own warning surfaced instead of silently swallowed
-- Small naming and labelling fixes: the work-of-breathing table names its source explicitly
-  when every row repeats the same value, instead of leaving it to be inferred; the
-  sample-entropy fields are labelled for what they measure; Setup now shows exactly where a
-  sampling frequency came from (the file itself, or a value you typed) instead of a bare number;
-  and breath-separation debounce is expressed in seconds, with a live readout, instead of an
-  opaque buffer count
-- "Group files by" (the cohort-summary grouping pattern) can now be checked on Setup before you
-  run — it shows how a batch will actually be grouped, using the exact same logic and the exact
-  same set of matched files the run itself will use, so the preview can no longer disagree with
-  what actually gets written
-- A further round of Windows-metrics layout fixes beyond v2.3.4: Setup's card rows no longer let
-  a long label squeeze the field next to it, the collapsed Run & results summary row keeps its
-  own compact margins instead of a full card's padding, the EMG rest-reference badge no longer
-  overflows its panel under Windows' wider fonts, and several panels now reserve just enough
-  width or height for Windows' font metrics instead of the narrower ones macOS happens to use
+- Setup grew up: two columns instead of one long stack, a real File/View/Help menu bar with
+  an offline About box, a startup chooser (New, Open, Explore with sample data, Get started)
+  and "Duplicate for another recordings folder…" for multi-subject studies
+- A batch of recordings gets one consistent read up front: column count, sampling frequency
+  and LabChart header warnings are checked across the whole folder, and a file that disagrees
+  with the rest is named instead of silently dropped
+- Breath exclusions, breath-count overrides and the EMG noise reference are remembered per
+  recordings folder, not just per filename — a new subject's folder no longer silently
+  inherits the previous subject's choices, and anything carried over is flagged with a
+  keep-or-clear banner and shaded in Preview
+- The channel dialog suggests roles from the file's own column headers, detects European
+  comma decimals automatically, and no longer blocks on a file missing an optional channel
+- Errors explain themselves: plain-language diagnoses with the traceback behind a Details
+  toggle, an unreadable file is named and skipped instead of aborting the batch, and Run &
+  results never overstates what happened — progress, the output-folder confirmation and the
+  pre-run plan all reflect exactly what was and will be written, and re-running a subset
+  never rebuilds the whole study's cohort summary
+- Preview & QC stays responsive: the mechanics stack no longer freezes the interface while
+  redrawing (even with a hundred-plus breaths), fits short screens, and labels its channels,
+  units, crosshair readout and analysis window. The Campbell preview now matches the
+  orientation of the figure RespMech actually writes
+- Long sessions no longer build up memory: windows and dialogs now release their plots'
+  internal menus when they close, instead of accumulating them for the life of the app —
+  and the cleanup is durable, built into every plot-owning screen rather than one code path
+- Keyboard and accessibility: dedicated file-navigation shortcuts (Page Up/Down no longer
+  steal a focused table's scrolling), visible focus rings on checkboxes and radio buttons,
+  higher-contrast disabled fields, and accessible names on previously unlabelled controls
+- The EMG tabs show the live signal instead of a stale one, lead with the RMS window in
+  their Advanced dialog, show an ECG suppression number, and every panel says plainly
+  whether it is raw or processed; Advanced dialogs gained an Apply button, and the Mechanics
+  one can stay open beside the plot it affects
+- Quality-of-life: drag-and-drop of recordings folders and analysis files, packaged builds
+  open a double-clicked .toml analysis directly, and the splash/sample startup warms the
+  compute core in the background instead of making you wait
 
 ## v2.3.4 — 2026-08-03
 
