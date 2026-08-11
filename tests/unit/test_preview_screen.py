@@ -1297,4 +1297,47 @@ def test_toggle_breath_is_locked_while_a_run_is_active_and_says_why(qapp, tmp_pa
     pv._toggle_breath(a_breath)                            # ordinary toggle works again
     assert len(s.processing.exclude_breaths) == 1
     win.close()
+
+
+def test_closing_the_window_closes_the_mechanics_stacks_current_plot_items(qapp, tmp_path):
+    """Point 6 (respmech CI ticket 20260811-0910, suite scaling). ``PlotItem``/``ViewBox``
+    build their own context menus EAGERLY at construction (one ``ctrlMenu`` + six
+    submenus per ``PlotItem``, one ``ViewBoxMenu`` per ``ViewBox``) -- and the GUI suite
+    never deletes a closed ``MainWindow`` (deleting one segfaults on Python 3.11, see
+    ``conftest.py``), so those menus used to accumulate for the life of the test session:
+    RESPMECH_NET_CENSUS measured 6,137 surviving QMenus after just 57 GUI-heavy tests.
+    ``PreviewScreen.shutdown()`` (called from ``MainWindow.closeEvent``) now closes every
+    ``PlotItem`` CURRENTLY held by ``pv.plots`` via pyqtgraph's OWN cleanup API --
+    ``ViewBox.setMenuEnabled(False)`` + ``PlotItem.close()`` -- not a sweep of
+    already-closed windows from outside (the earlier approach that segfaulted
+    nondeterministically; see ``plot_perf.close_plots()``).
+
+    This is a white-box test of the mechanism (does ``.close()`` actually run on the
+    plots this container references RIGHT NOW), not an end-to-end census: a re-render
+    mid-session (``self.plots.clear()`` followed by fresh ``addPlot()`` calls, which
+    several code paths do routinely) discards the PREVIOUS render's ``PlotItem``s from
+    ``pv.plots.ci.items`` without closing them first -- a second, larger, NOT YET fixed
+    leak source the ticket documents separately. An end-to-end app-wide menu count would
+    conflate the two and either flake on render count or silently stop testing the
+    mechanism this ticket actually landed.
+    """
+    from respmech.ui.main_window import MainWindow
+
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)                                    # populates pv.plots with real PlotItems
+
+    plot_items = list(pv.plots.ci.items.keys())
+    assert plot_items, "the mechanics stack should have built at least one PlotItem"
+    assert all(p.ctrlMenu is not None for p in plot_items), (
+        "every freshly rendered PlotItem should still own its context menu before close()"
+    )
+
     win.close()
+
+    assert all(p.ctrlMenu is None for p in plot_items), (
+        "PreviewScreen.shutdown() must call PlotItem.close() on every plot the mechanics "
+        "stack currently holds, dropping its ctrlMenu -- a survivor here means the window "
+        "closed without releasing menus it was still directly responsible for"
+    )
+    win.close()                                            # idempotent: a second close must not raise
