@@ -35,9 +35,9 @@ jobs:
       PYQTGRAPH_QT_LIB: PySide6    # never let pyqtgraph bind PyQt6
       PYTHONIOENCODING: utf-8      # the UI's ·, –, › survive the Windows console
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -57,7 +57,7 @@ jobs:
           RESPMECH_THEME=dark RM_OUT="${RUNNER_TEMP}/shots/dark" \
             python "${GITHUB_WORKSPACE}/tools/capture_screens.py"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: screenshots-${{ matrix.os }}
           path: ${{ runner.temp }}/shots/

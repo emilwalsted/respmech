@@ -41,8 +41,8 @@ jobs:
     name: Windows MSI (unsigned — signed locally post-release)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"          # numba/llvmlite (via librosa) ship cp312 wheels
       - name: Install briefcase
@@ -63,7 +63,7 @@ jobs:
 
       - name: Show artifacts
         run: ls -la dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: RespMech-Windows-MSI
           path: dist/*.msi
@@ -75,8 +75,8 @@ jobs:
     outputs:
       signed: ${{ steps.check.outputs.sign }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install briefcase
@@ -186,7 +186,7 @@ jobs:
 
       - name: Show artifacts
         run: ls -la dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: RespMech-macOS-dmg
           path: dist/*.dmg
@@ -201,7 +201,7 @@ jobs:
       contents: write                           # create the release + upload assets
     steps:
       - name: Download the built installers
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist                            # -> dist/<artifact-name>/<file>
       - name: Publish release with installers attached

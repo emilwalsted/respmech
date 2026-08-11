@@ -63,7 +63,7 @@ jobs:
       # to catch.
       PYTHONIOENCODING: utf-8
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Fuld historik OG tags: tools/check_changelog.py måler et
           # commit-interval mellem to tags, og standard-dybden (1) giver hverken
@@ -71,7 +71,7 @@ jobs:
           # indholdsløst grønt, og release-porten fejler på hver udgivelse.
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -230,9 +230,9 @@ jobs:
       PYQTGRAPH_QT_LIB: PySide6    # never let pyqtgraph bind PyQt6 (two Qt bindings in one process crash)
       PYTHONIOENCODING: utf-8      # match the win/mac jobs so output is comparable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -330,7 +330,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Fuld historik OG tags: tools/check_changelog.py måler et
           # commit-interval mellem to tags, og standard-dybden (1) giver hverken
@@ -338,7 +338,7 @@ jobs:
           # indholdsløst grønt, og release-porten fejler på hver udgivelse.
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
