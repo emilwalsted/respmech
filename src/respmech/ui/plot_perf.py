@@ -147,6 +147,12 @@ def close_plots(container) -> None:
     container is closed (``ctrlMenu``/axes/view box gone) and the container itself is
     unusable. Never raises: a plot that fails to release its menus is a memory-growth
     nuisance, not a reason to abort the rest of teardown.
+
+    Deliberately does NOT call ``ViewBox.close()`` (which additionally calls
+    ``unregister()``, dropping the view box from pyqtgraph's class-level
+    ``ViewBox.AllViews``/``NamedViews`` registries): both are ``weakref.WeakKeyDictionary``/
+    ``WeakValueDictionary``, so a view box left registered there is not kept alive by it —
+    a bookkeeping leftover, not a memory leak, and not worth the extra call.
     """
     if container is None:
         return

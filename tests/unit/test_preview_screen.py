@@ -1299,6 +1299,10 @@ def test_toggle_breath_is_locked_while_a_run_is_active_and_says_why(qapp, tmp_pa
     win.close()
 
 
+# --------------------------------------------------------------------------- #
+# Point 6 (respmech CI ticket 20260811-0910) — suite-scaling: PlotItem/ViewBox menus are
+# now closed at PreviewScreen shutdown, via plot_perf.close_plots().
+# --------------------------------------------------------------------------- #
 def test_closing_the_window_closes_the_mechanics_stacks_current_plot_items(qapp, tmp_path):
     """Point 6 (respmech CI ticket 20260811-0910, suite scaling). ``PlotItem``/``ViewBox``
     build their own context menus EAGERLY at construction (one ``ctrlMenu`` + six
