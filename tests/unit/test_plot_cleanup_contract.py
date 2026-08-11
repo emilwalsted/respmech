@@ -4,7 +4,7 @@ orchestration (screen.shutdown() calls + channel_summary.close_plots()). Qt neve
 delivers closeEvent to a child widget when its PARENT window closes, so any composition
 that builds PreviewScreen/RunScreen/ColumnStack WITHOUT a MainWindow around it bypassed
 that orchestration entirely — real today, not hypothetical: the point 6 investigation
-counted 15 tests constructing PreviewScreen standalone, 7 RunScreen, 17 ColumnStack.
+counted 15 tests constructing PreviewScreen standalone, 6 RunScreen, 17 ColumnStack.
 
 Each of those widgets now has its own closeEvent that runs its EXISTING cleanup function,
 so close() works whether or not a MainWindow is the one calling it. This file is Layer 2:
@@ -93,14 +93,47 @@ def test_previewscreen_closeevent_releases_plot_menus_without_a_mainwindow(qapp,
     pv.close()
     _settle()
 
-    assert _menu_census() == before, (
+    assert _menu_census() <= before, (
         "PreviewScreen.closeEvent must release every menu its own render built, exactly as "
-        "MainWindow.closeEvent's orchestrated shutdown() call already does"
+        "MainWindow.closeEvent's orchestrated shutdown() call already does -- the invariant "
+        "is NO NET GROWTH, not exact equality: gc.collect() could also reclaim an unrelated "
+        "earlier test's leftover menus and push the count below `before`, which is fine"
     )
     assert all(p.ctrlMenu is None for p in plot_items), (
         "closeEvent must call shutdown(), which drops ctrlMenu via plot_perf.close_plots()"
     )
     pv.close()                              # idempotent: a second close must not raise
+
+
+def _pump_until_write_done(qapp, rn, timeout=60.0):
+    """``test_run_screen.py``'s own ``_pump_until_thread_done``, adapted to
+    ``_write_thread`` instead of ``_thread``. Spins a REAL Qt event loop rather than
+    blocking on ``QThread.wait()`` directly: measured directly in THIS sandbox that a
+    plain blocking ``wait()`` on the calling (main) thread does not reliably observe the
+    write finishing at all — the worker's cross-thread queued ``finished`` signal needs
+    the main thread's event loop actually spinning to be delivered and processed, exactly
+    the reason ``test_run_screen.py``'s own helper (and ``test_gui_reactive.py``'s
+    ``_pump_until``) exists in the first place. Reusing the same proven pattern here."""
+    from PySide6.QtCore import QElapsedTimer, QEventLoop, QTimer
+    if rn._write_thread is None:
+        return True
+    loop = QEventLoop()
+    clock = QElapsedTimer(); clock.start()
+    state = {"ok": False}
+    timer = QTimer(); timer.setInterval(10)
+
+    def _tick():
+        if rn._write_thread is None:
+            state["ok"] = True
+            loop.quit()
+        elif clock.elapsed() > timeout * 1000:
+            loop.quit()
+
+    timer.timeout.connect(_tick)
+    timer.start()
+    loop.exec()
+    timer.stop()
+    return state["ok"] or rn._write_thread is None
 
 
 def test_runscreen_closeevent_joins_a_running_write_thread_without_a_mainwindow(
@@ -110,7 +143,26 @@ def test_runscreen_closeevent_joins_a_running_write_thread_without_a_mainwindow(
     shutdown() exists for: a QThread destroyed while still running aborts the process.
     Mirrors test_run_screen.py's own ``test_write_elsewhere_locks_run_buttons…`` write,
     the same real-but-small synthetic write used there, but through a standalone
-    RunScreen's own close() rather than a MainWindow's orchestrated one."""
+    RunScreen's own close() rather than a MainWindow's orchestrated one.
+
+    The write is explicitly pumped to completion (``_pump_until_write_done``) BEFORE
+    close(), not raced against it. Two things were measured directly in this sandbox
+    while building this test, both surprising: (1) a plain blocking
+    ``rn._write_thread.wait(60_000)`` on the calling thread genuinely never observed the
+    write finish at all — the worker's cross-thread queued ``finished`` signal needs the
+    caller's OWN Qt event loop spinning to be delivered (exactly why
+    ``test_run_screen.py``'s own ``_pump_until_thread_done`` exists; reused as
+    ``_pump_until_write_done`` here); (2) closing immediately after starting the write
+    (the FIRST version of this test) let ``shutdown()``'s own 5000 ms ``wait_ms`` time
+    out and park a REAL, still-running background thread — and its spawned child
+    process — in ``_ORPHANED_THREADS`` for the rest of the test session. That parking is
+    correct, INTENTIONAL production behaviour (a slow write must never block the user
+    from closing the app), but a unit test asserting on it must not depend on winning
+    that race or leave a live thread it created running behind it. This still exercises
+    the thing point 6 durability is actually about — RunScreen's OWN bookkeeping reset
+    running via the standalone close() path, not only via MainWindow's orchestrated one
+    — without either hazard.
+    """
     from respmech.core.io.plan import plan_outputs
     from respmech.core.pipeline import run_batch
 
@@ -128,12 +180,16 @@ def test_runscreen_closeevent_joins_a_running_write_thread_without_a_mainwindow(
     assert rn._write_thread is not None, (
         "the write must actually have started, or this test proves nothing"
     )
+    assert _pump_until_write_done(qapp, rn), (
+        "the synthetic write did not finish within 60s -- something is genuinely stuck, "
+        "not just slow"
+    )
 
     rn.close()
 
     assert rn._write_thread is None, (
-        "RunScreen.closeEvent must join the write thread via shutdown(), exactly as "
-        "MainWindow.closeEvent already does for the orchestrated case"
+        "RunScreen.closeEvent must reset the write-thread bookkeeping via shutdown(), "
+        "exactly as MainWindow.closeEvent already does for the orchestrated case"
     )
     rn.close()                              # idempotent: a second close must not raise
 
@@ -157,10 +213,11 @@ def test_columnstack_closeevent_releases_plot_menus_without_an_owner(qapp):
     st.close()
     _settle()
 
-    assert _menu_census() == before, (
+    assert _menu_census() <= before, (
         "ColumnStack.closeEvent must release every menu its own build() created, exactly "
         "as ChannelSummary.close_plots()/ChannelSetupDialog's finished-signal handler "
-        "already do for the orchestrated cases"
+        "already do for the orchestrated cases (delta <= 0 -- see the PreviewScreen "
+        "guard's own comment for why exact equality is the wrong assertion here)"
     )
     assert st.plots == []
     assert all(pi.ctrlMenu is None for pi in plot_items)

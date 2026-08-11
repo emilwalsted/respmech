@@ -1142,7 +1142,7 @@ class RunScreen(QWidget):
         6 durability). Qt never delivers ``closeEvent`` to a child widget when its PARENT
         window closes — ``MainWindow.closeEvent`` orchestrates ``shutdown()`` explicitly for
         that reason — so this override only fires when a ``RunScreen`` is itself the
-        top-level widget being closed: standalone in a test (7 of them, per the point 6
+        top-level widget being closed: standalone in a test (6 of them, per the point 6
         investigation), or any future composition without a ``MainWindow``. ``shutdown()``
         is safe to call twice (``self._worker``/``self._thread``/``self._write_thread`` are
         already ``None`` on a second pass), so a screen that is BOTH orchestrated by a
@@ -1152,7 +1152,16 @@ class RunScreen(QWidget):
 
     def shutdown(self, wait_ms=5000):
         """Cancel and join a running batch (called from MainWindow.closeEvent) so
-        the worker thread is never destroyed while running."""
+        the worker thread is never destroyed while running.
+
+        Stops the write-phase heartbeat FIRST (self-review, point 6 durability): a
+        screen closed WITHOUT a MainWindow around it (this method is now also reachable
+        via closeEvent, not only via MainWindow's orchestration) could otherwise leave a
+        1 s ``QTimer`` armed on an instance that is closed but, per this suite's own
+        never-delete-a-closed-window policy, never destroyed — ticking ``_tick_write``
+        against a screen nothing shows again. Same hazard class
+        ``PreviewScreen.shutdown()`` already disarms its own debounce timer for first."""
+        self._heartbeat.stop()
         if self._worker is not None:
             try:
                 self._worker.cancel()

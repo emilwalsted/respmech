@@ -247,35 +247,104 @@ claude-ops): cleanup moved from ONE orchestrator to each plot-owning widget itse
 Both fixes above only ran when `MainWindow.closeEvent` orchestrated them — `PreviewScreen`,
 `RunScreen` and `ColumnStack` had no `closeEvent` of their own, so any composition without
 a `MainWindow` bypassed cleanup entirely. Real, not hypothetical: 15 tests construct
-`PreviewScreen` standalone, 7 `RunScreen`, 17 `ColumnStack`. Qt never delivers `closeEvent`
+`PreviewScreen` standalone, 6 `RunScreen`, 17 `ColumnStack`. Qt never delivers `closeEvent`
 to a child widget when its PARENT window closes (that is exactly why the orchestration
-exists), so each now has its own `closeEvent` that calls its EXISTING cleanup function —
+exists — verified empirically, not just from general Qt knowledge, in the review below), so
+each now has its own `closeEvent` that calls its EXISTING cleanup function —
 `PreviewScreen.closeEvent` → `self.shutdown()`, `RunScreen.closeEvent` → `self.shutdown()`,
 `ColumnStack.closeEvent` → `self.close_plots()` — then `super().closeEvent(ev)`. This only
 changes behaviour for widgets closed WITHOUT a `MainWindow` around them: an embedded child
 still gets cleaned up exclusively via `MainWindow.closeEvent`'s explicit orchestration, so
 the `test_gui_interactive.py` 276-QMenu baseline is unaffected (re-measured: 276, 57/57
-unchanged). Idempotence came for free: `shutdown()`/`close_plots()` already empty their own
-job sets and plot containers on first call, so a widget that is both orchestrated by a
-parent AND later closed directly survives cleanup running twice without a guard flag —
-verified directly (`win.close(); win.close()` and the standalone equivalents never raise).
+unchanged).
+
+**Idempotence needed one small, targeted fix to be genuinely true, not just masked.**
+`RunScreen.shutdown()` and `ColumnStack.close_plots()` really do empty their own
+bookkeeping on first call, so a second call is a true no-op. `PreviewScreen.shutdown()`
+does NOT — its six plot containers (`self.plots`, `ecg_capture_plot`,
+`ecg_processed_plots`, `emg_raw_plots`, `emg_result_plots`, `emg_plots`) stay set to the
+same already-closed widget forever. Independent review found that a second call
+therefore re-entered `plot_perf.close_plots()` on three of those (the bare
+`pg.PlotWidget()`-typed ones — `ecg_capture_plot`/`emg_result_plots`/`emg_plots`;
+`GraphicsLayoutWidget`-typed ones are unaffected) and raised `AttributeError` on
+`None.close()` three times, since pyqtgraph 0.14's own `PlotWidget.close()` unconditionally
+runs `self.plotItem.close(); self.plotItem = None` with no re-entry guard. It never
+crashed — `plot_perf.close_plots()`'s own blanket `except Exception: pass` around
+`container.close()` already caught it — but the mask was doing load-bearing work the
+docstrings didn't admit to. Fixed at the source: `plot_perf.close_plots()` now checks
+`getattr(container, "plotItem", "sentinel") is None` and skips the redundant `close()`
+call outright for an already-closed bare `PlotWidget`, verified directly (instrumented a
+double `PreviewScreen.shutdown()` to intercept every `container.close()` call — zero
+exceptions reach it now, versus three before). This also reduces (does not eliminate —
+see below) the wasted-work cost `conftest.py`'s per-test sweep pays for these.
+
+**A closed bare `PlotWidget` becomes its own new top-level widget — pre-existing, not
+introduced here, but now reachable through more call sites.** pyqtgraph's
+`PlotWidget.close()` calls `self.setParent(None)`, so it detaches from whatever container
+held it. This is NOT new: the `test_gui_interactive.py` baseline above already carries 138
+such orphaned `PlotWidget`s (visible in a `RESPMECH_NET_CENSUS` type breakdown) from the
+MainWindow-orchestrated path, and Point 6 was closed on the `QMenu` metric, which these do
+not affect (confirmed: 0 surviving `QMenu`s from any of the standalone paths this ticket
+covers). What durability adds is a modest number more of the same already-accepted kind,
+now also from the 15+6+17 previously-untouched standalone construction sites — not a new
+class of leak, and out of scope for this ticket to redesign (`plot_perf.close_plots()`'s
+use of `container.close()` is the existing, shipped Fix 1/Fix 2 behaviour).
+
+**`RunScreen.shutdown()` now also stops its own write-phase heartbeat FIRST**, the same
+defensive pattern `PreviewScreen.shutdown()` already used for its debounce timer — found in
+review: closing a `RunScreen` without a `MainWindow` around it (newly possible via
+`closeEvent`) could otherwise leave a live 1 s `QTimer` ticking against an instance that is
+closed but, per this suite's own policy, never deleted. Left deliberately UNFIXED (documented,
+not silently accepted): the `WriteWorker.finished`/`failed` `Qt.QueuedConnection`s
+(`run_screen.py`, `_write_elsewhere`) stay wired after `shutdown()` — a genuinely
+still-running orphaned write thread could still deliver a queued signal to a closed
+`RunScreen` afterwards. Bounded risk (no crash — the closed screen is still a valid Python/Qt
+object, so at worst a pointless UI update on a widget nobody can see), not reachable in
+production today (RunScreen is only ever closed via `MainWindow` there), and the fix would
+need to touch signal-disconnection logic broader than this ticket's scope to verify safely.
 
 The invariant is now also a NAMED regression test, not just a memory:
 `tests/unit/test_plot_cleanup_contract.py` — one guard per type
 (`PreviewScreen`/`RunScreen`/`ColumnStack`/`MainWindow`), each constructing the widget
 standalone with a representative small render (a real mechanics render for `PreviewScreen`,
 a real small synthetic write for `RunScreen`, a real `build()` for `ColumnStack`), closing
-it, and asserting the top-level `QMenu` census returns to its pre-construction baseline —
-except `MainWindow`'s guard, which asserts a small ceiling (15) above the legitimate 6-menu
-baseline (its own File/Edit/Help bar) rather than 0, since a `MainWindow` is closed but
-deliberately never deleted in this suite. `RunScreen`'s guard checks thread-joining
-(`_write_thread` back to `None`), not `QMenu` census — `grep` confirms it owns no
-`PlotWidget`/`GraphicsLayoutWidget` at all, so its point 6 exposure was always the OTHER
-hazard `shutdown()` guards against (a `QThread` destroyed while running aborts the
-process), never menu accumulation. py3.11 stress-verified separately from the named
-suite (offscreen, this sandbox): 300 `ColumnStack` and 60 `PreviewScreen`
-construct/render/close/close cycles, zero errors — the two paths that actually touch
-pyqtgraph's C++ objects, the segfault-prone class on this interpreter.
+it, and asserting the top-level `QMenu` census does not GROW past its pre-construction
+baseline (`<=`, not `==` — `gc.collect()` reclaiming an unrelated earlier test's menus could
+legitimately push the count below `before`, and exact equality would make that an
+order-dependent flake) — except `MainWindow`'s guard, which asserts a small ceiling (15)
+above the legitimate 6-menu baseline (its own File/Edit/Help bar, independently re-measured
+here at delta 6, stable across three cycles) rather than 0, since a `MainWindow` is closed
+but deliberately never deleted in this suite. `RunScreen`'s guard checks bookkeeping reset
+(`_write_thread` back to `None`) after EXPLICITLY pumping the write to completion first
+(`_pump_until_write_done`, adapted from `test_run_screen.py`'s own
+`_pump_until_thread_done`), not a plain blocking `wait()` and not racing `shutdown()`'s own
+5000 ms budget against it. Two things were measured directly building this test: a plain
+`QThread.wait()` on the calling thread never observed the write finish AT ALL — the
+worker's cross-thread queued `finished` signal needs the caller's own Qt event loop
+actually spinning to be delivered, which is exactly why that pump helper exists in the
+first place — and closing immediately after starting the write let `shutdown()`'s own
+5000 ms budget time out and park a REAL, still-running background thread (and its spawned
+child process) in `_ORPHANED_THREADS` for the rest of the session. That parking is
+CORRECT, INTENTIONAL production behaviour (a slow write must never block the app from
+closing) — a unit test asserting on it must simply not gamble on winning that race or
+leave a live thread running behind it. `RunScreen` owns no `PlotWidget`/`GraphicsLayoutWidget` at all (`grep`
+confirms), so its point 6 exposure was always this thread hazard, never `QMenu`
+accumulation.
+
+**Two independent reviews (self-review, point 6 durability, 11-08-2026), both empirically
+verifying rather than assuming Qt behaviour:** confirmed `closeEvent` is genuinely never
+delivered to a child on a parent's close (tested `QStackedWidget`, `QDialog`
+`close()`/`done()`, `QApplication.closeAllWindows()` — all zero deliveries) and that
+stubbing out any one of the three new overrides makes 3 of the 4 new regression tests fail
+(not vacuous). py3.11 stress-verified beyond the named suite (offscreen, this sandbox): 300
+`ColumnStack` and 60 `PreviewScreen` construct/render/close/close cycles from one review
+pass (zero errors), independently repeated by the other with 100 `PreviewScreen` cycles
+including mid-session FILE SWITCHES (the historically segfault-prone pattern from the
+mid-session-`.clear()` investigation above) and 60 cycles with genuinely in-flight worker
+`QThread`s at close time — zero crashes, zero orphaned threads, zero leaked `QMenu`s across
+both. Full unit suite on the branch: 1360 passed, 1 skipped, 1 known sandbox-only failure
+(`test_gui.py::test_splash_resolves_fonts_to_installed_families`, already documented
+elsewhere in this file, unrelated to this change).
 
 ## Dev environment — check which interpreter you are actually running
 
