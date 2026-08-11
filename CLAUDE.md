@@ -127,7 +127,7 @@ The protocol, after **every** push:
    green: "suite green locally; CI not checked" is honest and lets the next session
    check. Never report a ticket done while its run shows a failed job.
 
-### Point 6 (suite scaling) — partial fix landed (`plot_perf.close_plots`, 11-08-2026); the dominant leak source is still open
+### Point 6 (suite scaling) — RESOLVED 11-08-2026: 6,137 → 276 surviving QMenus (95.5%), and the 276 are legitimate
 
 `tests/unit/conftest.py` never deletes a closed `MainWindow` — deleting one segfaults
 nondeterministically on Python 3.11 (see the reaper comment in
@@ -138,51 +138,95 @@ one `ViewBoxMenu`, both EAGERLY at construction — measured (`RESPMECH_NET_CENS
 6,137 surviving `QMenu`s after just 57 GUI-heavy tests (`test_gui_interactive.py`), the
 root of macOS CI's multi-hour wall and the sandbox's mid-suite OOM.
 
-**What's fixed:** `PreviewScreen.shutdown()` (called from `MainWindow.closeEvent`) now
-closes every `PlotItem` its containers CURRENTLY hold, via pyqtgraph's own documented
-cleanup — `ViewBox.setMenuEnabled(False)` then `PlotItem.close()` per item, then the
-container's own `.close()` — see `ui/plot_perf.py::close_plots()`. This is a
-fundamentally different, much lower-risk shape than the earlier "reap already-closed
-windows from outside" attempt that segfaulted (`deleteLater()` +
-`sendPostedEvents(DeferredDelete)` swept over `app.topLevelWidgets()`, never committed,
-only its diagnostics did — commit 9f2339c): closing each plot's OWN internals at the
-moment ITS OWNER shuts down touches only live, fully-valid objects, never something
-another test's teardown may have half-torn-down already. Verified safe: 360 synthetic
-open/close cycles + the full existing GUI suite subset touching these screens, zero
-crashes, on py3.11.15 (the exact segfault-class interpreter) offscreen.
+**Fix 1 (10-08/11-08-2026, `plot_perf.close_plots`):** `PreviewScreen.shutdown()` (called
+from `MainWindow.closeEvent`) closes every `PlotItem` its SIX known containers (`plots`,
+`ecg_capture_plot`, `ecg_processed_plots`, `emg_raw_plots`, `emg_result_plots`,
+`emg_plots`) CURRENTLY hold, via pyqtgraph's own documented cleanup —
+`ViewBox.setMenuEnabled(False)` then `PlotItem.close()` per item, then the container's own
+`.close()` — see `ui/plot_perf.py::close_plots()`. A fundamentally different, much
+lower-risk shape than an earlier "reap already-closed windows from outside" attempt that
+segfaulted (`deleteLater()` + `sendPostedEvents(DeferredDelete)` swept over
+`app.topLevelWidgets()`, never committed, only its diagnostics did — commit 9f2339c):
+closing each plot's OWN internals at the moment ITS OWNER shuts down touches only live,
+fully-valid objects. Reduced the measured count 6,137 → 3,797 (~38%).
 
 **Order matters and is load-bearing, not stylistic:** `setMenuEnabled(False)` must run
 BEFORE `PlotItem.close()` (which drops the item's reference to its view box), and both
 before the container's `.close()` — `GraphicsView.close()` calls `scene().clear()`,
 which invalidates any `PlotItem`/`ViewBox` still attached; closing the container first
-raises `RuntimeError: Signal source has been deleted` on the now-dead C++ objects.
+raises `RuntimeError: Signal source has been deleted` on the now-dead C++ objects. The
+SAME ordering constraint means a closed `PlotWidget`'s own `getPlotItem()`/`.plotItem`
+reads back `None` afterwards (`scene().clear()` deletes the PlotItem's C++ object outright
+— it was still IN the scene, only its view box had been explicitly removed) — tests that
+assert on a plot's state after closing it must capture the `PlotItem` reference BEFORE
+calling `close_plots()`, never re-fetch it after (see the `close_plots()`-adjacent tests
+in `test_column_stack.py`/`test_channel_summary.py`/`test_channel_setup.py`/
+`test_preview_screen.py` for the pattern).
 
-**What's still leaking — the DOMINANT source, not yet fixed:** roughly a dozen call
-sites re-render a panel mid-session by calling `<container>.clear()` then rebuilding
-with fresh `addPlot()` calls (`screen.py` ×2 blocks, `_mechanics.py` ×3,
-`_emg_noise.py` ×2, `_ecg.py` ×1 — file switches, settings changes, tab redraws all hit
-this). pyqtgraph's `GraphicsLayout.removeItem()` (what `.clear()` calls per item) only
-drops the item from the scene and the layout's own `.items` dict — it does **not** call
-`.close()` on it, so the discarded `PlotItem`'s `ctrlMenu`/`ViewBoxMenu` are orphaned but
-still fully alive, and by the time `close_plots()` runs at final shutdown they are no
-longer reachable via `container.ci.items` to close. Measured on the reference file: this
-fix alone reduces surviving `QMenu`s from 6,137 to 3,797 (~38%), not to zero — the
-remaining ~62% comes from every render BEFORE the window's last one. Fixing this
-properly means calling something like `plot_perf.close_plots()`'s inner loop (menu
-closing only, WITHOUT closing the container itself, since it needs to stay usable for
-the next `addPlot()`) immediately before each of those ~12 `.clear()` calls — a larger,
-more invasive change across four files that a future ticket should scope and verify on
-its own, not bundle into a shutdown-time fix.
+**Investigated and RULED OUT (11-08-2026): mid-session `<container>.clear()` re-renders.**
+The obvious next hypothesis — roughly a dozen call sites re-render a panel mid-session by
+calling `<container>.clear()` then rebuilding with fresh `addPlot()` calls (`screen.py`
+×2 blocks, `_mechanics.py` ×2, `_ecg.py` ×1 on the three `GraphicsLayoutWidget`
+containers; the matching calls on the three bare-`PlotWidget` containers do NOT apply —
+`PlotWidget.clear()` reaches `PlotItem.clear()`, which empties the SAME still-alive
+PlotItem's curves and never orphans its menus at all) — was built, and a targeted fix
+(`plot_perf.close_layout_items()`, closing each item WITHOUT closing the container, called
+immediately before each `.clear()`) was verified to work in an isolated single-window
+measurement (204 → 149 QMenus immediately, 138 → 83 after the eventual window close).
+**But it made ZERO measured difference on the representative metric**, confirmed on TWO
+independent full-file `RESPMECH_NET_CENSUS` runs of `test_gui_interactive.py` (57 tests):
+3,797 both with and without the fix, exact integer match, twice. Root cause: unlike the
+ColumnStack case below, a `.clear()`-discarded `PlotItem` really does become ordinary
+Python garbage (nothing else references it once dropped from `container.ci.items`) —
+`gc.collect()`, called explicitly both by `RESPMECH_NET_CENSUS`'s own census function AND
+by `tests/unit/conftest.py`'s `_close_top_level_windows` fixture after EVERY test, already
+reclaims it, making an additional explicit close redundant on this metric. The code was
+written, isolated-verified, then REVERTED once the full-suite measurement showed no
+effect — see ticket `20260811-0910-ci-tests.md` (claude-ops) for the four-experiment
+trail (a naive isolated loop that showed no leak at all, a `close_layout_items()`-only
+test that DID show -55, a combined `close+clear` test matching it, then the full-file
+test showing the "fix" made no difference once `run_batch()`/realistic session length was
+in the mix) that took the hypothesis from "obviously the dominant source" to "measurably
+irrelevant." A genuinely unbounded PRODUCTION concern this rules out only for the TEST
+metric, not necessarily for an hours-long real session with no `gc.collect()` ever called
+explicitly — Python's own generational collector still runs on allocation thresholds, so
+no permanent leak is expected there either, but this was not separately measured.
 
-**Also NOT covered:** `column_stack.py`'s `ColumnStack` widget (used by
-`channel_setup_dialog.py`'s modal and `channel_summary.py`'s Setup-screen widget) builds
-its own `PlotWidget`s and already calls `plot.setMenuEnabled(False)` — which drops the
-`ViewBoxMenu` but NOT the 7-`QMenu` `ctrlMenu` `PlotItem.__init__` builds unconditionally
-regardless. A separate leak source, same underlying pyqtgraph mechanism, no shared
-container list to close it from yet.
+**Fix 2 (11-08-2026, the actual dominant source): `ColumnStack.close_plots()`.**
+`column_stack.py`'s `ColumnStack` widget (used by `channel_setup_dialog.py`'s modal AND
+`channel_summary.py`'s Setup-screen widget) builds its own `PlotWidget`s and already
+called `plot.setMenuEnabled(False)` — which drops the `ViewBoxMenu` but NOT the
+7-`QMenu` `ctrlMenu` `PlotItem.__init__` builds unconditionally regardless. Unlike the
+ruled-out hypothesis above, THIS one is not ordinary garbage: `SettingsScreen`'s
+`ChannelSummary` builds a REAL `ColumnStack` eagerly at `MainWindow` construction (Setup
+renders the initial channel mapping on load) and never rebuilds it unless the mapping
+changes, so the instance alive when the window closes stays REACHABLE the whole time via
+`settings_screen.channel_summary.stack.plots` — never garbage at all, so no amount of
+`gc.collect()` was ever going to free it. Measured directly: a bare, freshly constructed
+`MainWindow` that renders nothing else (no Preview interaction at all) still left 83
+surviving `QMenu`s after `close()` before this fix, 6 after — and those 6 are the
+window's OWN File/Edit/Help menu-bar menus (`46 windows × 6 = 276`, the exact number the
+full `test_gui_interactive.py` census confirms), unrelated to pyqtgraph and not a leak.
+The fix: `ColumnStack.close_plots()` (closes every embedded `PlotWidget` via
+`plot_perf.close_plots()`, empties `self.plots`), called from three places —
+`ChannelSummary._clear()` (via its own `ChannelSummary.close_plots()`, so a mapping
+rebuild releases the OUTGOING stack before replacing it), `MainWindow.closeEvent` (the
+LAST-built stack, alongside the existing `preview_screen`/`run_screen` shutdown loop —
+this is the one that mattered for the measured count), and `ChannelSetupDialog`'s
+`finished` signal (covers accept/reject/window-close alike, for a caller that keeps a
+dialog reference alive rather than discarding it after `exec()`).
 
-See ticket `20260811-0910-ci-tests.md` (claude-ops) for the full investigation,
-before/after numbers, and the two independent review passes.
+**Combined result, full-file measurement (`RESPMECH_NET_CENSUS`,
+`test_gui_interactive.py`, 57 tests, unchanged pass count):** 6,137 → 3,797 (fix 1) →
+**276** (fix 2) — a 95.5% reduction from the original baseline, and the remaining 276 are
+the 46 closed-but-undeleted windows' own legitimate menu bars, not pyqtgraph accumulation.
+Point 6 is considered CLOSED: no further `QMenu` leak source is known. If the suite's
+macOS wall time or sandbox OOM recur, re-measure with `RESPMECH_NET_CENSUS`/
+`RESPMECH_NET_PROFILE` before assuming this is the same class of bug — the population
+this ticket targeted is gone.
+
+See ticket `20260811-0910-ci-tests.md` (claude-ops) for the full investigation, every
+measured number, and the review passes for both fixes.
 
 ## Dev environment — check which interpreter you are actually running
 

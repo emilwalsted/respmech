@@ -233,3 +233,42 @@ def test_the_summary_has_no_visible_axis(qapp):
     for plot in su.stack.plots:
         assert plot.getAxis("left").isVisible() is False
         assert plot.getAxis("bottom").isVisible() is False
+
+
+# -- plot cleanup (point 6, ticket 20260811-0910) -----------------------------------------
+def test_rebuilding_the_mapping_closes_the_previous_stacks_plots(qapp):
+    """Every show_mapping() rebuild used to just setParent(None) the old ColumnStack and
+    drop the reference — never closing its PlotWidgets' own context menus. _clear() now
+    closes the outgoing stack's plots before the new one replaces it.
+
+    The PlotItem references are captured BEFORE the rebuild, not re-fetched via
+    ``PlotWidget.getPlotItem()`` afterwards — see test_column_stack.py's
+    ``test_close_plots_closes_every_embedded_plotitem_and_empties_the_list`` for why a
+    closed PlotWidget's own ``getPlotItem()`` returns ``None``, not a readable PlotItem."""
+    ch = _channels(flow=5, poes=7)
+    m, names = _matrix()
+    su = ChannelSummary().show_mapping(ch, matrix=m, names=names)
+    old_plots = list(su.stack.plots)
+    old_plot_items = [p.getPlotItem() for p in old_plots]
+    assert old_plot_items and all(pi.ctrlMenu is not None for pi in old_plot_items)
+    su.show_mapping(ch, matrix=m, names=names)   # rebuilds regardless of the mapping's own signature
+    assert all(pi.ctrlMenu is None for pi in old_plot_items)
+    assert su.stack is not None and su.stack.plots is not old_plots
+
+
+def test_close_plots_closes_the_current_stack_without_rebuilding(qapp):
+    """The counterpart to Preview & QC's shutdown(): releases the LAST-built ColumnStack's
+    plots (the one still alive when the owning window closes), called from
+    MainWindow.closeEvent — unlike _clear()/show_mapping(), this does not restore the
+    empty-state label, because the caller is discarding the whole screen, not redrawing it."""
+    ch = _channels(flow=5, poes=7)
+    m, names = _matrix()
+    su = ChannelSummary().show_mapping(ch, matrix=m, names=names)
+    plot_items = [p.getPlotItem() for p in su.stack.plots]
+    su.close_plots()
+    assert all(pi.ctrlMenu is None for pi in plot_items)
+
+
+def test_close_plots_never_raises_with_nothing_assigned(qapp):
+    """An unpopulated summary (self.stack is None) has nothing to close."""
+    ChannelSummary().close_plots()

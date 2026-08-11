@@ -36,6 +36,36 @@ def test_shows_only_the_chosen_columns_in_the_given_order(qapp):
     assert [h.text().split()[1] for h in st.headers] == ["5", "2", "3"]
 
 
+# -- close_plots() (point 6, ticket 20260811-0910) ---------------------------------------
+def test_close_plots_closes_every_embedded_plotitem_and_empties_the_list(qapp):
+    """Each PlotWidget's own ctrlMenu/ViewBox are released (see close_plots()'s docstring
+    for why nothing else ever does this), and self.plots is emptied so nothing iterates a
+    now-unusable plot afterwards.
+
+    The PlotItem references are captured BEFORE closing, not re-fetched via
+    ``PlotWidget.getPlotItem()`` afterwards: the PlotWidget's own ``.close()`` (the last
+    step of ``plot_perf.close_plots()``) calls ``GraphicsView.close()``, whose
+    ``scene().clear()`` deletes the PlotItem's underlying C++ object outright (it is still
+    IN the scene at that point — only its view box was explicitly removed) and
+    ``getPlotItem()`` then returns ``None``, not a closed-but-readable PlotItem. Holding
+    the Python reference from before close keeps the (already-``None``-menu'd) attributes
+    readable, exactly as the shutdown-time regression test in test_preview_screen.py does.
+    """
+    m, names = _matrix()
+    st = ColumnStack(1000).build(m, names)
+    plots = list(st.plots)
+    plot_items = [p.getPlotItem() for p in plots]
+    assert plot_items and all(pi.ctrlMenu is not None for pi in plot_items)
+    st.close_plots()
+    assert st.plots == []
+    assert all(pi.ctrlMenu is None for pi in plot_items)
+
+
+def test_close_plots_never_raises_on_an_empty_stack(qapp):
+    """A ColumnStack that was never built() (no rows yet) has nothing to close."""
+    ColumnStack(1000).close_plots()
+
+
 def test_the_time_axis_is_labelled_on_the_last_row_only(qapp):
     m, names = _matrix()
     st = ColumnStack(1000, columns=[3, 0]).build(m, names)

@@ -1345,3 +1345,65 @@ def test_closing_the_window_closes_the_mechanics_stacks_current_plot_items(qapp,
         "closed without releasing menus it was still directly responsible for"
     )
     win.close()                                            # idempotent: a second close must not raise
+
+
+def test_closing_the_window_closes_setups_channel_summary_plots(qapp, tmp_path):
+    """Point 6 continued (ticket 20260811-0910): the dominant remaining leak source once
+    the mechanics stack's own shutdown-time close landed. Setup's read-only channel
+    summary (ChannelSummary -> ColumnStack) builds its own PlotWidgets -- one ctrlMenu per
+    assigned channel -- OUTSIDE PreviewScreen entirely, and MainWindow.closeEvent used to
+    call shutdown() only on preview_screen/run_screen. That ColumnStack is built once at
+    MainWindow construction (Setup renders the initial channel mapping eagerly) and is
+    never rebuilt unless the mapping changes, so it stays alive -- and reachable, not
+    garbage -- for the window's whole life. Measured directly: a bare, freshly constructed
+    MainWindow that renders nothing else still left 83 surviving QMenus after close()
+    before this fix, 6 after -- the window's own File/Help menu-bar menus, unrelated to
+    pyqtgraph (RESPMECH_NET_CENSUS; see the ticket for the full investigation and the two
+    isolated-experiment measurements that misattributed and then correctly attributed this
+    source).
+
+    The PlotItem references are captured BEFORE win.close(), not re-fetched via
+    ``PlotWidget.getPlotItem()`` afterwards -- see test_column_stack.py's
+    ``test_close_plots_closes_every_embedded_plotitem_and_empties_the_list`` for why a
+    closed PlotWidget's own ``getPlotItem()`` returns ``None``, not a readable PlotItem.
+    """
+    from respmech.ui.main_window import MainWindow
+
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    summary = win.settings_screen.channel_summary
+    assert summary.stack is not None, (
+        "synth_settings() assigns real channels, so Setup's initial refresh should have "
+        "built a real ColumnStack -- if this assert ever fails, the test below is vacuous"
+    )
+    plot_items = [p.getPlotItem() for p in summary.stack.plots]
+    assert plot_items and all(pi.ctrlMenu is not None for pi in plot_items)
+
+    win.close()
+
+    assert all(pi.ctrlMenu is None for pi in plot_items), (
+        "MainWindow.closeEvent must also release Setup's channel summary plots, not just "
+        "preview_screen/run_screen's -- a survivor here is exactly the leak source that "
+        "PreviewScreen.shutdown() alone could never reach"
+    )
+    win.close()                                            # idempotent: a second close must not raise
+
+
+def test_closing_the_window_with_no_channels_assigned_does_not_raise(qapp):
+    """MainWindow.closeEvent's new call to channel_summary.close_plots() is wrapped in a
+    bare except (matching the existing preview_screen/run_screen shutdown calls it sits
+    beside), so a raise there would be silently swallowed rather than failing a test --
+    this exercises the ChannelSummary.stack is None path (no channels assigned, no input
+    file: ChannelSummary.show_mapping() leaves self.stack unset, see its own text-only
+    fallback) directly through the real close path, not just at the ChannelSummary/
+    ColumnStack unit level, so a future attribute rename on this call chain cannot hide
+    behind the except forever."""
+    from respmech.core.settings import Settings
+    from respmech.ui.main_window import MainWindow
+
+    win = MainWindow(AppState(Settings()))
+    assert win.settings_screen.channel_summary.stack is None, (
+        "a brand-new, empty Settings() should leave no channels assigned -- if this ever "
+        "fails, the test above is exercising the wrong path"
+    )
+    win.close()                                            # must not raise, and must reach shutdown
