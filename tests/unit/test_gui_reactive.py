@@ -69,6 +69,22 @@ def _pump_until(qapp, predicate, timeout=60.0):
     return state["ok"] or predicate()
 
 
+def _assert_panels_idle(qapp, pv, timeout=10.0):
+    """Assert every spinner clears — by PUMPING for it, never reading it bare.
+
+    The 'channels'/'raw' busy overlays are stopped by the async render chain's own
+    final deferred stage (``QTimer.singleShot(0)`` — see ``_mechanics.py``'s
+    ``_render_preview_async_stage2/3``), which runs one or more event-loop turns
+    AFTER the job bookkeeping (``_jobs``/``_draining``) empties. "All jobs drained"
+    therefore does not yet mean "all spinners cleared": a bare
+    ``busy_panels() == set()`` right after the drain pump is a race against the
+    deferred stages' loop turn. Run #245 (master, 12-08-2026) hit exactly that
+    window on macOS×py3.11 — the fleet's slowest combination — while every other
+    platform passed by timing luck."""
+    assert _pump_until(qapp, lambda: pv.busy_panels() == set(), timeout), \
+        f"a spinner was left running: {pv.busy_panels()!r}"
+
+
 def test_selecting_a_file_autoruns_all_panels(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path), noise=True)))
@@ -82,7 +98,7 @@ def test_selecting_a_file_autoruns_all_panels(qapp, tmp_path):
     # every runnable job finishes and every spinner clears
     assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60), \
         "reactive jobs did not all finish"
-    assert pv.busy_panels() == set(), "a spinner was left running"
+    _assert_panels_idle(qapp, pv)
     # the auto panels are populated: mechanics channels, EMG result, and (auto) fidelity
     assert len(pv._channel_plots) == 5
     assert pv._emg_all is not None and len(pv._emg_all["conditioned"]) == 3
@@ -159,7 +175,7 @@ def test_autorun_without_noise_skips_fidelity_but_runs_the_rest(qapp, tmp_path):
     pv._refresh_files()
     pv.file_rail.select_index(1)
     assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining and pv._previewed_file, 60)
-    assert pv.busy_panels() == set()
+    _assert_panels_idle(qapp, pv)
     assert len(pv._channel_plots) == 5
     assert pv._emg_all is not None            # EMG staged (ECG-removed, no noise)
     assert pv.table.model().rowCount() > 0           # mechanics test run is automatic
@@ -178,7 +194,7 @@ def test_switching_file_mid_run_supersedes_cleanly(qapp, tmp_path):
     # everything drains and clears with no crash and A's mechanics preview is the one that won
     assert _pump_until(qapp, lambda: pv._previewed_file == "synth_case_A.csv"
                        and not pv._jobs and not pv._draining, 60)
-    assert pv.busy_panels() == set()
+    _assert_panels_idle(qapp, pv)
     win.close()
 
 
@@ -293,7 +309,7 @@ def test_settings_change_cancels_inflight_jobs(qapp, tmp_path):
     assert not pv._jobs                                      # current jobs were aborted...
     assert all(pv._tokens[k] == toks[k] + 1 for k in toks)  # ...and their tokens invalidated
     assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60)
-    assert pv.busy_panels() == set()
+    _assert_panels_idle(qapp, pv)
     win.close()
 
 

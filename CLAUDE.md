@@ -471,6 +471,19 @@ because the field it checked happened to already contain a matching substring in
 pre-recompute (blank/default) state, which made the false pass silent rather than an
 obvious `AssertionError` on an empty string.
 
+A third variant of the same lesson (run #245, master's first full-matrix run,
+12-08-2026): since D15 split the mechanics render into deferred stages, the
+'channels'/'raw' busy overlays are stopped by the async chain's own final
+`QTimer.singleShot(0)` stage — one or more event-loop turns AFTER `_jobs`/`_draining`
+empty. A bare `assert pv.busy_panels() == set()` immediately after the drain pump is
+therefore a race against the deferred stages' loop turn: it passed everywhere except
+macOS×py3.11, the fleet's slowest combination, where the drain flag fell inside the
+window before the stages fired. Four such asserts existed; all now go through
+`_assert_panels_idle()` (a third, pumped wait). The general rule: any state the async
+render chain itself finalizes (spinners, stage-3-drawn content) must be awaited with
+its own `_pump_until`, never read bare off the back of the drain predicate —
+"all jobs drained" is not "all panels idle".
+
 ### Known non-issue: a font-resolution test fails on a minimal Linux sandbox
 
 `tests/unit/test_gui.py::test_splash_resolves_fonts_to_installed_families` fails
