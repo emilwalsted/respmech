@@ -32,10 +32,26 @@ jobs:
     name: GUI smoke · ${{ matrix.os }} · py${{ matrix.python-version }}
     strategy:
       fail-fast: false   # let every OS/version combo report, don't cancel siblings on first red
-      matrix:
-        os: [windows-latest, macos-latest]
-        python-version: ["3.11", "3.12"]   # numba/librosa wheels lag the newest Python; 3.13 excluded on purpose
+      # Full 4-way (2 OS × 2 Python) where the verdict gates a merge or a release:
+      # master pushes, PRs, manual dispatch. Feature-branch pushes (the chained-ticket
+      # cadence: 3–8 commits/day) run ONE Python per OS instead — the failure axis this
+      # matrix exists for is the OS (fonts/encoding/paths), not the Python minor, and
+      # halving the macOS demand is what keeps the account's macOS runner queue from
+      # starving: measured 10-08-2026, runs were queued 10 deep with ~8 h verdict
+      # latency, each carrying two multi-hour macOS jobs.
+      # (3.13 stays excluded on purpose: numba/librosa wheels lag the newest Python.)
+      matrix: ${{ (github.event_name != 'push' || github.ref == 'refs/heads/master') && fromJSON('{"os":["windows-latest","macos-latest"],"python-version":["3.11","3.12"]}') || fromJSON('{"os":["windows-latest","macos-latest"],"python-version":["3.12"]}') }}
     runs-on: ${{ matrix.os }}
+    # A hung Qt test used to burn a runner for the full 6 h default (three runs hit it
+    # 06–07-08-2026, D13 era). Ceilings are generous against the honest runtime, so they
+    # only cut true hangs, never slow-but-passing runs. macOS's own comment used to say
+    # "if a green macOS run ever nears 4 h, the fix is profiling the teardown cost, not
+    # raising this number" — run #218 (10-08-2026, 1285 tests) then hit exactly that
+    # ceiling mid-suite, and the fix was accordingly NOT a bigger number: macOS now runs
+    # the suite file-by-file (see its unit step below), which sheds the accumulation cost
+    # that grew ~47 min (05-08) into >4 h. 240 stays as a pure hang guard far above the
+    # file-by-file runtime; Windows completes its single invocation in ~45-55 min.
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 240 || 90 }}
     env:
       QT_QPA_PLATFORM: offscreen   # headless Qt — no display on the runner
       PYQTGRAPH_QT_LIB: PySide6    # never let pyqtgraph bind PyQt6 (two Qt bindings in one process crash)
@@ -47,7 +63,7 @@ jobs:
       # to catch.
       PYTHONIOENCODING: utf-8
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Fuld historik OG tags: tools/check_changelog.py måler et
           # commit-interval mellem to tags, og standard-dybden (1) giver hverken
@@ -55,7 +71,7 @@ jobs:
           # indholdsløst grønt, og release-porten fejler på hver udgivelse.
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -80,7 +96,7 @@ jobs:
 
       - name: GUI constructs headless (MainWindow + themed splash)
         working-directory: ${{ runner.temp }}
-        run: python -c "import respmech.ui.splash as s; from PySide6.QtWidgets import QApplication; from respmech.ui import theme; from respmech.ui.state import AppState; from respmech.ui.main_window import MainWindow; app=QApplication([]); theme.apply_theme(app); s.make_splash(app); w=MainWindow(AppState()); assert w.tabs.count()==3; print('GUI OK')"
+        run: python -c "import respmech.ui.splash as s; from PySide6.QtWidgets import QApplication; from respmech.ui import theme; from respmech.ui.state import AppState; from respmech.ui.main_window import MainWindow; app=QApplication([]); theme.apply_theme(app); s.make_splash(app); w=MainWindow(AppState()); assert w.tabs.count()==2; print('GUI OK')"
 
       # Informational on purpose: the changelog is updated deliberately, not on
       # every commit (see the note in CHANGELOG.md), so this must not fail a
@@ -98,7 +114,13 @@ jobs:
         run: python3 tools/check_changelog.py --warnings-only
         continue-on-error: true
 
+      # Windows keeps the ONE-PROCESS whole-suite invocation — it is the last platform
+      # that completes it (~45-55 min at 1285 tests), and that single big run is the
+      # ordering-contract coverage every other job now forgoes (Linux went file-by-file
+      # for memory, macOS below for time). If Windows ever stops completing it, the
+      # suite-scaling ticket is overdue, not another per-OS carve-out.
       - name: Unit suite (headless, offscreen Qt)
+        if: runner.os != 'macOS'
         run: |
           # PySide6 can crash at interpreter shutdown on headless CI (macOS Abort trap 6 /
           # Windows segfault 139) AFTER every test has already passed — worker QThreads and
@@ -138,11 +160,177 @@ jobs:
           fi
           echo "Unit suite passed (any non-zero exit was a post-run Qt teardown crash)."
 
+      # macOS runs FILE-BY-FILE, same shape and same reasoning as smoke-linux below,
+      # measured onto this platform by run #218 (10-08-2026): the one-process suite's
+      # per-test teardown cost grows with the accumulated widget population, and at
+      # 1285 tests macOS crossed its own 4 h ceiling mid-suite — ~47 min green on
+      # 05-08, >4 h five days later. The accumulation tax IS the runtime on macOS
+      # (Linux's file-by-file run cut 32 min to ~14), so shedding it per file is what
+      # returns a verdict in under an hour. The one-process ordering-contract coverage
+      # stays on Windows above, which completes it; the real cure remains the
+      # suite-scaling ticket (cap the widget population), after which this can fold
+      # back into the single invocation. No --deselect here: macOS has a real Menlo,
+      # so the font-resolution test runs (the deselect on smoke-linux is that job's
+      # sandbox artefact, not this one's).
+      - name: Unit suite (headless, offscreen Qt, file by file)
+        if: runner.os == 'macOS'
+        run: |
+          fails=0; total_passed=0; total_skipped=0
+          : > pytest-unit.log
+          for f in tests/unit/test_*.py; do
+            set +e
+            python -m pytest "$f" -q --durations=5 > /tmp/one-file.log 2>&1
+            rc=$?
+            set -e
+            cat /tmp/one-file.log >> pytest-unit.log
+            summary=$(grep -E "[0-9]+ (passed|failed|error|skipped)|no tests ran" /tmp/one-file.log | tail -1)
+            echo "== ${f} :: ${summary:-NO SUMMARY} (exit ${rc})"
+            if grep -qE "[0-9]+ (failed|error)" /tmp/one-file.log; then
+              echo "::error::real test failures or errors in ${f}"; fails=1
+              # Print the actual failure, not just the count: on a platform-only red
+              # this job log is ALL the evidence there is (run #226's one macOS-only
+              # failure left its traceback in a file nothing uploaded). sed -nE works
+              # on both BSD (macOS) and GNU (Linux) sed — keep it that way.
+              echo "--- failure details from ${f} ---"
+              sed -nE '/^=+ (FAILURES|ERRORS)/,$p' /tmp/one-file.log | head -120
+            elif ! grep -qE "[0-9]+ (passed|skipped)" /tmp/one-file.log; then
+              echo "::error::${f} produced no pytest summary (crashed mid-run?)"; fails=1
+              echo "--- last 40 lines of ${f}'s output ---"
+              tail -40 /tmp/one-file.log
+            fi
+            p=$(grep -oE "[0-9]+ passed" /tmp/one-file.log | tail -1 | grep -oE "^[0-9]+" || true)
+            s=$(grep -oE "[0-9]+ skipped" /tmp/one-file.log | tail -1 | grep -oE "^[0-9]+" || true)
+            total_passed=$((total_passed + ${p:-0}))
+            total_skipped=$((total_skipped + ${s:-0}))
+          done
+          echo "TOTAL: ${total_passed} passed, ${total_skipped} skipped across all files."
+          if [ "$total_skipped" -gt $((total_passed / 10)) ]; then
+            echo "::error::${total_skipped} tests SKIPPED against ${total_passed} passed — the suite did not really run (fixture data not found?)"; fails=1
+          fi
+          if [ "$fails" -ne 0 ]; then exit 1; fi
+          echo "Unit suite passed file by file (per-file exit codes beyond the summaries are Qt teardown noise)."
+
+  # The fast first verdict, and the job every Claude ticket can reproduce EXACTLY:
+  # ticket sandboxes are Linux, so "the suite is green in my sandbox" and "smoke-linux
+  # is green" are the same claim. It exists so a portability break surfaces in
+  # ~15 minutes on every push instead of hours later in the win/mac queue — the
+  # win/mac matrix above remains the portability proof (fonts/encoding/paths differ);
+  # a green here does NOT imply a green there.
+  smoke-linux:
+    name: GUI smoke · ubuntu-latest · py3.12
+    runs-on: ubuntu-latest
+    # 60, arrived at empirically: 30 assumed "Linux beats the Windows runner" and run #207
+    # was killed mid-suite at exactly 30m00s (the ~1280-test suite alone is ~30 min;
+    # Windows' whole job is ~32-34 min). 50 fit the measured runtime; the swap step below
+    # adds a few tail minutes when the suite's memory curve spills, so 60 keeps ~70%
+    # headroom over measured before this ceiling cuts anything but a true hang.
+    timeout-minutes: 60
+    env:
+      QT_QPA_PLATFORM: offscreen   # headless Qt — no display on the runner
+      PYQTGRAPH_QT_LIB: PySide6    # never let pyqtgraph bind PyQt6 (two Qt bindings in one process crash)
+      PYTHONIOENCODING: utf-8      # match the win/mac jobs so output is comparable
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Qt offscreen system libraries
+        run: sudo apt-get update -q && sudo apt-get install -y -q libegl1 libxkbcommon0
+
+      - name: Install (gui + dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[gui,dev]"
+
+      # Same neutral-cwd reasoning as the win/mac steps above.
+      - name: Import smoke (fail fast on a bad import / missing dep)
+        working-directory: ${{ runner.temp }}
+        run: python -c "import respmech, respmech.ui.app, respmech.ui.main_window, respmech.ui.theme, respmech.ui.splash, respmech.cli.__main__; print('import OK')"
+
+      - name: CLI entry point resolves
+        working-directory: ${{ runner.temp }}
+        run: respmech --version
+
+      - name: GUI constructs headless (MainWindow + themed splash)
+        working-directory: ${{ runner.temp }}
+        run: python -c "import respmech.ui.splash as s; from PySide6.QtWidgets import QApplication; from respmech.ui import theme; from respmech.ui.state import AppState; from respmech.ui.main_window import MainWindow; app=QApplication([]); theme.apply_theme(app); s.make_splash(app); w=MainWindow(AppState()); assert w.tabs.count()==2; print('GUI OK')"
+
+      # FILE-BY-FILE, deliberately — this job's claim is "every test file is green on
+      # Linux", not "the whole suite survives one process". Four measurements, four walls:
+      #   * One invocation does not fit: the suite's top-level-widget population grows
+      #     monotonically (the teardown net closes but deliberately never deletes — the
+      #     py3.11 segfault note in conftest), so peak memory scales with suite length.
+      #     At 1282 tests, runs #210 and #213 were TERM'd (exit 143) at ~97% after
+      #     ~32 min on this 16 GB runner; an 8 GB sandbox dies at ~45%.
+      #   * Swap is not a cure: #213 carried 8 G of swap and died identically — the
+      #     hosted runner kills on memory PRESSURE, which swap turns into thrash.
+      #   * Halves are not a cure: #211 split the suite in two, which moved the
+      #     test_gui_reactive pair into a novel mid-suite composition and both failed
+      #     order-dependently — the passes-alone-fails-in-a-big-run class CLAUDE.md
+      #     documents. There is no honest composition between per-file and whole-suite.
+      #   * The obvious fix segfaults: an opt-in deleteLater() reap of closed windows in
+      #     the teardown net was built and validated first — it segfaults within four
+      #     tests on py3.12 too, so the conftest's "cannot be validated without shipping
+      #     it" warning stands beyond py3.11. Capping the population for real is the
+      #     suite-scaling ticket, and doing it is what would also cure macOS's 3½-hour
+      #     runs and win back a one-process Linux job.
+      # Per-file runs are the composition ticket sandboxes actually exercise while
+      # iterating, every file's peak stays far below the ceiling, and the pattern is
+      # proven: all 72 files ran green in an 8 GB container before this landed. The
+      # one-process whole-suite claim stays covered by the win/mac jobs, which complete
+      # it. Per-file pass/fail mirrors the win/mac step's summary-grep logic — keep the
+      # two in sync. The --deselect is the documented sandbox artefact (CLAUDE.md "Known
+      # non-issue: a font-resolution test fails on a minimal Linux sandbox"); win/mac
+      # keep that test covered.
+      - name: Unit suite (headless, offscreen Qt, file by file)
+        run: |
+          fails=0; total_passed=0; total_skipped=0
+          : > pytest-unit.log
+          for f in tests/unit/test_*.py; do
+            set +e
+            python -m pytest "$f" -q --durations=5 \
+              --deselect tests/unit/test_gui.py::test_splash_resolves_fonts_to_installed_families \
+              > /tmp/one-file.log 2>&1
+            rc=$?
+            set -e
+            cat /tmp/one-file.log >> pytest-unit.log
+            summary=$(grep -E "[0-9]+ (passed|failed|error|skipped)|no tests ran" /tmp/one-file.log | tail -1)
+            echo "== ${f} :: ${summary:-NO SUMMARY} (exit ${rc})"
+            if grep -qE "[0-9]+ (failed|error)" /tmp/one-file.log; then
+              echo "::error::real test failures or errors in ${f}"; fails=1
+              # Print the actual failure, not just the count: on a platform-only red
+              # this job log is ALL the evidence there is (run #226's one macOS-only
+              # failure left its traceback in a file nothing uploaded). sed -nE works
+              # on both BSD (macOS) and GNU (Linux) sed — keep it that way.
+              echo "--- failure details from ${f} ---"
+              sed -nE '/^=+ (FAILURES|ERRORS)/,$p' /tmp/one-file.log | head -120
+            elif ! grep -qE "[0-9]+ (passed|skipped)" /tmp/one-file.log; then
+              echo "::error::${f} produced no pytest summary (crashed mid-run?)"; fails=1
+              echo "--- last 40 lines of ${f}'s output ---"
+              tail -40 /tmp/one-file.log
+            fi
+            p=$(grep -oE "[0-9]+ passed" /tmp/one-file.log | tail -1 | grep -oE "^[0-9]+" || true)
+            s=$(grep -oE "[0-9]+ skipped" /tmp/one-file.log | tail -1 | grep -oE "^[0-9]+" || true)
+            total_passed=$((total_passed + ${p:-0}))
+            total_skipped=$((total_skipped + ${s:-0}))
+          done
+          echo "TOTAL: ${total_passed} passed, ${total_skipped} skipped across all files."
+          if [ "$total_skipped" -gt $((total_passed / 10)) ]; then
+            echo "::error::${total_skipped} tests SKIPPED against ${total_passed} passed — the suite did not really run (fixture data not found?)"; fails=1
+          fi
+          if [ "$fails" -ne 0 ]; then exit 1; fi
+          echo "Unit suite passed file by file (per-file exit codes beyond the summaries are Qt teardown noise)."
+
   golden:
     name: Numerical golden (synthetic, rtol 1e-9)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Fuld historik OG tags: tools/check_changelog.py måler et
           # commit-interval mellem to tags, og standard-dybden (1) giver hverken
@@ -150,7 +338,7 @@ jobs:
           # indholdsløst grønt, og release-porten fejler på hver udgivelse.
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip

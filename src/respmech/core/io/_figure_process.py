@@ -31,10 +31,15 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 
 # One trivial spawn decides whether this environment can run children at all. None = not yet
 # probed; True/False = the answer for the rest of the process.
 _CAN_SPAWN: bool | None = None
+
+# How often the parent wakes up to drain the child's progress queue and check the overall
+# deadline. Small enough that per-file progress feels live, large enough not to busy-loop.
+_POLL_INTERVAL_S = 0.2
 
 _PROBE_TIMEOUT_S = 30.0
 # Generous: a large test with every diagnostic on writes a lot of figures. A hung child costs
@@ -49,18 +54,32 @@ def _probe_ok() -> str:
     return "ok"
 
 
-def _run_write_figures(result, settings, outputfolder: str):
+def _run_write_figures(result, settings, outputfolder: str, cohort_outputs: bool = True,
+                       progress_queue=None):
     """Child-side entry point: import the plotting stack fresh and do the work.
 
     Runs in a process that has never imported Qt, which is the whole point.
-    """
+
+    ``progress_queue`` is a ``multiprocessing.Manager().Queue()`` proxy (picklable across the
+    spawn boundary, unlike a plain callable) — when given, the child's own per-file callback
+    puts each filename on it instead of calling back into the parent directly, which a spawned
+    process cannot do."""
     from respmech.core import plots
-    return plots.write_figures(result, settings, outputfolder)
+    progress = None
+    if progress_queue is not None:
+        def progress(fname):
+            try:
+                progress_queue.put(fname)
+            except Exception:      # noqa: BLE001 — a lost progress name must never fail the write
+                pass
+    return plots.write_figures(result, settings, outputfolder, progress=progress,
+                               cohort_outputs=cohort_outputs)
 
 
-def _in_process(result, settings, outputfolder: str, progress=None):
+def _in_process(result, settings, outputfolder: str, progress=None, cohort_outputs: bool = True):
     from respmech.core import plots
-    return plots.write_figures(result, settings, outputfolder, progress=progress)
+    return plots.write_figures(result, settings, outputfolder, progress=progress,
+                               cohort_outputs=cohort_outputs)
 
 
 def _executor():
@@ -107,15 +126,39 @@ def _can_spawn() -> bool:
     return _CAN_SPAWN
 
 
-def write_figures(result, settings, outputfolder: str, *, on_fallback=None, progress=None):
+def _drain_progress(queue, progress):
+    """Deliver every filename currently waiting on the queue to ``progress``, then return.
+    Never blocks — a caller polls this in a loop instead of blocking on the queue itself, so
+    it can also watch the future and the overall deadline."""
+    if queue is None or progress is None:
+        return
+    while True:
+        try:
+            fname = queue.get_nowait()
+        except Exception:       # noqa: BLE001 — empty queue (Empty) or a torn-down manager alike
+            break
+        try:
+            progress(fname)
+        except Exception:       # noqa: BLE001 — progress is cosmetic, never fatal
+            pass
+
+
+def write_figures(result, settings, outputfolder: str, *, on_fallback=None, progress=None,
+                  cohort_outputs: bool = True):
     """``plots.write_figures``, in a child process when that works, else here.
 
     ``on_fallback(reason)`` is called when the in-process path is taken, so a caller can
     record why in the run report rather than have it happen invisibly.
 
-    ``progress`` is an optional ``callable(fname)`` for per-file progress. It is honoured
-    only on the in-process path — a spawned child cannot call back into this process — so
-    the child path reports figures as a single stage, which the animated busy bar covers.
+    ``progress`` is an optional ``callable(fname)`` for per-file progress. On the isolated
+    path it is relayed from the child through a ``multiprocessing.Manager().Queue()`` — a
+    spawned process cannot call back into this one directly, but it CAN put values on a
+    proxy queue the parent polls. Building the Manager itself can fail (a locked-down
+    environment, a prior Manager left in a bad state); that must only cost the per-file
+    names, never the run — on any failure to build it, the child simply writes without a
+    progress channel and the run proceeds exactly as before this existed.
+
+    ``cohort_outputs`` (default True) is forwarded to ``plots.write_figures`` — see there.
     """
     if not _can_spawn():
         # A packaged build ALWAYS writes in-process by design (a spawn would re-launch the app),
@@ -124,16 +167,66 @@ def write_figures(result, settings, outputfolder: str, *, on_fallback=None, prog
         # still reported so the run report can record why the child was not used.
         if on_fallback and not _spawn_relaunches_the_app():
             on_fallback("figure subprocess unavailable; wrote figures in-process")
-        return _in_process(result, settings, outputfolder, progress=progress)
+        return _in_process(result, settings, outputfolder, progress=progress,
+                           cohort_outputs=cohort_outputs)
+
+    # A Manager() is itself a spawned server process, on top of the figure-drawing child —
+    # a real, if small, cost paid on every write that carries a progress callback (which the
+    # GUI's BatchWorker and WriteWorker always do). Only dev/venv/CI installs ever reach this
+    # line at all — _can_spawn()'s guard above sends every PACKAGED build straight to
+    # _in_process, so end users on a shipped installer never pay it. That population is
+    # exactly who this ticket is FOR (a pip install had nothing but a silent busy bar before
+    # this existed), so the cost is accepted rather than optimised away; a Manager carries no
+    # heavy imports of its own; unlike this call's OTHER spawned process, it never touches
+    # matplotlib.
+    manager = None
+    progress_queue = None
+    if progress is not None:
+        try:
+            import multiprocessing as mp
+            manager = mp.Manager()
+            progress_queue = manager.Queue()
+        except Exception:      # noqa: BLE001 — no per-file names, never a failed run
+            manager, progress_queue = None, None
 
     try:
         with _executor() as ex:
-            fut = ex.submit(_run_write_figures, result, settings, outputfolder)
-            return fut.result(timeout=_WORK_TIMEOUT_S)
+            fut = ex.submit(_run_write_figures, result, settings, outputfolder,
+                            cohort_outputs=cohort_outputs, progress_queue=progress_queue)
+            deadline = time.monotonic() + _WORK_TIMEOUT_S
+            while True:
+                _drain_progress(progress_queue, progress)
+                remaining = deadline - time.monotonic()
+                # ALWAYS ask the future once more, even once remaining <= 0: Future.result()
+                # returns immediately (never blocks) when the future is already done,
+                # whatever timeout is passed — so a `timeout=0` poll right at the deadline
+                # still catches a child that finished a moment ago, instead of declaring a
+                # timeout (and letting the in-process fallback start a SECOND, concurrent
+                # write into the same files) on a child that was never actually hung, only
+                # slightly slower than the last poll interval.
+                try:
+                    res = fut.result(timeout=max(0.0, min(_POLL_INTERVAL_S, remaining)))
+                except TimeoutError:
+                    if remaining <= 0:
+                        raise
+                    continue
+                _drain_progress(progress_queue, progress)   # catch any last, just-queued names
+                return res
     except BaseException as e:     # noqa: BLE001 - never let isolation break a run
         # One failure is not necessarily permanent (a timeout may just be a huge test), so the
         # probe verdict is left alone; the next batch tries the child again.
         if on_fallback:
             on_fallback(f"figure subprocess failed ({type(e).__name__}: {e}); "
                         "wrote figures in-process")
-        return _in_process(result, settings, outputfolder, progress=progress)
+        return _in_process(result, settings, outputfolder, progress=progress,
+                           cohort_outputs=cohort_outputs)
+    finally:
+        # This finally runs on the SUCCESS path too (after `return res` above), so a raising
+        # shutdown() here would turn a fully successful figure write into a reported failure
+        # over nothing more than tearing down the progress channel. Every other Manager/Queue
+        # call in this function is already guarded the same way, for the same reason.
+        if manager is not None:
+            try:
+                manager.shutdown()
+            except Exception:      # noqa: BLE001 — teardown failure, not a write failure
+                pass

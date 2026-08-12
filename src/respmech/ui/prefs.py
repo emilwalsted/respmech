@@ -101,6 +101,63 @@ def last_rig() -> dict | None:
     return rig if isinstance(rig, dict) and rig else None
 
 
+def recent_label(path: str, max_dir: int = 34) -> str:
+    """Label one recent analysis: the file name plus just enough of its folder to tell two
+    same-named analyses apart (ticket C03 — moved here from ``ui.main_window`` so the
+    startup chooser's recent buttons and the header's Analysis menu can never describe the
+    same file differently). Bare basenames collide across studies (every study has an
+    "analysis.toml"); full paths are unreadable at menu/dialog width. The folder is elided
+    at its HEAD — the leaf folder is the one that names the study."""
+    import os  # noqa: PLC0415
+    folder, name = os.path.split(path)
+    home = os.path.expanduser("~")
+    if folder.startswith(home):
+        folder = "~" + folder[len(home):]
+    if len(folder) > max_dir:
+        folder = "…" + folder[-max_dir:]
+    return f"{name}  —  {folder}" if folder else name
+
+
+# --- generic splitter geometry (D14, UI-overhaul) ---------------------------
+# The codebase had no ``saveState``/``restoreState``/``saveGeometry`` call anywhere before
+# this ticket. Generic and small on purpose, so the next splitter that wants to remember a
+# user's chosen split reuses this pair rather than each growing its own QSettings accessor.
+#
+# A splitter fed by this pair is restored on EVERY construction of the screen that owns
+# it — not just in tests that explicitly opt in. A test that makes such a splitter emit a
+# real ``splitterMoved`` (a simulated drag, not a plain ``setSizes()`` call, which does not
+# emit it) without also using the ``isolated_prefs`` fixture (see conftest.py) will persist
+# that split to the shared throwaway QSettings scope and silently perturb every later
+# test's default layout. Always pair a real-drag test of a persisted splitter with
+# ``isolated_prefs``.
+def save_splitter_state(key: str, splitter) -> None:
+    """Remember one QSplitter's handle positions across sessions, keyed by ``key`` (e.g.
+    ``'preview.mech.vsplit'``)."""
+    s = _qsettings()
+    if s is None or splitter is None:
+        return
+    try:
+        s.setValue(f"splitter/{key}", splitter.saveState())
+    except Exception:                            # pragma: no cover - defensive
+        pass
+
+
+def restore_splitter_state(key: str, splitter) -> bool:
+    """Restore a previously-saved splitter state onto ``splitter``. Returns whether a saved
+    state existed and was applied, so a caller can fall back to its own default sizes when
+    the user has never touched this splitter yet."""
+    s = _qsettings()
+    if s is None or splitter is None:
+        return False
+    try:
+        state = s.value(f"splitter/{key}", None)
+        if state is None:
+            return False
+        return bool(splitter.restoreState(state))
+    except Exception:                            # pragma: no cover - defensive
+        return False
+
+
 def apply_rig(settings, rig: dict) -> None:
     """Apply a saved rig onto a Settings object (channel columns + sampling only)."""
     if not rig:

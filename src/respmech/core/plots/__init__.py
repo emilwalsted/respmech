@@ -447,7 +447,8 @@ def _write_emg_audio(fr, fname, fs, figdir):
 # --------------------------------------------------------------------------- #
 # orchestration
 # --------------------------------------------------------------------------- #
-def write_figures(result, settings, outputfolder: str, progress=None) -> tuple[list, list]:
+def write_figures(result, settings, outputfolder: str, progress=None,
+                  cohort_outputs: bool = True) -> tuple[list, list]:
     """Write every enabled diagnostic figure (and WAV export). Returns (written_paths,
     failures) where failures is a list of ``(name, error)`` — a bad figure is skipped,
     not fatal, so a run always finishes even if one plot cannot be drawn.
@@ -457,18 +458,32 @@ def write_figures(result, settings, outputfolder: str, progress=None) -> tuple[l
     below would otherwise inherit at Figure()/add_subplot()/savefig() time.
 
     ``progress`` is an optional ``callable(fname)`` fired before each file's figures — the
-    slowest part of a batch — so the GUI can show which file is being drawn."""
+    slowest part of a batch — so the GUI can show which file is being drawn.
+
+    ``cohort_outputs`` (default True) gates the one figure built across the WHOLE batch
+    rather than per file — the "All files – Campbell (average)" cohort figure. A subset/
+    re-run (ticket A05) passes False so that figure, which the writer already treats as
+    cohort-level, is never silently rebuilt from a fraction of the study."""
     with plot_style.light_rc_context():
-        return _write_figures_impl(result, settings, outputfolder, progress=progress)
+        return _write_figures_impl(result, settings, outputfolder, progress=progress,
+                                   cohort_outputs=cohort_outputs)
 
 
-def _write_figures_impl(result, settings, outputfolder: str, progress=None) -> tuple[list, list]:
+def per_file_figure_jobs(settings):
+    """The per-file diagnostic-figure jobs ``output.diagnostics`` currently enables:
+    ``[(label, callable(fr, fname, path) -> path or None, filename-suffix), ...]``.
+
+    This is the single list ``_write_figures_impl`` (below) draws on to actually write
+    figures, and the plan the Run screen shows before a run (``core.io.plan.plan_outputs``)
+    draws on to describe what a run WOULD write — one place that knows which jobs exist, so
+    a figure type can never appear in one without the other (ticket A06). A job's callable
+    can still return ``None`` for a given file (e.g. "trend" when trend correction has no
+    detectable anchors) — the JOB existing is settings-driven and static; whether it
+    actually produces a file for a particular recording is data-driven and is not decided
+    here. Callers that need a ceiling, not a promise, must treat this list's length as an
+    upper bound per file, never an exact count."""
     dg = settings.output.diagnostics
-    emg = settings.processing.emg
     cols, rows = dg.pv_columns, dg.pv_rows
-    ylim = list(getattr(emg, "plot_yscale", []) or [])
-
-    # per-file jobs: (label, callable(fr, fname, path) -> path or None, filename-suffix)
     jobs = []
     if dg.save_pv_average:
         jobs.append(("PV average", _pv_average, "Campbell (average).pdf"))
@@ -483,6 +498,64 @@ def _write_figures_impl(result, settings, outputfolder: str, progress=None) -> t
         jobs.append(("volume correction", _volume_correction, "volume correction.pdf"))
         jobs.append(("trend", lambda fr, fn, p: _trend(fr, fn, p, settings), "volume trend.pdf"))
         jobs.append(("drift", _drift, "volume endpoints.pdf"))
+    return jobs
+
+
+def _emg_stage_candidates(settings):
+    """Which of the three EMG conditioning stages (raw / ECG-removed / noise-reduced) a
+    file COULD carry, given ``settings`` alone — before any data has been loaded. "Raw"
+    exists whenever EMG channels are configured at all; the other two follow directly from
+    the matching settings flags. A stage being a candidate here does not guarantee a
+    particular file's computed ``signals['emg_stages']`` actually has it (see
+    ``per_file_figure_jobs``'s docstring on jobs vs data) — this is the settings-only
+    ceiling ``core.io.plan`` uses, never the data-driven truth the writer itself checks."""
+    if not (settings.input.channels.emg or []):
+        return []
+    cands = [("raw", "Raw EMG")]
+    if settings.processing.emg.remove_ecg:
+        cands.append(("ecg_removed", "EMG (ECG removed)"))
+    if settings.processing.emg.noise.enabled:
+        cands.append(("noise_reduced", "EMG (ECG removed + noise reduced)"))
+    return cands
+
+
+def emg_overview_candidates(settings):
+    """The EMG-overview-figure stage candidates a file could produce — see
+    ``_emg_stage_candidates``. Kept as its own name (today identical to
+    ``emg_audio_candidates``) because the overview and audio exports are independent
+    features that could diverge later; sharing one private helper keeps them in lock-step
+    until they do."""
+    return _emg_stage_candidates(settings)
+
+
+def emg_audio_candidates(settings):
+    """The EMG-audio (WAV) stage candidates a file could produce — see
+    ``emg_overview_candidates``."""
+    return _emg_stage_candidates(settings)
+
+
+def diagnostic_figure_type_count(settings):
+    """How many DISTINCT diagnostic-figure *types* the current settings would produce for
+    one file — the count Setup's "You will get" line shows (ticket A06). Not a per-file
+    file count (that needs a file list; see ``core.io.plan.plan_outputs`` for that): a
+    single ``save_drift`` tick is worth 3 figure types (volume correction, trend, volume
+    endpoints), not 1, and this is the one place both Setup and Run read that number from,
+    so they can never again disagree about what a set of ticked boxes means."""
+    dg = settings.output.diagnostics
+    n = len(per_file_figure_jobs(settings))
+    if getattr(dg, "save_emg", False):
+        n += len(emg_overview_candidates(settings))
+    return n
+
+
+def _write_figures_impl(result, settings, outputfolder: str, progress=None,
+                        cohort_outputs: bool = True) -> tuple[list, list]:
+    dg = settings.output.diagnostics
+    emg = settings.processing.emg
+    ylim = list(getattr(emg, "plot_yscale", []) or [])
+
+    jobs = per_file_figure_jobs(settings)
+    cols, rows = dg.pv_columns, dg.pv_rows
 
     figdir = os.path.join(outputfolder, "diagnostics")
     written, failures = [], []
@@ -524,8 +597,9 @@ def _write_figures_impl(result, settings, outputfolder: str, progress=None) -> t
             except Exception as e:              # noqa: BLE001
                 failures.append((f"{fname}/EMG audio", str(e)))
 
-    # one cohort "all-files average" Campbell across the whole batch
-    if dg.save_pv_individual and len(result.ok_files) > 1:
+    # one cohort "all-files average" Campbell across the whole batch — never built from a
+    # subset (A05): a 2+-file re-run/single-file write is still not the whole study.
+    if dg.save_pv_individual and len(result.ok_files) > 1 and cohort_outputs:
         path = os.path.join(figdir, "All files – Campbell (average).pdf")
         try:
             p = _pv_cohort(result, path, cols, rows)

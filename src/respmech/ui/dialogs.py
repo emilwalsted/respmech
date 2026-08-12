@@ -2,6 +2,8 @@
 batch error log. Qt-only; no core dependency."""
 from __future__ import annotations
 
+import re
+
 from PySide6.QtCore import Qt, QTimer, QSize
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (QApplication, QDialog, QHBoxLayout, QLabel,
@@ -12,37 +14,101 @@ try:
 except Exception:  # pragma: no cover
     _theme = None
 
+# A Python traceback's last line is ``<dotted.qualified.Name>: message`` (or, for a
+# builtin exception, just ``Name: message`` — a dotted chain of zero dots). Matched
+# against the WHOLE last line: the message half is free text and may itself contain
+# colons, but the type half cannot (an identifier chain), so this can only ever
+# consume up to the first ": " — never eats into the message.
+_LAST_LINE_TYPE_RE = re.compile(r'^([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*): (.+)$')
+
+
+def _last_line(detail: str) -> str:
+    lines = [ln.strip() for ln in str(detail).splitlines() if ln.strip()]
+    return lines[-1] if lines else str(detail).strip()
+
 
 def short_error(detail: str) -> str:
     """Reduce a full traceback (or multi-line message) to a one-line summary —
-    the last non-empty line, which for a Python traceback is ``Type: message``."""
+    the last non-empty line. When that line has the shape ``<Type>: message``
+    (ticket D16 — a Python exception's own str(), e.g.
+    ``respmech.core.io.loaders.DataValidationError: Volume channel is set to
+    column 6, but subj04_short.csv has only 5 columns.``), only the message is
+    returned; the module/class prefix is implementation detail a physiologist
+    reading the status bar has no use for. Any other line is returned unchanged —
+    this is a presentation trim, not a rewrite of what exceptions say."""
     if not detail:
         return "unknown error"
-    lines = [ln.strip() for ln in str(detail).splitlines() if ln.strip()]
-    return lines[-1] if lines else str(detail).strip()
+    line = _last_line(detail)
+    if not line:
+        return str(detail).strip()
+    m = _LAST_LINE_TYPE_RE.match(line)
+    return m.group(2) if m else line
+
+
+def exception_type_name(detail: str) -> str | None:
+    """The bare exception class name from the last line of a traceback (or a lone
+    ``Type: message`` string) — e.g. ``"DataValidationError"`` from
+    ``"respmech.core.io.loaders.DataValidationError: Volume channel is set to
+    column 6, …"``. ``None`` if the last line isn't of that shape. Lets a caller
+    that only has the free-text ``detail`` (not the original exception object —
+    e.g. a fatal error relayed across a QThread as a plain string) still look the
+    kind up in a hint table such as ``run_screen._FIX_HINTS``."""
+    if not detail:
+        return None
+    m = _LAST_LINE_TYPE_RE.match(_last_line(detail))
+    if not m:
+        return None
+    return m.group(1).rsplit(".", 1)[-1]
 
 
 class TextViewerDialog(QDialog):
     """A modeless window showing read-only, selectable, copyable monospace text
     (an error trace or the batch error log). A Copy button puts it on the
-    clipboard; the text is also selectable directly."""
+    clipboard; the text is also selectable directly.
 
-    def __init__(self, title: str, text: str, parent=None, intro: str | None = None):
+    ``collapsed_detail=True`` (ticket D01) treats ``text`` as SUPPORTING detail (a stack
+    trace) rather than the primary message: the monospace view starts hidden behind a
+    "Details" toggle, and ``intro`` is shown in the normal (non-muted) style, since it IS
+    the message, not a caption above one. Used when a caller already has a plain-language
+    diagnosis and wants to lead with it instead of a traceback, while still keeping the
+    traceback one click away. A caller passing ``collapsed_detail=True`` with no ``intro``
+    gets the ordinary (uncollapsed) layout instead of a dialog whose only visible content
+    would otherwise be two buttons — self-review finding, not something any current caller
+    triggers, but a foot-gun worth closing for the next one."""
+
+    def __init__(self, title: str, text: str, parent=None, intro: str | None = None,
+                collapsed_detail: bool = False):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setMinimumSize(560, 340)
         self.resize(780, 500)
+        collapsed_detail = collapsed_detail and bool(intro)
         lay = QVBoxLayout(self)
+        self.intro_label = None
         if intro:
             lab = QLabel(intro)
             lab.setWordWrap(True)
-            lab.setProperty("status", "muted")
+            # PlainText, not Qt's default AutoText: ``intro`` can now be an exception's own
+            # message (ticket D01's diagnosis path), and Qt's mightBeRichText heuristic can
+            # misread stray '<'/'>' in a pandas/numpy message (e.g. a dtype '<f8') as HTML
+            # and silently mangle the diagnosis instead of showing it verbatim.
+            lab.setTextFormat(Qt.PlainText)
+            if not collapsed_detail:
+                lab.setProperty("status", "muted")
             lay.addWidget(lab)
+            self.intro_label = lab
         self.view = QPlainTextEdit()
         self.view.setReadOnly(True)
         self.view.setPlainText(text or "")
         self.view.setLineWrapMode(QPlainTextEdit.NoWrap)
         self.view.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+        self.details_btn = None
+        if collapsed_detail:
+            self.view.setVisible(False)
+            self.details_btn = QPushButton("Details")
+            self.details_btn.setAutoDefault(False)
+            self.details_btn.setCheckable(True)
+            self.details_btn.toggled.connect(self.view.setVisible)
         lay.addWidget(self.view, 1)
         row = QHBoxLayout()
         self.copy_btn = QPushButton("Copy to clipboard")
@@ -54,6 +120,8 @@ class TextViewerDialog(QDialog):
         if _theme is not None:
             _theme.make_primary(close_btn)
         row.addStretch(1)
+        if self.details_btn is not None:
+            row.addWidget(self.details_btn)
         row.addWidget(self.copy_btn)
         row.addWidget(close_btn)
         lay.addLayout(row)
@@ -80,17 +148,18 @@ class TextViewerDialog(QDialog):
         return self.view.toPlainText()
 
 
-def open_error_dialog(parent, title: str, detail: str, intro: str | None = None, prior=None):
+def open_error_dialog(parent, title: str, detail: str, intro: str | None = None, prior=None,
+                      collapsed_detail: bool = False):
     """Show a copyable full-detail (traceback) dialog, replacing ``prior`` if given
     so repeated errors don't accumulate windows. Returns the new dialog to keep a
-    reference on the caller."""
+    reference on the caller. ``collapsed_detail`` — see ``TextViewerDialog``."""
     if prior is not None:
         try:
             prior.close()
             prior.deleteLater()
         except Exception:                          # pragma: no cover - prior already gone
             pass
-    dlg = TextViewerDialog(title, detail, parent, intro=intro)
+    dlg = TextViewerDialog(title, detail, parent, intro=intro, collapsed_detail=collapsed_detail)
     dlg.show()
     dlg.raise_()
     return dlg

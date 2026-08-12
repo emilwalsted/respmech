@@ -10,8 +10,81 @@ import threading
 import time
 import traceback
 
-# minimum time (ms) the splash stays visible before the window is revealed
-_MIN_SPLASH_MS = 3000
+# floor (ms) the splash stays visible before the window is revealed, once the window
+# is actually built. Not the whole splash lifetime: building itself (splash paint +
+# theme + MainWindow construction) already takes ~1.3-1.6 s on its own, so this only
+# tops that up to a minimum, rather than adding a further fixed wait on top of it.
+_MIN_SPLASH_MS = 1200
+
+
+def _reveal_delay_ms(elapsed_ms: int, floor_ms: int = _MIN_SPLASH_MS) -> int:
+    """How much longer (ms) the splash should stay up, given that building the window
+    already took ``elapsed_ms``. Pure and Qt-free so it is trivially testable: 0 once
+    building alone has already spent the floor, otherwise the remainder of it."""
+    return max(0, floor_ms - elapsed_ms)
+
+
+def _warm_compute_core():
+    """Import the compute core in the background, as early as there is idle time to
+    spend on it.
+
+    The GUI no longer imports ``respmech.core.pipeline`` at startup (that cost 1.4 s
+    of a 2.0 s launch), but deferring an import only *moves* the stall — it would
+    otherwise land inside the user's first Run or file load, where it is more
+    annoying. Starting it right after the splash is shown spends the window-build
+    idle time (theming, ``MainWindow`` construction, ``respmech.ui`` imports)
+    instead of the fixed splash-floor wait that used to follow it.
+
+    A plain daemon thread, deliberately: it touches no Qt object, so there is no
+    thread affinity to get wrong (a QThreadPool/QRunnable would invite exactly that).
+    Python's import system is thread-safe per module, and ``respmech.core.pipeline``
+    / ``io.writers`` (pandas, scipy) and ``respmech.ui.main_window`` (matplotlib,
+    pyqtgraph, numpy) are leaf-ward imports with no cycle back into ``respmech.ui`` —
+    disjoint apart from numpy, which is itself safe to import concurrently. If the
+    user is faster than the thread, the import lock simply makes the foreground
+    import wait for the same work.
+    """
+    def _warm():
+        try:
+            import respmech.core.pipeline        # noqa: F401
+            import respmech.core.io.writers      # noqa: F401
+        except Exception:                        # noqa: BLE001 — best-effort only
+            pass
+    try:
+        # Called as a plain top-level statement in main(), before the window exists and
+        # before any of the try/except blocks that follow it — unlike theme.apply_theme
+        # and icon-loading (each explicitly guarded as "never fail to start over X"), an
+        # unguarded RuntimeError here (e.g. "can't start new thread", real under a low
+        # thread-count ulimit) would propagate out of main() with no window, no splash
+        # cleanup and no _fatal_startup dialog. This is best-effort only: if the thread
+        # cannot start, the import cost is simply paid later, on the first Run — exactly
+        # where it landed before this warm-up existed.
+        threading.Thread(target=_warm, name="respmech-warm-core", daemon=True).start()
+    except Exception:                            # noqa: BLE001 — best-effort only
+        pass
+
+
+def resolve_startup_path(argv, opened_path=None):
+    """Which ``.toml`` analysis (if any) should be opened at startup, and from where.
+
+    Two origins can name a startup file, and on any one platform only ever one of them
+    fires: ``opened_path``, from a native "open this file" launch (macOS's
+    ``QEvent.FileOpen`` for a double-clicked/Dock-opened document — never present in
+    ``argv`` on that platform, see ``qapp.RespMechApplication``), and ``argv[1]``, from a
+    plain command-line/double-click launch on Windows/Linux, where no such event is ever
+    delivered. ``opened_path`` wins if both are somehow present, being the more specific of
+    the two signals. Qt-free so it is trivially testable without a running application.
+
+    Only ``.toml`` is recognised here (a saved analysis) — a dropped ``.py`` legacy setup is
+    handled separately, on an already-open window, by ``settings_screen.open_analysis``
+    (drag-and-drop onto the main window, ticket C04), never through this startup path.
+    """
+    # casefold() so a Windows-style ANALYSIS.TOML / .Toml is recognised too, either way.
+    if opened_path and opened_path.casefold().endswith(".toml"):
+        return opened_path
+    if len(argv) > 1 and argv[1].casefold().endswith(".toml"):
+        return argv[1]
+    return None
 
 
 def _fatal_startup(tb: str) -> None:
@@ -37,10 +110,11 @@ def main(argv=None) -> int:
     import multiprocessing
     multiprocessing.freeze_support()
 
-    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtWidgets import QMessageBox
     from PySide6.QtCore import QTimer, QLoggingCategory
     from respmech.ui import theme
     from respmech.ui.dialogs import short_error
+    from respmech.ui.qapp import RespMechApplication
     from respmech.ui.splash import make_splash
 
     # Qt's font-database chatter ("Populating font family aliases … missing font
@@ -49,14 +123,18 @@ def main(argv=None) -> int:
     QLoggingCategory.setFilterRules("qt.qpa.fonts.warning=false")
 
     argv = list(sys.argv if argv is None else argv)
-    app = QApplication(argv)
+    app = RespMechApplication(argv)
     # stable identity so QSettings (recent analyses, sticky folders, last rig) persists
     app.setOrganizationName("RespMech")
     app.setApplicationName("RespMech")
+    # Flush a FileOpen event macOS may have already queued for a cold, double-click launch
+    # (Cocoa can deliver it as early as during QApplication construction) before anything
+    # below reads app.opened_path — otherwise a fresh launch would see it one tick too late.
+    app.processEvents()
 
     # Show the splash as the VERY FIRST thing on screen (it is a self-contained
     # pixmap, so it needs neither the theme nor the icon), then keep it up for at
-    # least _MIN_SPLASH_MS before the window is revealed.
+    # least _MIN_SPLASH_MS after the window is built before revealing it.
     t0 = time.monotonic()
     splash = make_splash(app)       # None if Qt SVG support is unavailable
     if splash is not None:
@@ -64,6 +142,12 @@ def main(argv=None) -> int:
         splash.raise_()
         splash.activateWindow()
         app.processEvents()         # paint the splash immediately
+
+    # Start the compute-core warm-up NOW, right after the splash is up: everything
+    # between here and the window being shown (theming, MainWindow construction,
+    # respmech.ui imports) is idle time the thread can spend instead of the user
+    # waiting for it later, on the first Run or file load.
+    _warm_compute_core()
 
     try:
         theme.apply_theme(app)      # Fusion + palette + QSS + plot styling (cosmetic)
@@ -80,8 +164,7 @@ def main(argv=None) -> int:
     from respmech.ui.state import AppState
     from respmech.ui.main_window import MainWindow
     startup_error = None
-    # casefold() so a Windows-style ANALYSIS.TOML / .Toml drag-drop is recognised too.
-    toml_arg = argv[1] if (len(argv) > 1 and argv[1].casefold().endswith(".toml")) else None
+    toml_arg = resolve_startup_path(argv, app.opened_path)
     try:
         state = AppState()
         # Optional: a settings file passed on the command line is loaded on start.
@@ -109,6 +192,15 @@ def main(argv=None) -> int:
             _fatal_startup(build_error)
             return 1
 
+    # From here on the window exists: a LATER FileOpen event (app already running, a second
+    # document opened from the Dock) is routed live through the same guarded open a
+    # drag-and-drop uses (C04) — never through begin_session, which assumes a fresh window.
+    # Relies on no processEvents() call happening between win's construction above and this
+    # line (confirmed true today: none does) — one landing in between could let a FileOpen
+    # event arrive while on_file_open is still unset, and it would be captured into
+    # opened_path instead of forwarded live, silently missing this "already running" open.
+    app.on_file_open = win._open_dropped_path
+
     if splash is not None:          # keep the (modal) splash on top after the build
         splash.raise_()
         app.processEvents()
@@ -123,11 +215,6 @@ def main(argv=None) -> int:
                 splash.finish(win)
         win.raise_()
         win.activateWindow()
-        # Start the warm-up HERE, before begin_session() below: that call opens the modal
-        # New/Open chooser and blocks until the user picks, so anything after it would not
-        # run until the choice is already made. Starting it here spends exactly the idle
-        # time we want — the seconds the user spends in the chooser.
-        _warm_compute_core()
         if startup_error is not None:
             fn, tb = startup_error
             box = QMessageBox(win)
@@ -143,31 +230,7 @@ def main(argv=None) -> int:
         except Exception:               # noqa: BLE001 — never let the chooser break startup
             traceback.print_exc()
 
-    def _warm_compute_core():
-        """Import the compute core in the background, once the window is up.
-
-        The GUI no longer imports ``respmech.core.pipeline`` at startup (that cost 1.4 s
-        of a 2.0 s launch), but deferring an import only *moves* the stall — it would
-        otherwise land inside the user's first Run or file load, where it is more
-        annoying. Doing it here spends the idle time instead.
-
-        A plain daemon thread, deliberately: it touches no Qt object, so there is no
-        thread affinity to get wrong (a QThreadPool/QRunnable would invite exactly that).
-        Python's import system is thread-safe per module and these are leaf-ward imports
-        with no cycle back into ``respmech.ui``, so there is no deadlock path; if the user
-        is faster than the thread, the import lock simply makes the foreground import wait
-        for the same work.
-        """
-        def _warm():
-            try:
-                import respmech.core.pipeline        # noqa: F401
-                import respmech.core.io.writers      # noqa: F401
-            except Exception:                        # noqa: BLE001 — best-effort only
-                pass
-        threading.Thread(target=_warm, name="respmech-warm-core", daemon=True).start()
-
-    delay = (max(0, _MIN_SPLASH_MS - int((time.monotonic() - t0) * 1000))
-             if splash is not None else 0)
+    delay = _reveal_delay_ms(int((time.monotonic() - t0) * 1000)) if splash is not None else 0
     QTimer.singleShot(delay, _reveal)
     return app.exec()
 

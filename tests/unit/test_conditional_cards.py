@@ -5,11 +5,11 @@ column is actually assigned to entropy. They used to sit in the "Advanced (rarel
 grab-bag, which hid them from the users who DO compute entropy while still showing them to
 everyone who does not. They now have their own card, shown only when it applies.
 
-The mechanism is the fussy part. _apply_card_visibility forces every card in _stage_cards
-visible outside "new" mode, so a conditional card registered there would be un-hidden on the
-next keystroke — and test_startup_flow's "open mode reveals everything" walk would fail on a
-default AppState, which has no entropy channels. Hence a separate registry, ANDed in its own
-pass.
+Ticket B04 retired progressive disclosure (every OTHER card is visible unconditionally, in
+every mode), but this one is a different mechanic: it stays a separate registry
+(_cond_cards), ANDed in its own pass by _apply_card_visibility, because "shown iff it
+applies" is not the same rule as "always shown" — an entropy-less default AppState must
+still hide it, in every mode, including 'open'.
 """
 from PySide6.QtWidgets import QApplication
 
@@ -61,9 +61,10 @@ def test_it_is_hidden_from_the_start_when_no_entropy_is_assigned(qapp, tmp_path)
 
 
 def test_an_unrelated_edit_does_not_un_hide_it(qapp, tmp_path):
-    """The failure mode the separate registry exists to prevent: _apply_card_visibility
-    forces every _stage_cards entry visible, so a predicate registered there would be
-    overwritten by the next field change."""
+    """The failure mode the separate registry exists to prevent: were this card's
+    predicate folded into the SAME unconditional pass B04 uses for every other card, a
+    predicate registered there would be overwritten by the next field change instead of
+    staying gated on its own relevance."""
     sc = _screen(qapp, tmp_path, entropy=())
     card = _entropy_card(sc)
     assert not card.isVisible()
@@ -71,14 +72,6 @@ def test_an_unrelated_edit_does_not_un_hide_it(qapp, tmp_path):
     sc._on_field_changed()
     qapp.processEvents()
     assert not card.isVisible(), "an unrelated keystroke revealed an irrelevant card"
-
-def test_the_conditional_card_is_not_in_the_staged_registry(qapp, tmp_path):
-    """Structural: test_startup_flow walks every staged card and asserts it is visible after
-    enter_open_mode. A conditional card there fails that on a default AppState."""
-    sc = _screen(qapp, tmp_path)
-    staged = [c for cards in sc._stage_cards for c in cards]
-    assert _entropy_card(sc) not in staged
-
 
 def test_open_mode_does_not_force_it_visible(qapp, tmp_path):
     sc = _screen(qapp, tmp_path, entropy=())

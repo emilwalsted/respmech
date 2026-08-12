@@ -6,6 +6,7 @@ directly, which is what must be testable without a display.
 """
 import os
 
+import numpy as np
 import pytest
 
 
@@ -35,9 +36,9 @@ def test_breath_overlays_and_toggle(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentIndex(0)
+    pv.file_rail.select_index(0)
     pv._preview()
-    name = pv.file_combo.currentText()
+    name = pv.file_rail.current_filename()
     # overlays were drawn: one region per breath per channel plot + spans + labels
     assert pv._breath_spans, "no breath spans recorded"
     assert len(pv._channel_plots) == 5
@@ -64,8 +65,8 @@ def test_use_region_as_noise_writes_settings_and_mirrors(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv, sc = win.preview_screen, win.settings_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentIndex(0)
-    name = pv.file_combo.currentText()
+    pv.file_rail.select_index(0)
+    name = pv.file_rail.current_filename()
     pv._ensure_noise_region()
     pv._noise_region.setRegion((1.0, 5.0))
     out = pv._use_region_as_noise()
@@ -206,7 +207,7 @@ def test_emg_controls_disabled_without_emg_channels(qapp, tmp_path):
     win = MainWindow(AppState(s))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentIndex(0)
+    pv.file_rail.select_index(0)
     pv._update_actions()
     assert pv.emg_channel.isEnabled() is False        # EMG-gated controls are off
     assert pv.btn_set_noise.isEnabled() is False
@@ -237,7 +238,7 @@ def test_noise_options_gated_on_reference_file(qapp, tmp_path):
     s.processing.emg.noise.enabled = True
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentIndex(0); pv._update_actions()
+    pv._refresh_files(); pv.file_rail.select_index(0); pv._update_actions()
     # noise on but no reference -> options disabled
     assert pv.noise_opts.isEnabled() is False
     # choose a rest region on the graph -> sets the reference -> options enable
@@ -259,7 +260,7 @@ def test_emg_result_view_selectable_channels(qapp, tmp_path):
     s = _settings(str(tmp_path))
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentIndex(0)
+    pv._refresh_files(); pv.file_rail.select_index(0)
     path = os.path.join(INPUT, "synth_case_A.csv")
     data = stage_emg_all_channels(s, path)
     assert data["cols"] == [2, 3, 4]
@@ -282,12 +283,15 @@ def _stage_mech(pv, s, name="synth_case_A.csv"):
     """Refresh + select `name`, then stage its mechanics preview synchronously."""
     from respmech.ui.workers import stage_mechanics_preview
     pv._refresh_files()
-    pv.file_combo.setCurrentText(name)
+    pv.file_rail.select_filename(name)
     return stage_mechanics_preview(s, os.path.join(INPUT, name))
 
 
 def _red_dominant(reg):
-    c = reg.brush.color()
+    # D15: reg is now (BreathSpansItem, index-into-that-item's-span-list) — one shared
+    # item per plot carries every breath's brush, not one pg.LinearRegionItem per breath.
+    item, idx = reg
+    c = item._spans[idx][2].color()
     return c.red() > c.blue()            # excluded brush is red, included is blue
 
 
@@ -304,7 +308,8 @@ def test_emg_raw_view_numbers_breaths_at_trim_offset(qapp, tmp_path):
     assert pv._trim_offset_s == off and pv._breaths
     raw = pv._bov["raw"]
     for (num, t0, t1, _ig) in pv._breaths:
-        a, b = raw["regions"][num][0].getRegion()     # region on the first raw subplot
+        item, idx = raw["regions"][num][0]            # shared span item on the first raw subplot
+        a, b = item._spans[idx][0], item._spans[idx][1]
         assert abs(a - (t0 + off)) < 1e-6 and abs(b - (t1 + off)) < 1e-6
         assert num in raw["texts"]                    # a visible number label per breath
     win.close()
@@ -363,7 +368,7 @@ def test_file_change_resets_breath_overlays(qapp, tmp_path):
     pv = win.preview_screen
     pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
     assert pv._bov.get("raw", {}).get("regions")      # overlays present for A
-    pv.file_combo.setCurrentText("synth_case_B.csv")  # -> _on_file_selected -> reset
+    pv.file_rail.select_filename("synth_case_B.csv")  # -> _on_file_selected -> reset
     assert pv._bov == {} and pv._breaths == []
     win.close()
 
@@ -382,7 +387,7 @@ def test_file_change_clears_emg_all_cache(qapp, tmp_path):
     pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
     pv._on_emg_all_result(stage_emg_all_channels(s, path))
     assert pv._emg_all is not None                    # A's conditioned result cached
-    pv.file_combo.setCurrentText("synth_case_B.csv")  # -> reset drops the cache
+    pv.file_rail.select_filename("synth_case_B.csv")  # -> reset drops the cache
     assert pv._emg_all is None
     pv._render_emg_result()                           # a checkbox re-render now no-ops
     assert pv._result_label_y is None
@@ -399,7 +404,7 @@ def test_file_change_clears_previewed_file(qapp, tmp_path):
     pv = win.preview_screen
     pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
     assert pv._previewed_file == "synth_case_A.csv"
-    pv.file_combo.setCurrentText("synth_case_B.csv")
+    pv.file_rail.select_filename("synth_case_B.csv")
     assert pv._previewed_file is None
     win.close()
 
@@ -415,7 +420,7 @@ def test_file_switch_invalidates_inflight_tokens(qapp, tmp_path):
     pv = win.preview_screen
     pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
     before = dict(pv._tokens)
-    pv.file_combo.setCurrentText("synth_case_B.csv")  # -> _begin_file_switch
+    pv.file_rail.select_filename("synth_case_B.csv")  # -> _begin_file_switch
     assert all(pv._tokens[k] > before[k] for k in ("mech", "batch", "emg_all", "emg_detail"))
     assert pv._tokens["noise"] == before["noise"]     # file-independent -> preserved
     win.close()
@@ -433,7 +438,7 @@ def test_refresh_files_prev_vanished_resets_overlays(qapp, tmp_path):
     assert pv._bov.get("raw", {}).get("regions")
     s.input.files = "synth_case_B.csv"                # narrow the glob: A no longer matches
     pv.refresh_files()
-    assert pv.file_combo.currentText() == "synth_case_B.csv"
+    assert pv.file_rail.current_filename() == "synth_case_B.csv"
     assert pv._bov == {} and pv._breaths == [] and pv._previewed_file is None
     win.close()
 
@@ -574,6 +579,61 @@ def test_result_picker_check_is_inside_the_coloured_box(qapp, tmp_path):
     win.close()
 
 
+def test_result_picker_checks_show_focus_despite_their_own_stylesheet(qapp, tmp_path):
+    """C02: each of these checkboxes carries its OWN ``setStyleSheet()`` (the channel-
+    colour coding above) to draw the indicator as that channel's coloured box. A
+    per-widget stylesheet shadows the app-wide QSS for every selector it redeclares —
+    including pseudo-states the local sheet never mentions — so the global
+    ``QCheckBox::indicator:focus`` rule added for this ticket silently never applied
+    here: found in review, reproduced as "focusing one produces zero visible pixel
+    change", the exact defect C02 exists to close. Each checkbox's own stylesheet now
+    repeats the focus rule (in the accent colour, not the channel colour, matching every
+    other focusable control)."""
+    from PySide6.QtCore import Qt as _Qt
+    from PySide6.QtGui import QImage
+    from respmech.ui.main_window import MainWindow
+
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    assert len(pv.result_checks) >= 2
+    win.resize(900, 650)
+    win.show()
+    win.activateWindow()
+    win.tabs.setCurrentWidget(pv)
+    pv.subtabs.setCurrentWidget(pv._emg_tab)
+    for _ in range(5):
+        qapp.processEvents()
+
+    def _render():
+        img = QImage(win.size(), QImage.Format_ARGB32)
+        img.fill(0)
+        win.render(img)
+        return img
+
+    def _differ(img_a, img_b):
+        for y in range(img_a.height()):
+            for x in range(img_a.width()):
+                if img_a.pixelColor(x, y) != img_b.pixelColor(x, y):
+                    return True
+        return False
+
+    cb_a, cb_b = pv.result_checks[0][1], pv.result_checks[1][1]
+    cb_a.setFocus(_Qt.FocusReason.OtherFocusReason)
+    qapp.processEvents()
+    assert cb_a.hasFocus()
+    img_a_focused = _render()
+    cb_a.clearFocus()
+
+    cb_b.setFocus(_Qt.FocusReason.OtherFocusReason)
+    qapp.processEvents()
+    assert cb_b.hasFocus()
+    img_b_focused = _render()
+
+    assert _differ(img_a_focused, img_b_focused), (
+        "focus moved between two result-channel checkboxes with zero visible difference")
+    win.close()
+
+
 def test_breath_labels_are_prefixed(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     from respmech.ui.workers import stage_emg_channel
@@ -605,7 +665,7 @@ def test_set_noise_profile_dialog_applies_selection(qapp, tmp_path, monkeypatch)
     s = _settings(str(tmp_path))
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
 
     class _FakeDialog:                                   # stub: accept with a chosen span
         def __init__(self, *a, **k):
@@ -630,7 +690,7 @@ def test_set_noise_profile_dialog_cancel_leaves_settings(qapp, tmp_path, monkeyp
     s = _settings(str(tmp_path))
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     before = s.processing.emg.noise.reference_file
 
     class _FakeDialog:
@@ -646,6 +706,110 @@ def test_set_noise_profile_dialog_cancel_leaves_settings(qapp, tmp_path, monkeyp
     win.close()
 
 
+# -- D08 (UI-overhaul): the picker shows the signal the profile is actually built from --
+# Regression: the picker used to be fed stage_raw_emg's RAW channels regardless of ECG
+# removal, while core/pipeline.py builds the noise reference from the ECG-REDUCED matrix
+# — so the picker's "quiet (EMG-free)" criterion could not be met in what it displayed.
+
+def _capture_dialog_call(monkeypatch, pv):
+    """Stub NoiseProfileDialog and return the kwargs _open_noise_profile_dialog passed it,
+    without a real modal ever opening (exec() rejects immediately)."""
+    from PySide6.QtWidgets import QCheckBox, QDialog
+    from respmech.ui import noise_profile_dialog as npd
+    captured = {}
+
+    class _FakeDialog:
+        def __init__(self, *args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            self.use_expiration = QCheckBox()
+
+        def exec(self):
+            return QDialog.Rejected
+
+        def selected_region(self):
+            return None
+
+    monkeypatch.setattr(npd, "NoiseProfileDialog", _FakeDialog)
+    pv._open_noise_profile_dialog()
+    return captured
+
+
+def test_the_picker_is_fed_the_ecg_reduced_channels_when_removal_is_on(qapp, tmp_path, monkeypatch):
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_ecg_reduction
+    s = _settings(str(tmp_path))                          # remove_ecg=True
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
+
+    captured = _capture_dialog_call(monkeypatch, pv)
+    expected = stage_ecg_reduction(s, os.path.join(INPUT, "synth_case_A.csv"))
+    got_channels = captured["args"][0]
+    assert len(got_channels) == len(expected["processed"])
+    for got, exp in zip(got_channels, expected["processed"]):
+        assert np.allclose(got, exp)
+    # NOT the raw signal (removal is on, so processed != raw for a real ECG-bearing file)
+    from respmech.ui.workers import stage_raw_emg
+    raw = stage_raw_emg(s, os.path.join(INPUT, "synth_case_A.csv"))["raw"]
+    assert not all(np.allclose(got, r) for got, r in zip(got_channels, raw)), \
+        "picker shows the raw signal even with ECG removal on"
+    assert captured["kwargs"]["ecg_applied"] is True
+    assert len(captured["kwargs"]["peak_times"]) == len(expected["peaks"])
+    win.close()
+
+
+def test_the_picker_channels_match_raw_when_removal_is_off(qapp, tmp_path, monkeypatch):
+    """'processed' equals 'raw' when removal is off (stage_ecg_reduction's own contract) —
+    pin that this is what actually reaches the picker, so the off-state is unaffected."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_raw_emg
+    s = _settings(str(tmp_path))
+    s.processing.emg.remove_ecg = False
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
+
+    captured = _capture_dialog_call(monkeypatch, pv)
+    raw = stage_raw_emg(s, os.path.join(INPUT, "synth_case_A.csv"))["raw"]
+    got_channels = captured["args"][0]
+    assert len(got_channels) == len(raw)
+    for got, r in zip(got_channels, raw):
+        assert np.allclose(got, r)
+    assert captured["kwargs"]["ecg_applied"] is False
+    win.close()
+
+
+def test_a_failed_removal_does_not_claim_heartbeats_are_gone_from_the_picker(qapp, tmp_path, monkeypatch):
+    """Regression found in review of this ticket: stage_ecg_reduction falls back to the
+    RAW channels and reports no peaks whenever detection/removal raises, but still echoes
+    back ecg_applied=True (the SETTING, not whether it actually ran) — see _ecg.py's own
+    ecg_error handling for the same quirk. Without accounting for it here, a failed
+    removal would show the picker the raw, heartbeat-laden signal while its hint
+    confidently claimed the heartbeats were already removed: the exact bug D08 exists
+    to fix, reappearing on the error path."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui import workers as wk
+    s = _settings(str(tmp_path))                          # remove_ecg=True
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
+
+    def _fake_ecg_reduction(*_a, **_k):
+        n, fs = 200, 1000
+        t = np.arange(n) / fs
+        return {"t": t, "fs": fs, "cols": [2, 3, 4], "detect": 1, "detect_col": 3,
+                "raw_capture": np.zeros(n), "processed": [np.zeros(n)] * 3,
+                "peaks": np.array([]), "flow": np.zeros(n),
+                "ecg_applied": True, "ecg_error": "boom", "suppression": None}
+
+    monkeypatch.setattr(wk, "stage_ecg_reduction", _fake_ecg_reduction)
+    captured = _capture_dialog_call(monkeypatch, pv)
+    assert captured["kwargs"]["ecg_applied"] is False, \
+        "picker would claim heartbeats removed on a fallback-to-raw signal"
+    win.close()
+
+
 def test_noise_without_reference_hint_points_to_the_modal(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     s = _settings(str(tmp_path))
@@ -653,7 +817,7 @@ def test_noise_without_reference_hint_points_to_the_modal(qapp, tmp_path):
     s.processing.emg.noise.reference_file = ""
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     pv._update_actions()
     txt = pv.status.text()
     assert "Set noise profile" in txt                    # points at the new modal…
@@ -695,7 +859,7 @@ def test_render_preview_trim_error_shows_channels_not_error_card(qapp, tmp_path,
     s = _settings(str(tmp_path))
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     monkeypatch.setattr(compute, "trim",
                         lambda *a, **k: (_ for _ in ()).throw(compute.TrimError("flow never crosses zero")))
     pv._render_preview(workers.stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv")))
@@ -723,11 +887,11 @@ def test_batch_precondition_error_is_soft_not_a_hard_failure(qapp, tmp_path, err
     s = _settings(str(tmp_path))
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     result = BatchResult(files={"synth_case_A.csv": FileResult(
         file="synth_case_A.csv", error=error, error_kind=kind)})
     pv._on_batch_result(result)                      # returns normally (no _FileRunError)
-    assert pv.table.rowCount() == 0                  # table left blank
+    assert pv.table.model().rowCount() == 0           # table left blank
     for panel in ("campbell", "table"):
         assert pv.panel_error(panel) == error        # the reason is carried on the panel
     # a genuine analysis error still raises -> the hard 'Test run failed' path
@@ -807,7 +971,7 @@ def test_label_headroom_does_not_compound_across_repaints(qapp, tmp_path):
     s = _settings(str(tmp_path))
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     path = os.path.join(INPUT, "synth_case_A.csv")
     pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
     pv._on_emg_detail_result(stage_emg_channel(s, path, 0))
@@ -832,12 +996,12 @@ def test_file_switch_clears_all_panels(qapp, tmp_path):
     s = _settings(str(tmp_path))
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
     pv._on_batch_result(run_batch(s, only_files=["synth_case_A.csv"]))   # fills table + Campbell
-    assert pv.table.rowCount() > 0 and pv._channel_plots
-    pv.file_combo.setCurrentText("synth_case_B.csv")   # -> clears every panel as at start
-    assert pv.table.rowCount() == 0 and pv._channel_plots == []
+    assert pv.table.model().rowCount() > 0 and pv._channel_plots
+    pv.file_rail.select_filename("synth_case_B.csv")   # -> clears every panel as at start
+    assert pv.table.model().rowCount() == 0 and pv._channel_plots == []
     assert pv._bov == {} and pv._breaths == []
     win.close()
 
@@ -850,11 +1014,11 @@ def test_stale_error_card_cleared_on_file_switch(qapp, tmp_path):
     s = _settings(str(tmp_path))
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
     pv._overlays["campbell"].show_error("Test run failed", "boom")
     assert pv.panel_error("campbell") is not None
-    pv.file_combo.setCurrentText("synth_case_B.csv")   # -> _clear_all_panels dismisses it
+    pv.file_rail.select_filename("synth_case_B.csv")   # -> _clear_all_panels dismisses it
     assert pv.panel_error("campbell") is None
     assert pv._overlays["campbell"].isHidden() is True
     win.close()
@@ -875,19 +1039,20 @@ def test_detail_job_covers_both_time_and_psd_panels(qapp, tmp_path):
     win.close()
 
 
-def test_file_strip_sizes_to_content_not_window(qapp, tmp_path):
-    """The file selector sizes to the recording names instead of swallowing the row's
-    stretch; the ◀/▶ glyphs keep side air and can never clip (width tracks sizeHint —
-    the QSS min-width:0 makes any code-side fixed width a dead letter); Refresh sits
-    just right of ▶ at its natural size, with the slack parked in a trailing stretch."""
+def test_file_strip_and_rail_size_to_content_not_window(qapp, tmp_path):
+    """B02 replaced the old file_combo — whose 'wide' cap kept it off the top bar's
+    stretch — with a left-hand file rail panel; this guards the same failure mode in its
+    new shape. The rail must stay within its own min/max width bound rather than
+    swallowing the workspace, and the ◀/▶ + Refresh cluster still in the top bar (just
+    without the combo it used to bracket) keeps the same sizing discipline as before."""
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
     win.resize(1400, 900); win.show()
     win.tabs.setCurrentWidget(pv); pv._refresh_files(); qapp.processEvents()
-    assert pv.file_combo.count() > 0                     # the guard is meaningless when empty
-    assert pv.file_combo.width() < win.width() / 3       # was 1222px of 1400 before the fix
-    assert pv.file_combo.width() >= min(pv.file_combo.sizeHint().width(), 338)
+    assert pv.file_rail.count() > 0                     # the guard is meaningless when empty
+    assert pv.file_rail.minimumWidth() <= pv.file_rail.width() <= pv.file_rail.maximumWidth()
+    assert pv.file_rail.width() < win.width() / 3        # never eats the workspace
     for b in (pv.btn_prev_file, pv.btn_next_file):
         assert b.width() >= b.sizeHint().width()         # the historical clipped-glyph mode
         assert b.width() > 20                            # air exists (13px before the fix)
@@ -899,24 +1064,27 @@ def test_file_strip_sizes_to_content_not_window(qapp, tmp_path):
     win.close()
 
 
-def test_campbell_legend_sits_bottom_left_in_the_preview_only(qapp):
-    """The preview plots Poes on x and volume on y, which leaves the bottom-LEFT corner
-    empty (the loop's EELV end is bottom-right). The output PDF transposes those axes, so
-    its legend must NOT follow: "lower left" there lands on the loop's EILV tip. Its
-    loc="best" already places it clear of the data."""
+def test_campbell_legend_sits_bottom_right_in_the_preview_only(qapp):
+    """D12 (UI-overhaul): the preview now plots volume on x (inverted) and Poes on y, the
+    SAME direction the written Campbell PDF uses (core/plots._pv_average), so the two
+    figures agree and neither legend has to counter a transposition any more. In this
+    orientation the loop runs from EELV (near-baseline Poes, low volume -> top-right) to
+    EILV (more negative Poes, high volume -> bottom-left); the WOB read-out is fixed at the
+    top-left corner (axes fraction), which leaves bottom-right as the one corner neither the
+    loop nor the read-out claims. Before D12 this was "lower left", when Poes sat on x and
+    volume on y and the two figures were mirror images of each other."""
     import inspect
     from respmech.ui.screens import preview_screen as ps
     from respmech.core import plots
-    # The call moved out of _overlay_campbell_work and into _draw_campbell, which hands it
-    # to _fit_compact_figure: at the height this panel gets, a legend has to be SHED when
-    # there is no room for it, and only the fit knows the height. The contract is unchanged
-    # — it is still "lower left", and still only in the preview.
-    assert 'loc": "lower left"' in inspect.getsource(ps.PreviewScreen._draw_campbell)
+    # The call lives in _draw_campbell, which hands it to _fit_compact_figure: at the height
+    # this panel gets, a legend has to be SHED when there is no room for it, and only the fit
+    # knows the height.
+    assert 'loc": "lower right"' in inspect.getsource(ps.PreviewScreen._draw_campbell)
     assert 'ax.legend(' not in inspect.getsource(ps.PreviewScreen._overlay_campbell_work), (
         "the overlay places its own legend again, so the fit can no longer shed it")
-    # the PDF's Campbell keeps auto-placement — its axes are transposed
+    # the PDF's Campbell keeps auto-placement, unaffected by this ticket
     assert 'loc="best"' in inspect.getsource(plots._pv_average)
-    assert 'loc="lower left"' not in inspect.getsource(plots._pv_average)
+    assert 'loc="lower right"' not in inspect.getsource(plots._pv_average)
 
 
 def test_breath_labels_stay_pinned_to_the_view_top_under_zoom(qapp, tmp_path):
@@ -927,7 +1095,7 @@ def test_breath_labels_stay_pinned_to_the_view_top_under_zoom(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
     win.resize(1400, 900); win.show(); qapp.processEvents()
-    pv._refresh_files(); pv.file_combo.setCurrentIndex(0)
+    pv._refresh_files(); pv.file_rail.select_index(0)
     pv._preview(); qapp.processEvents()
     vb = pv._channel_plots[0].getViewBox()
     texts = list(pv._breath_texts.values())
@@ -1082,7 +1250,7 @@ def test_mechanics_batch_snapshot_is_mechanics_only(qapp, tmp_path, monkeypatch)
     s.processing.emg.noise.enabled = True
     win = MainWindow(AppState(s))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     captured = {}
     monkeypatch.setattr(pv, "_launch", lambda kind, token, worker: captured.setdefault("w", worker))
     pv._schedule("batch")
@@ -1124,7 +1292,7 @@ def test_breath_labels_fit_inside_the_short_channel_plots(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path))))
     win.resize(1360, 880); win.show(); qapp.processEvents()
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentIndex(0); pv._preview()
+    pv._refresh_files(); pv.file_rail.select_index(0); pv._preview()
     for _ in range(10):
         qapp.processEvents()
     assert pv._breath_texts, "no breath labels drawn"

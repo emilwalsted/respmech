@@ -74,9 +74,9 @@ def test_selecting_a_file_autoruns_all_panels(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path), noise=True)))
     pv = win.preview_screen
     pv._refresh_files()
-    assert pv.file_combo.count() == 2
+    assert pv.file_rail.count() == 2
     # select a file -> the singleShot auto-run must dispatch jobs once the loop turns
-    pv.file_combo.setCurrentIndex(1)
+    pv.file_rail.select_index(1)
     assert _pump_until(qapp, lambda: bool(pv._jobs) or bool(pv.busy_panels()), 10), \
         "no jobs auto-started on file selection"
     # every runnable job finishes and every spinner clears
@@ -88,8 +88,67 @@ def test_selecting_a_file_autoruns_all_panels(qapp, tmp_path):
     assert pv._emg_all is not None and len(pv._emg_all["conditioned"]) == 3
     assert len(pv.fidelity_canvas.figure.axes) == 1     # fidelity frontier drawn by the noise job
     # the mechanics test run is automatic now -> the table + Campbell fill on their own
-    assert pv.table.rowCount() > 0
+    assert pv.table.model().rowCount() > 0
     assert "failed" not in pv.status.text().lower()     # ended on a success message
+    win.close()
+
+
+def test_setup_bar_unaffected_by_preview_autorun_and_panels_get_persistent_titles(qapp, tmp_path):
+    """Integration regression for the ticket's central complaints (A03): selecting a file on
+    Preview and letting all six reactive jobs land must not leak Preview vocabulary into the
+    shared status bar while Setup is the active tab, and the ECG/fidelity panels + the
+    Mechanics caption must carry a PERSISTENT verdict — readable via toolTip()/fullText(),
+    never a pixel measurement — that outlives every job's own transient status message."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path), noise=True)))
+    sc, pv = win.settings_screen, win.preview_screen
+    assert win.tabs.currentWidget() is sc                 # Setup is the default active tab
+    pv._refresh_files()
+    pv.file_rail.select_index(1)
+    assert _pump_until(qapp, lambda: bool(pv._jobs) or bool(pv.busy_panels()), 10), \
+        "no jobs auto-started on file selection"
+    assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60), \
+        "reactive jobs did not all finish"
+    # Preview's own vocabulary never reached the bar: Setup owns it while its tab is active
+    bar_text = win.statusBar().currentMessage().lower()
+    assert "tick channels" not in bar_text and "pick one" not in bar_text
+    assert "r-peak" not in bar_text and "fidelity" not in bar_text
+    # ECG + fidelity panels carry their own persistent verdict, independent of the bar
+    ecg_title = pv._ecg_capture_box._title_label
+    assert "r-peak" in ecg_title.toolTip().lower()
+    fidelity_title = pv._fidelity_panel._title_label
+    assert "prop" in fidelity_title.toolTip().lower()
+    assert "worst-channel fidelity" in fidelity_title.toolTip().lower()
+    # the Mechanics caption survived every subsequent EMG job landing after it was set
+    assert "breath" in pv.mech_caption.fullText().lower()
+    assert "click a shaded breath" in pv.mech_caption.fullText().lower()
+
+    # Switching file must not leave the FILE-SPECIFIC verdicts (ECG capture, the Mechanics
+    # caption) asserting the OLD file's numbers over freshly-blanked panels — a stale claim
+    # is worse than no claim at all (self-review regression: both independent reviewers
+    # found this). The fidelity panel is deliberately the odd one out: it is a test-WIDE
+    # result (one fidelity sweep covers the whole batch, not one file), so
+    # _clear_file_panels intentionally leaves it — and its title — alone on an ordinary file
+    # switch; see its docstring. Only its first-ever compute clears it.
+    fidelity_verdict_before = fidelity_title.fullText()
+    pv.file_rail.select_index(0)
+    # "·" only ever appears once a live verdict is appended to the base title (see
+    # _set_ecg_capture_title) — its absence means "reset to bare base title". Checking for
+    # "r-peak" directly would false-positive: the STATIC base title itself already reads
+    # "…detected R-peaks (▼)".
+    assert "·" not in ecg_title.fullText()
+    assert fidelity_title.fullText() == fidelity_verdict_before   # test-wide result untouched
+    assert pv.mech_caption.fullText() == ""
+    # ...and the file-specific ones are populated again once the new file's own jobs land.
+    # Two-step pump, same as the very first selection above: the debounced autorun has not
+    # necessarily fired yet, so "no jobs left" can otherwise be trivially (and wrongly) true
+    # from the very first tick.
+    assert _pump_until(qapp, lambda: bool(pv._jobs) or bool(pv.busy_panels()), 10), \
+        "no jobs auto-started on switching back to the first file"
+    assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining, 60), \
+        "reactive jobs did not all finish for the second file"
+    assert "·" in ecg_title.fullText()             # a live verdict is back, not just the base title
+    assert "breath" in pv.mech_caption.fullText().lower()
     win.close()
 
 
@@ -98,12 +157,12 @@ def test_autorun_without_noise_skips_fidelity_but_runs_the_rest(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path), noise=False)))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentIndex(1)
+    pv.file_rail.select_index(1)
     assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining and pv._previewed_file, 60)
     assert pv.busy_panels() == set()
     assert len(pv._channel_plots) == 5
     assert pv._emg_all is not None            # EMG staged (ECG-removed, no noise)
-    assert pv.table.rowCount() > 0           # mechanics test run is automatic
+    assert pv.table.model().rowCount() > 0           # mechanics test run is automatic
     assert len(pv.fidelity_canvas.figure.axes) == 0   # no noise reference -> no fidelity job
     win.close()
 
@@ -113,8 +172,8 @@ def test_switching_file_mid_run_supersedes_cleanly(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path), noise=True)))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentIndex(1)          # request jobs for synth_case_B (debounced)
-    pv.file_combo.setCurrentIndex(0)          # switch to synth_case_A before the debounce fires
+    pv.file_rail.select_index(1)          # request jobs for synth_case_B (debounced)
+    pv.file_rail.select_index(0)          # switch to synth_case_A before the debounce fires
     # the debounce coalesces the rapid A/B switch into ONE run for the last-selected file;
     # everything drains and clears with no crash and A's mechanics preview is the one that won
     assert _pump_until(qapp, lambda: pv._previewed_file == "synth_case_A.csv"
@@ -128,7 +187,7 @@ def test_shutdown_joins_running_jobs(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path), noise=True)))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentIndex(1)
+    pv.file_rail.select_index(1)
     qapp.processEvents()                       # launch the jobs
     pv.shutdown()                              # join them while (likely) still running
     assert not pv._jobs and not pv._draining   # registry cleared, no leaked threads
@@ -168,7 +227,7 @@ def test_gated_out_reschedule_does_not_supersede_running_job(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentIndex(1)
+    pv.file_rail.select_index(1)
     qapp.processEvents()                           # auto-run dispatches jobs (incl. the batch)
     assert _pump_until(qapp, lambda: "batch" in pv._jobs, 10)
     tok = pv._tokens["batch"]
@@ -187,7 +246,7 @@ def test_settings_going_invalid_DOES_supersede_a_running_job(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentIndex(1)
+    pv.file_rail.select_index(1)
     qapp.processEvents()
     assert _pump_until(qapp, lambda: "batch" in pv._jobs, 10)
     tok = pv._tokens["batch"]
@@ -209,7 +268,7 @@ def test_autoprop_writes_chosen_prop_back_to_settings(qapp, tmp_path):
     win = MainWindow(AppState(s))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentText("synth_case_B.csv")
+    pv.file_rail.select_filename("synth_case_B.csv")
     result = run_batch(s, only_files=["synth_case_B.csv"])
     chosen = float(result.noise_report["prop_decrease"])
     pv._on_batch_result(result)                    # writes chosen prop, re-dispatches EMG jobs
@@ -227,7 +286,7 @@ def test_settings_change_cancels_inflight_jobs(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path), noise=True)))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentIndex(1)
+    pv.file_rail.select_index(1)
     assert _pump_until(qapp, lambda: bool(pv._jobs), 10)     # jobs in flight
     toks = dict(pv._tokens)
     pv.sync_from_settings()                                  # settings changed
@@ -245,7 +304,7 @@ def test_refresh_recomputes_all_auto_panels(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path), noise=True)))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentIndex(1)
+    pv.file_rail.select_index(1)
     assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining and pv._previewed_file, 60)
     launched = []
     orig = pv._schedule
@@ -286,7 +345,7 @@ def test_edits_debounce_into_one_recompute(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentIndex(1)
+    pv._refresh_files(); pv.file_rail.select_index(1)
     assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining and pv._previewed_file, 60)
     calls = []
     orig = pv._schedule
@@ -310,7 +369,7 @@ def test_settings_change_scopes_recompute_to_affected_panels(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path), noise=True)))
     pv = win.preview_screen
     import copy as _copy
-    pv._refresh_files(); pv.file_combo.setCurrentIndex(1)
+    pv._refresh_files(); pv.file_rail.select_index(1)
     assert _pump_until(qapp, lambda: not pv._jobs and not pv._draining and pv._previewed_file, 60)
     # establish a clean diff baseline without kicking off another recompute
     pv._last_synced_settings = _copy.deepcopy(pv.state.settings)

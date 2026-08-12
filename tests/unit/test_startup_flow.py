@@ -1,11 +1,14 @@
-"""The startup flow: the New/Open chooser + the guided progressive-disclosure of the
-Settings screen and the downstream (Preview/Run) tabs.
+"""The startup flow: the New/Open chooser + Setup's guided 'new analysis' mode.
 
-New-analysis mode reveals the settings cards stage by stage (Input -> Output -> the
-rest) and keeps Preview/Run hidden until everything validates; opening an existing
-analysis reveals everything at once and validates. The guided flow is opt-in
-(``MainWindow.begin_session`` / ``SettingsScreen.enter_new_mode``) so plain
-construction keeps full access, which every other GUI test relies on.
+Ticket B04 retired progressive disclosure: every Setup card (Input/Channels/Output) is
+visible from the first frame in every mode, and the Preview & QC tab is never locked —
+"it is the action that is closed, and the reason hangs on the action" (the Run drawer's
+own commitment sheet, covered in test_run_screen.py). What survives from the old guided
+flow: blanking the folders/mask for a fresh start, and a one-shot auto-open of the
+channel-assignment modal once the input folder has matching files (no longer gated on the
+Output card too). The guided flow is opt-in (``MainWindow.begin_session`` /
+``SettingsScreen.enter_new_mode``) so plain construction keeps full access, which every
+other GUI test relies on.
 """
 import os
 
@@ -13,8 +16,7 @@ import pytest
 
 
 
-
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QGroupBox  # noqa: E402
 
 from respmech.ui.state import AppState  # noqa: E402
 
@@ -47,19 +49,28 @@ def _fill_valid_channels(sc):
 
 def _pass_channel_step(sc, mapping=None):
     """Simulate the channel-assignment modal completing with a mapping (the real modal
-    execs and can't run headless), mirroring _open_channel_setup_for_flow: mark the step
-    done, apply the mapping, then let the disclosure reveal the rest of the cards."""
+    execs and can't run headless), mirroring _open_channel_setup_for_flow's ACCEPT path:
+    mark the step done and apply the mapping. No extra _update_disclosure() call here —
+    _apply_channel_mapping already ran one (via _on_inputs_changed) before setting its
+    own "Channels assigned…" status, and a redundant second call would immediately
+    overwrite it with the generic validation status (see _open_channel_setup_for_flow's
+    own docstring for why that only happens on cancel now)."""
     sc._channel_modal_done = True
     sc._apply_channel_mapping(mapping or {"flow": 5, "volume": 6, "poes": 7, "pgas": 8,
                                           "pdi": 9, "emg": [2, 3, 4], "entropy": []})
-    sc._update_disclosure()
 
 
 def _shown(card):
     """The card's own visibility flag, independent of whether the (test) window is
     actually on screen — isVisible() would be False for every widget of an unshown
-    top-level, so we ask whether it was explicitly hidden by the disclosure logic."""
+    top-level, so we ask whether it was explicitly hidden."""
     return not card.isHidden()
+
+
+def _card(sc, title):
+    """A Setup card by its QGroupBox title — cards are no longer collected in any
+    registry (B04 retired _stage_cards), so this is the one way left to find one."""
+    return next(c for c in sc.findChildren(QGroupBox) if c.title() == title)
 
 
 # --------------------------------------------------------------------------- #
@@ -112,36 +123,57 @@ def test_analysis_menu_uses_analysis_terminology_not_toml(qapp):
 
 
 def test_plain_construction_keeps_full_access(qapp):
-    """No begin_session/enter_new_mode -> every tab visible (what all other GUI
-    tests depend on)."""
+    """No begin_session/enter_new_mode -> every tab visible and enabled (B04: there is no
+    locking mechanism left at all, so this holds trivially — kept as a regression name in
+    case a future ticket reintroduces some form of gating)."""
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState())
     assert win.tabs.isTabEnabled(win._i_preview)
-    assert win.tabs.isTabEnabled(win._i_run)
+    win.close()
+
+
+def test_every_tab_stays_enabled_over_an_empty_appstate(qapp):
+    """Ticket B04 acceptance: from a new, empty analysis the user can click into Preview &
+    QC (which hosts the Run drawer since B03) and get there — every tab is enabled in
+    every state, guided or not."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    for enter in (lambda: None, sc.enter_new_mode, sc.enter_open_mode):
+        enter()
+        assert win.tabs.isTabEnabled(win._i_settings)
+        assert win.tabs.isTabEnabled(win._i_preview)
     win.close()
 
 
 # --------------------------------------------------------------------------- #
 # Guided new-analysis flow
 # --------------------------------------------------------------------------- #
-def test_new_mode_shows_only_input_and_hides_downstream(qapp):
+def test_new_mode_shows_every_card_immediately(qapp):
+    """B04: progressive disclosure is retired — Input, Channels and Output are all
+    visible from the very first frame of a guided 'new analysis', not revealed stage by
+    stage."""
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState())
     sc = win.settings_screen
     sc.enter_new_mode()
-    inp, out, rest = sc._stage_cards[0][0], sc._stage_cards[1][0], sc._stage_cards[2][0]
-    assert _shown(inp) and not _shown(out) and not _shown(rest)
-    assert not win.tabs.isTabEnabled(win._i_preview)
-    assert not win.tabs.isTabEnabled(win._i_run)
+    assert _shown(_card(sc, "Input"))
+    assert _shown(_card(sc, "Channels"))
+    assert _shown(_card(sc, "Output"))
     win.close()
 
 
-def test_output_card_reordered_second(qapp):
-    """The Output card is the second stage (right after Input), per the flow."""
+def test_setup_shows_the_assign_channels_button_from_the_first_frame(qapp):
+    """Ticket B04 acceptance, verbatim: btn_assign_channels.isVisible() is true
+    immediately after enter_new_mode() — needs a shown window, since isVisible() (unlike
+    isHidden()) also depends on the whole ancestor chain actually being on screen."""
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState())
     sc = win.settings_screen
-    assert sc._stage_cards[1][0].title() == "Output"
+    sc.enter_new_mode()
+    win.show()
+    qapp.processEvents()
+    assert sc.btn_assign_channels.isVisible()
     win.close()
 
 
@@ -155,81 +187,69 @@ def test_new_analysis_defaults_the_file_mask_to_csv_and_txt(qapp):
     win.close()
 
 
-def test_guided_status_points_at_mask_when_it_matches_nothing(qapp, tmp_path):
+def test_status_points_at_mask_when_it_matches_nothing(qapp, tmp_path):
+    """B04: the guided-flow guidance label is retired — the same live validation status
+    Setup always had now reports this directly, sharing validation.path_problem's exact
+    wording with the Run drawer's own commitment sheet. Channels are filled in FIRST so
+    core validate() has nothing else to object to — otherwise (a fresh AppState has no
+    channels assigned yet) validate() raises on the missing channels before ever reaching
+    the path check, which is a real, separate fact and not what this test is about."""
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState())
     sc = win.settings_screen
-    sc.enter_new_mode()                            # sets the *.txt default
-    sc.in_folder.setText(str(tmp_path))            # a real folder with NO .txt files
-    sc.samp_freq.setValue(1000)
-    sc._on_inputs_changed()
-    assert "no files match" in sc.status.text().lower()   # not the generic prompt
-    win.close()
-
-
-def test_progressive_reveal_then_unlock_downstream(qapp, tmp_path):
-    from respmech.ui.main_window import MainWindow
-    win = MainWindow(AppState())
-    sc = win.settings_screen
-    out, rest = sc._stage_cards[1][0], sc._stage_cards[2][0]
-    sc.enter_new_mode()
-    assert not _shown(out) and not _shown(rest)
-
-    _fill_valid_input(sc)                     # Input valid -> Output appears
-    assert _shown(out) and not _shown(rest)
-    assert not win.tabs.isTabEnabled(win._i_preview)
-
-    _fill_valid_output(sc, tmp_path)          # Output valid -> the channel modal gates the rest
-    assert not _shown(rest)
-    assert "assign your data channels" in sc.status.text().lower()
-    assert not win.tabs.isTabEnabled(win._i_preview)
-
-    _pass_channel_step(sc)                    # modal OK -> channels applied -> rest + unlock
-    assert _shown(rest)
-    assert sc._all_ok()
-    assert win.tabs.isTabEnabled(win._i_preview)
-    assert win.tabs.isTabEnabled(win._i_run)
-    win.close()
-
-
-def test_reveal_is_monotonic_but_downstream_relocks(qapp, tmp_path):
-    from respmech.ui.main_window import MainWindow
-    win = MainWindow(AppState())
-    sc = win.settings_screen
-    out, rest = sc._stage_cards[1][0], sc._stage_cards[2][0]
     sc.enter_new_mode()
     _fill_valid_input(sc); _fill_valid_output(sc, tmp_path); _pass_channel_step(sc)
+    assert sc._all_ok()
+    sc.in_files.setText("*.nomatch"); sc._on_inputs_changed()
+    assert "no files match" in sc.status.text().lower()
+    win.close()
+
+
+def test_settings_becoming_valid_flips_flow_ready_and_tab_stays_enabled(qapp, tmp_path):
+    """B04: flow_ready_changed still tracks the analysis's overall validity (used
+    elsewhere, e.g. by a future screen), but nothing locks a tab on it any more — the
+    Preview & QC tab is enabled throughout, before, during and after the guided flow, and
+    stays enabled even if the settings go invalid again."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.enter_new_mode()
+    assert win.tabs.isTabEnabled(win._i_preview)
+    assert not sc._all_ok()
+
+    _fill_valid_input(sc)
+    assert win.tabs.isTabEnabled(win._i_preview)
+    assert not sc._all_ok()                        # channels still unset
+
+    _fill_valid_output(sc, tmp_path)
     assert win.tabs.isTabEnabled(win._i_preview)
 
+    _pass_channel_step(sc)
+    assert sc._all_ok()
+    assert win.tabs.isTabEnabled(win._i_preview)
+
+    # settings going invalid again must not re-lock anything — there is nothing left to lock
     sc.in_folder.setText("/nonexistent-xyz-123"); sc._on_inputs_changed()
-    # cards stay revealed (monotonic, no jarring retraction)...
-    assert _shown(out) and _shown(rest)
-    # ...but the downstream tabs re-lock because the settings are no longer valid
-    assert not win.tabs.isTabEnabled(win._i_preview)
-    assert not win.tabs.isTabEnabled(win._i_run)
+    assert not sc._all_ok()
+    assert win.tabs.isTabEnabled(win._i_preview)
     win.close()
 
 
 # --------------------------------------------------------------------------- #
 # Open an existing analysis
 # --------------------------------------------------------------------------- #
-def test_open_mode_reveals_everything(qapp):
+def test_open_mode_shows_conditional_cards_that_apply(qapp):
+    """Every staged card is unconditionally visible in every mode since B04 (see
+    test_new_mode_shows_every_card_immediately) — the one thing 'open' still needs to get
+    right is the RELEVANCE-based _cond_cards (Sample entropy), which a default AppState
+    has no entropy channels for."""
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState())
     sc = win.settings_screen
     sc.enter_new_mode()
-    assert not win.tabs.isTabEnabled(win._i_preview)
     sc.enter_open_mode()
-    for stage in sc._stage_cards:
-        for card in stage:
-            assert _shown(card)
-    # conditional cards are deliberately NOT in _stage_cards: "reveal everything" reveals
-    # every card that APPLIES, and a default AppState has neither EMG nor entropy channels,
-    # so these two stay hidden (test_conditional_cards.py covers them in full)
     for card, predicate in sc._cond_cards:
         assert _shown(card) == predicate()
-    assert win.tabs.isTabEnabled(win._i_preview)
-    assert win.tabs.isTabEnabled(win._i_run)
     win.close()
 
 
@@ -243,14 +263,13 @@ def test_open_analysis_from_saved_toml_roundtrips(qapp, tmp_path):
     sc.state.save_toml(str(p))
     win.close()
 
-    # a fresh window opens it -> everything revealed and the fields are restored
+    # a fresh window opens it -> fields are restored and it validates
     win2 = MainWindow(AppState())
     sc2 = win2.settings_screen
     sc2.enter_new_mode()
     sc2.open_analysis(str(p))
     assert sc2.in_folder.text() == INPUT
     assert [t for t in sc2.channel_summary.texts() if t.startswith("EMG  ·  Column")] != []
-    assert win2.tabs.isTabEnabled(win2._i_preview)
     assert "valid" in sc2.status.text().lower()
     win2.close()
 
@@ -286,7 +305,6 @@ def test_begin_session_new_enters_guided_mode(qapp, monkeypatch):
     monkeypatch.setattr(startup_dialog, "StartupDialog", lambda parent=None: _FakeChooser("new"))
     win.begin_session()
     assert win.settings_screen._mode == "new"
-    assert not win.tabs.isTabEnabled(win._i_preview)
     win.close()
 
 
@@ -307,7 +325,6 @@ def test_begin_session_open_loads_and_reveals(qapp, monkeypatch, tmp_path):
                         lambda parent=None: _FakeChooser("open", str(p)))
     win.begin_session()
     assert win.settings_screen._mode == "full"
-    assert win.tabs.isTabEnabled(win._i_preview)
     win.close()
 
 
@@ -315,10 +332,11 @@ class _StubChannelDialog:
     """Stand-in for the real (exec-blocking) ChannelSetupDialog."""
     calls = 0
 
-    def __init__(self, *a, accept=False, mapping=None, **k):
+    def __init__(self, *a, accept=False, mapping=None, integrate_from_flow=False, **k):
         self._accept = accept
         self._mapping = mapping or {"flow": 5, "volume": 6, "poes": 7, "pgas": 8,
                                     "pdi": 9, "emg": [2, 3, 4], "entropy": []}
+        self._integrate_from_flow = integrate_from_flow
 
     def exec(self):
         from PySide6.QtWidgets import QDialog
@@ -328,8 +346,14 @@ class _StubChannelDialog:
     def selected_mapping(self):
         return dict(self._mapping)
 
+    def integrate_from_flow(self):
+        return self._integrate_from_flow
 
-def test_channel_modal_auto_opens_exactly_once_after_output(qapp, tmp_path, monkeypatch):
+
+def test_channel_modal_auto_opens_exactly_once_after_input_matches_files(qapp, monkeypatch):
+    """B04: the one-shot channel-modal auto-open now hangs on the input folder having
+    matching files — NOT on the Output card too (the old disclosure-stage gate). Filling
+    only Input, never Output, must still trigger it exactly once."""
     import respmech.ui.channel_setup_dialog as csd
     from respmech.ui.main_window import MainWindow
     _StubChannelDialog.calls = 0
@@ -338,8 +362,7 @@ def test_channel_modal_auto_opens_exactly_once_after_output(qapp, tmp_path, monk
     win = MainWindow(AppState())
     sc = win.settings_screen
     sc.enter_new_mode()
-    _fill_valid_input(sc)
-    _fill_valid_output(sc, tmp_path)               # Output valid -> schedule the one-shot
+    _fill_valid_input(sc)                          # Output is left untouched on purpose
     assert sc._channel_modal_pending is True
     qapp.processEvents()                           # fire the QTimer.singleShot -> real open path
     assert _StubChannelDialog.calls == 1
@@ -349,26 +372,28 @@ def test_channel_modal_auto_opens_exactly_once_after_output(qapp, tmp_path, monk
     win.close()
 
 
-def test_channel_modal_cancel_reveals_rest_but_keeps_downstream_locked(qapp, tmp_path, monkeypatch):
+def test_channel_modal_cancel_leaves_flow_not_ready_but_every_tab_reachable(qapp, tmp_path, monkeypatch):
     import respmech.ui.channel_setup_dialog as csd
     from respmech.ui.main_window import MainWindow
     monkeypatch.setattr(csd, "ChannelSetupDialog",
                         lambda *a, **k: _StubChannelDialog(*a, accept=False, **k))
     win = MainWindow(AppState())
     sc = win.settings_screen
-    rest = sc._stage_cards[2][0]
     sc.enter_new_mode()
-    _fill_valid_input(sc); _fill_valid_output(sc, tmp_path)
+    _fill_valid_input(sc)
     qapp.processEvents()                           # auto-open -> cancelled
-    assert _shown(rest)                            # the rest reveals (non-trapping)...
-    assert not win.tabs.isTabEnabled(win._i_preview)   # ...but stays locked (channels unset)
-    assert not win.tabs.isTabEnabled(win._i_run)
+    assert sc._channel_modal_done is True           # the one-shot never re-arms itself
+    assert not sc._all_ok()                         # channels default to unset -> not ready
+    assert win.tabs.isTabEnabled(win._i_preview)    # …but nothing was ever locked to begin with
     win.close()
 
 
-def test_completion_status_surfaces_a_science_note(qapp, tmp_path):
-    """The soft science guardrails (EMG/pressure column overlap; low fs) should appear at the
-    end of the guided flow, not only when the user clicks Validate."""
+def test_qc_strip_surfaces_a_science_note(qapp, tmp_path):
+    """The soft science guardrails (EMG/pressure column overlap; low fs) live on the QC
+    strip, not the status line — it is the ONE surface that always shows every current
+    caution regardless of what just happened (the status line, by contrast, legitimately
+    shows "Channels assigned…" right after the modal closes; the two must not fight over
+    the same label, which is exactly why they are still two separate widgets)."""
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState())
     sc = win.settings_screen
@@ -377,7 +402,24 @@ def test_completion_status_surfaces_a_science_note(qapp, tmp_path):
     _pass_channel_step(sc, {"flow": 5, "volume": 6, "poes": 7, "pgas": 8, "pdi": 9,
                             "emg": [5], "entropy": []})     # EMG column 5 == the flow column
     assert sc._all_ok()
-    assert "overlap" in sc.status.text().lower()            # surfaced without clicking Validate
+    assert "overlap" in sc.qc.text().lower()
+    win.close()
+
+
+def test_status_shows_channel_assignment_message_after_the_modal_completes(qapp, tmp_path):
+    """Regression (the ticket B04 was built on top of): applying a channel mapping must
+    leave ITS OWN 'Channels assigned…' message as the last word on the status line, not
+    have it clobbered by the live-validation status _update_disclosure also sets — the two
+    now share one label (the guidance label that used to keep them apart is retired), so
+    the ordering inside _apply_channel_mapping (validate first, name the assignment last)
+    is what keeps this honest."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.enter_new_mode()
+    _fill_valid_input(sc); _fill_valid_output(sc, tmp_path)
+    _pass_channel_step(sc)
+    assert "channels assigned" in sc.status.text().lower()
     win.close()
 
 
@@ -390,9 +432,11 @@ def test_reentry_rearms_the_channel_gate(qapp, tmp_path):
     assert sc._channel_modal_done is True
     sc.enter_new_mode()                            # start over -> gate must re-arm
     assert sc._channel_modal_done is False and sc._channel_modal_pending is False
-    _fill_valid_input(sc); _fill_valid_output(sc, tmp_path)
-    assert not _shown(sc._stage_cards[2][0])       # rest re-held for a fresh modal
+    _fill_valid_input(sc)                           # input alone is enough to re-trigger (B04)
     assert sc._channel_modal_pending is True
+    sc._channel_modal_done = True                   # disarm the still-pending singleShot(0, ...)
+                                                      # before it can fire against a REAL, unstubbed
+                                                      # modal later in the run (hung the reviewer)
     win.close()
 
 
@@ -402,7 +446,6 @@ def test_begin_session_with_cli_path_opens_directly(qapp):
     win.settings_screen.enter_new_mode()
     win.begin_session(cli_path="/some/preloaded.toml")   # already loaded in __init__
     assert win.settings_screen._mode == "full"
-    assert win.tabs.isTabEnabled(win._i_preview)
     win.close()
 
 
@@ -421,7 +464,6 @@ def test_cancelled_chooser_falls_through_to_new(qapp, monkeypatch):
     monkeypatch.setattr(startup_dialog, "StartupDialog", _Cancelled)
     win.begin_session()
     assert win.settings_screen._mode == "new" and win.settings_screen.state.settings_path is None
-    assert not win.tabs.isTabEnabled(win._i_preview)
     win.close()
 
 
@@ -430,7 +472,7 @@ def test_cancelled_chooser_falls_through_to_new(qapp, monkeypatch):
 # --------------------------------------------------------------------------- #
 def test_integrate_from_flow_unlocks_without_a_volume_column(qapp, tmp_path):
     """Ticking 'Calculate volume from flow' makes the volume column optional, so the
-    guided flow must still unlock Preview/Run with volume left at 0."""
+    guided flow must still report the analysis ready with volume left at 0."""
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState())
     sc = win.settings_screen
@@ -440,50 +482,31 @@ def test_integrate_from_flow_unlocks_without_a_volume_column(qapp, tmp_path):
     _pass_channel_step(sc, {"flow": 5, "volume": None, "poes": 7, "pgas": 8,
                             "pdi": 9, "emg": [2, 3, 4], "entropy": []})
     assert not sc._all_ok()                # volume missing + integrate off -> not valid
-    assert not win.tabs.isTabEnabled(win._i_preview)
-    assert "volume" in sc.status.text().lower()
-    # ...ticking 'Calculate volume from flow' makes the volume column optional -> unlock
+    # the status line itself shows "Channels assigned…" right after the modal (a more
+    # recent, more specific event) — check the underlying verdict directly instead of
+    # the label, which is not what this test is about
+    assert "volume" in sc._validation_status().lower()
+    # ...ticking 'Calculate volume from flow' makes the volume column optional -> ready
     sc.state.settings.processing.volume.integrate_from_flow = True   # Preview-owned now
     sc._update_disclosure()
     assert sc._all_ok()
-    assert win.tabs.isTabEnabled(win._i_preview)
-    win.close()
-
-
-# --------------------------------------------------------------------------- #
-# Guided-flow status wording
-# --------------------------------------------------------------------------- #
-def test_guided_status_messages_per_stage(qapp, tmp_path):
-    from respmech.ui.main_window import MainWindow
-    win = MainWindow(AppState())
-    sc = win.settings_screen
-    sc.enter_new_mode()
-    assert sc.status.text() == "New analysis — fill in the Input card to begin."
-    _fill_valid_input(sc)
-    assert sc.status.text() == "Input set — now choose an Output folder."
-    _fill_valid_output(sc, tmp_path)
-    assert sc.status.text() == "Output set — assign your data channels to continue."
-    _pass_channel_step(sc)
-    assert sc.status.text() == "Settings complete — Preview and Run are now available."
     win.close()
 
 
 # --------------------------------------------------------------------------- #
 # Re-entering the guided flow
 # --------------------------------------------------------------------------- #
-def test_reenter_new_mode_after_completing_collapses_and_blanks(qapp, tmp_path):
+def test_reenter_new_mode_after_completing_blanks_the_folders(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState())
     sc = win.settings_screen
     sc.enter_new_mode()
     _fill_valid_input(sc); _fill_valid_output(sc, tmp_path); _pass_channel_step(sc)
-    assert win.tabs.isTabEnabled(win._i_preview)          # completed once
+    assert sc._all_ok()                                   # completed once
     sc.enter_new_mode()                                   # start over
-    assert _shown(sc._stage_cards[0][0])                  # Input shown again
-    assert not _shown(sc._stage_cards[1][0]) and not _shown(sc._stage_cards[2][0])
     assert sc.in_folder.text() == "" and sc.out_folder.text() == ""
-    assert not win.tabs.isTabEnabled(win._i_preview)
-    assert not win.tabs.isTabEnabled(win._i_run)
+    assert not sc._all_ok()                               # blanked -> invalid again
+    assert sc._channel_modal_done is False                # the gate re-armed too
     win.close()
 
 
@@ -508,9 +531,52 @@ def test_open_broken_toml_rolls_back_and_keeps_prior(qapp, tmp_path, monkeypatch
     win.close()
 
 
-def test_open_invalid_analysis_reveals_all_but_warns(qapp, tmp_path):
-    """A parseable analysis that fails validation still opens (all cards + tabs) but the
-    status reports it as invalid."""
+def test_open_broken_toml_leads_with_a_plain_diagnosis(qapp, tmp_path):
+    """Ticket D16: opening an invalid .toml used to pop the generic "Open analysis
+    failed. The full detail below is copyable." over a 15-line traceback ending inside
+    Python's own tomllib module — the user's mental model is "my analysis file", and the
+    app never says TOML anywhere else in the interface. It must now lead with a
+    plain-language diagnosis (naming the broken FILE, not the parser) and keep the
+    traceback one click away, reusing the D01 collapsed-detail dialog pattern."""
+    from respmech.ui.dialogs import TextViewerDialog
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    bad = tmp_path / "broken.toml"
+    bad.write_text("this is = not valid toml [[[\n")
+    ok = sc.open_analysis(str(bad))
+    assert ok is False
+    assert sc._err_dialog is not None
+    intro = sc._err_dialog.intro_label.text()
+    assert "broken.toml" in intro
+    assert "not a valid analysis file" in intro
+    assert "Your current analysis is unchanged" in intro
+    assert "tomllib" not in intro and "Traceback" not in intro   # no raw parser leakage
+    assert sc._err_dialog.details_btn is not None            # trace is one click away…
+    assert sc._err_dialog.view.isVisibleTo(sc._err_dialog) is False   # …but starts hidden
+    assert "Traceback" in sc._err_dialog.text()               # …and is still the FULL trace
+    win.close()
+
+
+def test_open_missing_toml_keeps_the_generic_surface(qapp, tmp_path):
+    """A load failure that is NOT a malformed-TOML problem (here: the file does not
+    exist — FileNotFoundError, not tomllib.TOMLDecodeError) must keep the ordinary,
+    uncollapsed error surface: the diagnosis-first path is specific to "this file isn't
+    valid TOML", not every possible way opening a file can fail."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    missing = str(tmp_path / "does_not_exist.toml")
+    ok = sc.open_analysis(missing)
+    assert ok is False
+    assert sc._err_dialog is not None
+    assert sc._err_dialog.details_btn is None                # ordinary, uncollapsed layout
+    win.close()
+
+
+def test_open_invalid_analysis_shows_cards_but_warns(qapp, tmp_path):
+    """A parseable analysis that fails validation still opens (every card, per
+    test_open_mode_shows_conditional_cards_that_apply) but the status reports it invalid."""
     from respmech.ui.main_window import MainWindow
     from respmech.core.settings import Settings
     from respmech.settingsio.toml_io import save_toml
@@ -530,12 +596,8 @@ def test_open_invalid_analysis_reveals_all_but_warns(qapp, tmp_path):
     sc = win.settings_screen
     sc.enter_new_mode()
     assert sc.open_analysis(str(p)) is True
-    for stage in sc._stage_cards:
-        for card in stage:
-            assert _shown(card)
     for card, predicate in sc._cond_cards:     # shown iff they apply (this file has no EMG/entropy)
         assert _shown(card) == predicate()
-    assert win.tabs.isTabEnabled(win._i_preview)
     assert sc.status.text().lower().startswith("invalid")
     win.close()
 
@@ -561,9 +623,6 @@ def test_open_legacy_py_migrates_populates_and_reveals(qapp, tmp_path):
     assert sc.in_folder.text() == INPUT                   # migrated fields landed in the form
     assert sc.samp_freq.value() == 1000
     assert [t for t in sc.channel_summary.texts() if t.startswith("EMG  ·  Column")] != []
-    for stage in sc._stage_cards:
-        for card in stage:
-            assert _shown(card)
     win.close()
 
 
@@ -627,7 +686,6 @@ def test_new_analysis_confirm_declined_is_noop_accepted_resets(qapp, tmp_path, m
     sc.new_analysis()
     assert sc._mode == "new"
     assert sc.in_folder.text() == "" and sc.out_folder.text() == ""
-    assert not win.tabs.isTabEnabled(win._i_preview)
     win.close()
 
 
@@ -635,8 +693,8 @@ def test_new_analysis_confirm_declined_is_noop_accepted_resets(qapp, tmp_path, m
 # Startup doors + guided-flow gating (P23/P24/P25) — waves 1, 6
 # ---------------------------------------------------------------------------
 def test_cancelled_channel_modal_leaves_flow_gated(qapp, tmp_path, monkeypatch):
-    """The cancel trap: cancelling the auto-opened modal must NOT unlock Preview/Run with
-    every pressure defaulting to the time column."""
+    """The cancel trap: cancelling the auto-opened modal must NOT unlock/ready Preview/Run
+    with every pressure defaulting to the time column."""
     import respmech.ui.channel_setup_dialog as csd
     from PySide6.QtWidgets import QDialog
     from respmech.ui.main_window import MainWindow
@@ -650,10 +708,9 @@ def test_cancelled_channel_modal_leaves_flow_gated(qapp, tmp_path, monkeypatch):
     sc.enter_new_mode()
     sc.in_folder.setText(INPUT); sc.in_files.setText("synth_case_*.csv")
     sc.samp_freq.setValue(1000); sc._on_inputs_changed()
-    sc.out_folder.setText(str(tmp_path)); sc._on_field_changed()
     qapp.processEvents()                                 # auto-open -> cancelled
+    sc.out_folder.setText(str(tmp_path)); sc._on_field_changed()
     assert not sc._all_ok()                              # channels default to col 1 -> gated
-    assert not win.tabs.isTabEnabled(win._i_preview)
     win.close()
 
 
@@ -666,18 +723,6 @@ def test_startup_sample_and_cancel(qapp, isolated_prefs):
     dlg2 = StartupDialog()
     dlg2.reject()                                        # Cancel leaves the safe default
     assert dlg2.mode == "new"
-
-
-def test_downstream_tabs_locked_not_hidden(qapp):
-    from respmech.ui.main_window import MainWindow
-    win = MainWindow(AppState()); sc = win.settings_screen
-    sc.enter_new_mode()
-    assert win.tabs.isTabVisible(win._i_preview)          # still VISIBLE (a stepper)…
-    assert not win.tabs.isTabEnabled(win._i_preview)      # …but LOCKED until valid
-    assert win.tabs.tabToolTip(win._i_preview)            # explains why
-    assert sc.open_sample_analysis()
-    assert win.tabs.isTabEnabled(win._i_preview) and win.tabs.isTabEnabled(win._i_run)
-    win.close()
 
 
 def test_new_from_last_rig(qapp, isolated_prefs):
@@ -699,5 +744,214 @@ def test_new_from_last_rig(qapp, isolated_prefs):
     assert "Oesophageal pressure (Poes): Column #7" in rows
     assert "EMG: Columns #2, #3, #4" in rows
     assert sc.samp_freq.value() == 800
-    assert not win.tabs.isTabEnabled(win._i_preview)      # still guided (folders blank)
+    assert not sc._all_ok()                               # still guided (folders blank)
+    win.close()
+
+
+# ---------------------------------------------------------------------------
+# UI-overhaul ticket C03 — startup screen + the returning-user's stuck paths
+# ---------------------------------------------------------------------------
+def test_startup_dialog_skip_button_replaces_bare_cancel(qapp):
+    """C03 point 1: the old bare "Cancel" was wired to reject(), which landed on the exact
+    same outcome as the guided flow anyway (mode stays "new") — a user backing out with
+    Esc to go find their file first was silently dropped into "New analysis" instead. The
+    button is renamed to say what happens, and wired to the explicit choice rather than
+    left as an implicit reject()."""
+    from PySide6.QtWidgets import QDialog, QPushButton
+    from respmech.ui.startup_dialog import StartupDialog
+    dlg = StartupDialog()
+    texts = [b.text() for b in dlg.findChildren(QPushButton)]
+    assert "Skip — start a new analysis" in texts
+    assert "Cancel" not in texts
+    skip_btn = next(b for b in dlg.findChildren(QPushButton)
+                    if b.text() == "Skip — start a new analysis")
+    skip_btn.click()
+    assert dlg.mode == "new" and dlg.path is None
+    assert dlg.result() == QDialog.Accepted
+
+
+def test_recent_label_is_shared_between_chooser_and_menu(qapp, isolated_prefs, tmp_path):
+    """C03 point 3: the startup chooser's recent buttons and the header's Analysis menu
+    must describe the SAME file the same way — both now go through prefs.recent_label
+    (moved here from main_window._recent_label, which is gone)."""
+    from PySide6.QtWidgets import QPushButton
+    from respmech.ui import prefs
+    from respmech.ui import main_window as mw
+    from respmech.ui.startup_dialog import StartupDialog
+    assert not hasattr(mw, "_recent_label")     # moved to prefs.recent_label, not duplicated
+    p = tmp_path / "analysis.toml"; p.write_text("# analysis")
+    isolated_prefs.add_recent_analysis(str(p))
+    dlg = StartupDialog()
+    expected = prefs.recent_label(str(p))
+    recent_btn = next(b for b in dlg.findChildren(QPushButton) if b.text() == expected)
+    assert recent_btn.toolTip() == str(p)
+    assert recent_btn.property("recent") is True    # left-aligned via theme.py's QSS rule
+
+
+def test_get_started_and_explore_sample_are_repeatable_from_the_menu(qapp, isolated_prefs):
+    """C03 point 2: before this ticket, "Explore with sample data" and the startup chooser
+    were reachable ONLY from the very first window of a session — open_sample_analysis had
+    exactly one caller (begin_session), so a user who dismissed the sample could never see
+    it again in the same process. Both are now real, repeatable menu actions."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    labels = [a.text() for a in win.analysis_btn.menu().actions()]
+    assert "Get started…" in labels
+    assert "Explore with sample data" in labels
+    assert "Duplicate for another recordings folder…" in labels
+    # the exact same QAction objects also sit in the File menu (C01 pattern) — never a
+    # second implementation that could quietly disagree
+    file_labels = [a.text() for a in win._file_menu.actions()]
+    assert "Get started…" in file_labels
+    assert win._act_sample.text() in file_labels
+    assert win._act_get_started in win._file_menu.actions()
+    # exercise the door itself: a fresh window has nothing to lose, so no guard fires
+    win._explore_sample()
+    assert win.settings_screen.state.is_sample is True
+    # dismissible and reachable again — this is the whole point of the ticket
+    win.settings_screen.new_analysis()
+    assert win.settings_screen.state.is_sample is False
+    win._explore_sample()
+    assert win.settings_screen.state.is_sample is True
+    win.close()
+
+
+def test_open_analysis_dialog_and_import_start_in_the_open_analysis_folder(
+        qapp, isolated_prefs, tmp_path, monkeypatch):
+    """C03 point 4: before this ticket both started the file picker at a bare '.' — the
+    PROCESS's cwd, unrelated to the user's data in a packaged .app/.msi. They now start in
+    the CURRENTLY OPEN analysis's own folder (mirroring _browse's existing precedence),
+    falling back to the sticky "analysis" folder when nothing is open."""
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    study_dir = tmp_path / "Study" / "S02"
+    study_dir.mkdir(parents=True)
+    analysis_path = study_dir / "analysis.toml"
+    sc.state.settings_path = str(analysis_path)          # simulate an already-open analysis
+
+    seen = {}
+    def _fake_open(*a, **k):
+        seen["start"] = a[2] if len(a) > 2 else k.get("dir")
+        return ("", "")
+    monkeypatch.setattr(ss.QFileDialog, "getOpenFileName", staticmethod(_fake_open))
+    sc.open_analysis_dialog()
+    assert seen["start"] == str(study_dir)
+
+    seen.clear()
+    sc._import()
+    assert seen["start"] == str(study_dir)
+
+    # nothing open -> falls back to the sticky "analysis" folder, never a bare "."
+    sc.state.settings_path = None
+    isolated_prefs.set_last_folder("analysis", str(tmp_path))
+    seen.clear()
+    sc.open_analysis_dialog()
+    assert seen["start"] == str(tmp_path)
+    win.close()
+
+
+def test_legacy_import_marks_the_analysis_dirty(qapp, tmp_path):
+    """C03 point 7: a just-converted legacy analysis used to be marked CLEAN — indistinct
+    from an untouched save, so closing over it (or opening another analysis) asked
+    nothing even though the conversion had never been written to a .toml of its own."""
+    legacy = tmp_path / "legacy_setup.py"
+    legacy.write_text(
+        "settings = {\n"
+        f"  'input': {{'inputfolder': {INPUT!r}, 'files': 'synth_case_*.csv',\n"
+        "    'format': {'samplingfrequency': 1000},\n"
+        "    'data': {'column_poes':7,'column_pgas':8,'column_pdi':9,'column_volume':6,\n"
+        "             'column_flow':5,'columns_emg':[2,3,4],'columns_entropy':[10,11,12]}},\n"
+        "  'processing': {'mechanics': {'breathseparationbuffer':200,'separateby':'flow',\n"
+        "                               'avgresamplingobs':300},\n"
+        "                 'emg': {'remove_ecg': False, 'remove_noise': False}},\n"
+        f"  'output': {{'outputfolder': {str(tmp_path)!r},\n"
+        "    'data': {'saveaveragedata': True, 'savebreathbybreathdata': True}}}\n")
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    assert sc.open_analysis(str(legacy)) is True
+    assert sc.is_dirty() is True
+    assert sc.state.display_name == "legacy_setup"
+    assert sc.state.legacy_source_path == str(legacy)
+    assert "legacy_setup" in win.windowTitle()
+    assert "* (modified)" in win.windowTitle()
+    win.close()
+
+
+def test_sample_analysis_is_labelled_everywhere(qapp, isolated_prefs):
+    """C03 point 8: nothing on screen used to distinguish the built-in sample from a real
+    analysis, and it writes into a temp folder the OS may clean up. Checks the three
+    on-screen tells: the Setup banner, the window title, and that a real save clears
+    is_sample (a saved-and-reopened sample analysis is a plain analysis from then on)."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    assert sc.open_sample_analysis() is True
+    assert sc.state.is_sample is True
+    assert _shown(sc.sample_banner)          # not isVisible(): the window is never shown here
+    assert "Sample analysis (built-in)" in win.windowTitle()
+    # a NEW analysis clears the flag and hides the banner
+    sc.new_analysis()
+    assert sc.state.is_sample is False
+    assert not _shown(sc.sample_banner)
+    win.close()
+
+
+def test_open_sample_analysis_shows_a_busy_cursor_while_building(qapp, monkeypatch):
+    """Ticket D28: building the sample recording is a synchronous ~1 s stall (mostly a
+    lazy import, measured), previously with no status text or wait cursor, so the window
+    appeared to freeze. Intercepts the synchronous build call to check the wait cursor and
+    status text are up WHILE it runs, and the cursor is gone again once the call returns."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+    import respmech.core.sample as sample_mod
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    real_write = sample_mod.write_sample_recording
+    seen = {}
+
+    def _spy(*a, **k):
+        cur = QApplication.overrideCursor()
+        seen["shape"] = cur.shape() if cur is not None else None
+        seen["status"] = sc.status.text()
+        return real_write(*a, **k)
+    monkeypatch.setattr(sample_mod, "write_sample_recording", _spy)
+    assert sc.open_sample_analysis() is True
+    assert seen["shape"] == Qt.WaitCursor
+    assert seen["status"] == "Building the sample recording…"
+    assert QApplication.overrideCursor() is None      # restored once the call returns
+    win.close()
+
+
+def test_open_sample_analysis_restores_the_cursor_even_when_building_fails(qapp, monkeypatch):
+    """The except branch opens a non-modal error dialog — a wait cursor still hanging
+    over the window behind it would be worse than the freeze this feature exists to
+    fix, so the restore must happen in a finally, not only on the success path.
+
+    Self-review finding (ticket D28): a version of this test that only checked the
+    cursor was gone AFTER the call would pass just as well if the whole busy-cursor
+    feature had been reverted (no cursor is ever set -> trivially None afterwards).
+    Capturing the shape INSIDE the failing call proves the cursor really was up when
+    the exception hit, so this genuinely exercises the finally path, not just its
+    absence."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+    import respmech.core.sample as sample_mod
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    seen = {}
+
+    def _boom(*a, **k):
+        cur = QApplication.overrideCursor()
+        seen["shape"] = cur.shape() if cur is not None else None
+        raise RuntimeError("synthetic failure")
+    monkeypatch.setattr(sample_mod, "write_sample_recording", _boom)
+    assert sc.open_sample_analysis() is False
+    assert seen["shape"] == Qt.WaitCursor      # the cursor really was up when it failed
+    assert QApplication.overrideCursor() is None
+    assert "Explore sample data failed" in sc.status.text()
     win.close()

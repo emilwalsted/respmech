@@ -258,10 +258,23 @@ def _auto_detect_ecg_settings(settings, s, allfiles, progress=None, cache=None):
         path = os.path.abspath(allfiles[0])
     _emit(progress, ProgressEvent(
         "stage", message=f"auto-detecting ECG settings from {os.path.basename(path)}"))
-    load_result = _load(path, s)
-    raw_emg = load_result[6]                                  # keep native dtype for _ecg_remove
-    fs = s.input.format.samplingfrequency
-    sug = emglib.suggest_ecg_settings(np.asarray(raw_emg, dtype=float), fs)
+    try:
+        load_result = _load(path, s)
+        raw_emg = load_result[6]                              # keep native dtype for _ecg_remove
+        fs = s.input.format.samplingfrequency
+        sug = emglib.suggest_ecg_settings(np.asarray(raw_emg, dtype=float), fs)
+    except Exception as e:
+        # D18 point 4: this reads exactly ONE file, so there is no "skip and continue"
+        # available the way the auto_prop collection loop below has. A file that EXISTS
+        # (the isfile check above already handles a missing one) but cannot be read as
+        # data must not abort the whole batch over the single reference file. Fall back
+        # to the already-configured manual ECG settings -- left untouched below, since
+        # this path returns before mutating them -- with a warning, so an unsupervised
+        # run still produces output.
+        warnings.warn(
+            f"{os.path.basename(path)}: ecg_auto_detect could not read this reference "
+            f"file ({e}) -- falling back to the configured manual ECG settings.")
+        return None
 
     s.processing.emg.column_detect = int(sug["detect_channel"])
     s.processing.emg.minheight = float(sug["ecg_min_height"])
@@ -332,22 +345,42 @@ def _emg_segmented(path, s, cache=None, cancel_check=None):
 
 
 def _reference_noise_clip(settings, s, cache=None, cancel_check=None):
-    """Build the EMG-free noise reference clip (multichannel) once per test."""
+    """Build the EMG-free noise reference clip (multichannel) once per test.
+
+    Unlike ``_build_noise_set``'s ``auto_prop`` collection loop, a file that fails here
+    is never merely skipped: it IS the shared noise reference, so if it cannot be read
+    the profile cannot be built at all (D18 point 3). The failure is re-raised naming
+    the reference file in plain English, since the underlying loader error may not
+    mention it at all (e.g. a bare ``EmptyDataError`` for a 0-byte file) -- but the
+    ORIGINAL exception type is preserved where possible (falling back to ``ValueError``
+    only when the type itself refuses a single-message constructor): callers such as
+    ``ui/workers.py``'s ``stage_noise_fidelity`` and ``ui/screens/run_screen.py``'s
+    fix-hint lookup key their handling off ``DataValidationError``/``TrimError``/
+    ``FileNotFoundError`` specifically, and a bare ``ValueError`` here would silently
+    fall through both (self-review finding, 10-08-2026)."""
     ns_cfg = settings.processing.emg.noise
     ref = ns_cfg.reference_file
     if not ref:
         raise ValueError("processing.emg.noise.reference_file is required when noise reduction is enabled")
     path = os.path.join(s.input.inputfolder, ref)
     fs = s.input.format.samplingfrequency
-    # Prefer expiration-based reference (many STFT frames -> stable estimate). Explicit
-    # intervals are used only when use_expiration is False (a deliberate override).
-    if ns_cfg.use_expiration or not ns_cfg.reference_intervals:
-        emg_full, ins, ex = _emg_segmented(path, s, cache=cache, cancel_check=cancel_check)
-        clip = emg_full[ex]   # diaphragm-quiet expiration of the rest reference
-    else:
-        _load_result, emg_ecg, _diag = _load_and_ecg(path, s, cache=cache, cancel_check=cancel_check)
-        parts = [emg_ecg[int(t0 * fs):int(t1 * fs)] for t0, t1 in ns_cfg.reference_intervals]
-        clip = np.concatenate(parts, axis=0)
+    try:
+        # Prefer expiration-based reference (many STFT frames -> stable estimate). Explicit
+        # intervals are used only when use_expiration is False (a deliberate override).
+        if ns_cfg.use_expiration or not ns_cfg.reference_intervals:
+            emg_full, ins, ex = _emg_segmented(path, s, cache=cache, cancel_check=cancel_check)
+            clip = emg_full[ex]   # diaphragm-quiet expiration of the rest reference
+        else:
+            _load_result, emg_ecg, _diag = _load_and_ecg(path, s, cache=cache, cancel_check=cancel_check)
+            parts = [emg_ecg[int(t0 * fs):int(t1 * fs)] for t0, t1 in ns_cfg.reference_intervals]
+            clip = np.concatenate(parts, axis=0)
+    except Exception as e:
+        msg = f"Could not read the noise reference file '{ref}': {e}"
+        try:
+            wrapped = type(e)(msg)
+        except TypeError:
+            wrapped = ValueError(msg)
+        raise wrapped from e
     return clip
 
 
@@ -369,13 +402,56 @@ def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=
 
     if cfg.auto_prop:
         # Gather active/quiet EMG across the test (capped) to choose prop ONCE.
-        act, qui, cap = [], [], 40000
+        act, qui, cap, unreadable, last_exc = [], [], 40000, [], None
         for fi in files:
-            emg_full, ins, ex = _emg_segmented(os.path.abspath(fi), s, cache=cache,
-                                               cancel_check=cancel_check)
+            try:
+                emg_full, ins, ex = _emg_segmented(os.path.abspath(fi), s, cache=cache,
+                                                   cancel_check=cancel_check)
+            except Exception as e:
+                # D18 point 2: a file that cannot be read cannot contribute to a profile
+                # it cannot be read for either. Skip it here so it fails normally, as an
+                # ordinary per-file error, in run_batch's own main loop below (which has
+                # its own guard) -- instead of aborting the whole batch before a single
+                # file has actually been processed. This also makes the outcome
+                # independent of where the bad file sorts: the old code could reach the
+                # 40000-sample cap (and so never reach a bad file sorted late) or hit it
+                # first (and abort), making a batch's success depend on file order.
+                unreadable.append(os.path.basename(fi))
+                last_exc = e
+                continue
             act.append(emg_full[ins]); qui.append(emg_full[ex])
             if sum(len(a) for a in act) >= cap:
                 break
+        if not act:
+            # Self-review finding (10-08-2026): if EVERY file failed above, falling
+            # through would hand an empty list to np.concatenate below, which raises a
+            # bare "need at least one array to concatenate" -- naming no file and no
+            # cause, i.e. strictly worse than the abort this ticket exists to fix. Name
+            # what actually happened instead, and -- second self-review finding, found by
+            # a regression this surfaced in ui/workers.py's stage_noise_fidelity (which
+            # has no per-file loop of its own to fall back into; it calls this function
+            # directly and depends on catching a TrimError/DataValidationError BY TYPE
+            # to build its own friendly message) -- preserve `last_exc`'s TYPE the same
+            # way ``_reference_noise_clip`` does, rather than always raising a bare
+            # ValueError that such a type-keyed caller cannot recognise.
+            msg = ("Could not auto-select the noise reduction strength (auto_prop): none of "
+                  f"the {len(files)} batch file{'s' if len(files) != 1 else ''} could be "
+                  f"read ({', '.join(unreadable)}): {last_exc}")
+            try:
+                wrapped = type(last_exc)(msg)
+            except TypeError:
+                wrapped = ValueError(msg)
+            raise wrapped from last_exc
+        if unreadable:
+            # Self-review finding (10-08-2026): the skip above was otherwise completely
+            # silent -- no warning, no progress event -- so a batch could complete having
+            # quietly chosen its shared noise-reduction strength from fewer files than
+            # the user thinks it did.
+            warnings.warn(
+                f"auto_prop: {len(unreadable)} of {len(files)} file"
+                f"{'s' if len(unreadable) != 1 else ''} could not be read and were "
+                f"excluded from noise-reduction-strength selection: "
+                f"{', '.join(unreadable)}")
         active = np.concatenate(act, axis=0)[:cap]
         quiet = np.concatenate(qui, axis=0)[:cap]
         prop, report = noiselib.select_prop_decrease(
@@ -420,6 +496,35 @@ def match_input_files(folder: str, pattern: str) -> list:
         if fnmatch.fnmatchcase(name.lower(), pat) and os.path.isfile(full):
             out.append(full)
     return sorted(out)
+
+
+def is_subset_run(settings: Settings, only_files: Optional[list]) -> bool:
+    """True when ``only_files`` restricts a run to fewer than everything ``settings.input``
+    would otherwise match — never true for ``None``, and never true when ``only_files``
+    happens to name every matching file (a "subset" that is not actually one).
+
+    This is the single yes/no test the write layer (``core.io.writers.write_batch``) and the
+    GUI (``ui.workers.BatchWorker``, ``ui.screens.run_screen.RunScreen``) all use to decide
+    whether cohort-level outputs — the Average/Cohort-summary workbooks and the cohort Campbell
+    figure — may be written at all, since those are built across the WHOLE study and a partial
+    run silently rebuilding them from a handful of files was the data-loss bug this exists to
+    prevent (ticket A05). Matched against the exact same file list ``run_batch`` itself uses
+    (``match_input_files`` on ``settings.input.folder``/``settings.input.files``), so this
+    agrees with what a run actually processed rather than a UI-level approximation.
+
+    Compares the INTERSECTION of ``only_files`` with what currently matches, not
+    ``only_files`` directly: ``run_batch`` itself only ever processes
+    ``{f for f in allfiles if basename(f) in only_files}`` (see below), so a stale name in
+    ``only_files`` that no longer matches anything (e.g. a file deleted from the input
+    folder between a run and a later "Re-run failed") must not, by itself, make an
+    otherwise-complete run look like a subset — every file that would actually be
+    processed is still all of them."""
+    if not only_files:
+        return False
+    allfiles = match_input_files(settings.input.folder, settings.input.files)
+    allnames = {os.path.basename(f) for f in allfiles}
+    given = {os.path.basename(f) for f in only_files}
+    return bool(given) and (given & allnames) != allnames
 
 
 def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
@@ -524,7 +629,13 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                 # file fine. Warn per file (never fail the run) so an unsupervised batch
                 # leaves a visible trail of files worth revisiting -- the same detection_quality
                 # check robust_peak already uses, just evaluated unconditionally here.
-                if settings.processing.emg.ecg_auto_detect and ecg_diag is not None:
+                # ``result.ecg_auto_report is not None`` (not just the settings flag, D18
+                # point 4): when the auto-detect reference file itself could not be read,
+                # ``_auto_detect_ecg_settings`` falls back to the manual settings and
+                # returns ``None`` -- the flag is still on, but there is no reference
+                # file's name left to quote below, and the fallback already warned once.
+                if (settings.processing.emg.ecg_auto_detect and ecg_diag is not None
+                        and result.ecg_auto_report is not None):
                     _peaks = np.asarray(ecg_diag["peaks_s"], float)
                     if _peaks.size == 0:
                         warnings.warn(

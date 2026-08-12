@@ -311,6 +311,11 @@ def build_sample_settings(desc: dict, output_folder: str):
     ch.flow, ch.volume = m["flow"], m["volume"]
     ch.poes, ch.pgas, ch.pdi = m["poes"], m["pgas"], m["pdi"]
     ch.emg, ch.entropy = list(m["emg"]), list(m["entropy"])
+    # Below the schema default of 800 (0.8 s at FS), but not because 800 breaks this
+    # recording: at FS=1000, buffer 200/800/1600 all detect the same 9 breaths with the
+    # same VT and WOB on this file (measured, ticket D29/UI-overhaul) — the value is not
+    # load-bearing here. It predates the current default and is kept for continuity of the
+    # bundled sample rather than any requirement of the demo's own waveform.
     s.processing.segmentation.buffer = 200
     e = s.processing.emg
     e.remove_ecg = True
@@ -321,6 +326,11 @@ def build_sample_settings(desc: dict, output_folder: str):
     e.noise.reference_file = desc["filename"]
     e.noise.use_expiration = False
     e.noise.reference_intervals = [desc["reference_interval"]]
+    e.noise.reference_folder = desc["folder"]   # matches s.input.folder set above — see
+    # core.settings.carried_over_state: leaving this unset reads as "unrecorded", which is
+    # ALWAYS carried (an unknown provenance can never be proven current), so the very first
+    # load of a freshly BUILT (not migrated) sample analysis would falsely show the
+    # carried-over banner even though it never named a different folder.
     e.noise.auto_prop = True
     e.plot_yscale = []          # auto-scale the diagnostic EMG figures: the raw stage is
                                 # dominated by the R-waves, the conditioned stages are ~5× smaller

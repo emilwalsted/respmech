@@ -46,6 +46,12 @@ def write_batch(*args, **kwargs):
     return _fn(*args, **kwargs)
 
 
+def write_planned(*args, **kwargs):
+    """Lazy shim for :func:`respmech.core.io.writers.write_planned` — see the note above."""
+    from respmech.core.io.writers import write_planned as _fn
+    return _fn(*args, **kwargs)
+
+
 class BatchWorker(QObject):
     progress = Signal(object)          # ProgressEvent
     file_done = Signal(str, object)    # filename, average-row DataFrame
@@ -59,6 +65,22 @@ class BatchWorker(QObject):
         self._write = write
         self._only = only_files
         self._cancel = False
+        # Set True the instant this thread commits to the uninterruptible write phase (A07)
+        # — a plain attribute, read directly by RunScreen._cancel() on the GUI thread. A
+        # Cancel click cannot wait for the "writing" ProgressEvent to make it through Qt's
+        # QueuedConnection (necessarily asynchronous, since this thread must never touch
+        # widgets): that gap is exactly wide enough for a click landing in it to still log
+        # the old, plain "cancelling…" line for a click that in fact arrived too late to
+        # cancel anything. CPython's GIL makes a bool assignment/read atomic across threads,
+        # so this closes the race to the width of one bytecode op instead of one event-loop
+        # tick.
+        self._writing = False
+        # D20: the paths write_batch actually wrote, read by RunScreen._on_finished before
+        # self._worker is discarded, so the finished-status line can name what was written
+        # instead of re-deriving a partial guess from the pre-flight plan (which — unlike
+        # this — never covers diagnostics figures or the cohort summary). Stays empty for a
+        # dry run (write_batch is never called) or a run whose write raised before returning.
+        self.written = []
 
     @Slot()
     def cancel(self):
@@ -94,6 +116,7 @@ class BatchWorker(QObject):
         # click that lands during writing can't be reported as "no output written".
         cancelled = self._cancel
         if self._write and not cancelled:
+            self._writing = True     # see __init__ — set before anything else in this phase
             # Signal the Run screen that the (previously silent) write phase has begun, so it
             # can switch the progress bar to its animated busy state and stop looking frozen.
             # Lazy import keeps pipeline out of GUI startup (Wave 1.4); it is already loaded
@@ -101,8 +124,14 @@ class BatchWorker(QObject):
             from respmech.core.pipeline import ProgressEvent
             self._on_event(ProgressEvent("writing", message="writing output"))
             try:
-                write_batch(result, self._settings, self._settings.output.folder,
-                            progress=self._on_event)
+                # is_subset_run inside the try: it re-lists the input folder, and a folder
+                # that becomes transiently unreadable between analysis and writing must be
+                # reported as a write failure like any other, not crash the worker thread
+                # with an unhandled exception (no failed/finished signal at all).
+                from respmech.core.pipeline import is_subset_run
+                cohort_outputs = not is_subset_run(self._settings, self._only)
+                self.written = write_batch(result, self._settings, self._settings.output.folder,
+                                           progress=self._on_event, cohort_outputs=cohort_outputs)
             except Exception:
                 self.failed.emit(
                     "Analysis completed, but writing the output failed. Some files may be "
@@ -112,6 +141,35 @@ class BatchWorker(QObject):
                 return
         # Final result carries every file's table for the results view.
         self.finished.emit(None if cancelled else result)
+
+
+class WriteWorker(QObject):
+    """Write an ALREADY-COMPUTED ``BatchResult`` to a folder, off the GUI thread (ticket
+    A06's "Write results to another folder…" — offered when the analysis succeeded but the
+    original write failed). Never re-runs the analysis: ``write_planned`` only replays
+    ``write_batch``'s own write logic against the frozen ``result``/``settings`` this worker
+    was constructed with. On a worker thread for the same reason ``BatchWorker``'s write
+    phase is: the figure step alone can take many seconds, and this app's one rule for
+    anything that slow is that it must never block the window."""
+    finished = Signal(object)      # list of written paths
+    failed = Signal(str)           # error message (traceback)
+
+    def __init__(self, result, settings, plan, outputfolder: str):
+        super().__init__()
+        self._result = result
+        self._settings = settings
+        self._plan = plan
+        self._outputfolder = outputfolder
+
+    @Slot()
+    def run(self):
+        try:
+            written = write_planned(self._result, self._settings, self._plan,
+                                    outputfolder=self._outputfolder)
+        except Exception:
+            self.failed.emit(traceback.format_exc())
+            return
+        self.finished.emit(written)
 
 
 # --------------------------------------------------------------------------- #
@@ -450,6 +508,9 @@ def stage_ecg_reduction(settings: Settings, file_path: str, cancel_check=None) -
         ecg_error = None
         peaks = np.array([], dtype=float)
         processed = [emg[:, i].astype(float) for i in range(nch)]
+        # None (not NaN) while removal is off: there is nothing to suppress, so the tab
+        # must show no number at all, distinct from "computed but degenerate" (NaN).
+        suppression = None
         try:
             if remove:                                     # detect + subtract (the real pipeline)
                 proc, _w, peak_times = emglib.remove_ecg(
@@ -463,6 +524,14 @@ def stage_ecg_reduction(settings: Settings, file_path: str, cancel_check=None) -
                     proc = proc[:, None]
                 processed = [proc[:, i].astype(float) for i in range(proc.shape[1])]
                 peaks = np.asarray(peak_times, dtype=float)
+                # Same peak-window-RMS suppression core.pipeline._ecg_remove reports (and
+                # writers.py persists to run-report.txt) — computed here too, on the SAME
+                # helper, so the tuning surface has a number to judge "Min height"/"Min
+                # gap" by before a real run ever happens.
+                peaks_samp = (peaks * fs).astype(int)
+                before = emglib.peak_window_rms(emg[:, detect].astype(float), peaks_samp, fs)
+                after = emglib.peak_window_rms(proc[:, detect].astype(float), peaks_samp, fs)
+                suppression = (1.0 - after / before) if (before and before == before) else float("nan")
             else:                                          # detect ONLY (cheap); processed == raw
                 from scipy import signal as _sig
                 pk, _props = _sig.find_peaks(
@@ -474,10 +543,12 @@ def stage_ecg_reduction(settings: Settings, file_path: str, cancel_check=None) -
             raise
         except Exception:                                  # noqa: BLE001 — bad params -> raw + no capture
             ecg_error = traceback.format_exc()
+            suppression = None
         return {"t": t, "fs": fs, "cols": cols, "detect": detect,
                 "detect_col": cols[detect] if detect < len(cols) else detect + 1,
                 "raw_capture": emg[:, detect].astype(float), "processed": processed,
-                "peaks": peaks, "flow": flow_full, "ecg_applied": remove, "ecg_error": ecg_error}
+                "peaks": peaks, "flow": flow_full, "ecg_applied": remove, "ecg_error": ecg_error,
+                "suppression": suppression}
 
     got = _pc.cached(_pc.ECG_REDUCTION, _pc.ecg_matrix_key(settings, file_path), _compute)
     # Copy on return, the same contract _load_and_condition documents: this dict is a SHARED
@@ -599,18 +670,202 @@ def probe_data_columns(settings: Settings, file_path: str):
     return None
 
 
+def peek_columns(settings: Settings, file_path: str):
+    """Cheap column-count probe for the manifest scanner (``ui/manifest.py``): an 8 KB
+    byte-peek of the first line for .csv/.txt — measured at 0.06 ms/file against
+    ``probe_data_columns``'s 46 ms/file for the same files, with the same result — so the
+    format read-out and the QC strip can re-probe a whole folder on every input edit
+    without the multi-second cost a full pandas read would add for a hundred recordings.
+
+    Delegates straight to ``probe_data_columns`` for .xlsx/.xls/.mat, where a byte-peek is
+    meaningless (an .xlsx is a zip archive of XML, not delimited text — sniffing its raw
+    bytes previously misreported it as "1 columns, whitespace-separated"). Honours the same
+    delimiter selection as ``probe_data_columns``/``load_raw_matrix`` (';' for a
+    comma-decimal CSV; tab for .txt), so the two can never disagree on the same file.
+    Returns the column count, or ``None`` if the file could not be read.
+
+    KNOWN LIMITATION: only the FIRST line is inspected. A file whose header parses fine but
+    whose data rows are ragged (a short row further down, or a quoted field containing the
+    delimiter that a naive ``str.split`` miscounts) is not distinguishable from a well-formed
+    file here — it still surfaces as a run-time ``DataValidationError`` when the batch
+    actually runs, exactly as before this scanner existed. Accepted for the same reason the
+    scan is a byte-peek at all: a row-by-row validation would cost close to what
+    ``probe_data_columns`` already costs, defeating the point."""
+    import os
+
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext not in (".csv", ".txt"):
+        return probe_data_columns(settings, file_path)
+    try:
+        with open(file_path, "rb") as fh:
+            head = fh.read(8192)
+    except OSError:
+        return None
+    if head[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        text = head.decode("utf-16", errors="replace")
+    else:
+        text = None
+        for enc in ("utf-8-sig", "cp1252", "latin-1"):
+            try:
+                text = head.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
+    line = text.splitlines()[0].strip() if text else ""
+    if not line:
+        return None
+    fmt = settings.input.format
+    dec = getattr(fmt, "decimal", ".") or "."
+    sep = "\t" if ext == ".txt" else (";" if dec == "," else ",")
+    return len(line.split(sep))
+
+
+def peek_header_warning(settings: Settings, file_path: str):
+    """Cheap two-line consistency probe for the manifest scanner (ticket D01): flags a file
+    whose FIRST non-blank line looks like it belongs to an instrument export's preamble
+    rather than real channel data — either because that line's own field count is under 3
+    (a real multi-channel recording needs at least a time column plus two signals; a header
+    line like LabChart's 'Interval=<TAB>0.001 s' has exactly two), or because the first two
+    non-blank lines disagree on field count. Delimited-text files only (.csv/.txt); returns
+    ``None`` for any other extension, an unreadable head, a head this function's fixed
+    encoding chain cannot decode (see below — narrower than it sounds), or a first line
+    that is itself empty — the same "nothing to say" cases ``peek_columns`` already
+    returns ``None`` for. Never raises.
+
+    Deliberately its OWN small decode block rather than sharing ``peek_columns``'s: the two
+    probes answer different questions (this one wants up to two non-blank lines,
+    ``peek_columns`` wants exactly line zero, blank or not) and folding them into one
+    shared helper risked silently changing ``peek_columns``'s existing, already-tested
+    blank-first-line behaviour for the sake of a probe that postdates it — a handful of
+    duplicated lines is the safer trade. In practice the "undecodable head" case above
+    never actually happens for a non-UTF-16 file: ``latin-1`` maps every byte, so the
+    decode loop always succeeds by the time it gets there — the guard exists for the same
+    defensive reason ``peek_columns``'s does, not because it is expected to fire.
+
+    ONLY sniffs the first 8 KB, same as ``peek_columns``: a data-row mismatch further into
+    the file (a short row, a quoted delimiter) is not caught here, only the specific,
+    common case of a header/preamble block ahead of the real data. That surfaces later as a
+    run-time ``DataValidationError``, exactly as before this probe existed. When the file is
+    at least 8 KB and the buffer's last line has no trailing newline, that line may be
+    mid-row rather than genuinely short — dropped before comparison (self-review finding: a
+    500-column recording's own row can exceed 8 KB, and a truncated SECOND row read as
+    "fewer fields" would otherwise manufacture a false disagreement on a perfectly uniform,
+    clean file)."""
+    import os
+
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext not in (".csv", ".txt"):
+        return None
+    try:
+        with open(file_path, "rb") as fh:
+            head = fh.read(8192)
+    except OSError:
+        return None
+    if head[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        text = head.decode("utf-16", errors="replace")
+    else:
+        text = None
+        for enc in ("utf-8-sig", "cp1252", "latin-1"):
+            try:
+                text = head.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
+    if not text:
+        return None
+    all_lines = text.splitlines()
+    if len(head) >= 8192 and not text.endswith(("\n", "\r")):
+        all_lines = all_lines[:-1]              # drop the possibly mid-row trailing line
+    first_line = all_lines[0].strip() if all_lines else ""
+    if not first_line:
+        return None
+    lines = [ln.strip() for ln in all_lines if ln.strip()][:2]
+    fmt = settings.input.format
+    dec = getattr(fmt, "decimal", ".") or "."
+    sep = "\t" if ext == ".txt" else (";" if dec == "," else ",")
+    counts = [len(ln.split(sep)) for ln in lines]
+    if counts[0] < 3:
+        plural = "" if counts[0] == 1 else "s"
+        return (f"the first row has only {counts[0]} field{plural} — too few to be "
+               "channel data")
+    if len(counts) > 1 and counts[1] != counts[0]:
+        return (f"the first two rows disagree on the number of fields "
+               f"({counts[0]} vs {counts[1]})")
+    return None
+
+
+def probe_sampling_frequency(settings: Settings, file_path: str):
+    """Cheap per-file sampling-frequency probe for the manifest scanner: read only column 0
+    (the time axis), capped at 5000 rows — measured at 4.3 ms and a correct 2000 Hz on a
+    60,000-row file. NEVER uses ``load_raw_matrix``, which reads every column of the whole
+    file (21.7 ms/file for a single column alone).
+
+    Returns ``None`` for .mat (no comparable cheap column-0 read) or .xlsx/.xls, or when the
+    column does not look like regular time-in-seconds — see :func:`detect_sampling_frequency`,
+    which this delegates the actual inference to. The 5000-row cap only bounds the COST for a
+    delimited-text engine (pandas' C CSV parser stops reading once ``nrows`` is satisfied);
+    openpyxl parses an Excel sheet before pandas applies that cap, so ``nrows=5000`` does
+    nothing to bound an .xlsx read's cost — measured at 37-306 ms/file depending on the
+    sheet's true row count (NOT capped at 5000, up to 30s+ for a hundred-file batch), against
+    this function's ONE synchronous call per input edit. Ruled out rather than shipped with
+    that cost: this only skips the (secondary) frequency-mismatch caution for Excel input,
+    never the (primary) column-count/outlier detection, which stays cheap via
+    ``probe_data_columns``'s single-row read."""
+    import os
+
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in (".mat", ".xls", ".xlsx"):
+        return None
+    import pandas as pd  # noqa: PLC0415
+    from respmech.core.io.loaders import _read_table  # noqa: PLC0415
+    fmt = settings.input.format
+    dec = getattr(fmt, "decimal", ".") or "."
+    try:
+        if ext == ".csv":
+            df = _read_table(file_path, sep=";" if dec == "," else ",", decimal=dec,
+                             usecols=[0], nrows=5000)
+        elif ext == ".txt":
+            df = _read_table(file_path, sep="\t", decimal=dec, usecols=[0], nrows=5000)
+        else:
+            return None
+    except Exception:                       # noqa: BLE001 — best-effort, never blocks the scan
+        return None
+    if df.shape[1] == 0:
+        return None
+    col = pd.to_numeric(df.iloc[:, 0], errors="coerce").to_numpy(dtype=float)
+    return detect_sampling_frequency(col)
+
+
 def detect_decimal(file_path: str, fallback: str = ".") -> str:
-    """Best-effort decimal-separator detection for a tab-delimited .txt file. Defaults to
-    '.' and only switches to ',' when '.' genuinely fails to parse the numbers (a comma-
-    decimal European export reads mostly as NaN under '.') AND ',' is clearly better — so a
-    US file with occasional comma-THOUSANDS integers ('1,024'), which '.' still parses fine
-    on most cells, is not mis-detected as comma-decimal. Returns ``fallback`` on doubt."""
+    """Best-effort decimal-separator detection for a .csv or tab-delimited .txt file.
+    Defaults to '.' and only switches to ',' when '.' genuinely fails to parse the numbers
+    (a comma-decimal European export reads mostly as NaN under '.') AND ',' is clearly
+    better — so a US file with occasional comma-THOUSANDS integers ('1,024'), which '.'
+    still parses fine on most cells, is not mis-detected as comma-decimal. Returns
+    ``fallback`` on doubt (see the caller's own fallback contract, e.g.
+    ``ui.screens.settings_screen.SettingsScreen._detect_decimal``, which passes the
+    CURRENT setting so a doubtful file never overwrites an explicit or loaded-analysis
+    choice).
+
+    Ticket D03: for a .csv, each decimal candidate is read with the DELIMITER it
+    implies — ';' for a comma decimal, ',' for a point decimal, the same pairing the
+    loader itself uses (``core.io.loaders._read_table`` / this module's
+    ``load_raw_matrix``/``probe_data_columns``) — so the two interpretations are compared
+    on equal footing instead of both parsed with the SAME separator. A semicolon-delimited,
+    comma-decimal export used to fail both candidates identically that way (every field
+    read as one mostly-NaN column regardless of which decimal was tried), so the function
+    always fell back and could never actually detect a European CSV. .txt is unchanged:
+    always tab-delimited for both candidates."""
+    import os
+
     import pandas as pd  # noqa: PLC0415
 
+    ext = os.path.splitext(file_path)[1].lower()
     frac = {}
     for dec in (".", ","):
+        sep = "\t" if ext == ".txt" else (";" if dec == "," else ",")
         try:
-            df = pd.read_csv(file_path, sep="\t", decimal=dec, nrows=300)
+            df = pd.read_csv(file_path, sep=sep, decimal=dec, nrows=300)
             num = df.apply(pd.to_numeric, errors="coerce")
             total = int(num.size) or 1
             frac[dec] = int(num.notna().to_numpy().sum()) / total
@@ -702,15 +957,31 @@ def stage_noise_fidelity(settings: Settings, cancel_check=None) -> dict:
         # Copy on return: a shared cache entry, and _apply_noise_report reads it while the
         # renderers hold on to the frontier lists (same contract as _load_and_condition).
         import copy as _copy                                # noqa: PLC0415
-        return _copy.deepcopy(
+        report = _copy.deepcopy(
             _pc.cached(_pc.NOISE_REPORT, key, _compute))    # test-wide report; keyed on all-file tokens
+        # D09: the reference clip's frame count travels WITH the report, so the
+        # fidelity panel can carry the core's stability warning visibly (from_clip
+        # says it through warnings.warn, which reaches a stderr nobody sees). The
+        # clip build is the same shared, cached one _compute used, so this costs a
+        # cache hit — and it is recomputed here, ON the copy, rather than stored in
+        # the cache entry, so older cached reports simply lack the key and the
+        # caption hides itself instead of showing a stale count.
+        try:
+            from respmech.ui.stft_frames import stft_frame_count   # noqa: PLC0415
+            n = settings.processing.emg.noise
+            clip = _cached_reference_clip(settings, s, cancel_check=cancel_check)
+            report["noise_clip_frames"] = stft_frame_count(
+                len(clip), n.win_length, n.hop_length)
+        except Exception:                                   # noqa: BLE001
+            pass          # the report itself is intact; the caption just stays hidden
+        return report
     except (compute.TrimError, DataValidationError, FileNotFoundError, ImportError) as e:
         # A user-fixable precondition on the reference/input files — most often a misassigned or
         # inverted flow channel, so the reference has no segmentable breaths for the quiet-
         # expiration clip. Surface it as a clean, single-line, actionable message (rendered by
         # _on_noise_result -> _FileRunError) instead of a raw traceback. Genuine bugs
         # (IndexError / KeyError / numeric) are NOT caught here and still propagate.
-        name = os.path.basename(ref_path) if ref_path else "the noise reference"
+        name = os.path.basename(ref_path) if ref_path else "the rest reference"
         return {"error": (f"Could not build the noise profile from '{name}' or the input files: "
                           f"{e} Check the flow channel and inverse-flow assignment, or turn off "
                           f"'use expiration' and set explicit reference intervals.")}

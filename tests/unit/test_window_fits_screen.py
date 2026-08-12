@@ -69,9 +69,11 @@ def _window(qapp, tmp_path, **kw):
     return win
 
 
-@pytest.mark.parametrize("tab", [0, 1, 2])
+@pytest.mark.parametrize("tab", [0, 1])
 def test_window_minimum_fits_a_laptop_screen(qapp, tmp_path, tab):
-    """On every screen — Setup, Preview & QC, Run — the window must be able to be small.
+    """On every tab — Setup and the Preview & QC workspace (which since B03 also hosts the
+    Run drawer, so there is no separate third tab to parametrise any more) — the window
+    must be able to be small.
 
     Both axes off ONE ``minimumSizeHint()`` call. The height half used to be discarded, and
     it is the axis that actually ran out: a 1080p laptop at 150% scaling has 650 px to give.
@@ -360,9 +362,21 @@ def test_the_emg_strip_stays_one_line_on_a_laptop(qapp, tmp_path, windows_metric
             rows[-1] = (rows[-1][0], max(rows[-1][1], bottom))
         else:
             rows.append((top, bottom))
+    # Per-item widths ride in the assertion message: this guard went red on the Windows
+    # runner across three fix rounds aimed by a DejaVu-stretch model of Segoe that missed
+    # every time — a red here must carry the real numbers. (With the strip converted to a
+    # squeezing QHBoxLayout this cannot wrap at all; the diagnostics stay for the day
+    # someone reintroduces a wrapping layout here.)
+    names = ("noise_enabled", "btn_set_noise", "noise_ref_readout", "noise_opts",
+             "btn_emg_advanced")
+    diag = "; ".join(
+        f"{n}: hint={getattr(pv, n).sizeHint().width()} w={getattr(pv, n).width()} "
+        f"min={getattr(pv, n).minimumSizeHint().width()}"
+        for n in names if getattr(pv, n).isVisible())
     assert len(rows) == 1, (
         f"the EMG strip wraps to {len(rows)} lines at {_NARROWEST_SCREEN} px — it is spending "
-        f"the graphs' vertical space on options that belong in Advanced")
+        f"the graphs' vertical space on options that belong in Advanced — "
+        f"page w={page.width()}; {diag}")
     win.close()
 
 

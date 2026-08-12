@@ -11,7 +11,9 @@ import pytest
 from PySide6.QtWidgets import QLabel
 
 from respmech.ui.column_stack import (ASSIGNABLE, ColumnStack, ROLE_NAMES, ROLES,
+                                      infer_role_from_name, infer_roles_from_names,
                                       name_suffix, role_color)
+from respmech.ui.plot_axis import MinPitchAxis
 
 
 def _matrix(n=200, cols=6):
@@ -32,6 +34,36 @@ def test_shows_only_the_chosen_columns_in_the_given_order(qapp):
     st = ColumnStack(1000, columns=[4, 1, 2]).build(m, names)
     assert len(st.plots) == 3
     assert [h.text().split()[1] for h in st.headers] == ["5", "2", "3"]
+
+
+# -- close_plots() (point 6, ticket 20260811-0910) ---------------------------------------
+def test_close_plots_closes_every_embedded_plotitem_and_empties_the_list(qapp):
+    """Each PlotWidget's own ctrlMenu/ViewBox are released (see close_plots()'s docstring
+    for why nothing else ever does this), and self.plots is emptied so nothing iterates a
+    now-unusable plot afterwards.
+
+    The PlotItem references are captured BEFORE closing, not re-fetched via
+    ``PlotWidget.getPlotItem()`` afterwards: the PlotWidget's own ``.close()`` (the last
+    step of ``plot_perf.close_plots()``) calls ``GraphicsView.close()``, whose
+    ``scene().clear()`` deletes the PlotItem's underlying C++ object outright (it is still
+    IN the scene at that point — only its view box was explicitly removed) and
+    ``getPlotItem()`` then returns ``None``, not a closed-but-readable PlotItem. Holding
+    the Python reference from before close keeps the (already-``None``-menu'd) attributes
+    readable, exactly as the shutdown-time regression test in test_preview_screen.py does.
+    """
+    m, names = _matrix()
+    st = ColumnStack(1000).build(m, names)
+    plots = list(st.plots)
+    plot_items = [p.getPlotItem() for p in plots]
+    assert plot_items and all(pi.ctrlMenu is not None for pi in plot_items)
+    st.close_plots()
+    assert st.plots == []
+    assert all(pi.ctrlMenu is None for pi in plot_items)
+
+
+def test_close_plots_never_raises_on_an_empty_stack(qapp):
+    """A ColumnStack that was never built() (no rows yet) has nothing to close."""
+    ColumnStack(1000).close_plots()
 
 
 def test_the_time_axis_is_labelled_on_the_last_row_only(qapp):
@@ -114,6 +146,36 @@ def test_one_column_is_accepted(qapp):
     assert len(st.plots) == 1 and len(st.curves[0].getData()[0]) == 50
 
 
+# -- B05: MinPitchAxis + the compact sparkline mode -----------------------------
+def test_rows_use_min_pitch_axis_by_default(qapp):
+    """Even the dialog's rows (74 px) are short enough that pyqtgraph's top tick level can
+    overlap itself; every ColumnStack row gets the thinning axis, not just Preview's."""
+    m, names = _matrix()
+    st = ColumnStack(1000, columns=[0]).build(m, names)
+    assert isinstance(st.plots[0].getAxis("left"), MinPitchAxis)
+
+
+def test_sparkline_mode_hides_the_axes_and_is_uniformly_short(qapp):
+    m, names = _matrix()
+    st = ColumnStack(1000, columns=[0, 1, 2], row_height=20, sparkline=True).build(m, names)
+    for plot in st.plots:
+        assert plot.getAxis("left").isVisible() is False
+        assert plot.getAxis("bottom").isVisible() is False
+        assert plot.minimumHeight() == 20              # no extra height for a hidden time axis
+    assert st.plots[-1].getAxis("bottom").labelText == ""
+
+
+def test_non_sparkline_mode_keeps_the_last_row_time_axis(qapp):
+    """The channel-assignment dialog is unaffected by the sparkline addition: only the
+    last row shows tick values, and it still carries the 'Time (s)' label."""
+    m, names = _matrix()
+    st = ColumnStack(1000, columns=[0, 1]).build(m, names)
+    assert st.plots[0].getAxis("bottom").style["showValues"] is False
+    assert st.plots[1].getAxis("bottom").style["showValues"] is True
+    assert st.plots[1].getAxis("bottom").labelText == "Time (s)"
+    assert st.plots[0].getAxis("left").isVisible() is True
+
+
 # -- the vocabulary the two views must agree on --------------------------------
 def test_every_assignable_role_has_a_summary_name_and_a_colour(qapp):
     """The summary names a role in prose where the dialog names it in a menu; a role
@@ -140,3 +202,71 @@ def test_entropy_is_not_a_dropdown_role(qapp):
 ])
 def test_name_suffix_hides_the_unhelpful(qapp, names, i, expect):
     assert name_suffix(names, i) == expect
+
+
+# -- D27: seeding the channel-assignment dialog from the file's own column names ------
+@pytest.mark.parametrize("name, expect", [
+    ("flow", "flow"), ("Flow (L/s)", "flow"),                    # case-insensitive, extra text
+    ("volume", "volume"), ("Vol", "volume"), ("VOLUME (L)", "volume"),
+    ("poes", "poes"), ("Pes", "poes"), ("oesophageal", "poes"),
+    ("pgas", "pgas"), ("pga", "pgas"), ("Gastric pressure", "pgas"),
+    ("pdi", "pdi"), ("di", "pdi"),
+    ("emg1", "emg"), ("EMG2", "emg"), ("EMG3", "emg"),
+    ("edi", "emg"),               # a recognised diaphragm-EMG alias, NOT pdi's "di" it contains
+    ("time", ""), ("ENT1", ""),   # no keyword matches at all
+    ("", ""), ("   ", ""), ("__index", ""), ("Unnamed: 3", ""),   # blank/placeholder
+])
+def test_infer_role_from_name(qapp, name, expect):
+    assert infer_role_from_name(name) == expect
+
+
+@pytest.mark.parametrize("name", [
+    "0", "12", "-3.5", "3,5",       # a bare number, '.' or ',' decimal
+    "0,0000", "1,2500",             # header-less EU export: comma-decimal data row as header
+])
+def test_infer_role_from_name_rejects_numbers(qapp, name):
+    """The bug report this ticket fixes: a header-less export gives pandas' own
+    number-like fragments as column 'names', which must never be treated as real ones."""
+    assert infer_role_from_name(name) == ""
+
+
+@pytest.mark.parametrize("name", [
+    "flowpoes",          # "flow" (4, flow) and "poes" (4, poes) -- an equally long tie
+    "pdi_edi",           # "pdi" (3, pdi) and "edi" (3, emg) -- also tied, not resolved by length
+])
+def test_infer_role_from_name_is_ambiguous_not_guessed(qapp, name):
+    assert infer_role_from_name(name) == ""
+
+
+def test_infer_roles_from_names_matches_the_tickets_own_example(qapp):
+    """The exact reproduction from the ticket: a 9-column CSV whose header names every
+    channel. Column 0 (time) is never assignable and must be skipped."""
+    names = "time,flow,volume,poes,pgas,pdi,emg1,emg2,emg3".split(",")
+    assert infer_roles_from_names(names) == {
+        1: "flow", 2: "volume", 3: "poes", 4: "pgas", 5: "pdi",
+        6: "emg", 7: "emg", 8: "emg",
+    }
+
+
+def test_infer_roles_from_names_matches_the_real_synth_fixture_header(qapp):
+    """tests/golden/input/synth_case_*.csv's actual header — the fixture every dialog test
+    in test_channel_setup.py loads. ENT1-3 (entropy-only columns) suggest nothing, since
+    entropy is never seeded from a name."""
+    names = "time,EMG1,EMG2,EMG3,flow,volume,poes,pgas,pdi,ENT1,ENT2,ENT3".split(",")
+    assert infer_roles_from_names(names) == {
+        1: "emg", 2: "emg", 3: "emg", 4: "flow", 5: "volume", 6: "poes", 7: "pgas", 8: "pdi",
+    }
+
+
+def test_infer_roles_from_names_skips_a_headerless_export(qapp):
+    """No real header row: pandas' own fragments of the first data row become the column
+    'names' (comma-decimal, ';'-separated EU export) — none of them may seed anything."""
+    names = ["0,0000", "0,2000", "0,3000", "0,4000"]
+    assert infer_roles_from_names(names) == {}
+
+
+def test_infer_roles_from_names_never_returns_column_zero(qapp):
+    """Column 0 is the time axis and is never assignable in the dialog, even in the
+    unlikely case its own name happened to look like a role."""
+    names = ["flow", "flow"]           # column 0 named "flow" too
+    assert infer_roles_from_names(names) == {1: "flow"}

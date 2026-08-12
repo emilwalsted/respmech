@@ -103,6 +103,66 @@ def test_ecg_auto_batch_greys_out_the_fields_it_overrides(qapp, tmp_path):
     assert all(w.isEnabled() for w in manual)                    # back off -> editable again
 
 
+def test_ecg_auto_batch_blanks_the_stale_numeric_fields(qapp, tmp_path):
+    """Ticket 20260804-0923: greyed out is not enough — the min height/min gap fields kept
+    showing the last manual/Auto-suggest numbers even though a real run ignores them
+    entirely and auto-detects its own from the reference file. They must show a dash
+    while auto-batch governs them, and the REAL number again the moment it is unticked —
+    without the underlying setting ever changing because of the display switch."""
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    s.processing.emg.ecg_min_height = 0.2309
+    s.processing.emg.ecg_min_distance_s = 0.405        # 3 decimals — the field's own precision
+    pv = _win(s).preview_screen
+    fields = (pv.ecg_min_height, pv.ecg_min_distance)
+    for w in fields:
+        assert w.lineEdit().text() != "—"
+    pv.ecg_auto_batch.setChecked(True)
+    for w in fields:
+        assert w.lineEdit().text() == "—"
+    # blanking is display-only: the model must still hold the real numbers
+    assert abs(s.processing.emg.ecg_min_height - 0.2309) < 1e-9
+    assert abs(s.processing.emg.ecg_min_distance_s - 0.405) < 1e-9
+    pv.ecg_auto_batch.setChecked(False)
+    for w in fields:
+        assert w.lineEdit().text() != "—"
+    assert abs(pv.ecg_min_height.value() - 0.2309) < 1e-9
+    assert abs(pv.ecg_min_distance.value() - 0.405) < 1e-9
+
+
+def test_ecg_auto_batch_caption_survives_a_later_status_overwrite(qapp, tmp_path):
+    """The one sentence explaining 'these values are stale, the run auto-detects its own'
+    used to live only in the shared status line, where an EMG or noise job finishing a
+    moment later silently erased it. It must now live in the ECG strip's own persistent
+    caption instead, which nothing else on the tab can overwrite."""
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    pv = _win(s).preview_screen
+    assert pv.ecg_caption.fullText() == ""                       # nothing to say yet
+    pv.ecg_auto_batch.setChecked(True)
+    caption = pv.ecg_caption.fullText()
+    assert "Auto-detect for the batch" in caption
+    assert "first matched file" in caption                       # no reference file set
+    # ticket D21 (UI-overhaul): the sentence must say ONE parameter set for the WHOLE
+    # batch, never "for every file" in the sense of a per-file re-detection — an earlier
+    # status-line wording ("auto-detects its own parameters ... for every file") read as
+    # the opposite of what the pipeline actually does (one set, derived once, applied to
+    # all). Checked on fullText(), never the elided text(), same as elsewhere in this file.
+    assert "applied to every file" in caption
+    # simulate an EMG/noise job finishing a moment later and overwriting the status line
+    pv._set_status("EMG result: conditioned (ECG + noise).")
+    assert pv.ecg_caption.fullText() == caption                  # untouched
+    assert pv.status.text() != caption
+    pv.ecg_auto_batch.setChecked(False)
+    assert pv.ecg_caption.fullText() == ""                       # cleared once auto is off
+
+
+def test_ecg_auto_batch_caption_names_the_reference_file(qapp, tmp_path):
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    s.processing.emg.ecg_reference_file = "S03.csv"
+    pv = _win(s).preview_screen
+    pv.ecg_auto_batch.setChecked(True)
+    assert "'S03.csv'" in pv.ecg_caption.fullText()
+
+
 def test_ecg_auto_batch_disabled_without_remove_ecg(qapp, tmp_path):
     # Mirrors Settings.validate()'s requirement: auto-detect needs Remove ECG on, so the
     # checkbox that would enable it is itself disabled until Remove ECG is ticked.
@@ -129,6 +189,12 @@ def test_unchecking_remove_ecg_clears_stuck_auto_batch(qapp, tmp_path):
     assert s.processing.emg.ecg_auto_detect is False         # cleared, not left stuck
     assert pv.ecg_auto_batch.isChecked() is False             # widget reflects the clear
     s.validate()                                              # the resulting settings are valid
+    # ticket 20260804-0923: the forced uncheck must also un-blank the fields and clear the
+    # caption — a stuck-open dash or a stale "Auto (whole batch) is on" sentence here would
+    # be its own, quieter version of the bug this ticket fixes.
+    assert pv.ecg_min_height.lineEdit().text() != "—"
+    assert pv.ecg_min_distance.lineEdit().text() != "—"
+    assert pv.ecg_caption.fullText() == ""
 
 
 def test_ecg_auto_batch_also_gates_autosuggest(qapp, tmp_path):
@@ -150,7 +216,7 @@ def test_autosuggest_writes_settings_and_selects_channel(qapp, tmp_path, monkeyp
     from respmech.core import emg as emglib
     s = synth_settings(str(tmp_path), remove_ecg=False, data_out=_DATA_OUT)
     win = _win(s); pv = win.preview_screen
-    pv._refresh_files(); pv.file_combo.setCurrentIndex(0)
+    pv._refresh_files(); pv.file_rail.select_index(0)
     monkeypatch.setattr(emglib, "suggest_ecg_settings", lambda m, fs: {
         "detect_channel": 2, "ecg_min_height": 0.02, "ecg_min_distance_s": 0.45,
         "ecg_min_width_s": 0.005, "ecg_window_s": 0.4,
@@ -217,3 +283,103 @@ def test_a_consistent_analysis_is_left_alone(qapp, tmp_path):
     assert s.processing.emg.ecg_auto_detect is True
     assert pv.ecg_auto_batch.isChecked() is True
     assert pv._ecg_auto_repaired is False
+
+
+def test_the_processed_panel_title_reflects_whether_removal_is_actually_on(qapp, tmp_path):
+    """Ticket 20260804-0922: the panel over the processed EMG stack used to say
+    'ECG-processed EMG channels' even with Remove ECG off, while it showed the RAW
+    channels underneath (R-takker in full swing) -- reading as 'the removal is broken'
+    rather than 'the removal is off'. It must now name which is true, and carry the
+    peak-window-RMS suppression when removal is actually on. Asserted on fullText()
+    (the ElidingLabel's untruncated string), never a rendered/elided text()."""
+    from respmech.ui.screens.preview._ecg import _ECG_PROCESSED_TITLE_ON, _ECG_PROCESSED_TITLE_OFF
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    pv = _win(s).preview_screen
+    n, fs = 4000, 2000
+    t = np.arange(n) / fs
+    base = {"t": t, "fs": fs, "cols": [2, 3, 4], "detect": 1, "detect_col": 3,
+            "raw_capture": np.sin(t), "processed": [np.sin(t), np.cos(t), np.sin(2 * t)],
+            "peaks": np.array([0.5, 1.0, 1.5, 2.0]), "flow": np.sin(2 * np.pi * 0.3 * t),
+            "ecg_error": None}
+
+    pv._on_ecg_result({**base, "ecg_applied": True, "suppression": 0.78})
+    title_on = pv._ecg_processed_box._title_label.fullText()
+    assert title_on.startswith(_ECG_PROCESSED_TITLE_ON)
+    assert "78%" in title_on                    # the suppression number reaches the title band
+    assert "78%" in pv.status.text()             # ...and the status line
+
+    pv._on_ecg_result({**base, "ecg_applied": False, "suppression": None})
+    title_off = pv._ecg_processed_box._title_label.fullText()
+    assert title_off == _ECG_PROCESSED_TITLE_OFF
+    assert "%" not in title_off                  # nothing was suppressed -- no number to show
+    assert "ECG-processed" not in title_off      # must not claim removal happened
+    assert "%" not in pv.status.text()
+
+    # Blanking the panel (file switch) resets it to the CURRENT remove_ecg setting's base
+    # title (here: ON, since the settings object has remove_ecg=True) -- see the sibling
+    # test below for the off-setting case. The next _on_ecg_result corrects it either way.
+    pv._set_ecg_processed_title()
+    assert pv._ecg_processed_box._title_label.fullText() == _ECG_PROCESSED_TITLE_ON
+
+
+def test_the_processed_panel_title_reset_reflects_the_current_setting_not_a_hardcoded_on(qapp, tmp_path):
+    """Ticket 20260804-0922 follow-up (self-review finding): the capture panel's reset
+    text is neutral ("Raw capture channel..."), but the processed panel's ON title is
+    itself a claim -- so a reset that always hard-codes ON would show "ECG-processed EMG
+    channels" on a freshly blanked panel even when remove_ecg is off, exactly the
+    misleading verdict this ticket exists to fix, just a beat early (e.g. while the
+    settings-incomplete gate in screen.py keeps _on_ecg_result from firing at all)."""
+    from respmech.ui.screens.preview._ecg import _ECG_PROCESSED_TITLE_ON, _ECG_PROCESSED_TITLE_OFF
+    s = synth_settings(str(tmp_path), remove_ecg=False, data_out=_DATA_OUT)
+    pv = _win(s).preview_screen
+    pv._set_ecg_processed_title()
+    assert pv._ecg_processed_box._title_label.fullText() == _ECG_PROCESSED_TITLE_OFF
+
+    s.processing.emg.remove_ecg = True
+    pv._set_ecg_processed_title()
+    assert pv._ecg_processed_box._title_label.fullText() == _ECG_PROCESSED_TITLE_ON
+
+
+def test_a_failed_detection_never_claims_ecg_processed_over_the_raw_fallback(qapp, tmp_path):
+    """Ticket 20260804-0922 follow-up (self-review finding): stage_ecg_reduction falls
+    back to the RAW channels whenever detection/removal raises, regardless of the
+    remove_ecg setting (data['ecg_applied'] stays True). The error-branch title must
+    therefore say OFF, or it reproduces the exact bug this ticket exists to fix --
+    'ECG-processed' printed over a stack that is, right now, unprocessed."""
+    from respmech.ui.screens.preview._ecg import _ECG_PROCESSED_TITLE_OFF
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    pv = _win(s).preview_screen
+    n, fs = 2000, 2000
+    t = np.arange(n) / fs
+    data = {"t": t, "fs": fs, "cols": [2, 3, 4], "detect": 1, "detect_col": 3,
+            "raw_capture": np.sin(t), "processed": [np.sin(t), np.cos(t), np.sin(2 * t)],
+            "peaks": np.array([]), "flow": np.sin(2 * np.pi * 0.3 * t),
+            "ecg_applied": True, "ecg_error": "boom", "suppression": None}
+    pv._on_ecg_result(data)
+    title = pv._ecg_processed_box._title_label.fullText()
+    assert title.startswith(_ECG_PROCESSED_TITLE_OFF)
+    assert "ECG-processed" not in title
+
+
+def test_emg_all_result_label_composes_ecg_and_noise_independently(qapp, tmp_path):
+    """Ticket 20260804-0922: the EMG result status line hard-coded '(ECG + noise)'
+    whenever noise_applied was true, regardless of whether ECG removal actually ran, so
+    turning ECG removal off while noise reduction stayed on kept claiming ECG removal
+    had happened. All four combinations must be named independently and correctly."""
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    pv = _win(s).preview_screen
+    n, fs = 200, 1000
+    t = np.arange(n) / fs
+    base = {"t": t, "fs": fs, "cols": [2, 3, 4],
+            "raw": [np.zeros(n)] * 3, "conditioned": [np.zeros(n)] * 3,
+            "flow": np.zeros(n), "ecg_error": None, "noise_error": None}
+
+    cases = [
+        (True, True, "conditioned (ECG + noise)"),
+        (True, False, "ECG-removed"),
+        (False, True, "noise-reduced"),
+        (False, False, "raw"),
+    ]
+    for ecg_applied, noise_applied, expected in cases:
+        pv._on_emg_all_result({**base, "ecg_applied": ecg_applied, "noise_applied": noise_applied})
+        assert f"EMG result: {expected}." in pv.status.text(), (ecg_applied, noise_applied, pv.status.text())

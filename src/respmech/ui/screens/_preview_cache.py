@@ -120,7 +120,14 @@ def _ecg_key(settings):
 
 
 def _exclude_key(settings):
-    return tuple((x.file, tuple(x.breaths)) for x in settings.processing.exclude_breaths)
+    # x.folder does not itself change which breaths compute ignores (core.compute keys
+    # purely on filename — see core/_legacy_ns.py), but it is now part of an ExcludeEntry's
+    # state and the file it feeds into can change independently of (file, breaths) — e.g.
+    # a "Clear" on the carried-over banner removing the entry entirely, which (file,
+    # breaths) alone already invalidates, but a folder restamp with an unchanged breath set
+    # (a click that only confirms, never edits, the current selection) would not. Include
+    # it so a cache hit can never silently outlive either kind of change.
+    return tuple((x.file, tuple(x.breaths), x.folder) for x in settings.processing.exclude_breaths)
 
 
 def ecg_matrix_key(settings, file_path):

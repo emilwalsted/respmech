@@ -81,7 +81,7 @@ def test_every_preview_job_is_gated_on_a_valid_mapping(qapp, tmp_path):
     win = MainWindow(AppState(s))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv.file_rail.select_filename("synth_case_A.csv")
     pv.state.settings.input.channels.flow = None            # as the dialog can now leave it
 
     # NOT "the tokens did not move": the gate cancels in-flight work, which bumps them by
@@ -103,7 +103,7 @@ def test_a_valid_mapping_still_schedules(qapp, tmp_path):
     win = MainWindow(AppState(s))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv.file_rail.select_filename("synth_case_A.csv")
     before = pv._tokens["mech"]
     pv._schedule("mech")
     assert pv._tokens["mech"] == before + 1
@@ -125,7 +125,7 @@ def test_clearing_the_mapping_blanks_the_plots_not_just_the_spinners(qapp, tmp_p
     win = MainWindow(AppState(s))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv.file_rail.select_filename("synth_case_A.csv")
     pv._render_preview(stage_mechanics_preview(pv.state.settings, _FILE))
     qapp.processEvents()
     assert pv._channel_plots, "the fixture never drew anything, so this proves nothing"
@@ -148,7 +148,7 @@ def test_the_blank_re_arms_when_the_settings_become_valid_again(qapp, tmp_path):
     win = MainWindow(AppState(s))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv.file_rail.select_filename("synth_case_A.csv")
     pv.state.settings.input.channels.flow = None
     pv._schedule("mech")
     assert pv._blanked_for_invalid is True
@@ -174,7 +174,7 @@ def test_a_job_launched_while_valid_cannot_repaint_the_blanked_panels(qapp, tmp_
     win = MainWindow(AppState(s))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv.file_rail.select_filename("synth_case_A.csv")
     result = stage_mechanics_preview(pv.state.settings, _FILE)
 
     token = pv._tokens["mech"] + 1                 # a job launched while settings were valid
@@ -205,7 +205,7 @@ def test_recovering_from_invalid_settings_rebuilds_every_panel(qapp, tmp_path):
     win = MainWindow(AppState(s))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentText("synth_case_A.csv")
+    pv.file_rail.select_filename("synth_case_A.csv")
 
     pv.state.settings.input.channels.flow = None
     pv._schedule("mech")

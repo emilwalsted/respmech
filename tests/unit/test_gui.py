@@ -23,7 +23,9 @@ def _settings(outdir):
 def test_mainwindow_constructs(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path))))
-    assert win.tabs.count() == 3
+    # Setup, Preview & QC — Run & results has no tab of its own since B03 (it lives
+    # inside Preview & QC as a drawer instead).
+    assert win.tabs.count() == 2
     # settings form round-trips into shared state
     win.settings_screen.from_state()
     win.settings_screen.to_state()
@@ -36,13 +38,13 @@ def test_preview_and_batch_render(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
     pv._refresh_files()
-    assert pv.file_combo.count() == 2
-    pv.file_combo.setCurrentIndex(0)
+    assert pv.file_rail.count() == 2
+    pv.file_rail.select_index(0)
     pv._preview()
     assert "breaths" in pv.status.text()
     # the mechanics test run is automatic (async); its handler fills the table + Campbell
     pv._on_batch_result(run_batch(win.state.settings, only_files=["synth_case_A.csv"]))
-    assert pv.table.rowCount() > 0 and pv.table.columnCount() > 0
+    assert pv.table.model().rowCount() > 0 and pv.table.model().columnCount() > 0
 
 
 def test_worker_runs_and_writes(qapp, tmp_path):
@@ -135,22 +137,24 @@ def test_reactive_file_list_and_noise_gating(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState(_settings(str(tmp_path))))
     sc, pv = win.settings_screen, win.preview_screen
-    assert pv.file_combo.count() == 2
+    assert pv.file_rail.count() == 2
     # changing the mask in Settings refreshes the Preview file list (reactive)
     sc.in_files.setText("synth_case_A.csv"); sc._on_inputs_changed()
-    assert pv.file_combo.count() == 1
+    assert pv.file_rail.count() == 1
     sc.in_files.setText("synth_case_*.csv"); sc._on_inputs_changed()
-    assert pv.file_combo.count() == 2
-    # noise on but no reference -> the noise-window options are disabled + a hint.
+    assert pv.file_rail.count() == 2
+    # noise on but no reference -> the noise-window options are disabled + a hint pointing
+    # at the one real way to set a reference: 'Set noise profile' on this file's own graph
+    # (A03 dropped the old '(Settings)' alternative — there was never a picker there).
     # ECG removal has to be on first: it is the earlier prerequisite, and while it is off
     # the button that PICKS a reference is itself disabled, so asking for one would send
     # the user after something they cannot do.
     pv.noise_enabled.setChecked(True)             # noise enable is on the Preview strip now
     pv.state.settings.processing.emg.noise.reference_file = None
     pv.state.settings.processing.emg.remove_ecg = True
-    pv.file_combo.setCurrentIndex(0); pv._update_actions()
+    pv.file_rail.select_index(0); pv._update_actions()
     assert pv.noise_opts.isEnabled() is False
-    assert "reference" in pv.status.text().lower()
+    assert "set noise profile" in pv.status.text().lower()
     # ...and with ECG removal off, that prerequisite is what the user is told instead
     pv.state.settings.processing.emg.remove_ecg = False
     pv._update_actions()
@@ -182,7 +186,7 @@ def test_empty_input_folder_is_handled(qapp, tmp_path):
     s.input.folder = str(tmp_path / "does_not_exist")
     win = MainWindow(AppState(s))
     win.preview_screen.refresh_files()
-    assert win.preview_screen.file_combo.count() == 0
+    assert win.preview_screen.file_rail.count() == 0
     assert "not found" in win.preview_screen.status.text().lower()
 
 
@@ -206,12 +210,127 @@ def test_validate_checks_paths(qapp, tmp_path):
     sc.state.settings.input.folder = str(tmp_path / "nope")
     msg = sc._path_problem()
     assert msg and "input folder" in msg
-    # restore folder; a missing noise reference file is caught when noise is on
+    # restore folder; a missing rest reference recording is caught when noise is on
     sc.state.settings.input.folder = INPUT
     sc.state.settings.processing.emg.noise.enabled = True
     sc.state.settings.processing.emg.noise.reference_file = "not_here.csv"
     msg = sc._path_problem()
-    assert msg and "noise reference file" in msg
+    assert msg and "rest reference recording" in msg
+
+
+# --------------------------------------------------------------------------- #
+# Status bar ownership (A03): the bar mirrors the ACTIVE tab's own status label,
+# not whichever screen fired status_changed last — with one legitimate exception
+# for a run's progress, which stays visible across tabs while it is in flight.
+# --------------------------------------------------------------------------- #
+def test_status_bar_shows_only_the_active_screens_message(qapp, tmp_path):
+    """Run & results has no tab of its own since B03 — it lives inside Preview & QC as a
+    drawer. A LIVE Run status update reaches the bar exactly when Preview & QC (the tab
+    that hosts the drawer) is active, and not otherwise — the same per-tab ownership rule
+    as before, just naming the tab that actually contains the drawer now. (Switching TO
+    Preview & QC itself shows Preview's OWN message, since that tab's primary content is
+    Preview, not Run — covered by test_refresh_files_skips_the_pick_one_line_when_already_drawn.)"""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    rn = win.run_screen
+    assert win.tabs.currentWidget() is win.settings_screen    # Setup is the default active tab
+    rn._set_status("RUN OWN MESSAGE")
+    # Setup is the active tab -> Run's message must not reach the shared bar
+    assert win.statusBar().currentMessage() != "RUN OWN MESSAGE"
+    win.tabs.setCurrentWidget(win.preview_screen)              # switch to Preview & QC (hosts the drawer)
+    rn._set_status("RUN OWN MESSAGE")                          # a fresh update, now that this tab is active
+    assert win.statusBar().currentMessage() == "RUN OWN MESSAGE"
+    win.tabs.setCurrentWidget(win.settings_screen)             # away again
+    rn._set_status("STILL NOT SHOWN")
+    assert win.statusBar().currentMessage() != "STILL NOT SHOWN"
+    win.close()
+
+
+def test_run_progress_shows_globally_while_a_batch_is_active(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    rn = win.run_screen
+    assert win.tabs.currentWidget() is win.settings_screen    # looking at Setup, not Run
+    win._on_run_started()
+    rn._set_status("breath 3/10")
+    assert win.statusBar().currentMessage() == "Run: breath 3/10"
+    win._on_run_finished()
+    # the run is over: the bar shows Run's own last message directly (its outcome is what
+    # the user is looking at, regardless of which tab happens to be current — Run has no
+    # tab of its own since B03), losing the "Run: " prefix that belonged to the exclusive
+    # in-flight window rather than leaving the stale "Run: …" line sitting there
+    assert win.statusBar().currentMessage() == "breath 3/10"
+    rn._set_status("breath 4/10")            # Run isn't the active tab -> stays off the bar
+    assert win.statusBar().currentMessage() != "breath 4/10"
+    win.close()
+
+
+def test_run_outcome_lines_are_not_double_prefixed(qapp, tmp_path):
+    """Run's own outcome lines already start with the word 'Run' ('Run failed — …', 'Run
+    cancelled — …') — the global "Run: " prefix must not stutter on top of them."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    rn = win.run_screen
+    win._on_run_started()
+    rn._set_status("Run failed — ValueError: boom")
+    assert win.statusBar().currentMessage() == "Run failed — ValueError: boom"
+    rn._set_status("Run cancelled — no output written.")
+    assert win.statusBar().currentMessage() == "Run cancelled — no output written."
+    # an ordinary progress line (not an outcome) still gets the prefix as normal
+    rn._set_status("file 1/2: breath 3/40")
+    assert win.statusBar().currentMessage() == "Run: file 1/2: breath 3/40"
+    win.close()
+
+
+def test_analysis_menu_actions_show_feedback_regardless_of_active_tab(qapp, tmp_path):
+    """The Analysis menu (Save/Save as/New/Open) lives in the header and is reachable from
+    any tab, but its confirmation ('Saved …', guided-flow entry, etc.) is emitted by Setup —
+    which the per-tab ownership rule would otherwise swallow unless Setup happens to be the
+    active tab. Regression for the ticket's self-review finding."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    win.tabs.setCurrentWidget(win.preview_screen)  # looking at Preview & QC (hosts the Run
+                                                    # drawer since B03), not Setup
+    win._new_analysis()
+    # B04 retired the separate guidance label — Setup's own validation status (its only
+    # status now) lands on the bar instead, and a freshly blanked analysis is honestly
+    # invalid (no input folder) until the user fills one in again. The real regression
+    # check is that this is Setup's OWN message, not still whatever Run's status happened
+    # to be while Preview & QC was the active tab.
+    assert "invalid" in win.statusBar().currentMessage().lower()
+    win._on_noise_reference_changed("synth_case_A.csv", [[1.0, 2.0]], False)
+    assert "rest reference set" in win.statusBar().currentMessage().lower()
+    win.close()
+
+
+def test_refresh_files_skips_the_pick_one_line_when_already_drawn(qapp, tmp_path):
+    """A plain revisit of the Preview tab (main_window._on_tab_changed calls refresh_files
+    on every entry, see test_reactive_file_list_and_noise_gating above and A03) must not
+    reset the status line over an already-selected, already-drawn file's own result."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_mechanics_preview
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    pv._refresh_files()
+    pv.file_rail.select_filename("synth_case_A.csv")
+    pv._render_preview(stage_mechanics_preview(
+        win.state.settings, os.path.join(INPUT, "synth_case_A.csv")))
+    pv._set_status("A CUSTOM RESULT LINE")
+    pv.refresh_files()                       # simulate a plain tab revisit
+    assert pv.status.text() == "A CUSTOM RESULT LINE"
+    win.close()
+
+
+def test_refresh_files_singular_and_plural_wording(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    pv.refresh_files()                        # 2 synthetic files -> plural, "pick one"
+    assert pv.status.text() == "2 files — pick one; everything runs automatically."
+    win.state.settings.input.files = "synth_case_A.csv"    # narrow the mask to exactly one
+    pv.refresh_files()
+    assert pv.status.text() == "1 file — everything runs automatically."
+    win.close()
 
 
 def test_checkboxes_show_a_box_in_both_states(qapp):

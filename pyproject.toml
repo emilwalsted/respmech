@@ -145,6 +145,30 @@ requires = [
 ]
 test_requires = ["pytest>=7.0"]
 
+# C04 (UI-overhaul): registers *.toml as a RespMech document, so a packaged build opens a
+# double-clicked analysis file (macOS Info.plist / Windows registry association) instead of
+# it landing in a text editor. Declared ONCE at the app level, not duplicated under
+# `.macOS`/`.windows` below: briefcase's own config merge (`merge_config` in
+# briefcase/config.py) only OVERRIDES a base-level table when the SAME key is also present
+# in the platform-specific block — it does not require the key to be repeated to reach both
+# platforms. A per-platform copy would only invite the two copies to drift apart. The
+# macOS-only `LSItemContentTypes`/`CFBundleTypeRole`/`UTTypeConformsTo` machinery is derived
+# automatically at build time from this same table (see `validate_document_type_config`);
+# only `CFBundleTypeRole` is overridden below, from the default "Viewer" to "Editor" — the
+# app saves/overwrites the file, it does not just display it. `icon` reuses the app's own
+# icon stem (no dedicated document icon exists yet); `mime_type` is TOML's own IANA-registered
+# type (registered 2024-10-21), not the synthetic per-app default briefcase would otherwise
+# generate.
+[tool.briefcase.app.respmech.document_type.toml]
+extension = "toml"
+description = "RespMech analysis settings"
+icon = "installer/respmech"
+url = "https://github.com/emilwalsted/respmech"
+mime_type = "application/toml"
+
+[tool.briefcase.app.respmech.document_type.toml.macOS]
+CFBundleTypeRole = "Editor"
+
 [tool.briefcase.app.respmech.macOS]
 # Single-arch (host) build: librosa's numba/llvmlite don't reliably ship universal2
 # wheels, which a universal_build would require. Testers on the other Mac arch get a

@@ -30,6 +30,40 @@ for _p in (SRC, HERE):
 
 import pytest  # noqa: E402
 
+# --- Opt-in scaling diagnostics (point 6, 11-08-2026) ---------------------------------
+# RESPMECH_NET_PROFILE=<path.csv>: append one row per test —
+#   test_idx, n_top_level_widgets, t_gc, t_drain, t_close, t_since_prev_net, rss_mb, nodeid
+# — the columns that located the suite's scaling costs: by test 635 of a one-process run
+# the population was 31,678 top-level widgets, gc.collect() 1.9 s/test and RSS 7.5 GB.
+# RESPMECH_NET_CENSUS=1: print a type census of the surviving top-level widgets at
+# session end (before pytest_unconfigure's os._exit) — it is what identified the
+# population as dead windows' fanout: after 57 tests of test_gui_interactive alone,
+# 8,038 top-levels of which 6,137 QMenu + 234 ViewBoxMenu (pyqtgraph context menus,
+# ~130 parentless QMenus per MainWindow) — ~175 widgets kept alive per closed window.
+# Both are inert unless their env var is set; CI never sets them by default.
+import time as _time
+_NET_PROF = os.environ.get("RESPMECH_NET_PROFILE")
+_NET_IDX = {"i": 0}
+
+def _rss_mb():
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmRSS"):
+                    return int(line.split()[1]) // 1024
+    except Exception:
+        return -1
+    return -1
+
+def _net_log(row):
+    if not _NET_PROF:
+        return
+    try:
+        with open(_NET_PROF, "a") as fh:
+            fh.write(",".join(str(x) for x in row) + "\n")
+    except Exception:
+        pass
+
 
 _EXIT_STATUS = {"code": 0}
 
@@ -87,7 +121,7 @@ def _close_top_level_windows(request):
     Why this is needed and not just per-test ``win.close()``:
       * A test whose assertion FAILS skips its own trailing ``win.close()``, leaking a screen
         (and, without cancellation, a running batch thread) into the next test.
-      * Several GUI tests arm the debounce (via a ``file_combo`` change) but never spin an
+      * Several GUI tests arm the debounce (via a file-rail selection change) but never spin an
         event loop, so the timer stays LOADED on a still-alive screen. When a later test
         spins the session's first real event loop, that expired timer fires and dispatches
         real, never-cancelled jobs on a dead screen — on the 2-core headless Windows runner
@@ -113,7 +147,10 @@ def _close_top_level_windows(request):
     # depends on. Deliberately NOT touched: the gc/DeferredDelete/scan sequence itself. The
     # segfault it guards against is py3.11-specific and cannot be reproduced on the
     # maintainer's 3.13, so changing it could only be validated by shipping it.
+    _NET_IDX["i"] += 1
+    _t_test_end = _time.perf_counter()
     if "qapp" not in getattr(request, "fixturenames", ()):
+        _net_log([_NET_IDX["i"], 0, 0, 0, 0, 0, _rss_mb(), repr(request.node.nodeid)])
         return
     try:
         from PySide6.QtWidgets import QApplication
@@ -132,17 +169,23 @@ def _close_top_level_windows(request):
     # fire.
     import gc  # noqa: PLC0415
     from PySide6.QtCore import QEvent  # noqa: PLC0415
+    _t0 = _time.perf_counter()
     gc.collect()
+    _t_gc = _time.perf_counter() - _t0
+    _t0 = _time.perf_counter()
     try:
         app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     except Exception:                       # pragma: no cover - defensive
         pass
+    _t_drain = _time.perf_counter() - _t0
     try:
         import shiboken6  # noqa: PLC0415
         _alive = shiboken6.isValid
     except Exception:                       # pragma: no cover - shiboken ships with PySide6
         _alive = lambda _w: True            # noqa: E731
-    for w in list(app.topLevelWidgets()):
+    _t0c = _time.perf_counter()
+    _tops = list(app.topLevelWidgets())
+    for w in _tops:
         if not _alive(w):                   # belt-and-braces after the reap above
             continue
         try:
@@ -155,6 +198,10 @@ def _close_top_level_windows(request):
             w.close()
         except Exception:                   # pragma: no cover - defensive; never fail teardown
             pass
+    _t_close = _time.perf_counter() - _t0c
+    _net_log([_NET_IDX["i"], len(_tops), round(_t_gc, 4), round(_t_drain, 4),
+              round(_t_close, 4), round(_time.perf_counter() - _t_test_end, 4),
+              _rss_mb(), repr(request.node.nodeid)])
 
 
 @pytest.fixture(autouse=True)
@@ -262,3 +309,29 @@ def pytest_collection_modifyitems(items):
                              "test_plot_palette_tracks_theme_and_has_a_complete_contract")
 
     items.sort(key=lambda it: 0 if theme_switching(it) else 1)
+
+
+# RESPMECH_NET_CENSUS: dump a type census of the surviving top-level widgets at session
+# end (before pytest_unconfigure's os._exit) — local diagnosis of the population leak.
+if os.environ.get("RESPMECH_NET_CENSUS"):
+    import collections
+
+    def pytest_sessionfinish(session, exitstatus):   # noqa: F811 - deliberate override
+        _EXIT_STATUS["code"] = int(exitstatus)
+        try:
+            from PySide6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app is None:
+                return
+            tops = list(app.topLevelWidgets())
+            c = collections.Counter(type(w).__name__ for w in tops)
+            print("\n=== TOP-LEVEL CENSUS: %d widgets ===" % len(tops))
+            for name, n in c.most_common(20):
+                print("%6d  %s" % (n, name))
+            # sample a few of the biggest class for identity clues
+            big = c.most_common(1)[0][0]
+            for w in [w for w in tops if type(w).__name__ == big][:5]:
+                print("sample:", big, "objectName=%r visible=%s size=%s" % (
+                    w.objectName(), w.isVisible(), (w.width(), w.height())))
+        except Exception as e:
+            print("census failed:", e)

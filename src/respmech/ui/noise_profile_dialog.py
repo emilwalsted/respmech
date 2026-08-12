@@ -1,12 +1,17 @@
 """Modal noise-profile picker.
 
-Shows the raw EMG channels stacked on a shared time axis. Hovering draws a vertical
-crosshair on every channel and a cursor-following label with the time (3 dp). A
-click-drag marks a rest region — shaded on every channel — and the label then shows
-the region's duration (Δt). A region wider than 0.5 s warns that a larger noise
-profile can slow processing markedly. The selection persists until a new drag or a
-plain click clears it. "Set noise profile" (enabled only once a region is marked)
-accepts the dialog; "Cancel" rejects it without touching the settings.
+Shows the EMG channels the noise profile is actually built from — the ECG-reduced
+matrix when "Remove ECG" is on, or the raw channels when it is off (D08, UI-overhaul:
+the caller resolves this via ``workers.stage_ecg_reduction``, never here) — stacked on
+a shared time axis. R-peak markers (``peak_times``) are drawn on every channel when
+ECG removal found any, the same ▼ the ECG tab uses, so a residual heartbeat reads as
+cardiac rather than muscle activity. Hovering draws a vertical crosshair on every
+channel and a cursor-following label with the time (3 dp). A click-drag marks a rest
+region — shaded on every channel — and the label then shows the region's duration
+(Δt). A region wider than 0.5 s warns that a larger noise profile can slow processing
+markedly. The selection persists until a new drag or a plain click clears it. "Set
+noise profile" (enabled only once a region is marked) accepts the dialog; "Cancel"
+rejects it without touching the settings.
 
 The reference can also be defined as "every expiration" rather than a marked span — the two
 are alternatives in the core, so they are offered as one choice here instead of a checkbox
@@ -18,6 +23,16 @@ double-click resets it — restoring the marked region its own leading click cle
 
 The selection state (``_set_selection`` / ``_clear_selection`` / ``_maybe_warn`` /
 ``selected_region``) is factored out of the mouse handling so it is testable headless.
+
+Opening the picker on a test that already has a saved reference seeds it via
+``_seed_reference`` (D07, UI-overhaul) — the caller resolves the reference against the
+CURRENT (possibly re-opened) settings and calls it after construction; the dialog itself
+never reads settings. That makes "OK" without dragging anything a valid, no-op accept,
+instead of the picker opening empty and forcing a fresh drag to see what was already
+saved. When ``reference_file`` names a file other than the one the picker was opened on,
+a persistent banner explains that accepting moves the WHOLE test's reference to this
+file, and the accept button is relabelled "Replace rest reference" so the click
+describes its own effect.
 """
 from __future__ import annotations
 
@@ -29,7 +44,10 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFrame, QHBoxLa
 import pyqtgraph as pg
 
 from respmech.ui.flow_layout import ElidingCheckBox
-from respmech.ui.plot_overlays import add_flow_background
+from respmech.ui.stft_frames import (DEFAULT_HOP_LENGTH, DEFAULT_WIN_LENGTH,
+                                     MIN_STABLE_FRAMES, min_seconds_for_frames,
+                                     stft_frame_count)
+from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
 
 try:
     from respmech.ui import theme as _theme
@@ -39,7 +57,6 @@ except Exception:  # pragma: no cover
 #: sentinel returned by ``selected_region`` for the whole-expiration option
 EXPIRATION = "expiration"
 
-_WARN_SECONDS = 0.5
 _TIME_STEPS = 1000.0                   # scrollbar ticks per second: QScrollBar is integer-only
 _GLW_MARGIN = 10                       # GraphicsLayoutWidget's own margin around the plots
 #: Minimum height (px) for one channel row, so a rest span stays judgeable by eye however
@@ -49,7 +66,13 @@ _GLW_MARGIN = 10                       # GraphicsLayoutWidget's own margin aroun
 #: ~85 px of actual trace.)
 _ROW_MIN_H = 120
 _REGION_BRUSH = (255, 152, 0, 60)      # brand orange, semi-transparent
-_ACCENT = (255, 152, 0)
+#: The one accent this picker uses for "a marked noise reference", unthemed (it reads the
+#: same on light and dark plot grounds). Public: the Detail-plot indicator that mirrors the
+#: saved reference (preview_screen's EMG tab) imports this so the two never drift apart —
+#: before D07 that indicator was painted the SAME hue as the breathing shading it sits
+#: inside (theme.py's old noise_region token), which made it invisible in practice.
+NOISE_ACCENT = (255, 152, 0)
+_ACCENT = NOISE_ACCENT
 
 
 def _axis_width():
@@ -76,7 +99,9 @@ def _plot_pal():
 class NoiseProfileDialog(QDialog):
     """Pick a rest span across the raw EMG channels to use as the noise reference."""
 
-    def __init__(self, raw, t, fs, cols, parent=None, file_name="", flow=None):
+    def __init__(self, raw, t, fs, cols, parent=None, file_name="", flow=None,
+                reference_file="", peak_times=None, ecg_applied=True,
+                win_length=DEFAULT_WIN_LENGTH, hop_length=DEFAULT_HOP_LENGTH):
         super().__init__(parent)
         self.setWindowTitle("Set noise profile" + (f" — {file_name}" if file_name else ""))
         self.setModal(True)
@@ -84,7 +109,25 @@ class NoiseProfileDialog(QDialog):
         self._t = np.asarray(t, dtype=float)
         self._fs = fs
         self._flow = np.asarray(flow, dtype=float) if flow is not None else None
+        # R-peak times (s), same axis as _t — the caller passes stage_ecg_reduction's
+        # 'peaks', which are populated whether or not removal is ON (D08): even with
+        # removal off, the reference channel's peaks are still detected (cheaply) so the
+        # markers can say "these are heartbeats" instead of leaving them unlabelled.
+        self._peak_times = (np.asarray(peak_times, dtype=float)
+                            if peak_times is not None else np.array([], dtype=float))
+        self._ecg_applied = bool(ecg_applied)
+        # The STFT geometry the noise profile will actually be built with, threaded in
+        # from settings.processing.emg.noise by the caller (D09). Without it the frame
+        # threshold cannot be computed and any warning would silently assume 1000 Hz.
+        self._win_length = int(win_length)
+        self._hop_length = int(hop_length)
         self._selection = None             # (t0, t1) in seconds, or None
+        # the file the TEST's shared reference currently lives on (may differ from the
+        # file this picker was opened on, or be "" if no reference is set yet) — drives
+        # the persistent cross-file warning below, never touched again after construction
+        self._reference_file = reference_file or ""
+        self._mismatch = bool(self._reference_file and file_name
+                              and self._reference_file != file_name)
         self._dragging = False
         self._moved = False                # did the pointer move far enough to count as a drag?
         self._press_x = None
@@ -96,12 +139,44 @@ class NoiseProfileDialog(QDialog):
                                            # must refuse to answer the other's update
 
         v = QVBoxLayout(self)
-        hint = QLabel("Hover to read the time; click-drag over a quiet (EMG-free) span to "
-                      "mark the rest region on all channels. Click once to clear it. "
-                      "Scroll to zoom the time axis (all channels together); double-click to reset. "
-                      "Use the bar below the plots to move through the recording when zoomed in.")
-        hint.setProperty("status", "muted"); hint.setWordWrap(True)
-        v.addWidget(hint)
+        # Asks for what the criterion can actually mean on real data (D08): "quiet
+        # (EMG-free)" sent users hunting for a gap between heartbeat spikes that are not
+        # even in the signal the profile is built from when ECG removal is on. Says
+        # plainly, when it is OFF, that the heartbeats are still there — in this signal
+        # AND in the profile it builds — rather than leaving that to be discovered later.
+        _rest_hint = ("click-drag over a span where the diaphragm is at rest, typically "
+                     "late in expiration, to mark the rest region on all channels")
+        if self._ecg_applied:
+            _ecg_hint = ("Heartbeats are marked ▼ and have already been removed from "
+                         "this signal.")
+        else:
+            _ecg_hint = ("'Remove ECG' is off, so heartbeats (marked ▼ where found) are "
+                         "still in this signal, and will still be in the profile it builds.")
+        self.hint = QLabel(f"Hover to read the time; {_rest_hint}. {_ecg_hint} Click once "
+                          "to clear the selection. Scroll to zoom the time axis (all "
+                          "channels together); double-click to reset. Use the bar below "
+                          "the plots to move through the recording when zoomed in.")
+        self.hint.setProperty("status", "muted"); self.hint.setWordWrap(True)
+        v.addWidget(self.hint)
+
+        # Persistent, not tied to the drag/selection state below (self.warn IS): the test
+        # has exactly one shared reference regardless of which file is open, and accepting
+        # here always moves it to THIS file — the user needs to know that before they ever
+        # touch the plots, not only after a drag. First shown widget, so it cannot be missed.
+        self.file_warn = QLabel("")
+        self.file_warn.setObjectName("noiseFileWarn")
+        self.file_warn.setWordWrap(True)
+        self.file_warn.setVisible(self._mismatch)
+        _fwarn = (_theme.active_theme().get("st_warn_fg", "#8A5A12")
+                 if _theme is not None else "#8A5A12")
+        self.file_warn.setStyleSheet("#noiseFileWarn { color: %s; font-weight: 600; }" % _fwarn)
+        if self._mismatch:
+            self.file_warn.setText(
+                f"This test's rest reference is currently {self._reference_file}. Setting "
+                f"it here moves the whole test's reference to {file_name} — the profile is "
+                "still built once, from this one span, and applied identically to every "
+                "file in the test.")
+        v.addWidget(self.file_warn)
 
         pal = _plot_pal()
         trace_pen = pal.get("noise_trace", (90, 150, 200))
@@ -134,6 +209,7 @@ class NoiseProfileDialog(QDialog):
                 _theme.align_left_axis(p)          # keep the stacked channels x-aligned
             p.plot(self._t[:len(y)], np.asarray(y, dtype=float), pen=pg.mkPen(trace_pen))
             add_flow_background(p, self._t, self._flow, pal)   # discrete respiration reference, behind
+            add_ecg_capture_markers(p, self._peak_times, pal)  # same ▼ the ECG tab uses (D08)
             if i == n - 1:
                 p.setLabel("bottom", "Time (s)")
             vb = p.getViewBox()
@@ -213,7 +289,11 @@ class NoiseProfileDialog(QDialog):
         self.info = QLabel(""); self.info.setProperty("status", "muted")
         row.addWidget(self.info, 1)
         self.btn_cancel = QPushButton("Cancel"); self.btn_cancel.clicked.connect(self.reject)
-        self.btn_ok = QPushButton("Set noise profile"); self.btn_ok.setEnabled(False)
+        # Relabelled when accepting would move the reference off another file (see
+        # file_warn above): the click then describes what it actually does.
+        self.btn_ok = QPushButton("Replace rest reference" if self._mismatch
+                                  else "Set noise profile")
+        self.btn_ok.setEnabled(False)
         self.btn_ok.clicked.connect(self.accept)
         # Enter commits, Esc cancels. Without this Qt promotes Cancel (added first) as the
         # default and Enter throws away the marked region. The accepting button starts
@@ -408,10 +488,36 @@ class NoiseProfileDialog(QDialog):
         self.info.setText("")
         self.warn.setVisible(False)
 
+    def _seed_reference(self, t0, t1):
+        """Show the reference already saved for this test (D07, UI-overhaul): shade it via
+        the normal selection path — so it behaves exactly like a fresh drag, right down to
+        the width warning — then say plainly that this is the CURRENT reference, not a new
+        pick, so accepting without touching anything is understood as "keep it". The
+        caller resolves ``(t0, t1)`` against whatever is current in settings; this method
+        never reads settings itself. Any later drag calls ``_set_selection`` directly and
+        overwrites this wording with the ordinary "Rest region …" text, which is correct:
+        at that point it IS a new pick, not the saved one."""
+        self._set_selection(t0, t1)
+        where = self._reference_file or "the current file"
+        self.info.setText(f"Current reference: {where}, {t0:.3f}–{t1:.3f} s")
+
     def _maybe_warn(self, width):
-        if width > _WARN_SECONDS:
-            self.warn.setText(f"⚠ A noise profile wider than {_WARN_SECONDS:g} s "
-                              f"(selected {width:.3f} s) can increase processing time markedly.")
+        """Judge the dragged span by the SAME frame arithmetic the EMG tab applies
+        (D09) — live, on every ``_set_selection``. The old rule warned above a fixed
+        0.5 s about processing time, which the reference's width does not drive
+        (the costly sweep runs on the ACTIVE clip), and at 1000 Hz it pointed the
+        user away from the only spans the tab would call good. Below the stability
+        threshold the label says how far to drag, in seconds; at or past it, the
+        label goes quiet."""
+        frames = stft_frame_count(int(round(width * self._fs)),
+                                  self._win_length, self._hop_length)
+        if frames < MIN_STABLE_FRAMES:
+            need = min_seconds_for_frames(MIN_STABLE_FRAMES, self._fs,
+                                          self._win_length, self._hop_length)
+            enkelt = "frame" if frames == 1 else "frames"
+            self.warn.setText(
+                f"⚠ {width:.2f} s gives {frames} STFT {enkelt} — too short for a stable "
+                f"noise estimate. Drag to at least {need:.2f} s ({MIN_STABLE_FRAMES} frames).")
             self.warn.setVisible(True)
         else:
             self.warn.setVisible(False)

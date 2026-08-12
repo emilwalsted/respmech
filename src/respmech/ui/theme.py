@@ -156,6 +156,13 @@ PLOT_ROW_MIN_HEIGHT = 96
 #: view's height on any window under ~1200 px tall.
 PLOT_DIAG_MIN_HEIGHT = 96
 
+#: Hard per-row floor a stacked graph's rows are never squeezed below, even once
+#: ``set_stack_floor``'s ``viewport_height`` lets the floor give way (D14, UI-overhaul).
+#: Below this a row stops being useful for judging a breath/burst by eye at all — it is the
+#: same job PLOT_ROW_MIN_HEIGHT does for a screen with room to spare, just for the screen
+#: that does not have it.
+PLOT_ROW_HARD_MIN = 60
+
 
 def set_plot_floor(widget, height: int = PLOT_MIN_HEIGHT) -> None:
     """Stop a plot widget from being squeezed below the height at which it stops being
@@ -166,7 +173,9 @@ def set_plot_floor(widget, height: int = PLOT_MIN_HEIGHT) -> None:
         pass
 
 
-def set_stack_floor(widget, rows: int, row_height: int = PLOT_ROW_MIN_HEIGHT) -> None:
+def set_stack_floor(widget, rows: int, row_height: int = PLOT_ROW_MIN_HEIGHT, *,
+                     viewport_height: int | None = None,
+                     row_hard_min: int = PLOT_ROW_HARD_MIN) -> None:
     """Floor a widget that STACKS ``rows`` graphs, per row rather than in total.
 
     The distinction is the whole point and it was got wrong once: flooring the container at
@@ -175,8 +184,30 @@ def set_stack_floor(widget, rows: int, row_height: int = PLOT_ROW_MIN_HEIGHT) ->
     than before the floor was introduced, on the tab the Preview screen opens on, while the
     container happily satisfied its 130 px. A stack's floor is ``rows * row_height``; the page
     scrolls when that does not fit, which is what was asked for.
+
+    ``viewport_height`` (D14, UI-overhaul) lets that floor give way once the viewport the
+    stack is actually shown in genuinely cannot afford ``rows * row_height``: on a 1280x720
+    screen a 5-channel stack's 480 px floor left the containing vertical splitter's lower
+    half permanently pinned at its own floor with zero pixels of travel — the splitter
+    reported movable but a drag could not move it, and scrolling was the only way to reach
+    the table/Campbell half at all. When given, the floor becomes
+    ``min(rows * row_height, 0.55 * viewport_height)``, clamped to never fall below
+    ``rows * row_hard_min`` — the stack keeps SOME readable trace per row even on the
+    shortest screen shipped to, it just stops being ``row_height`` tall.
+
+    Omitted (the default, ``None``, or a non-positive value meaning "not known yet" — e.g.
+    a viewport that has not been laid out), the floor is the original, viewport-blind
+    ``rows * row_height``, unchanged from before this parameter existed. Existing callers
+    that never pass it (the EMG raw-channel stack) are therefore untouched by this change.
     """
-    set_plot_floor(widget, max(1, int(rows)) * int(row_height))
+    rows = max(1, int(rows))
+    ideal = rows * int(row_height)
+    if viewport_height is None or viewport_height <= 0:
+        set_plot_floor(widget, ideal)
+        return
+    cap = int(0.55 * viewport_height)
+    hard_min = rows * int(row_hard_min)
+    set_plot_floor(widget, max(hard_min, min(ideal, cap)))
 
 
 def align_left_axis(plot, width: int = PLOT_AXIS_WIDTH) -> None:
@@ -199,7 +230,10 @@ _LIGHT = {
     "header_bg": "#F1F4F8",
     "accent": "#2C6E9B", "accent_hover": "#2A6591", "accent_pressed": "#24597F",
     "accent_fg": "#FFFFFF", "accent_soft": "#E6F0F7",
-    "disabled_bg": "#F0F2F5", "disabled_fg": "#A7B0BB",
+    # C02: disabled_fg was 1.96:1 against disabled_bg — readable as "something is there" but
+    # not as which value it holds (e.g. Advanced/EMG noise's Auto-derived prop_decrease).
+    # Raised to ~3.3:1, still unmistakably muted next to active text's ~14.8:1.
+    "disabled_bg": "#F0F2F5", "disabled_fg": "#7A8593",
     "st_info_fg": "#215C86", "st_info_bg": "#E7F0F7", "st_info_bd": "#C4DBEC",
     "st_ok_fg": "#1F6B48", "st_ok_bg": "#E6F3EC", "st_ok_bd": "#BFE0CD",
     "st_warn_fg": "#8A5A12", "st_warn_bg": "#FBF1DD", "st_warn_bd": "#EBD6A8",
@@ -218,7 +252,12 @@ _DARK = {
     "header_bg": "#232B34",
     "accent": "#4B9CD3", "accent_hover": "#5CA9DD", "accent_pressed": "#3E8AC0",
     "accent_fg": "#0C1116", "accent_soft": "#263643",
-    "disabled_bg": "#21272F", "disabled_fg": "#58636F",
+    # C02: disabled_bg used to be byte-identical to "surface" (#21272F), so a disabled
+    # field's flat dissolved into the card it sat on and only a 1.27:1 border said a
+    # control was even there — deepened one step so a disabled field still reads as a
+    # field. disabled_fg raised from 2.46:1 to ~4.25:1 against the new background (still
+    # unmistakably muted next to active text's ~13.3:1).
+    "disabled_bg": "#1B2028", "disabled_fg": "#79838F",
     "st_info_fg": "#8FC4E8", "st_info_bg": "#1E2E3A", "st_info_bd": "#2C4457",
     "st_ok_fg": "#7FCBA4", "st_ok_bg": "#172A20", "st_ok_bd": "#2A4636",
     "st_warn_fg": "#E0B357", "st_warn_bg": "#2C2413", "st_warn_bd": "#4A3D1D",
@@ -538,6 +577,17 @@ QRadioButton::indicator:checked { border: 1px solid $accent; background: $accent
 QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {
     border: 1px solid $border; background: $disabled_bg;
 }
+/* C02: neither indicator had ANY visible focus state — a keyboard user tabbing through
+   a checklist (e.g. Output's ten save-format boxes) could not see which box they were on
+   (two renders with focus on different boxes differed by zero pixels). A 2px accent border
+   reads clearly, but naively widening it grows the 16x16 content box and shifts the row —
+   so the focused indicator is also shrunk to 14x14, keeping the same 18x18 OUTER footprint
+   (16 + 2*1 == 14 + 2*2) as the unfocused state. `outline: none` suppresses Qt's own dotted
+   focus rectangle, which this replaces. */
+QCheckBox:focus, QRadioButton:focus { outline: none; }
+QCheckBox::indicator:focus, QRadioButton::indicator:focus {
+    width: 14px; height: 14px; border: 2px solid $accent;
+}
 
 /* ---- tables: light header, zebra rows, quiet grid -------------------- */
 QTableView, QTableWidget {
@@ -670,6 +720,9 @@ QToolButton#appMenuButton:hover { background-color: $surface_alt; border-color: 
 QToolButton#appMenuButton:pressed,
 QToolButton#appMenuButton:open { background-color: $accent_soft; border-color: $accent; color: $accent; }
 QToolButton#appMenuButton:disabled { color: $disabled_fg; border-color: $border; }
+/* C02: same focus treatment as QPushButton:focus above — border width is already 1px in
+   the base rule, so recolouring it to $accent on focus causes no layout shift. */
+QToolButton#appMenuButton:focus { outline: none; border-color: $accent; }
 QToolButton#appMenuButton::menu-indicator {
     subcontrol-origin: padding;
     subcontrol-position: center right;
@@ -693,6 +746,15 @@ QPushButton[compact="true"] {
 QPushButton[nav="true"] {
     padding: 6px 6px;
     min-width: 0;
+}
+
+/* ---- startup chooser's recent-analysis buttons (ticket C03) -----------
+   Default QPushButton text is centred, which reads fine for a short caption
+   but scrambles "name  —  folder" into a ragged column once names/folders
+   vary in length. Left-aligning keeps the two halves lined up down the list. */
+QPushButton[recent="true"] {
+    text-align: left;
+    padding-left: 12px;
 }
 
 /* ---- form fields: keep them tidy, not full-width ---------------------

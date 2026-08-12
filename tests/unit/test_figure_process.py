@@ -181,6 +181,133 @@ def test_spawn_relaunch_detection(monkeypatch):
     assert fp._spawn_relaunches_the_app() is True
 
 
+# -- A07: per-file progress across the process boundary ------------------------
+
+def test_progress_names_delivered_on_isolated_and_in_process_paths(tmp_path):
+    """The isolated (spawned-child) path must deliver the SAME per-file progress names the
+    in-process path always has — via a Manager().Queue() relay, not the single coarse
+    'figures' stage a spawned child used to leave pip/PyPI installs with. Skipped (not
+    xfailed) on an environment that genuinely cannot spawn: there the isolated path IS the
+    in-process path (write_figures degrades to it), so the assertion would just retest the
+    in-process path against itself under a misleading name."""
+    res, s = _result(tmp_path)
+    if not fp._can_spawn():
+        pytest.skip("environment cannot spawn a child process")
+    seen = []
+    written, failures = fp.write_figures(res, s, str(tmp_path / "iso"), progress=seen.append)
+    assert written, "the isolated path must still write the figures"
+    assert not failures
+    assert seen, "no per-file names arrived through the isolated path's progress queue"
+    assert "synth_case_A.csv" in seen
+
+
+def test_in_process_path_reports_progress_directly(tmp_path, monkeypatch):
+    """The in-process path's progress callback is unchanged — it is called directly, no
+    queue involved — so this must keep working exactly as before the progress queue existed."""
+    res, s = _result(tmp_path)
+    monkeypatch.setattr(fp, "_CAN_SPAWN", None)
+    monkeypatch.setenv(fp._DISABLE_ENV, "1")
+    seen = []
+    written, _ = fp.write_figures(res, s, str(tmp_path), progress=seen.append)
+    assert written
+    assert seen == ["synth_case_A.csv"]
+
+
+def test_a_failing_manager_completes_the_write_without_names(tmp_path, monkeypatch):
+    """A failing Manager or queue must cost only the per-file names, never the run. The
+    executor is faked so this is deterministic regardless of whether THIS environment can
+    actually spawn — the point under test is write_figures' own handling of a Manager()
+    that raises, not the isolation mechanism itself (covered by the tests above)."""
+    monkeypatch.setattr(fp, "_CAN_SPAWN", True)
+
+    import multiprocessing as real_mp
+
+    class _BoomManager:
+        def __init__(self, *a, **kw):
+            raise OSError("no manager here")
+
+    monkeypatch.setattr(real_mp, "Manager", _BoomManager)
+
+    class _FakeFuture:
+        def result(self, timeout=None):
+            return (["fake.pdf"], [])
+
+    calls = []
+
+    class _FakeExecutor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def submit(self, fn, *args, **kwargs):
+            calls.append(kwargs.get("progress_queue"))
+            return _FakeFuture()
+
+    monkeypatch.setattr(fp, "_executor", lambda: _FakeExecutor())
+
+    notes = []
+    seen = []
+    written, failures = fp.write_figures(None, None, "unused", progress=seen.append,
+                                         on_fallback=notes.append)
+    assert written == ["fake.pdf"]
+    assert failures == []
+    assert seen == [], "a failing Manager must degrade to no per-file names, not a crash"
+    assert notes == [], "a failing Manager is not a figure-subprocess failure — no fallback note"
+    assert calls == [None], "no queue must reach the child when the Manager could not be built"
+
+
+def test_progress_queue_is_drained_even_on_a_fast_finish(tmp_path, monkeypatch):
+    """A per-file name queued by the child just before it finishes must still be delivered —
+    the poll loop must drain the queue once more after the future resolves, not only on each
+    waiting iteration before it."""
+    monkeypatch.setattr(fp, "_CAN_SPAWN", True)
+
+    class _FakeQueue:
+        def __init__(self):
+            self._items = ["only_file.csv"]
+
+        def get_nowait(self):
+            if not self._items:
+                raise Exception("empty")
+            return self._items.pop(0)
+
+    class _FakeManager:
+        def __init__(self, *a, **kw):
+            pass
+
+        def Queue(self):
+            return _FakeQueue()
+
+        def shutdown(self):
+            pass
+
+    import multiprocessing as real_mp
+    monkeypatch.setattr(real_mp, "Manager", _FakeManager)
+
+    class _FakeFuture:
+        def result(self, timeout=None):
+            return (["fake.pdf"], [])   # resolves on the very first poll
+
+    class _FakeExecutor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def submit(self, fn, *args, **kwargs):
+            return _FakeFuture()
+
+    monkeypatch.setattr(fp, "_executor", lambda: _FakeExecutor())
+
+    seen = []
+    written, _ = fp.write_figures(None, None, "unused", progress=seen.append)
+    assert written == ["fake.pdf"]
+    assert seen == ["only_file.csv"]
+
+
 # -- the writers.py seam -------------------------------------------------------
 
 def test_writers_reports_the_fallback_in_its_failure_list(tmp_path, monkeypatch):

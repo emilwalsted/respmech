@@ -3,10 +3,14 @@
 The Setup screen used to hold seven editable fields for the channel columns, which meant two
 places could set them and the numbers had to be typed against a column count the user could
 not see. Assignment now happens only in the channel dialog, where each column is plotted, so
-Setup shows what was chosen rather than asking for it: the same stacked preview the dialog
-draws, restricted to the columns that carry something, with each graph headed by the role it
-serves. There is no separate legend — each row names itself, so a list above repeating the
-same facts would only be a second place to keep in sync.
+Setup shows what was chosen rather than asking for it: the same stacked-column machinery the
+dialog draws with (``ColumnStack``), restricted to the columns that carry something and — since
+ticket B05 — rendered as a compact SPARKLINE (no axis apparatus; ``ColumnStack``'s
+``sparkline=True``) rather than the dialog's full, tick-labelled panels. Each graph is still
+headed by the role it serves, and there is no separate legend — each row names itself, so a
+list above repeating the same facts would only be a second place to keep in sync. The full,
+editable view (with a real axis to read a value off) is what the channel-assignment dialog is
+for.
 
 Only columns that HAVE a role appear — an empty summary is the honest rendering of "nothing
 assigned yet", and is what the empty-state line says.
@@ -44,11 +48,14 @@ ORDER = ("flow", "volume", "poes", "pgas", "pdi", "emg", "entropy")
 
 EMPTY_TEXT = "No channels assigned yet — click ‘Assign channels from data…’."
 
-#: the previews here are a readout, not a working surface, so they are shorter than the
-#: dialog's. Measured floor: below this the y tick labels of the wider-range channels clip
-#: (48 loses Poes's end labels, 50 still clips Volume's top), so this is as compact as the
-#: axis text allows rather than an aesthetic pick.
-SUMMARY_ROW_HEIGHT = 56
+#: the previews here are a readout, not a working surface: a low sparkline (no axis
+#: apparatus at all — see ColumnStack's ``sparkline`` mode, ticket B05), so there is no
+#: tick text left to clip and the row can be genuinely compact. The header text above each
+#: trace already says the role, the column and its source name; the trace is there so the
+#: SHAPE of the signal can be seen, not so a value can be read off it — that full, editable
+#: view lives in the channel-assignment dialog (ColumnStack's default, non-sparkline mode,
+#: ROW_HEIGHT = 74).
+SUMMARY_ROW_HEIGHT = 28
 
 
 def roles_of(channels, col):
@@ -66,13 +73,22 @@ def roles_of(channels, col):
 
 
 def describe(channels, role, integrate_from_flow=False):
-    """The one-line readout for a role, or None when it has no column.
+    """The one-line readout for a role, or None when it has no column — EXCEPT Volume
+    (ticket D02), which always returns a sentence, because a flow-only rig with no volume
+    channel is a supported setup (see the README), not an omission the summary should stay
+    silent about like it does for the other, genuinely-not-relevant-yet roles.
 
-    Volume is the exception worth spelling out: with 'Calculate volume from flow' on, the
-    column is ignored, and silently showing a column number that nothing reads is exactly
-    the kind of quiet wrongness the summary exists to prevent."""
-    if role == "volume" and integrate_from_flow:
-        return "Volume: derived from flow"
+    'Calculate volume from flow' on: the column, if any, is ignored, and silently showing
+    a column number that nothing reads is exactly the kind of quiet wrongness the summary
+    exists to prevent — checked FIRST so it also wins over a stale, still-assigned column
+    left over from before the checkbox was ticked."""
+    if role == "volume":
+        if integrate_from_flow:
+            return "Volume: derived from flow"
+        value = getattr(channels, "volume", None)
+        if not value:
+            return "Volume: not assigned"
+        return f"{ROLE_NAMES['volume']}: Column #{value}"
     value = getattr(channels, role, None)
     if role in ("emg", "entropy"):
         cols = list(value or [])
@@ -114,6 +130,8 @@ class ChannelSummary(QWidget):
         self._box.addWidget(self._empty)
 
     def _clear(self):
+        if self.stack is not None:
+            self.stack.close_plots()   # see close_plots()'s own docstring below
         while self._box.count():
             item = self._box.takeAt(0)
             w = item.widget()
@@ -121,6 +139,32 @@ class ChannelSummary(QWidget):
                 w.setParent(None)
         self.rows = []
         self.stack = None
+
+    def close_plots(self) -> None:
+        """Release the CURRENT ``ColumnStack``'s embedded plots' own context menus,
+        without rebuilding the empty state ``_clear()`` leaves behind — call this when the
+        window that owns this widget is closing, not when the mapping merely changes
+        (``_clear()``, called from ``show_mapping()``, already covers that case).
+
+        Every column of the previewed file gets its own ``pg.PlotWidget()`` in
+        :meth:`show_mapping` (via ``ColumnStack.build``), each with a context menu built
+        eagerly at construction. Nothing closes these on a normal redraw or file switch —
+        ``_clear()`` above now does — but the LAST ``ColumnStack`` built before the owning
+        window closes is never rebuilt, so nothing ever calls ``_clear()`` again for it.
+        Preview & QC's screen has an explicit ``shutdown()`` for exactly this; this is its
+        counterpart for Setup's channel summary — see ``MainWindow.closeEvent``, which
+        calls both. Measured 11-08-2026 (point 6, ticket 20260811-0910): this was the
+        SOLE remaining leak source after Preview & QC's own shutdown-time fix landed — a
+        bare, freshly-built ``MainWindow`` that renders nothing at all still measured 83
+        surviving ``QMenu``s after ``close()`` (0 with both fixes), because unlike a
+        discarded mid-session PlotItem (which becomes unreachable garbage a `gc.collect()`
+        eventually reclaims on its own), these stay REACHABLE via
+        ``self.channel_summary.stack.plots`` for as long as the (closed but, on Python
+        3.11, deliberately never deleted) window exists — never garbage at all, so no
+        amount of collection ever frees them without this call.
+        """
+        if self.stack is not None:
+            self.stack.close_plots()
 
     def show_mapping(self, channels, *, matrix=None, names=None, fs=1000,
                      integrate_from_flow=False):
@@ -149,25 +193,47 @@ class ChannelSummary(QWidget):
                 self.rows.append(lab)
             return self
 
+        def _carried(col):
+            carried = roles_of(channels, col)
+            # ticket D02: with 'derive from flow' on, an assigned Volume column (stale, or
+            # kept for later) is IGNORED by the core loader — tagging its column "Volume"
+            # here would claim the column is read when it is not, the same silent
+            # wrongness describe() avoids above. The trailing "derived from flow" row
+            # added below carries the fact instead.
+            if integrate_from_flow and "volume" in carried:
+                carried = [r for r in carried if r != "volume"]
+            return carried
+
         roles, prefixes = {}, {}
         for col in cols:
-            carried = roles_of(channels, col)
+            carried = _carried(col)
             # the trace takes the exclusive role's colour; entropy-only columns take entropy's
             roles[col - 1] = carried[0] if carried else ""
             # ...and the header names what the column IS, ahead of where it sits, so a graph
             # can be read without a legend to cross-reference
             prefixes[col - 1] = " + ".join(ROLE_NAMES[r] for r in carried)
         self.stack = ColumnStack(fs, columns=[c - 1 for c in cols],
-                                 row_height=SUMMARY_ROW_HEIGHT)
+                                 row_height=SUMMARY_ROW_HEIGHT, sparkline=True)
         self.stack.build(matrix, names or [], roles=roles, prefixes=prefixes)
         # the graph headers ARE the rows now, so they carry the settings-path tooltips the
         # deleted fields used to hold — a column with two roles names both
         for col, head in zip(cols, self.stack.headers):
-            carried = roles_of(channels, col)
+            carried = _carried(col)
             if carried:
                 head.setToolTip("<br><br>".join(_tip(*ROLE_HELP[r]) for r in carried))
             self.rows.append(head)
         self._box.addWidget(self.stack)
+        # ticket D02: Volume has no column of its own to draw here whenever it is either
+        # unassigned or being derived from flow — a trailing label names it either way,
+        # matching describe()'s no-matrix listing above instead of silently omitting the
+        # one role the graphs cannot represent.
+        if integrate_from_flow or not getattr(channels, "volume", None):
+            text = describe(channels, "volume", integrate_from_flow)
+            lab = QLabel(text)
+            lab.setToolTip(_tip(*ROLE_HELP["volume"]))
+            lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            self._box.addWidget(lab)
+            self.rows.append(lab)
         return self
 
     def texts(self):

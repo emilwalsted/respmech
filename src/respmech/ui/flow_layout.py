@@ -231,6 +231,20 @@ class ElidingLabel(QLabel):
         s.setWidth(min(s.width(), self._floor))
         return s
 
+    def sizeHint(self):                                  # noqa: N802 - Qt API
+        # Hint from the FULL text, never from the currently-shown (possibly elided) one.
+        # QLabel hints from what it displays, which turns the elide into a one-way
+        # ratchet: a label built empty (or granted ~0 by a squeezing layout) elides to
+        # nothing, hints 0, and is then GRANTED 0 forever — setFullText() can never grow
+        # it back. Measured 10-08-2026 when the noise read-out became a squeezing-row
+        # member: it collapsed to '' and stayed there. Hinting from the full text states
+        # the real contract — this is what the label WANTS; the floor is what it needs;
+        # the rendered text is whatever the granted width allows. (A maximumWidth set by
+        # the caller still caps the grant — Qt clamps the hint to the maximum.)
+        s = super().sizeHint()
+        s.setWidth(max(s.width(), self.fontMetrics().horizontalAdvance(self._full) + 4))
+        return s
+
     def resizeEvent(self, ev):                           # noqa: N802 - Qt API
         super().resizeEvent(ev)
         self._relayout()
@@ -238,9 +252,45 @@ class ElidingLabel(QLabel):
     def _relayout(self) -> None:
         fm = self.fontMetrics()
         width = max(0, self.width())
+        if not self.isVisible():
+            # An unshown widget has no honest geometry to elide against — width() is Qt's
+            # default 100x30, or a stale grant from before the text changed. Measured
+            # 10-08-2026: a squeezing row granted the then-empty read-out ~4 px, and a
+            # setFullText() before show elided the whole string away ('' on screen and in
+            # every unshown-widget test). Elide against the DECLARED budget instead: the
+            # caller's maximumWidth when one is set, else show the full text — a real
+            # resize re-elides the moment a shown layout grants a real width.
+            mw = self.maximumWidth()
+            width = mw if mw < 16777215 else 0
         # setText, not super().setText: a subclass that overrode setText would still be
         # honoured, and QLabel.setText on an unchanged string is a no-op anyway.
         self.setText(fm.elidedText(self._full, self._mode, width) if width else self._full)
+
+
+class FormLabel(ElidingLabel):
+    """An :class:`ElidingLabel` whose ``sizeHint`` is capped, for QFormLayout label columns.
+
+    The parent class only lowers ``minimumSizeHint`` — its ``sizeHint`` is still the full
+    text, which is the right contract inside a FlowLayout (items are PLACED at sizeHint) but
+    exactly the wrong one in a QFormLayout: the label COLUMN is allocated from the widest
+    label's sizeHint whenever there is room, so swapping QLabel for ElidingLabel changed
+    nothing measurable — the Windows runner reported the identical 371 px squeezed field
+    before and after (runs #192 and #215/#216,
+    ``test_form_fields_are_bounded_not_full_width``). Capping the HINT is what actually
+    bounds the column. The cap is metric-derived (``max_chars`` × the font's average char
+    width), so it scales with the platform's font instead of freezing one machine's pixels;
+    the default 24 is comfortably above every current Setup label (longest: "MATLAB file
+    variant", 19 chars), so no label elides in practice — the cap only bites when a font's
+    metrics run far past the reference, which is precisely the failure being bounded."""
+
+    def __init__(self, text: str = "", parent=None, *, max_chars: int = 24, **kw):
+        super().__init__(text, parent, **kw)
+        self._max_chars = int(max_chars)
+
+    def sizeHint(self):                                  # noqa: N802 - Qt API
+        s = super().sizeHint()
+        s.setWidth(min(s.width(), self.fontMetrics().averageCharWidth() * self._max_chars))
+        return s
 
 
 class ElidingCheckBox(QCheckBox):

@@ -30,9 +30,43 @@ def _settings(outdir):
 # -- copyable text dialog + error summary -----------------------------------
 def test_short_error_extracts_last_line():
     from respmech.ui.dialogs import short_error
-    tb = "Traceback (most recent call last):\n  File \"x\", line 1\nValueError: boom"
-    assert short_error(tb) == "ValueError: boom"
     assert short_error("") == "unknown error"
+
+
+def test_short_error_strips_the_exception_type_prefix():
+    """Ticket D16: a traceback's last line is ``<dotted.qualified.Name>: message`` — the
+    module/class prefix is implementation detail a physiologist reading the status bar or
+    an error card has no use for, so only the message is kept. Verbatim example from the
+    ticket."""
+    from respmech.ui.dialogs import short_error
+    tb = ("Traceback (most recent call last):\n  File \"x\", line 1\n"
+          "respmech.core.io.loaders.DataValidationError: Volume channel is set to "
+          "column 6, but subj04_short.csv has only 5 columns.")
+    assert short_error(tb) == ("Volume channel is set to column 6, but subj04_short.csv "
+                               "has only 5 columns.")
+    # a builtin exception (no dots at all) is stripped the same way
+    assert short_error("ValueError: boom") == "boom"
+
+
+def test_short_error_leaves_a_non_traceback_message_unchanged():
+    """A multi-line message whose last line is NOT of the ``Type: message`` shape (no
+    identifier-chain prefix before a colon) must be returned exactly as-is."""
+    from respmech.ui.dialogs import short_error
+    msg = "Analysis completed, but writing the output failed.\nSome files may be partially written."
+    assert short_error(msg) == "Some files may be partially written."
+    # a single line with a space before the colon isn't a Type: message either
+    assert short_error("writing failed: disk full") == "writing failed: disk full"
+
+
+def test_exception_type_name_parses_the_bare_class_name():
+    from respmech.ui.dialogs import exception_type_name
+    tb = ("Traceback (most recent call last):\n  ...\n"
+          "respmech.core.io.loaders.DataValidationError: Flow channel is set to column 5, "
+          "but subject01.csv has only 1 column.")
+    assert exception_type_name(tb) == "DataValidationError"
+    assert exception_type_name("RuntimeError: kaboom") == "RuntimeError"
+    assert exception_type_name("writing failed: disk full") is None
+    assert exception_type_name("") is None
 
 
 def test_text_viewer_dialog_is_copyable(qapp):
@@ -42,6 +76,52 @@ def test_text_viewer_dialog_is_copyable(qapp):
     assert dlg.view.isReadOnly()
     dlg._copy()
     assert QApplication.clipboard().text() == "line one\nline two"
+
+
+def test_text_viewer_dialog_collapsed_detail_starts_hidden_behind_details(qapp):
+    """Ticket D01: a caller with an already-diagnosed failure leads with the diagnosis
+    (``intro``, shown in the normal — not muted — style, since it IS the message) and keeps
+    the trace reachable but out of the way, instead of dumping it straight on screen.
+
+    Checks visibility with ``isVisibleTo(dlg)`` rather than ``isVisible()``: the latter also
+    asks whether the whole ancestor chain up to the screen is shown, which is False for an
+    unshown top-level QDialog regardless of the child's own explicit setVisible() state — a
+    property of the widget's OWN visibility flag, not of whether the dialog is on screen."""
+    from respmech.ui.dialogs import TextViewerDialog
+    dlg = TextViewerDialog("Channel setup — error", "Traceback (most recent call last):\n...",
+                           intro="P05_60W.txt: row 4 has 9 values but the first row has 3.",
+                           collapsed_detail=True)
+    assert dlg.view.isVisibleTo(dlg) is False
+    assert dlg.intro_label is not None
+    assert dlg.intro_label.property("status") != "muted"
+    assert dlg.details_btn is not None
+    dlg.details_btn.setChecked(True)
+    assert dlg.view.isVisibleTo(dlg) is True
+    assert "Traceback" in dlg.text()        # still reachable — nothing was dropped
+    dlg.details_btn.setChecked(False)
+    assert dlg.view.isVisibleTo(dlg) is False    # toggles back off
+
+
+def test_text_viewer_dialog_without_collapsed_detail_is_unchanged(qapp):
+    """The default (existing) behaviour must be untouched: no Details button, the trace
+    visible immediately, and the intro (when given) muted — the previous, plain error
+    surface every OTHER caller of open_error_dialog still uses."""
+    from respmech.ui.dialogs import TextViewerDialog
+    dlg = TextViewerDialog("Open analysis — error", "Traceback...", intro="Open analysis failed.")
+    assert dlg.details_btn is None
+    assert dlg.view.isVisibleTo(dlg) is True
+    assert dlg.intro_label.property("status") == "muted"
+
+
+def test_text_viewer_dialog_collapsed_detail_without_an_intro_falls_back(qapp):
+    """Self-review finding: no current caller passes ``collapsed_detail=True`` without an
+    ``intro`` (there would be nothing to lead with), but a dialog that silently hid its
+    only content behind a button labelled 'Details' would be a foot-gun for the next one —
+    it must fall back to the ordinary, uncollapsed layout instead."""
+    from respmech.ui.dialogs import TextViewerDialog
+    dlg = TextViewerDialog("Channel setup — error", "Traceback...", collapsed_detail=True)
+    assert dlg.details_btn is None
+    assert dlg.view.isVisibleTo(dlg) is True
 
 
 # -- splash -----------------------------------------------------------------
@@ -81,6 +161,63 @@ def test_make_splash_renders_a_pixmap(qapp):
     assert not sp.pixmap().isNull()
 
 
+def test_splash_click_does_not_hide_it(qapp):
+    """Ticket D28: the base QSplashScreen hides itself on any mouse press — a habit
+    users have with a static "loading" image — which used to leave both splash and
+    (not-yet-shown) window invisible mid-build. A click must now be a no-op."""
+    from PySide6.QtCore import QPointF, QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+    from respmech.ui.splash import make_splash
+    sp = make_splash(qapp)
+    sp.show()
+    qapp.processEvents()
+    assert sp.isVisible()
+    pt = QPointF(sp.width() / 2, sp.height() / 2)
+    ev = QMouseEvent(QEvent.MouseButtonPress, pt, Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+    QApplication.sendEvent(sp, ev)
+    qapp.processEvents()
+    assert sp.isVisible()          # still up — the click was swallowed
+    sp.close()
+
+
+def test_splash_shows_a_starting_message(qapp, monkeypatch):
+    """Ticket D28: a static plaque with no progress text is indistinguishable from a
+    hang. ``make_splash`` must call ``showMessage`` with legible (near-white) text over
+    the dark motif — checked by intercepting the call, since QSplashScreen exposes no
+    public getter for the message it is currently showing."""
+    from PySide6.QtGui import QColor
+    from PySide6.QtWidgets import QSplashScreen
+    from respmech.ui.splash import make_splash, _TEXT
+    calls = []
+    monkeypatch.setattr(QSplashScreen, "showMessage",
+                        lambda self, *a, **k: calls.append((a, k)))
+    sp = make_splash(qapp)
+    assert sp is not None
+    assert len(calls) == 1
+    args, _kwargs = calls[0]
+    assert args[0] == "Starting…"
+    assert QColor(args[2]) == QColor(_TEXT)          # legible over the dark veil
+    # an explicit, small pixel size — not whatever the OS default app font happens to
+    # be at this point (make_splash runs before theme.apply_theme sets it) — so the
+    # message's height near the bottom edge stays predictable and clear of the SVG's
+    # own footer text (self-review finding, ticket D28)
+    assert sp.font().pixelSize() == 13
+
+
+# -- startup reveal timing (app.py) ------------------------------------------
+def test_reveal_delay_is_the_remaining_floor_or_zero():
+    """Ticket D28: the splash floor is topped up to a minimum rather than added as a
+    further fixed wait — 0 once building the window alone already spent the floor,
+    otherwise exactly the remainder of it. Pure/Qt-free, so no qapp fixture needed."""
+    from respmech.ui.app import _reveal_delay_ms
+    assert _reveal_delay_ms(0, floor_ms=1200) == 1200
+    assert _reveal_delay_ms(700, floor_ms=1200) == 500
+    assert _reveal_delay_ms(1200, floor_ms=1200) == 0
+    assert _reveal_delay_ms(1600, floor_ms=1200) == 0     # built slower than the floor -> no wait
+    assert _reveal_delay_ms(1199, floor_ms=1200) == 1
+
+
 # -- per-panel error card + copyable trace ----------------------------------
 def test_failed_job_shows_panel_error_with_copyable_detail(qapp, tmp_path):
     from PySide6.QtCore import QThread
@@ -108,6 +245,48 @@ def test_failed_job_shows_panel_error_with_copyable_detail(qapp, tmp_path):
     win.close()
 
 
+def test_error_card_summary_carries_the_diagnosis(qapp, tmp_path):
+    """The error card's own visible summary now carries the exception's diagnosis (A03
+    point 5), not only the generic '<job> failed' — previously the diagnosis was reachable
+    only via the transient status line or behind the round 'i' info button. Ticket D16:
+    the diagnosis itself is now also stripped of its 'Type:' prefix (short_error), so the
+    card reads as a sentence rather than 'valueerror: bad channel'."""
+    from PySide6.QtCore import QThread
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.screens.preview_screen import _Job
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    job = _Job("mech", pv._tokens["mech"], QThread(), object())
+    job.error = "Traceback (most recent call last):\n  ...\nValueError: bad channel"
+    pv._jobs["mech"] = job
+    pv._on_job_done(job, None)
+    ov = pv._overlays["channels"]
+    assert "bad channel" in ov._err_label.text().lower()
+    assert "valueerror" not in ov._err_label.text().lower()
+    win.close()
+
+
+def test_failed_preview_job_card_names_the_column_mismatch(qapp, tmp_path):
+    """Ticket D16's own acceptance criterion: a preview job that fails on a too-narrow
+    file must show the column-count diagnosis on the card ITSELF, not just '… failed'
+    behind the info button."""
+    from PySide6.QtCore import QThread
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.screens.preview_screen import _Job
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    job = _Job("mech", pv._tokens["mech"], QThread(), object())
+    job.error = ("Traceback (most recent call last):\n  ...\n"
+                "respmech.core.io.loaders.DataValidationError: Flow channel is set to "
+                "column 5, but subject01.csv has only 1 column.")
+    pv._jobs["mech"] = job
+    pv._on_job_done(job, None)
+    ov = pv._overlays["channels"]
+    assert "column 5" in ov._err_label.text() and "subject01.csv" in ov._err_label.text()
+    assert ov._err_label.text().strip() != "Channel preview failed"
+    win.close()
+
+
 def test_synchronous_preview_clears_stale_error_card(qapp, tmp_path):
     """A successful synchronous re-render must dismiss a lingering error card."""
     from PySide6.QtCore import QThread
@@ -116,7 +295,7 @@ def test_synchronous_preview_clears_stale_error_card(qapp, tmp_path):
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
     pv._refresh_files()
-    pv.file_combo.setCurrentIndex(0)
+    pv.file_rail.select_index(0)
     job = _Job("mech", pv._tokens["mech"], QThread(), object())
     job.error = "ValueError: transient read error"
     pv._jobs["mech"] = job
@@ -179,6 +358,44 @@ def test_run_screen_error_report_and_window(qapp, tmp_path):
     rs._fatal_msg = "RuntimeError: kaboom"
     rep2 = rs._error_report(None, {})
     assert "did not complete" in rep2 and "kaboom" in rep2
+
+
+def test_fatal_error_report_looks_up_the_fix_hint_by_parsing_the_traceback(qapp, tmp_path):
+    """Ticket D16: a FATAL run (no FileResult, hence no error_kind to key _FIX_HINTS by)
+    still gets its hint — parsed straight out of the traceback's own last line."""
+    from respmech.ui.screens.run_screen import RunScreen
+    rs = RunScreen(AppState(_settings(str(tmp_path))))
+    rs._fatal_msg = ("Traceback (most recent call last):\n  ...\n"
+                     "respmech.core.io.loaders.DataValidationError: Volume channel is "
+                     "set to column 6, but subj04_short.csv has only 5 columns.")
+    report = rs._error_report(None, {})
+    assert "Where to fix DataValidationError" in report
+    assert "Setup" in report and "channel assignment" in report
+    # an exception type with no hint entry adds nothing (no dangling "Where to fix None:")
+    rs._fatal_msg = "RuntimeError: kaboom"
+    report2 = rs._error_report(None, {})
+    assert "Where to fix" not in report2
+
+
+def test_fatal_log_line_is_short_not_the_full_traceback(qapp, tmp_path):
+    """Ticket D16: `_on_fatal` used to append `traceback.format_exc()` in full to the
+    always-visible log (~20 lines of stack frames for what is usually a data problem).
+    It must now log one summarising line and point at the (still full-detail) error
+    window instead."""
+    from respmech.ui.screens.run_screen import RunScreen
+    rs = RunScreen(AppState(_settings(str(tmp_path))))
+    tb = ("Traceback (most recent call last):\n"
+         "  File \"x.py\", line 1, in <module>\n"
+         "    raise DataValidationError(msg)\n"
+         "respmech.core.io.loaders.DataValidationError: Volume channel is set to "
+         "column 6, but subj04_short.csv has only 5 columns.")
+    rs._on_fatal(tb)
+    log_text = rs.log.toPlainText()
+    assert rs._fatal_msg == tb                       # the FULL trace is still retained…
+    assert log_text.count("\n") < 3                  # …but the LOG got only a short line
+    assert "Volume channel is set to column 6" in log_text
+    assert "see the error window" in log_text
+    assert "File \"x.py\"" not in log_text            # no stack frame lines in the log
 
 
 # -- maximise on startup ----------------------------------------------------

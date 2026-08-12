@@ -47,9 +47,16 @@ def _loader():
     return lambda p: load_raw_matrix(Settings(), p)
 
 
-def _dialog(initial=None, files=None):
+def _dialog(initial=None, files=None, suggest_from_names=False):
+    """``suggest_from_names`` defaults OFF here (unlike the dialog's own default): the
+    shared synth fixture's header (time,EMG1..3,flow,volume,poes,pgas,pdi,ENT1..3, see
+    tests/golden/input/synth_case_*.csv) is made of the REAL role names, so leaving
+    ticket D27's name-based seeding on by default would auto-fill every test in this file
+    that opens a dialog with an empty mapping, whether or not it is testing that feature.
+    Tests for the seeding feature itself opt back in explicitly."""
     from respmech.ui.channel_setup_dialog import ChannelSetupDialog
-    return ChannelSetupDialog(files or _files(), 1000, initial=initial, loader=_loader())
+    return ChannelSetupDialog(files or _files(), 1000, initial=initial, loader=_loader(),
+                              suggest_from_names=suggest_from_names)
 
 
 # --------------------------------------------------------------------------- #
@@ -85,6 +92,28 @@ def test_dialog_has_a_control_and_plot_per_column(qapp):
     assert len(dlg._combos) == 12 and len(dlg._plots) == 12
     assert dlg.selected_mapping() == {"flow": None, "volume": None, "poes": None,
                                       "pgas": None, "pdi": None, "emg": [], "entropy": []}
+
+
+# -- plot cleanup (point 6, ticket 20260811-0910) -----------------------------------------
+def test_closing_the_dialog_closes_its_plots(qapp):
+    """Each column's PlotWidget builds its own ctrlMenu eagerly at construction
+    (ColumnStack.build) and nothing used to release it when the dialog closed -- unlike
+    Setup's channel summary (ChannelSummary.close_plots(), the dominant instance of this
+    same gap), this dialog is normally short-lived, but a caller that keeps a reference
+    around (as this test does) would otherwise hold the same leak. QDialog emits
+    ``finished`` for accept(), reject() AND the window's own close button alike, unlike
+    closeEvent, which only fires for the last of the three -- see the connection in
+    ChannelSetupDialog.__init__.
+
+    The PlotItem references are captured BEFORE reject(), not re-fetched via
+    ``PlotWidget.getPlotItem()`` afterwards -- see test_column_stack.py's
+    ``test_close_plots_closes_every_embedded_plotitem_and_empties_the_list`` for why a
+    closed PlotWidget's own ``getPlotItem()`` returns ``None``, not a readable PlotItem."""
+    dlg = _dialog()
+    plot_items = [p.getPlotItem() for p in dlg._stack.plots]
+    assert plot_items and all(pi.ctrlMenu is not None for pi in plot_items)
+    dlg.reject()
+    assert all(pi.ctrlMenu is None for pi in plot_items)
 
 
 def test_dialog_lists_valid_files_and_defaults_to_first(qapp):
@@ -166,6 +195,84 @@ def test_dialog_switch_to_unreadable_file_reverts(qapp):
     assert dlg._file_idx == 0                        # reverted to the last good file
     assert dlg.file_combo.currentIndex() == 0
     assert "could not read" in dlg.info.text().lower()
+
+
+# --------------------------------------------------------------------------- #
+# ticket D01: a diagnosis, not a bare sentence, when nothing could be read
+# --------------------------------------------------------------------------- #
+def test_dialog_diagnoses_a_field_count_mismatch_instead_of_a_bare_sentence(qapp):
+    """An instrument export with a header block above the real channel data is unreadable
+    end to end; the raised error must name the file and translate pandas' 'Expected N
+    fields...saw M' into RespMech's own words, plus the header-block hint — not the
+    previous bare 'None of the matching data files could be read.'"""
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog, NoReadableFileError
+
+    def loader(_p):
+        raise ValueError("Error tokenizing data. C error: Expected 3 fields in line 4, saw 9")
+    with pytest.raises(NoReadableFileError) as excinfo:
+        ChannelSetupDialog(["P05_60W.txt"], 1000, loader=loader)
+    assert isinstance(excinfo.value, ValueError)     # still a plain ValueError to old callers
+    msg = str(excinfo.value)
+    assert "P05_60W.txt" in msg
+    assert "row 4" in msg and "9 values" in msg and "the first row has 3" in msg
+    assert "header block" in msg.lower()
+    assert "Traceback" not in msg
+
+
+def test_dialog_diagnosis_omits_the_header_hint_for_a_mismatch_deep_in_the_file(qapp):
+    """Self-review finding: the header-block guidance ('delete the lines above the channel
+    data') only makes sense for a mismatch NEAR THE TOP of the file. A ragged row 5000
+    lines in (a truncated export, a quoted delimiter pandas miscounts) is a different
+    problem, and telling the user to look at the top would send them the wrong way."""
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+
+    def loader(_p):
+        raise ValueError("Error tokenizing data. C error: Expected 6 fields in line 5000, saw 2")
+    with pytest.raises(ValueError) as excinfo:
+        ChannelSetupDialog(["deep.csv"], 1000, loader=loader)
+    msg = str(excinfo.value)
+    assert "row 5000" in msg and "2 values" in msg and "the first row has 6" in msg
+    assert "header block" not in msg.lower()
+
+
+def test_dialog_diagnosis_names_the_first_of_several_failed_files(qapp):
+    """Every file's own exception is kept (not just discarded), but the raised message
+    leads with the FIRST failure — the one a user would investigate first — while still
+    saying how many files failed in total."""
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+
+    def loader(_p):
+        raise ValueError("boom")
+    with pytest.raises(ValueError) as excinfo:
+        ChannelSetupDialog(["A.txt", "B.txt", "C.txt"], 1000, loader=loader)
+    msg = str(excinfo.value)
+    assert msg.startswith("None of the 3 matching files could be read.")
+    assert "A.txt" in msg and "boom" in msg
+    assert "B.txt" not in msg and "C.txt" not in msg
+
+
+def test_dialog_diagnosis_for_a_single_file_reads_naturally(qapp):
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+
+    def loader(_p):
+        raise ValueError("boom")
+    with pytest.raises(ValueError) as excinfo:
+        ChannelSetupDialog(["A.txt"], 1000, loader=loader)
+    assert str(excinfo.value) == "A.txt could not be read: boom"
+
+
+def test_dialog_diagnosis_falls_back_to_the_raw_message_for_an_unrecognised_failure(qapp):
+    """Not every read failure is a field-count mismatch — an unrelated exception must still
+    surface, just without the header-block guess grafted onto it."""
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+
+    def loader(_p):
+        raise PermissionError("Permission denied")
+    with pytest.raises(ValueError) as excinfo:
+        ChannelSetupDialog(["locked.csv"], 1000, loader=loader)
+    msg = str(excinfo.value)
+    assert msg == "locked.csv could not be read: Permission denied"
+    assert "header block" not in msg.lower()
 
 
 def test_dialog_updates_column_names_on_file_switch(qapp):
@@ -389,6 +496,131 @@ def test_dialog_ok_is_gated_on_the_required_roles(qapp):
     assert not dlg._ok_btn.isEnabled()
 
 
+# --------------------------------------------------------------------------- #
+# volume-from-flow checkbox (ticket D02)
+# --------------------------------------------------------------------------- #
+def _assign_required(dlg):
+    _set_role(dlg, 4, "flow"); _set_role(dlg, 6, "poes")
+    _set_role(dlg, 7, "pgas"); _set_role(dlg, 8, "pdi")
+
+
+def test_volume_checkbox_is_auto_suggested_when_nothing_claims_the_role(qapp):
+    """A flow-only rig — the exact state this ticket is about — starts with no Volume
+    column and no prior setting, so the checkbox should already be ticked, not merely
+    available, the moment the dialog opens."""
+    dlg = _dialog()
+    assert dlg._volume_from_flow.isChecked()
+
+
+def test_volume_checkbox_is_not_suggested_when_a_column_already_carries_it(qapp):
+    dlg = _dialog(initial={"flow": 5, "volume": 6, "poes": 7, "pgas": 8, "pdi": 9})
+    assert not dlg._volume_from_flow.isChecked()
+
+
+def test_volume_checkbox_seeded_true_is_kept_even_with_a_volume_column(qapp):
+    """A saved analysis can legally carry integrate_from_flow=True alongside a leftover
+    Volume column value (the core loader ignores the column in that case) — the checkbox
+    must reflect the caller's actual setting, not silently override it because a column
+    number also happens to be present."""
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+    dlg = ChannelSetupDialog(_files(), 1000,
+                             initial={"flow": 5, "volume": 6, "poes": 7, "pgas": 8, "pdi": 9},
+                             loader=_loader(), integrate_from_flow=True)
+    assert dlg._volume_from_flow.isChecked()
+
+
+def test_ok_is_gated_on_volume_or_the_checkbox_not_both(qapp):
+    dlg = _dialog()
+    _assign_required(dlg)
+    assert dlg._ok_btn.isEnabled()                    # checkbox auto-suggested -> already ok
+    dlg._volume_from_flow.setChecked(False)
+    assert not dlg._ok_btn.isEnabled()
+    assert "derive from flow" in dlg.info.text()
+    dlg._volume_from_flow.setChecked(True)
+    assert dlg._ok_btn.isEnabled()
+    _set_role(dlg, 5, "volume")                        # a real column also satisfies it...
+    assert dlg._ok_btn.isEnabled()
+    assert not dlg._volume_from_flow.isChecked()        # ...and un-ticks the checkbox (below)
+
+
+def test_assigning_a_volume_column_unchecks_the_derive_from_flow_box(qapp):
+    """Ticket D02: the core loader gives integrate_from_flow priority over an assigned
+    column when both are set (core/io/loaders.py) — leaving the checkbox ticked after the
+    user picks a real Volume column would silently ignore the column they just chose, so
+    the dialog must clear it for them the moment a column takes the role."""
+    dlg = _dialog()
+    assert dlg._volume_from_flow.isChecked()           # auto-suggested (no column yet)
+    _set_role(dlg, 5, "volume")
+    assert not dlg._volume_from_flow.isChecked()
+
+
+def test_reopening_an_already_derived_analysis_does_not_uncheck_on_open(qapp):
+    """The auto-uncheck above must only fire on a genuine USER edit — the initial preselect
+    of an already-saved 'derive from flow' analysis (no Volume column, box already ticked)
+    must not be mistaken for that same edit and cleared right back off."""
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+    dlg = ChannelSetupDialog(_files(), 1000, initial={}, loader=_loader(),
+                             integrate_from_flow=True, suggest_from_names=False)
+    assert dlg._volume_from_flow.isChecked()
+
+
+def test_reticking_the_checkbox_after_a_column_assignment_clears_the_column(qapp):
+    """Self-review finding: the guard above only covered column-THEN-checkbox. The reverse
+    order — assign a real Volume column (which un-ticks the box, as designed), then
+    manually RE-tick the box afterwards — used to leave BOTH set with no warning at all
+    (_refresh_info even suppresses the 'derived from flow' note once a column is present),
+    so OK would silently commit a column the core loader was about to ignore anyway
+    (core/io/loaders.py gives integrate_from_flow priority). Ticking the box must now
+    clear the column symmetrically, the same way assigning a column clears the box."""
+    dlg = _dialog()
+    _assign_required(dlg)
+    _set_role(dlg, 5, "volume")
+    assert dlg._role_of(5) == "volume" and not dlg._volume_from_flow.isChecked()
+    dlg._volume_from_flow.setChecked(True)
+    assert dlg._role_of(5) == ""                       # the column was cleared, not left dual-set
+    assert dlg.selected_mapping()["volume"] is None
+    assert "volume derived from flow" in dlg.info.text()   # the note is no longer suppressed
+
+
+def test_both_volume_sources_set_at_once_still_enables_ok(qapp):
+    """The OR gate itself, pinned directly rather than only inferred from the auto-uncheck
+    tests: with the mutual-exclusion guards in place this combination cannot normally
+    arise through the UI, but _refresh_info's own condition (column OR checkbox) must not
+    regress into an AND if either guard above is ever weakened."""
+    dlg = _dialog()
+    _assign_required(dlg)
+    dlg._volume_from_flow.setChecked(False)
+    _set_role(dlg, 5, "volume")                          # column assigned, checkbox already off
+    dlg._volume_from_flow.blockSignals(True)              # bypass the mutual-exclusion guard,
+    dlg._volume_from_flow.setChecked(True)                # to test _refresh_info's OR in isolation
+    dlg._volume_from_flow.blockSignals(False)
+    dlg._refresh_info()
+    assert dlg._role_of(5) == "volume" and dlg._volume_from_flow.isChecked()   # both true here
+    assert dlg._ok_btn.isEnabled()
+
+
+def test_switching_files_does_not_disturb_the_checkbox(qapp):
+    """The checkbox is a per-dialog processing setting, not per-file data — switching which
+    file's columns are previewed (_on_file_changed only touches the matrix/stack) must
+    never reset or flip it."""
+    files = _files()
+    assert len(files) >= 2
+    dlg = _dialog(files=files)
+    dlg._volume_from_flow.setChecked(False)
+    dlg.file_combo.setCurrentIndex(1)
+    assert not dlg._volume_from_flow.isChecked()
+    dlg._volume_from_flow.setChecked(True)
+    dlg.file_combo.setCurrentIndex(0)
+    assert dlg._volume_from_flow.isChecked()
+
+
+def test_info_text_names_volume_derived_from_flow_when_checked(qapp):
+    dlg = _dialog()
+    _assign_required(dlg)
+    assert dlg._volume_from_flow.isChecked()
+    assert "Ready" in dlg.info.text() and "volume derived from flow" in dlg.info.text()
+
+
 def test_dialog_reassigning_a_single_role_recolors_both_plots(qapp):
     from respmech.ui.channel_setup_dialog import _role_color
     dlg = _dialog()
@@ -411,20 +643,191 @@ def test_dialog_uses_dark_plot_background_in_dark_mode(qapp, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# ticket D27: seeding a fresh dialog's dropdowns from the file's own column names
+# --------------------------------------------------------------------------- #
+def test_a_fresh_dialog_is_seeded_from_the_synth_fixtures_own_header(qapp):
+    """The exact shape of the ticket's bug report, run against this file's real fixture
+    (time,EMG1-3,flow,volume,poes,pgas,pdi,ENT1-3): opening with no initial mapping at all
+    pre-fills every recognisable column instead of leaving all eight on "(unused)"."""
+    dlg = _dialog(suggest_from_names=True)
+    assert dlg.selected_mapping() == {"flow": 5, "volume": 6, "poes": 7, "pgas": 8,
+                                      "pdi": 9, "emg": [2, 3, 4], "entropy": []}
+    assert dlg._ok_btn.isEnabled()                    # all four required roles landed
+
+
+def test_seeding_is_skipped_when_a_saved_mapping_is_passed(qapp):
+    """'Kun stien hvor initial er tom' — a caller with an existing mapping (even a partial
+    one) behaves exactly as before: no name-based seeding, no suggestion badges."""
+    dlg = _dialog(initial={"flow": 5}, suggest_from_names=True)
+    assert dlg.selected_mapping()["poes"] is None      # NOT seeded from the header, though
+                                                        # "poes" is the real column 7 name
+    assert dlg._suggested == set()
+
+
+def test_seeded_rows_are_marked_suggested_until_touched(qapp):
+    dlg = _dialog(suggest_from_names=True)
+    assert dlg._suggested == {4, 5, 6, 7, 8, 1, 2, 3}   # every seeded column, 0-based
+    for i in (4, 5, 6, 7, 8, 1, 2, 3):
+        assert dlg._suggested_labels[i] is not None
+        assert dlg._suggested_labels[i].isVisibleTo(dlg)
+    assert "8 columns pre-filled from the column names, check them." in dlg.info.text()
+    _set_role(dlg, 4, "")                               # the user edits this row (unassigns it)
+    assert 4 not in dlg._suggested
+    assert dlg._suggested_labels[4].isVisibleTo(dlg) is False
+    assert dlg._role_of(4) == ""                        # the edit itself took effect
+
+
+def test_the_suggestion_footnote_disappears_once_every_row_is_reviewed(qapp):
+    dlg = _dialog(suggest_from_names=True)
+    for i in (4, 5, 6, 7, 8, 1, 2, 3):
+        _set_role(dlg, i, "")                           # touch every seeded row (unassign it)
+    assert dlg._suggested == set()
+    assert "pre-filled" not in dlg.info.text()
+
+
+def test_stealing_a_single_role_also_dismisses_the_displaced_columns_badge(qapp):
+    """_on_role_changed's collision handling silently resets a DIFFERENT column's combo
+    back to "(unused)" — that column must lose its "suggested" mark too, or the row would
+    say "suggested" next to a role it no longer carries."""
+    dlg = _dialog(suggest_from_names=True)
+    assert 4 in dlg._suggested                         # column 5 (idx 4) starts as flow
+    _set_role(dlg, 3, "flow")                          # steal Flow onto a different column
+    assert dlg._role_of(4) == ""                       # displaced back to unused
+    assert 4 not in dlg._suggested
+    assert dlg._suggested_labels[4].isVisibleTo(dlg) is False
+
+
+def test_ticking_derive_from_flow_dismisses_a_displaced_volume_suggestion(qapp):
+    dlg = _dialog(suggest_from_names=True)
+    assert 5 in dlg._suggested                         # column 6 (idx 5) starts as volume
+    dlg._volume_from_flow.setChecked(True)              # clears the suggested Volume column
+    assert dlg._role_of(5) == ""
+    assert 5 not in dlg._suggested
+    assert dlg._suggested_labels[5].isVisibleTo(dlg) is False
+
+
+def test_seeding_never_touches_the_time_column_or_entropy(qapp):
+    dlg = _dialog(suggest_from_names=True)
+    assert dlg._combos[0] is None and 0 not in dlg._suggested
+    assert dlg.selected_mapping()["entropy"] == []      # entropy is never seeded from a name
+    for box in dlg._entropy_boxes:
+        assert box is None or not box.isChecked()
+
+
+def test_ambiguous_or_number_only_names_are_never_seeded(qapp):
+    """A per-file loader that reports header-less, comma-decimal-fragment names (this
+    ticket's own bug report) must leave the dialog exactly as blank as it always was."""
+    import numpy as np
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+    names = ["0,0000", "0,2000", "0,3000", "0,4000"]
+    data = (np.zeros((50, 4)), names)
+    dlg = ChannelSetupDialog(["A"], 1000, loader=lambda p: data, suggest_from_names=True)
+    assert dlg.selected_mapping() == {"flow": None, "volume": None, "poes": None,
+                                      "pgas": None, "pdi": None, "emg": [], "entropy": []}
+    assert dlg._suggested == set()
+    assert "pre-filled" not in dlg.info.text()
+
+
+def test_a_single_role_claimed_by_two_columns_is_left_unseeded_for_both(qapp):
+    """Two columns both named 'flow' is itself a form of ambiguity, at the batch level
+    rather than within one name — silently picking one would be exactly the kind of guess
+    this ticket's suggestion feature must never make."""
+    import numpy as np
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+    names = ["time", "Flow A", "Flow B", "poes", "pgas", "pdi"]
+    data = (np.zeros((50, 6)), names)
+    dlg = ChannelSetupDialog(["A"], 1000, loader=lambda p: data, suggest_from_names=True)
+    m = dlg.selected_mapping()
+    assert m["flow"] is None                           # neither Flow A nor Flow B is guessed
+    assert (m["poes"], m["pgas"], m["pdi"]) == (4, 5, 6)   # the unambiguous ones still seed
+    assert dlg._suggested == {3, 4, 5}                  # only the unambiguous columns are marked
+
+
+def test_suggest_from_names_false_disables_seeding_even_with_an_empty_initial(qapp):
+    dlg = _dialog(suggest_from_names=False)
+    assert dlg.selected_mapping() == {"flow": None, "volume": None, "poes": None,
+                                      "pgas": None, "pdi": None, "emg": [], "entropy": []}
+    assert dlg._suggested == set()
+
+
+@pytest.mark.parametrize("m", [
+    {},
+    None,
+    {"flow": None, "volume": None, "poes": None, "pgas": None, "pdi": None,
+     "emg": [], "entropy": []},                          # _current_channel_mapping()'s own shape
+])
+def test_mapping_names_no_role_treats_all_placeholder_shapes_as_empty(qapp, m):
+    """Self-review finding: a dict with every key present but every value falsy is truthy
+    as a Python object, so a bare `not initial` check would treat SettingsScreen's own
+    ``_current_channel_mapping()`` — what `initial=None` resolves to on the dialog's
+    ordinary, everyday open path (the "Assign channels from data…" button) — as "an
+    existing mapping" and silently disable seeding on the one path a real user actually
+    takes most often."""
+    from respmech.ui.channel_setup_dialog import _mapping_names_no_role
+    assert _mapping_names_no_role(m) is True
+
+
+def test_mapping_names_no_role_is_false_once_anything_is_set(qapp):
+    from respmech.ui.channel_setup_dialog import _mapping_names_no_role
+    assert _mapping_names_no_role({"flow": 5}) is False
+    assert _mapping_names_no_role({"flow": None, "emg": [2]}) is False
+    assert _mapping_names_no_role({"flow": None, "entropy": [3]}) is False
+
+
+def test_seeding_fires_through_settings_screens_own_open_channel_setup_default_path(qapp, monkeypatch):
+    """The regression this self-review finding fixes, driven end to end through the REAL
+    call site a user actually clicks — SettingsScreen.btn_assign_channels calls
+    ``_open_channel_setup()`` with no argument, which resolves ``initial`` from
+    ``_current_channel_mapping()``, NOT a literal ``{}``. Before the fix, this made seeding
+    unreachable outside the one guided auto-open call site that happens to pass ``{}``
+    explicitly."""
+    import respmech.ui.channel_setup_dialog as csd
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.in_folder.setText(INPUT); sc.in_files.setText("synth_case_*.csv")
+    sc.samp_freq.setValue(1000)
+    sc._on_inputs_changed()
+    ch = sc.state.settings.input.channels
+    assert (ch.flow, ch.volume, ch.poes, ch.pgas, ch.pdi) == (None, None, None, None, None)
+
+    real_cls = csd.ChannelSetupDialog
+
+    def _build(*a, **k):
+        dlg = real_cls(*a, **k)
+        assert dlg._suggested, "the everyday open path must seed from the synth fixture's header"
+        dlg.exec = lambda: QDialog.Accepted
+        return dlg
+    monkeypatch.setattr(csd, "ChannelSetupDialog", _build)
+
+    assert sc._open_channel_setup() is True            # the button's own call shape: no argument
+    ch = sc.state.settings.input.channels
+    assert (ch.flow, ch.volume, ch.poes, ch.pgas, ch.pdi) == (5, 6, 7, 8, 9)
+    win.close()
+
+
+# --------------------------------------------------------------------------- #
 # Settings-screen integration (the real modal execs, so we stub it)
 # --------------------------------------------------------------------------- #
 class _StubDialog:
     _MAP = {"flow": 5, "volume": 6, "poes": 7, "pgas": 8, "pdi": 9,
             "emg": [2, 3, 4], "entropy": [10, 11, 12]}
 
-    def __init__(self, *a, accept=True, **k):
+    def __init__(self, *a, accept=True, integrate_from_flow=False, **k):
         self._accept = accept
+        # ticket D02: the real dialog's checkbox state, read back by _open_channel_setup
+        # via the SAME method name — a stub that did not implement this would raise
+        # AttributeError the moment that call site started reading it, not silently pass.
+        self._integrate_from_flow = integrate_from_flow
 
     def exec(self):
         return QDialog.Accepted if self._accept else QDialog.Rejected
 
     def selected_mapping(self):
         return dict(self._MAP)
+
+    def integrate_from_flow(self):
+        return self._integrate_from_flow
 
 
 def _screen_pointed_at_input(qapp):
@@ -451,6 +854,82 @@ def test_open_channel_setup_applies_mapping_on_ok(qapp, monkeypatch):
     win.close()
 
 
+def test_open_channel_setup_writes_integrate_from_flow_from_the_dialog(qapp, monkeypatch):
+    """Ticket D02: the checkbox lives on the dialog, not in selected_mapping()'s dict — the
+    caller must read it back separately and write it into
+    processing.volume.integrate_from_flow, alongside (not instead of) applying the channel
+    mapping, so a flow-only rig's choice actually reaches settings on OK."""
+    import respmech.ui.channel_setup_dialog as csd
+    monkeypatch.setattr(csd, "ChannelSetupDialog",
+                        lambda *a, integrate_from_flow=False, **k:
+                            _StubDialog(accept=True, integrate_from_flow=True))
+    win, sc = _screen_pointed_at_input(qapp)
+    assert sc.state.settings.processing.volume.integrate_from_flow is False
+    assert sc._open_channel_setup(initial={}) is True
+    assert sc.state.settings.processing.volume.integrate_from_flow is True
+    win.close()
+
+
+def test_flow_only_rig_reaches_all_ok_and_can_save_via_the_real_dialog(qapp, monkeypatch):
+    """Ticket D02's acceptance scenario, driven through the REAL dialog's own gating logic
+    (not a stub): Flow/Poes/Pgas/Pdi assigned, no Volume channel, the new checkbox
+    auto-suggested and left ticked — Setup must reach a fully valid, saveable state in the
+    SAME session, with no need to open a different analysis first to unblock it (the only
+    workaround that existed before this ticket)."""
+    import respmech.ui.channel_setup_dialog as csd
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.in_folder.setText(INPUT); sc.in_files.setText("synth_case_*.csv")
+    sc.out_folder.setText(INPUT)                          # can_save() only needs settings validity
+    sc.samp_freq.setValue(1000)
+    sc._on_inputs_changed()
+
+    real_cls = csd.ChannelSetupDialog
+
+    def _build(*a, **k):
+        # ticket D27: this scenario is specifically a rig with NO volume channel — the
+        # synth fixture's header names a real "volume" column, so name-based seeding
+        # would auto-assign it and defeat the very premise being tested. Turned off here,
+        # not in production: SettingsScreen's own call site keeps the real default.
+        dlg = real_cls(*a, suggest_from_names=False, **k)
+        _set_role(dlg, 4, "flow"); _set_role(dlg, 6, "poes")
+        _set_role(dlg, 7, "pgas"); _set_role(dlg, 8, "pdi")
+        assert dlg._volume_from_flow.isChecked()          # auto-suggested: no volume column
+        assert dlg._ok_btn.isEnabled()
+        dlg.exec = lambda: QDialog.Accepted               # skip the real (blocking) modal loop
+        return dlg
+    monkeypatch.setattr(csd, "ChannelSetupDialog", _build)
+
+    assert sc._open_channel_setup(initial={}) is True
+    assert sc.state.settings.processing.volume.integrate_from_flow is True
+    assert sc.state.settings.input.channels.volume is None
+    assert sc._all_ok() is True
+    assert sc.can_save() is True
+    assert win.tabs.isTabEnabled(win._i_preview)
+    win.run_screen.refresh_actions()
+    assert win.run_screen.btn_run.isEnabled()
+    win.close()
+
+
+def test_open_channel_setup_passes_the_current_setting_into_the_dialog(qapp, monkeypatch):
+    """The dialog's checkbox has to be SEEDED from the current setting too, not just
+    written back on OK, so reopening an analysis that already derives volume from flow
+    shows the checkbox already ticked instead of asking the user to re-discover it."""
+    import respmech.ui.channel_setup_dialog as csd
+    seen = {}
+
+    def _capture(*a, integrate_from_flow=False, **k):
+        seen["value"] = integrate_from_flow
+        return _StubDialog(accept=False)                # cancel -> nothing else to unwind
+    monkeypatch.setattr(csd, "ChannelSetupDialog", _capture)
+    win, sc = _screen_pointed_at_input(qapp)
+    sc.state.settings.processing.volume.integrate_from_flow = True
+    sc._open_channel_setup(initial={})
+    assert seen["value"] is True
+    win.close()
+
+
 def test_shared_entropy_column_survives_a_full_settings_round_trip(qapp):
     """End to end through the real dialog, not a stub: settings -> _current_channel_mapping
     -> dialog -> selected_mapping -> _apply_channel_mapping -> settings. The dialog is the
@@ -473,6 +952,66 @@ def test_open_channel_setup_cancel_changes_nothing(qapp, monkeypatch):
     before = list(sc.state.settings.input.channels.emg)
     assert sc._open_channel_setup(initial={}) is False
     assert sc.state.settings.input.channels.emg == before
+    win.close()
+
+
+def test_open_channel_setup_shows_a_diagnosis_not_a_traceback(qapp, monkeypatch):
+    """Ticket D01: when ChannelSetupDialog raises its diagnostic ``NoReadableFileError``
+    (every matching file unreadable), the screen must lead with that diagnosis — no
+    'Traceback' text and no path into RespMech's own source on the primary surface — with
+    the full trace still one click away behind Details, not silently dropped.
+
+    Uses ``isVisibleTo(dlg)``, not bare ``isVisible()``: the latter also asks whether the
+    whole ancestor chain up to the screen is realised, and would give a false answer for an
+    unshown top-level widget regardless of the child's own explicit visibility flag — the
+    same class of gotcha CLAUDE.md documents for QShortcut. It happens to read correctly
+    here only because ``open_error_dialog`` calls ``dlg.show()``; asserting the form that is
+    correct regardless is the point."""
+    import respmech.ui.channel_setup_dialog as csd
+    diagnosis = ("None of the 2 matching files could be read. P05_60W.txt: row 4 has 9 "
+                "values but the first row has 3. Instrument exports often start with a "
+                "header block.")
+
+    def _raise(*a, **k):
+        raise csd.NoReadableFileError(diagnosis)
+    monkeypatch.setattr(csd, "ChannelSetupDialog", _raise)
+    win, sc = _screen_pointed_at_input(qapp)
+    assert sc._open_channel_setup(initial={}) is False
+    assert diagnosis in sc.status.text()
+    dlg = sc._err_dialog
+    assert dlg is not None
+    assert dlg.intro_label is not None
+    assert dlg.intro_label.text() == diagnosis
+    assert "Traceback" not in dlg.intro_label.text()
+    assert ".py" not in dlg.intro_label.text()            # no source path on the primary surface
+    assert dlg.view.isVisibleTo(dlg) is False              # the trace starts collapsed
+    assert dlg.details_btn is not None
+    dlg.details_btn.setChecked(True)
+    assert dlg.view.isVisibleTo(dlg) is True
+    assert "NoReadableFileError" in dlg.text()             # still reachable, one click away
+    win.close()
+
+
+def test_open_channel_setup_shows_a_full_traceback_for_an_unrelated_valueerror(qapp, monkeypatch):
+    """Self-review finding: an unrelated ``ValueError`` from elsewhere in
+    ``ChannelSetupDialog.__init__`` (e.g. a numpy reshape error) is NOT the dialog's own
+    diagnosed no-files-readable case, and must not be mistaken for one — it must still go
+    through the ordinary, full-traceback error surface, not be presented as a trustworthy
+    plain-language diagnosis. This is what distinguishes ``NoReadableFileError`` from
+    catching bare ``ValueError``."""
+    import respmech.ui.channel_setup_dialog as csd
+
+    def _raise(*a, **k):
+        raise ValueError("cannot reshape array of size 12 into shape (5,3)")
+    monkeypatch.setattr(csd, "ChannelSetupDialog", _raise)
+    win, sc = _screen_pointed_at_input(qapp)
+    assert sc._open_channel_setup(initial={}) is False
+    assert "channel setup failed" in sc.status.text().lower()
+    dlg = sc._err_dialog
+    assert dlg is not None
+    assert dlg.details_btn is None                         # NOT the collapsed-diagnosis mode
+    assert dlg.view.isVisibleTo(dlg) is True                # the trace is visible immediately
+    assert "reshape" in dlg.text()
     win.close()
 
 
@@ -529,17 +1068,29 @@ def test_detect_decimal(qapp, tmp_path):
     assert detect_decimal(str(tmp_path / "us.txt")) == "."
 
 
-def test_probe_narrows_multi_mask_and_detects_decimal(qapp, tmp_path):
+def test_detect_and_apply_decimal_narrows_multi_mask(qapp, tmp_path):
+    """Ticket D03: decimal detection moved from _probe_and_apply_file_settings (on OK) to
+    _detect_decimal (before the picker builds) — see that method's docstring. This is the
+    .txt case _probe_and_apply_file_settings used to cover; _detect_decimal must reach the
+    same result from the same call site the picker itself uses (_valid_input_files)."""
     from respmech.ui.main_window import MainWindow
     for name in ("r1.txt", "r2.txt"):                # tab-separated, comma-decimal, 5 cols
         (tmp_path / name).write_text("t\tf\tp\tg\td\n0\t1,0\t2,0\t3,0\t4,0\n0,1\t1,1\t2,1\t3,1\t4,1\n")
     win = MainWindow(AppState()); sc = win.settings_screen
     sc.enter_new_mode()                              # mask = *.csv; *.txt
+    # Not exercising the guided channel-modal auto-open here (that is
+    # test_startup_flow.py's job) — B04 hangs it on the input folder alone having
+    # matching files, so filling in_folder below would otherwise schedule a REAL
+    # (unstubbed) modal dialog via QTimer.singleShot(0, ...) that this test never pumps
+    # the event loop for; disarm it up front instead of leaving a pending exec() for some
+    # unrelated later test's processEvents() to stumble into.
+    sc._channel_modal_done = True
     sc.in_folder.setText(str(tmp_path)); sc.samp_freq.setValue(1000); sc._on_inputs_changed()
     assert sc.state.settings.input.files == "*.txt"          # multi-mask narrowed on input change
-    note = sc._probe_and_apply_file_settings(sc._valid_input_files())
+    assert sc.state.settings.input.format.decimal == "."     # not yet detected
+    assert sc._detect_decimal(sc._valid_input_files()) is True
     assert sc.state.settings.input.format.decimal == ","     # comma decimal auto-detected
-    assert "decimal" in note                                 # probe reports the detected format
+    assert sc.decimal_sep.currentData() == ","                # the new picker follows the model
     win.close()
 
 
@@ -549,6 +1100,38 @@ def test_detect_decimal_ignores_thousands_separators(qapp, tmp_path):
     (tmp_path / "eu.txt").write_text("a\tb\n1,5\t2,7\n3,1\t4,9\n12,34\t5,6\n")
     assert detect_decimal(str(tmp_path / "us.txt")) == "."   # comma-thousands, not comma-decimal
     assert detect_decimal(str(tmp_path / "eu.txt")) == ","   # genuine comma-decimal
+
+
+def test_detect_decimal_handles_semicolon_csv(qapp, tmp_path):
+    """Ticket D03: a semicolon-separated, comma-decimal CSV — European instrument exports
+    pair the two, and (like a raw LabChart export) carry no header row: this is what makes
+    the ticket's own bug report describe column names that are 'fragments of the first
+    data row' — pandas reads that row as a header regardless. Before this ticket,
+    detect_decimal always parsed BOTH candidates with the SAME separator, so a semicolon
+    file failed identically under '.' and ',' and the function could never tell them apart;
+    each candidate must be read with the delimiter IT implies (';' for a comma decimal, ','
+    for a point decimal — the same pairing the loader itself uses)."""
+    from respmech.ui.workers import detect_decimal
+    eu = tmp_path / "eu.csv"
+    eu.write_text("0,0000;1,5000;2,7000\n0,0010;3,1000;4,9000\n"
+                  "0,0020;5,2000;6,3000\n0,0030;7,1000;8,2000\n")
+    us = tmp_path / "us.csv"
+    us.write_text("0.0000,1.5000,2.7000\n0.0010,3.1000,4.9000\n"
+                  "0.0020,5.2000,6.3000\n0.0030,7.1000,8.2000\n")
+    assert detect_decimal(str(eu)) == ","
+    assert detect_decimal(str(us)) == "."
+
+
+def test_detect_decimal_csv_does_not_overwrite_when_ambiguous(qapp, tmp_path):
+    """The fallback contract (return the CURRENT value on doubt) is what lets the call site
+    move earlier without a guess clobbering an explicit or loaded-analysis decimal: a plain
+    point-decimal, comma-separated CSV must be read as '.' outright, regardless of what the
+    caller passes as fallback — '.' parses it almost perfectly, so it is trusted, not
+    merely defaulted to."""
+    from respmech.ui.workers import detect_decimal
+    us = tmp_path / "us.csv"
+    us.write_text("0.000,1,2,3,4\n0.001,1,2,3,4\n0.002,1,2,3,4\n0.003,1,2,3,4\n")
+    assert detect_decimal(str(us), fallback=",") == "."
 
 
 def test_detect_sampling_frequency(qapp):
@@ -565,6 +1148,7 @@ def test_normalize_mask_narrows_multi_pattern_to_the_extension_present(qapp, tmp
     (tmp_path / "b.csv").write_text("t,f\n0,1\n1,2\n")
     win = MainWindow(AppState()); sc = win.settings_screen
     sc.enter_new_mode()                              # *.csv; *.txt
+    sc._channel_modal_done = True   # disarm the guided auto-open modal (see the sibling test above)
     sc.in_folder.setText(str(tmp_path)); sc.samp_freq.setValue(1000); sc._on_inputs_changed()
     assert sc.state.settings.input.files == "*.csv"  # narrowed so the single-glob core runner works
     win.close()
@@ -601,16 +1185,193 @@ def test_probe_detects_sampling_frequency_from_the_time_column(qapp, tmp_path):
     win.close()
 
 
-def test_probe_leaves_csv_decimal_untouched(qapp, tmp_path):
+def test_probe_detected_frequency_mismatch_is_shown_persistently_and_marks_the_field(qapp, tmp_path):
+    """Ticket D26: the field's previous value (2000 Hz, what the user set) and the just-
+    detected value (500 Hz, from the time column) must BOTH survive on screen once the
+    channel-setup flow finishes applying the probe — not just for the ~460 ms the old
+    status-line note lived before Preview's refresh overwrote it. _apply_channel_mapping
+    is what a real 'OK' in the picker calls after the probe (_open_channel_setup), and it
+    is what rebuilds the read-out via _on_inputs_changed — so this drives the same path a
+    real channel-setup OK does, rather than calling _update_format_readout directly."""
+    import numpy as np
+    from respmech.ui.main_window import MainWindow
+    n = 400; t = np.arange(n) / 500.0               # a real 500 Hz seconds time axis
+    rows = "\n".join(f"{t[i]:.6f},1,2,3,4" for i in range(n))
+    (tmp_path / "rec.csv").write_text("time,f,p,g,d\n" + rows + "\n")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv"); sc.samp_freq.setValue(2000)
+    sc._on_inputs_changed()
+    files = sc._valid_input_files()
+    sc._probe_and_apply_file_settings(files)
+    assert sc.samp_freq.value() == 500
+    assert sc._input_form.isRowVisible(sc.samp_freq_detected_label)
+    sc._apply_channel_mapping({"flow": 2, "volume": None, "poes": 3, "pgas": 4, "pdi": 5,
+                               "emg": [], "entropy": []})
+    text = sc.format_readout.text()
+    assert "500" in text and "2000" in text
+    assert sc.format_readout.property("status") == "warn"
+    win.close()
+
+
+def test_probe_detected_frequency_marker_and_note_clear_on_manual_edit(qapp, tmp_path):
+    """The 'detected from the time column' marker and the persistent mismatch note both
+    exist to be superseded the moment the user acts on them — editing the field by hand
+    must clear both, or a stale note would keep claiming provenance for a value the user
+    just chose themselves. Self-review finding: the field's value after the probe is
+    already 500, so a same-value setValue(500) would not even emit valueChanged and the
+    test would pass regardless of whether the real signal wiring is connected at all
+    (verified: it still passed with samp_freq.valueChanged disconnected). Editing to a
+    genuinely DIFFERENT value and relying on nothing but the real signal (no direct
+    handler calls) actually exercises the production wiring this test is named for."""
+    import numpy as np
+    from respmech.ui.main_window import MainWindow
+    n = 400; t = np.arange(n) / 500.0
+    rows = "\n".join(f"{t[i]:.6f},1,2,3,4" for i in range(n))
+    (tmp_path / "rec.csv").write_text("time,f,p,g,d\n" + rows + "\n")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv"); sc.samp_freq.setValue(2000)
+    sc._on_inputs_changed()
+    sc._probe_and_apply_file_settings(sc._valid_input_files())
+    sc._apply_channel_mapping({"flow": 2, "volume": None, "poes": 3, "pgas": 4, "pdi": 5,
+                               "emg": [], "entropy": []})
+    assert sc._input_form.isRowVisible(sc.samp_freq_detected_label)
+    assert "implies" in sc.format_readout.text()
+    sc.samp_freq.setValue(750)   # the user edits the field by hand, to a genuinely new value
+    assert not sc._input_form.isRowVisible(sc.samp_freq_detected_label)
+    assert "implies" not in sc.format_readout.text()
+    win.close()
+
+
+def test_probe_detected_frequency_note_does_not_leak_into_a_different_folder(qapp, tmp_path):
+    """Self-review finding (two independent reviewers): a probe result recorded for folder
+    A used to survive UNCHANGED once the user pointed the Recordings folder at a completely
+    different folder B, without ever re-running the channel picker — neither _on_inputs_
+    changed (the ordinary folder-edit handler) nor "Duplicate for another recordings
+    folder..." reset the D26 state, so folder B's read-out kept quoting folder A's probe
+    numbers as if they were about folder B's (entirely unprobed) data, alongside whatever
+    genuine caution folder B's own data actually deserved. Reproduces the folder-edit half
+    of that report end to end via _on_inputs_changed (the same handler a real Recordings-
+    folder edit fires)."""
+    import numpy as np
+    from respmech.ui.main_window import MainWindow
+    a = tmp_path / "a"; a.mkdir()
+    n = 400; t = np.arange(n) / 500.0                # folder A: a real 500 Hz time axis
+    rows = "\n".join(f"{t[i]:.6f},1,2,3,4" for i in range(n))
+    (a / "rec.csv").write_text("time,f,p,g,d\n" + rows + "\n")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(a)); sc.in_files.setText("*.csv"); sc.samp_freq.setValue(2000)
+    sc._on_inputs_changed()
+    sc._probe_and_apply_file_settings(sc._valid_input_files())
+    sc._apply_channel_mapping({"flow": 2, "volume": None, "poes": 3, "pgas": 4, "pdi": 5,
+                               "emg": [], "entropy": []})
+    assert "implies" in sc.format_readout.text()          # folder A's mismatch is shown
+
+    b = tmp_path / "b"; b.mkdir()                    # folder B: unrelated, clean data
+    (b / "other.csv").write_text("time,f,p,g,d\n0.000,1,2,3,4\n0.001,1,2,3,4\n")
+    sc.in_folder.setText(str(b))
+    sc._on_inputs_changed()                            # the ordinary folder-edit handler
+    text = sc.format_readout.text()
+    assert "implies" not in text                        # folder A's stale note must not leak in
+    assert not sc._input_form.isRowVisible(sc.samp_freq_detected_label)
+    win.close()
+
+
+def test_probe_and_apply_file_settings_never_touches_decimal(qapp, tmp_path):
+    """Ticket D03: _probe_and_apply_file_settings handles the sampling frequency ONLY now —
+    decimal detection moved to _detect_decimal, called earlier from _open_channel_setup.
+    Calling this method alone must leave the decimal exactly as it was, for ANY extension
+    (not just .csv, which is the case this ticket actually changed)."""
     from respmech.ui.main_window import MainWindow
     (tmp_path / "r.csv").write_text("t,f,p,g,d\n0,1,2,3,4\n1,1,2,3,4\n")
     win = MainWindow(AppState()); sc = win.settings_screen
     sc.enter_new_mode()
+    sc._channel_modal_done = True   # disarm the guided auto-open modal (see test_detect_and_apply…)
     sc.in_folder.setText(str(tmp_path)); sc.samp_freq.setValue(1000); sc._on_inputs_changed()
     assert sc.state.settings.input.files == "*.csv"
     before = sc.state.settings.input.format.decimal
     sc._probe_and_apply_file_settings(sc._valid_input_files())
-    assert sc.state.settings.input.format.decimal == before   # decimal is a .txt-only concern
+    assert sc.state.settings.input.format.decimal == before
+    win.close()
+
+
+def _write_eu_csv(path, ncols=7, nrows=30, fs=1000.0):
+    """Ticket D03's own reproduction: NO header row (a raw instrument export — the ticket's
+    bug report names column headers that are 'fragments of the first DATA row', which only
+    happens when there is no real header for pandas to read instead), ';'-separated
+    columns, ','-decimal floats, column 0 a real time axis. Same shape convention as
+    _helpers.write_delim otherwise."""
+    dt = 1.0 / fs
+    lines = []
+    for i in range(nrows):
+        row = [f"{i * dt:.4f}"] + [f"{(i + j) / 10:.4f}" for j in range(2, ncols + 1)]
+        lines.append(";".join(row).replace(".", ","))
+    with open(path, "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
+def test_open_channel_setup_detects_decimal_before_the_dialog_reads_data(qapp, tmp_path):
+    """Ticket D03's acceptance scenario for the format read-out: before detection the
+    read-out (B01's manifest) misreads the file exactly as the ticket describes (8 columns
+    from splitting the wrong way); _detect_decimal — called from _open_channel_setup,
+    BEFORE the dialog is built — must correct the setting and the read-out must then name
+    the real shape (7 columns, semicolon-separated)."""
+    from respmech.ui.main_window import MainWindow
+    _write_eu_csv(tmp_path / "s01.csv")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
+    sc.samp_freq.setValue(1000); sc._on_inputs_changed()
+    assert sc.state.settings.input.format.decimal == "."      # not yet detected
+    assert "8 columns" in sc.format_readout.text()             # misread under the wrong guess
+    files = sc._valid_input_files()
+    assert sc._detect_decimal(files) is True
+    assert sc.state.settings.input.format.decimal == ","
+    assert sc.decimal_sep.currentData() == ","                 # the picker follows the model
+    assert "7 columns" in sc.format_readout.text()
+    assert "semicolon-separated" in sc.format_readout.text()
+    win.close()
+
+
+def test_semicolon_csv_reaches_ok_via_the_real_dialog(qapp, monkeypatch, tmp_path):
+    """The end-to-end regression this ticket exists to fix: a user pointed at a genuine
+    European CSV must reach a usable channel picker on the FIRST attempt — real, non-NaN
+    data to plot and OK reachable — with no need to set the decimal separator by hand
+    first, driven through the REAL dialog's own gating logic, not a stub."""
+    import numpy as np
+    import respmech.ui.channel_setup_dialog as csd
+    from respmech.ui.main_window import MainWindow
+    for n in ("s01", "s02"):
+        _write_eu_csv(tmp_path / f"{n}.csv")
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
+    sc.out_folder.setText(str(tmp_path))
+    sc.samp_freq.setValue(1000)
+    sc._on_inputs_changed()
+
+    real_cls = csd.ChannelSetupDialog
+
+    def _build(*a, **k):
+        # ticket D27: this fixture's header-less rows are already rejected by the
+        # name-based lookup's own numeric guard (see column_stack._looks_numeric), so
+        # turning seeding off here changes nothing observable — done anyway to keep this
+        # test decoupled from that unrelated feature, same as the sibling test above.
+        dlg = real_cls(*a, suggest_from_names=False, **k)
+        matrix, _names = dlg._cache[dlg._files[dlg._file_idx]]
+        # the bug this ticket fixes: every column read as all-NaN under the wrong decimal
+        assert not np.isnan(matrix).all(axis=0).any()
+        _set_role(dlg, 1, "flow"); _set_role(dlg, 2, "poes")
+        _set_role(dlg, 3, "pgas"); _set_role(dlg, 4, "pdi")
+        assert dlg._ok_btn.isEnabled()
+        dlg.exec = lambda: QDialog.Accepted               # skip the real (blocking) modal loop
+        return dlg
+    monkeypatch.setattr(csd, "ChannelSetupDialog", _build)
+
+    assert sc._open_channel_setup(initial={}) is True
+    assert sc.state.settings.input.format.decimal == ","
+    ch = sc.state.settings.input.channels
+    assert (ch.flow, ch.poes, ch.pgas, ch.pdi) == (2, 3, 4, 5)
+    # self-review finding: a silently auto-detected decimal must still be told to the user
+    # somewhere — the status line is where every other auto-detected file setting surfaces.
+    assert "decimal ','" in sc.status.text()
     win.close()
 
 
@@ -657,7 +1418,10 @@ def test_apply_channel_mapping_writes_the_model_and_the_readout(qapp):
     # plain list, which is the point — the mapping shows the moment it exists
     rows = sc.channel_summary.texts()
     assert "Flow signal: Column #3" in rows
-    assert not any(r.startswith("Volume") for r in rows)
+    # ticket D02: Volume is the one role the summary always names, even unassigned — a
+    # flow-only rig is a supported setup, not something the readout should stay silent
+    # about the way it stays silent about a genuinely-not-relevant role.
+    assert "Volume: not assigned" in rows
     assert "assigned" in sc.status.text().lower()
     win.close()
 
@@ -685,3 +1449,72 @@ def test_channel_role_labels_are_descriptive(qapp):
     labels = dict(_ROLES)
     assert "oesophageal" in labels["poes"] and "gastric" in labels["pgas"]
     assert "transdiaphragmatic" in labels["pdi"] and "diaphragm" in labels["emg"]
+
+
+# ---------------------------------------------------------------------------
+# B01: the batch banner reconciles with the manifest's excluded files
+# ---------------------------------------------------------------------------
+def test_banner_names_excluded_files_when_given(qapp):
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+    dlg = ChannelSetupDialog(_files(), 1000, loader=_loader(), suggest_from_names=False,
+                             excluded=[("odd_one.csv", 8), ("also_odd.csv", 11)])
+    text = None
+    for w in dlg.findChildren(type(dlg.info)):
+        if "applied to all" in w.text():
+            text = w.text()
+            break
+    assert text is not None
+    assert "odd_one.csv" in text and "8" in text
+    assert "also_odd.csv" in text
+    assert "not shown here" in text
+    dlg.close()
+
+
+def test_banner_names_an_unreadable_excluded_file_without_literal_none(qapp):
+    """Self-review regression (05-08-2026): an excluded file the manifest could not read at
+    all carries columns=None (manifest.py's FileEntry), and the banner used to format that
+    as the literal string 'brokenfile.csv (None cols)' — a bare f-string over None."""
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+    dlg = ChannelSetupDialog(_files(), 1000, loader=_loader(), suggest_from_names=False,
+                             excluded=[("brokenfile.csv", None), ("odd_one.csv", 8)])
+    text = next(w.text() for w in dlg.findChildren(type(dlg.info)) if "applied to all" in w.text())
+    assert "None" not in text
+    assert "brokenfile.csv (unreadable)" in text
+    assert "odd_one.csv (8 cols)" in text
+    dlg.close()
+
+
+def test_banner_says_nothing_extra_without_excluded_files(qapp):
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+    dlg = ChannelSetupDialog(_files(), 1000, loader=_loader(), suggest_from_names=False)
+    banners = [w.text() for w in dlg.findChildren(type(dlg.info)) if "applied to all" in w.text()]
+    assert len(banners) == 1
+    assert "not shown here" not in banners[0]
+    dlg.close()
+
+
+def test_settings_screen_passes_manifest_outliers_to_the_dialog(qapp, monkeypatch, tmp_path):
+    """_open_channel_setup must hand the dialog exactly what its own manifest scan found —
+    not silently drop the fact that a file was excluded."""
+    from _helpers import write_delim
+    from respmech.ui.main_window import MainWindow
+    for n in ("a", "b", "c"):
+        write_delim(tmp_path / f"{n}.csv", 9)
+    write_delim(tmp_path / "outlier.csv", 8)
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
+    sc.samp_freq.setValue(1000)
+    sc._on_inputs_changed()
+    assert sc._manifest is not None and len(sc._manifest.outliers) == 1
+
+    seen = {}
+
+    def fake_dialog(files, fs, initial, loader=None, parent=None, excluded=None,
+                    integrate_from_flow=False):
+        seen["excluded"] = excluded
+        raise ValueError("stop before actually opening a modal")
+
+    monkeypatch.setattr("respmech.ui.channel_setup_dialog.ChannelSetupDialog", fake_dialog)
+    sc._open_channel_setup(initial={})
+    assert seen["excluded"] == [("outlier.csv", 8)]
+    win.close()

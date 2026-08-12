@@ -19,7 +19,7 @@ pytestmark = requires_synth()
 # P10 / P21 — units
 # --------------------------------------------------------------------------- #
 def test_units_resolve_by_physical_quantity():
-    from respmech.core import units
+    from respmech.core import quantities as units
     assert units.unit_for("poes_mininsp") == "cmH₂O"
     assert units.unit_for("vt") == "L"
     assert units.unit_for("max_in_flow") == "L/s"       # 'flow' beats the volume rule
@@ -31,6 +31,47 @@ def test_units_resolve_by_physical_quantity():
     assert units.unit_for("int_oesinsp") == "cmH₂O·s"         # the un-scaled per-breath integral
     assert units.unit_for("sample_entropy_max") == "—"
     assert units.unit_for("file") == "" and units.unit_for("breath_no") == ""
+
+
+def test_display_for_falls_back_to_the_column_identifier():
+    """The registry has room for a human-readable name (ticket A04), but the name
+    table itself is deliberately not populated yet — see quantities.py's docstring.
+    Until it is, display_for() must return the column's own identifier."""
+    from respmech.core import quantities
+    assert quantities.display_for("ptp_oesinsp") == "ptp_oesinsp"
+    assert quantities.display_for("vt") == "vt"
+
+
+def test_units_sheet_notes_the_wob_source_on_wob_columns_only():
+    """D22 (UI-overhaul): the Units sheet's Note column names the work-of-breathing
+    source ('averaged breath' vs 'individual breaths') on the wob* columns only — the
+    only columns whose meaning depends on processing.wob.calc_from. Every other
+    column's Note stays blank, so a reader is never told something is a whole-file
+    average when it is not."""
+    from respmech.core.io.writers import _units_df
+    s = synth_settings("")
+    # "file"/"breath_no" resolve to no unit at all (quantities.unit_for) and so never
+    # become a row here (units_map keeps only columns with a real unit) — unaffected by
+    # this change, just not a column this assertion can check a blank Note on.
+    cols = ["file", "breath_no", "wobtotal", "wob_in_total", "vt"]
+    by_col = _units_df(cols, s).set_index("Column")
+    assert "average" in by_col.loc["wobtotal", "Note"].lower()
+    assert "average" in by_col.loc["wob_in_total", "Note"].lower()
+    assert by_col.loc["vt", "Note"] == ""
+    assert "file" not in by_col.index
+
+    s.processing.wob.calc_from = "individual"
+    by_col2 = _units_df(cols, s).set_index("Column")
+    assert "individual" in by_col2.loc["wobtotal", "Note"].lower()
+
+
+def test_units_sheet_note_column_is_blank_without_settings():
+    """``settings`` is optional (kept for the signature's own sake — nothing in this
+    codebase calls _units_df without it); a caller that omits it gets an empty Note
+    column rather than a crash."""
+    from respmech.core.io.writers import _units_df
+    df = _units_df(["wobtotal", "vt"])
+    assert list(df["Note"]) == ["", ""]
 
 
 # --------------------------------------------------------------------------- #
@@ -226,6 +267,43 @@ def test_write_batch_adds_units_provenance_summary_without_touching_data(tmp_pat
     assert os.path.isfile(os.path.join(tmp_path, "data", "Cohort summary.xlsx"))
 
 
+def test_provenance_names_sample_entropy_only_when_it_is_computed(tmp_path):
+    """D11 (UI-overhaul): the Provenance sheet gets a 'Sample entropy' row, in the same m/r
+    words as Setup's own read-out, but only when a channel is actually assigned to entropy —
+    an empty processing.entropy.epochs/tolerance would otherwise be printed as if a run had
+    used them when nothing was computed at all."""
+    from respmech.core.io.writers import _provenance_rows
+    s = synth_settings(tmp_path)
+    s.input.channels.entropy = []                      # nothing assigned -> nothing computed
+    rows = dict(_provenance_rows(s, datetime(2026, 7, 11)).values)
+    assert "Sample entropy" not in rows
+
+    s.input.channels.entropy = [3]
+    s.processing.entropy.epochs = 2
+    s.processing.entropy.tolerance = 0.1
+    rows = dict(_provenance_rows(s, datetime(2026, 7, 11)).values)
+    assert rows["Sample entropy"] == "m = 1, r = 0.1 × SD"
+
+    s.processing.entropy.epochs = 3
+    rows = dict(_provenance_rows(s, datetime(2026, 7, 11)).values)
+    assert rows["Sample entropy"] == "m = 2, r = 0.1 × SD"
+
+
+def test_provenance_names_the_wob_source(tmp_path):
+    """D22 (UI-overhaul): the same average/individual choice the Preview & QC table's
+    own header now names (see test_wob_table_note_* in test_preview_screen.py) also
+    lands in the written file's Provenance sheet, always present (unlike Sample
+    entropy, calc_from is never unset)."""
+    from respmech.core.io.writers import _provenance_rows
+    s = synth_settings(tmp_path)
+    rows = dict(_provenance_rows(s, datetime(2026, 7, 11)).values)
+    assert rows["Work of breathing"] == "averaged breath"
+
+    s.processing.wob.calc_from = "individual"
+    rows = dict(_provenance_rows(s, datetime(2026, 7, 11)).values)
+    assert rows["Work of breathing"] == "individual breaths"
+
+
 # ---------------------------------------------------------------------------
 # Run report + reloadable manifest (P7); sample data (P23) — waves 2, 6
 # ---------------------------------------------------------------------------
@@ -264,6 +342,139 @@ def test_write_batch_emits_reloadable_manifest(tmp_path):
     reloaded = load_toml(manifest)
     assert reloaded.input.format.sampling_frequency == 1000
     assert "2 processed, 0 failed" in open(report, encoding="utf-8").read()
+
+
+# ---------------------------------------------------------------------------
+# A05 — a subset/re-run write must never silently rebuild the study's
+# cohort-level outputs (or overwrite its provenance) from a fraction of it.
+# ---------------------------------------------------------------------------
+def test_full_run_default_cohort_outputs_writes_the_same_files_as_before(tmp_path):
+    """cohort_outputs defaults to True and must be byte-for-byte the pre-A05 behaviour:
+    the CLI (which never passes only_files/cohort_outputs at all) is unaffected."""
+    from respmech.core.pipeline import run_batch
+    from respmech.core.io.writers import write_batch
+    s = synth_settings(tmp_path)
+    result = run_batch(s)
+    out_default, out_explicit = tmp_path / "default", tmp_path / "explicit"
+    out_default.mkdir(); out_explicit.mkdir()
+    default_written = write_batch(result, s, str(out_default), when=datetime(2026, 7, 11))
+    explicit_written = write_batch(result, s, str(out_explicit), when=datetime(2026, 7, 11),
+                                   cohort_outputs=True)
+    rel = lambda base, paths: sorted(os.path.relpath(p, str(base)) for p in paths)
+    assert rel(out_default, default_written) == rel(out_explicit, explicit_written)
+    assert os.path.isfile(out_default / "data" / "Average breathdata.xlsx")
+    assert os.path.isfile(out_default / "data" / "Cohort summary.xlsx")
+    assert os.path.isfile(out_default / "run-report.txt")
+    assert os.path.isfile(out_default / "analysis-used.toml")
+
+
+def test_subset_write_leaves_cohort_spreadsheets_and_full_report_untouched(tmp_path):
+    from respmech.core.pipeline import run_batch
+    from respmech.core.io.writers import write_batch
+    s = synth_settings(tmp_path)
+    full_result = run_batch(s)
+    write_batch(full_result, s, str(tmp_path), when=datetime(2026, 7, 11, 14, 0, 0))
+
+    avg_path = os.path.join(tmp_path, "data", "Average breathdata.xlsx")
+    cohort_path = os.path.join(tmp_path, "data", "Cohort summary.xlsx")
+    report_path = os.path.join(tmp_path, "run-report.txt")
+    manifest_path = os.path.join(tmp_path, "analysis-used.toml")
+    avg_before = open(avg_path, "rb").read()
+    cohort_before = open(cohort_path, "rb").read()
+    report_before = open(report_path, encoding="utf-8").read()
+    manifest_before = open(manifest_path, encoding="utf-8").read()
+    avg_mtime_before = os.path.getmtime(avg_path)
+
+    subset_result = run_batch(s, only_files=["synth_case_A.csv"])
+    written = write_batch(subset_result, s, str(tmp_path), when=datetime(2026, 7, 11, 15, 0, 0),
+                          cohort_outputs=False)
+
+    # cohort-level workbooks: byte-identical, untouched
+    assert open(avg_path, "rb").read() == avg_before
+    assert open(cohort_path, "rb").read() == cohort_before
+    assert os.path.getmtime(avg_path) == avg_mtime_before
+    # neither cohort workbook is even in the subset's own written-list
+    assert not any(os.path.basename(p) in ("Average breathdata.xlsx", "Cohort summary.xlsx")
+                  for p in written)
+    # the full run's report and manifest survive verbatim (settings unchanged -> no partial manifest)
+    assert open(report_path, encoding="utf-8").read() == report_before
+    assert open(manifest_path, encoding="utf-8").read() == manifest_before
+    assert not any("analysis-used (partial" in p for p in written)
+    # a distinct, timestamped partial report was written instead of replacing run-report.txt
+    partial_reports = [p for p in written if "run-report (partial" in p]
+    assert len(partial_reports) == 1 and os.path.isfile(partial_reports[0])
+    partial_txt = open(partial_reports[0], encoding="utf-8").read()
+    assert "PARTIAL RUN" in partial_txt
+    assert "Settings snapshot: analysis-used.toml" in partial_txt   # unchanged -> points at the full file
+    # the file's own per-file artefacts ARE written, as normal
+    assert os.path.isfile(os.path.join(tmp_path, "data", "synth_case_A.csv.breathdata.xlsx"))
+
+
+def test_subset_write_creates_a_timestamped_manifest_when_settings_differ(tmp_path):
+    from respmech.core.pipeline import run_batch
+    from respmech.core.io.writers import write_batch
+    from respmech.settingsio.toml_io import load_toml
+    s = synth_settings(tmp_path)
+    full_result = run_batch(s)
+    write_batch(full_result, s, str(tmp_path), when=datetime(2026, 7, 11))
+    manifest_path = os.path.join(tmp_path, "analysis-used.toml")
+    manifest_before = open(manifest_path, encoding="utf-8").read()
+
+    s.output.group_regex = r"_(\d+)W"                 # any settings field that round-trips
+    subset_result = run_batch(s, only_files=["synth_case_A.csv"])
+    written = write_batch(subset_result, s, str(tmp_path), when=datetime(2026, 7, 11, 16, 0, 0),
+                          cohort_outputs=False)
+
+    assert open(manifest_path, encoding="utf-8").read() == manifest_before   # full manifest untouched
+    partial_manifests = [p for p in written if "analysis-used (partial" in p]
+    assert len(partial_manifests) == 1 and os.path.isfile(partial_manifests[0])
+    reloaded = load_toml(partial_manifests[0])
+    assert reloaded.output.group_regex == r"_(\d+)W"          # the SUBSET's settings, not the full run's
+    partial_report = next(p for p in written if "run-report (partial" in p)
+    report_txt = open(partial_report, encoding="utf-8").read()
+    assert f"Settings snapshot: {os.path.basename(partial_manifests[0])}" in report_txt
+
+
+def test_subset_manifest_protects_an_unreadable_existing_file_instead_of_overwriting_it(tmp_path):
+    """Regression: a read failure on an EXISTING analysis-used.toml (not valid UTF-8 —
+    corrupted by an interrupted write, or hand-edited with a different encoding) used to
+    read as 'existing is None' -> 'nothing to protect' -> the full run's manifest was
+    silently overwritten by the subset's settings, exactly the data loss A05 exists to
+    prevent. It must instead be treated the same as 'exists and differs': protected under
+    a timestamped name."""
+    from respmech.core.io.writers import _write_manifest
+    s = synth_settings(tmp_path)
+    manifest_path = os.path.join(tmp_path, "analysis-used.toml")
+    with open(manifest_path, "wb") as f:
+        f.write(b"\xff\xfe not valid utf-8 \x00\x01")     # undecodable as UTF-8
+    corrupt_before = open(manifest_path, "rb").read()
+
+    result_path = _write_manifest(s, str(tmp_path), cohort_outputs=False,
+                                  when=datetime(2026, 7, 11, 16, 0, 0))
+
+    assert open(manifest_path, "rb").read() == corrupt_before   # the unreadable file is untouched
+    assert result_path is not None and "analysis-used (partial" in result_path
+    assert os.path.isfile(result_path)
+    assert "sampling_frequency" in open(result_path, encoding="utf-8").read()   # a real settings dump
+
+
+def test_subset_write_skips_the_cohort_figure_even_with_two_or_more_files(tmp_path):
+    """The cohort Campbell figure's existing len(ok_files) > 1 guard is not enough on its
+    own — A05 explicitly measured this being redrawn from a 2-file 'Re-run failed'. The
+    cohort_outputs flag must gate it regardless of how many files are IN the subset."""
+    from respmech.core.pipeline import run_batch
+    from respmech.core import plots
+    s = synth_settings(tmp_path)
+    for flag in ("save_pv_average", "save_raw", "save_trimmed", "save_drift", "save_emg"):
+        setattr(s.output.diagnostics, flag, False)
+    s.output.diagnostics.save_pv_individual = True
+    result = run_batch(s)                              # both synth files -> len(ok_files) == 2
+    written_full, _ = plots.write_figures(result, s, str(tmp_path), cohort_outputs=True)
+    assert any("All files" in os.path.basename(p) for p in written_full)
+    for p in written_full:
+        os.remove(p)
+    written_subset, _ = plots.write_figures(result, s, str(tmp_path), cohort_outputs=False)
+    assert not any("All files" in os.path.basename(p) for p in written_subset)
 
 
 def test_sample_recording_is_analysable(tmp_path):
@@ -308,8 +519,8 @@ def test_output_pdfs_are_always_light(monkeypatch):
     from respmech.core import plots
     seen = {}
     monkeypatch.setattr(plots, "_write_figures_impl",
-                        lambda r, s, o, progress=None: (seen.update(face=mpl.rcParams["axes.facecolor"]),
-                                                        ([], []))[1])
+                        lambda r, s, o, progress=None, cohort_outputs=True:
+                            (seen.update(face=mpl.rcParams["axes.facecolor"]), ([], []))[1])
     assert plots.write_figures(None, None, "") == ([], [])
     assert seen["face"] == "#FFFFFF"                              # light INSIDE the writer
     assert mpl.rcParams["axes.facecolor"] == dark_ground          # ...dark restored after
@@ -323,3 +534,183 @@ def test_output_pdfs_are_always_light(monkeypatch):
         if dark_val != mpl.rcParams[key]:                         # a key the theme re-colours
             assert light[key] == mpl.rcParams[key], (
                 f"{key}: core's light table has drifted from the light theme")
+
+
+# ---------------------------------------------------------------------------
+# A06 — one plan, shown before a run and executed by the writer: core.io.plan
+# ---------------------------------------------------------------------------
+def _rel(paths, base):
+    return {os.path.relpath(p, str(base)).replace(os.sep, "/") for p in paths}
+
+
+def test_plan_contains_every_path_a_real_run_writes(tmp_path):
+    """The regression this ticket exists for. Measured before the fix: a dry run of the
+    bundled sample settings said 4 files where a real run wrote 14 (missing Cohort
+    summary.xlsx and every diagnostics/ figure); on a bigger batch, 7 vs 45. For the SAME
+    settings and the SAME files, every path write_batch actually writes must be a member
+    of plan_outputs' ceiling — proven here with every diagnostic figure, EMG overview,
+    EMG audio and cohort output turned on at once."""
+    from respmech.core.io.plan import plan_outputs
+    from respmech.core.io.writers import write_batch
+    from respmech.core.pipeline import run_batch
+
+    s = synth_settings(tmp_path, noise=True)          # ECG removal + shared-profile noise
+    s.output.data.save_processed = True
+    s.processing.emg.save_sound = True
+    for flag in ("save_pv_average", "save_pv_individual", "save_raw", "save_trimmed",
+                "save_drift", "save_emg"):
+        setattr(s.output.diagnostics, flag, True)
+
+    files = [os.path.join(INPUT, "synth_case_A.csv"), os.path.join(INPUT, "synth_case_B.csv")]
+    plan = plan_outputs(s, files)
+    assert plan.is_cap                                 # figures/EMG-audio are ceilings, not promises
+
+    result = run_batch(s)
+    written = write_batch(result, s, str(tmp_path))
+
+    rel_written = _rel(written, tmp_path)
+    rel_plan = set(plan.all_paths())
+    missing = rel_written - rel_plan
+    assert not missing, f"written but not in the plan: {sorted(missing)}"
+    assert plan.total_count >= len(written)            # a ceiling, never smaller than reality
+
+
+def test_plan_omits_cohort_outputs_for_a_subset(tmp_path):
+    """A05's rule extends to the plan (ticket A06 point 1): a subset plan must not promise
+    the cohort-level workbooks or the cohort Campbell figure it will never write."""
+    from respmech.core.io.plan import plan_outputs
+    s = synth_settings(tmp_path)
+    s.output.diagnostics.save_pv_individual = True
+    files = [os.path.join(INPUT, "synth_case_A.csv")]
+    full_plan = plan_outputs(s, files, cohort_outputs=True)
+    subset_plan = plan_outputs(s, files, cohort_outputs=False)
+    assert any("Average breathdata.xlsx" in p for p in full_plan.all_paths())
+    assert not any("Average breathdata.xlsx" in p for p in subset_plan.all_paths())
+    assert not any("Cohort summary.xlsx" in p for p in subset_plan.all_paths())
+    assert not any("All files" in p for p in subset_plan.all_paths())
+
+
+def test_subset_provenance_never_names_the_full_runs_files(tmp_path):
+    """Self-review fix: the writer NEVER gives a subset write's run report the full run's
+    plain 'run-report.txt' name (writers._write_run_report always timestamps it), and the
+    manifest keeps that name only when no full-run manifest exists yet to protect. The plan
+    must not claim the literal full-run names for a subset, even as a 'roughly this'."""
+    from respmech.core.io.plan import plan_outputs
+    s = synth_settings(tmp_path)
+    files = [os.path.join(INPUT, "synth_case_A.csv")]
+    subset_plan = plan_outputs(s, files, cohort_outputs=False)
+    assert not any(p == "run-report.txt" for p in subset_plan.all_paths())
+    full_plan = plan_outputs(s, files, cohort_outputs=True)
+    assert any(p == "run-report.txt" for p in full_plan.all_paths())
+    assert any(p == "analysis-used.toml" for p in full_plan.all_paths())
+
+
+def test_plan_is_exact_not_a_cap_for_an_empty_file_list(tmp_path):
+    """Self-review fix: an empty file list with save_average on used to still mark the
+    plan a cap (is_cap is an OR across every group, and the cohort-summary group was
+    unconditionally is_cap=True) even though the only two things such a plan can ever
+    write — the manifest and the run report — are exact, not uncertain."""
+    from respmech.core.io.plan import plan_outputs
+    s = synth_settings(tmp_path)
+    plan = plan_outputs(s, [])
+    assert plan.total_count == 2                      # manifest + run report, nothing else
+    assert plan.is_cap is False
+
+
+def test_new_figure_job_appears_in_plan_and_is_actually_written(tmp_path, monkeypatch):
+    """Both the plan and write_batch read core.plots.per_file_figure_jobs() by name at call
+    time — proof that a figure type can never appear in one without the other, because
+    there is only one list, not two independently maintained copies of it."""
+    from respmech.core import plots
+    from respmech.core.io.plan import plan_outputs
+    from respmech.core.pipeline import run_batch
+
+    s = synth_settings(tmp_path)
+    for flag in ("save_pv_average", "save_pv_individual", "save_raw", "save_trimmed",
+                "save_drift", "save_emg"):
+        setattr(s.output.diagnostics, flag, False)
+
+    real_jobs = plots.per_file_figure_jobs
+
+    def _marker(fr, fname, path):
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("marker")
+        return path
+
+    def fake_jobs(settings):
+        return real_jobs(settings) + [("marker job", _marker, "marker.txt")]
+
+    monkeypatch.setattr(plots, "per_file_figure_jobs", fake_jobs)
+
+    files = [os.path.join(INPUT, "synth_case_A.csv"), os.path.join(INPUT, "synth_case_B.csv")]
+    plan = plan_outputs(s, files)
+    assert any(p.endswith("– marker.txt") for p in plan.all_paths())
+
+    # plots.write_figures directly (not write_batch, which can hand the figure step to a
+    # SEPARATE PROCESS — a fresh interpreter that would re-import the real, unpatched
+    # per_file_figure_jobs and defeat the monkeypatch above; see core/io/_figure_process.py).
+    # The shared-list claim this test proves is about core.plots and core.io.plan agreeing,
+    # which the subprocess indirection is orthogonal to.
+    result = run_batch(s)
+    written, failures = plots.write_figures(result, s, str(tmp_path))
+    assert not failures
+    marker_written = [p for p in written if p.endswith("– marker.txt")]
+    assert len(marker_written) == 2                    # one per file
+    assert _rel(marker_written, tmp_path) <= set(plan.all_paths())
+
+
+def test_plan_deduplicates_repeated_emg_channel_numbers(tmp_path):
+    """A channel typo'd twice into input.channels.emg must not double every WAV path in
+    the plan — the same channel is still only written once by the actual EMG audio export."""
+    from respmech.core.io.plan import plan_outputs
+    s = synth_settings(tmp_path, remove_ecg=True)
+    s.processing.emg.save_sound = True
+    s.input.channels.emg = [2, 3, 4, 2]                 # 2 appears twice
+    files = [os.path.join(INPUT, "synth_case_A.csv")]
+    plan = plan_outputs(s, files)
+    wav_group = next(g for g in plan.groups if "audio" in g.category.lower())
+    # channel 2, raw stage: exactly one entry, not two, even though channel 2 was typo'd
+    # twice into input.channels.emg (there ARE legitimately two entries for channel 2
+    # overall — one per conditioning stage, raw and ECG-removed, since remove_ecg=True).
+    raw_col2 = [p for p in wav_group.paths if "EMG col 2 (Raw EMG).wav" in p]
+    assert len(raw_col2) == 1
+
+
+def test_write_planned_writes_to_a_different_folder_without_recomputing(tmp_path):
+    """Ticket A06 point 7 — 'Write results to another folder…': the SAME computed result
+    is written a second time, to a NEW folder, and nothing about the analysis is redone
+    (no second run_batch call is even possible here — only `result` is reused)."""
+    from respmech.core.io.plan import plan_outputs
+    from respmech.core.io.writers import write_planned
+    from respmech.core.pipeline import run_batch
+
+    s = synth_settings(tmp_path / "original")
+    result = run_batch(s)
+    files = [os.path.join(INPUT, "synth_case_A.csv"), os.path.join(INPUT, "synth_case_B.csv")]
+    plan = plan_outputs(s, files)
+
+    elsewhere = tmp_path / "elsewhere"
+    written = write_planned(result, s, plan, outputfolder=str(elsewhere))
+    assert written and all(p.startswith(str(elsewhere)) for p in written)
+    assert os.path.isfile(elsewhere / "data" / "Average breathdata.xlsx")
+    assert not (tmp_path / "original").exists()         # the original folder was never created
+
+
+def test_write_planned_honours_the_plans_cohort_outputs_flag(tmp_path):
+    """Regression (found in self-review): write_planned must read cohort_outputs FROM the
+    plan it is given, not default to True independently of it — otherwise a subset write
+    redirected to a new folder could silently rebuild the study's cohort spreadsheets from
+    the fraction of files the subset actually covered."""
+    from respmech.core.io.plan import plan_outputs
+    from respmech.core.io.writers import write_planned
+    from respmech.core.pipeline import run_batch
+
+    s = synth_settings(tmp_path)
+    subset_result = run_batch(s, only_files=["synth_case_A.csv"])
+    files = [os.path.join(INPUT, "synth_case_A.csv")]
+    subset_plan = plan_outputs(s, files, cohort_outputs=False)
+
+    elsewhere = tmp_path / "elsewhere"
+    written = write_planned(subset_result, s, subset_plan, outputfolder=str(elsewhere))
+    assert not any(os.path.basename(p) in ("Average breathdata.xlsx", "Cohort summary.xlsx")
+                  for p in written)

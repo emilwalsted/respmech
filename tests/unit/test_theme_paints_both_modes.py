@@ -75,6 +75,8 @@ def _all_windows(qapp, tmp_path):
     """One of every top-level window the user can meet, built and shown."""
     from respmech.ui.main_window import MainWindow
     from respmech.ui.dialogs import TextViewerDialog
+    from respmech.ui.migration_report_dialog import MigrationReportDialog
+    from respmech.settingsio.migrate import MigrationReport
     from respmech.ui.startup_dialog import StartupDialog
 
     s = synth_settings(str(tmp_path), data_out={"saveaveragedata": True},
@@ -86,23 +88,32 @@ def _all_windows(qapp, tmp_path):
         qapp.processEvents()
 
     captured = {}
-    original = QDialog.exec
+    # Patch AdvancedDialog.exec ITSELF, not QDialog.exec (D13, UI-overhaul): the mechanics
+    # modal is now non-modal and its exec() override never calls QDialog's own exec() at
+    # all (see advanced_dialog.py), so a patch on the base class would silently miss it —
+    # the dialog would actually show() and block on a real QEventLoop, forever, since
+    # nothing here ever accepts/rejects/closes it.
+    from respmech.ui.advanced_dialog import AdvancedDialog
+    original = AdvancedDialog.exec
 
     def _capture(self):
         captured[self.windowTitle()] = self
         return QDialog.Rejected
 
-    QDialog.exec = _capture
+    AdvancedDialog.exec = _capture
     try:
         for opener in ("_open_mech_advanced", "_open_emg_advanced", "_open_ecg_advanced"):
             getattr(win.preview_screen, opener)()
     finally:
-        QDialog.exec = original
+        AdvancedDialog.exec = original
 
     windows = {"MainWindow": win}
     windows.update(captured)
     windows["StartupDialog"] = StartupDialog()
     windows["TextViewerDialog"] = TextViewerDialog("Error log", "trace\n" * 20)
+    report = MigrationReport(mapped=["a.b -> c.d"], normalised=["e.f changed meaning"],
+                             dropped=["g.h (unused)"])
+    windows["MigrationReportDialog"] = MigrationReportDialog(report)
     return windows
 
 
@@ -200,3 +211,98 @@ def test_the_channel_tick_contrasts_with_every_channel_fill(qapp, dark, request)
     assert not weak, (
         f"{'dark' if dark else 'light'}: "
         + "; ".join(f"channel {i} tick {t} on {f} is {c:.2f}:1" for i, f, t, c in weak))
+
+
+# --------------------------------------------------------------------------- #
+# C02 — disabled-field contrast, and a visible keyboard focus ring on
+# checkboxes/radio buttons that does not shift the row it sits in.
+# --------------------------------------------------------------------------- #
+def test_disabled_tokens_meet_the_contrast_floor_in_both_themes():
+    """Before this ticket: disabled_fg/disabled_bg measured 1.96:1 in light mode and
+    2.46:1 in dark — you could tell a disabled field was THERE (e.g. Advanced/EMG
+    noise's Auto-derived prop_decrease), not read the value it held. Dark mode's
+    disabled_bg was also byte-identical to surface, so a disabled field's flat
+    dissolved into the card it sat on and only a 1.27:1 border said a control existed
+    at all. Reads the tokens directly, no Qt/rendering involved (theme.py is designed
+    to be import-safe without Qt)."""
+    from respmech.ui import theme
+    for name, tokens in (("light", theme._LIGHT), ("dark", theme._DARK)):
+        c = contrast(tokens["disabled_fg"], tokens["disabled_bg"])
+        assert c >= _CONTRAST_FLOOR, (
+            f"{name} mode: disabled_fg {tokens['disabled_fg']} on disabled_bg "
+            f"{tokens['disabled_bg']} is only {c:.2f}:1")
+    assert theme._DARK["disabled_bg"] != theme._DARK["surface"], (
+        "dark disabled_bg is still byte-identical to surface — a disabled field's flat "
+        "would dissolve into the card it sits on")
+
+
+def _render_image(widget):
+    img = QImage(widget.size(), QImage.Format_ARGB32)
+    img.fill(0)
+    widget.render(img)
+    return img
+
+
+def _diff_bbox(img_a, img_b):
+    """Bounding box (xmin, ymin, xmax, ymax) of pixels that differ between two
+    same-sized renders, or ``None`` if they are pixel-identical — mirrors
+    ``PIL.ImageChops.difference(...).getbbox()``, which is how this ticket's own
+    investigation first measured "zero pixels changed"."""
+    assert img_a.size() == img_b.size()
+    w, h = img_a.width(), img_a.height()
+    xmin = ymin = xmax = ymax = None
+    for y in range(h):
+        for x in range(w):
+            if img_a.pixelColor(x, y) != img_b.pixelColor(x, y):
+                xmin = x if xmin is None else min(xmin, x)
+                xmax = x if xmax is None else max(xmax, x)
+                ymin = y if ymin is None else min(ymin, y)
+                ymax = y if ymax is None else max(ymax, y)
+    return None if xmin is None else (xmin, ymin, xmax, ymax)
+
+
+def test_checkbox_and_radio_focus_is_visible_without_shifting_the_row(qapp):
+    """C02: neither QCheckBox nor QRadioButton had any ``:focus`` rule — a keyboard
+    user tabbing through a checklist (e.g. Output's ten save-format boxes) could not
+    see which box currently had focus. Measured before the fix: two renders with
+    focus on different boxes were pixel-identical (bbox ``None``). The fix widens the
+    indicator's border only on focus and shrinks its content box by the same amount
+    (16px + 1px border == 14px + 2px border == an 18px outer footprint either way), so
+    the row's layout must not move either."""
+    from PySide6.QtCore import Qt as _Qt
+    from PySide6.QtWidgets import QCheckBox, QVBoxLayout, QWidget
+    from respmech.ui import theme
+
+    theme.apply_theme(qapp)
+    w = QWidget()
+    lay = QVBoxLayout(w)
+    a = QCheckBox("Option A")
+    b = QCheckBox("Option B")
+    lay.addWidget(a)
+    lay.addWidget(b)
+    w.resize(220, 70)
+    w.show()
+    w.activateWindow()   # offscreen assigns focus only once a window is active
+    for _ in range(3):
+        qapp.processEvents()
+
+    geo_a_before, geo_b_before = a.geometry(), b.geometry()
+
+    a.setFocus(_Qt.FocusReason.OtherFocusReason)
+    qapp.processEvents()
+    assert a.hasFocus()
+    img_a_focused = _render_image(w)
+    a.clearFocus()
+
+    b.setFocus(_Qt.FocusReason.OtherFocusReason)
+    qapp.processEvents()
+    assert b.hasFocus()
+    img_b_focused = _render_image(w)
+    b.clearFocus()
+    qapp.processEvents()
+
+    assert _diff_bbox(img_a_focused, img_b_focused) is not None, (
+        "moving focus from one checkbox to another produced zero visible difference")
+    assert a.geometry() == geo_a_before, "focusing a checkbox moved its own row"
+    assert b.geometry() == geo_b_before, "focusing a checkbox moved a sibling row"
+    w.close()

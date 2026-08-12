@@ -49,14 +49,14 @@ jobs:
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Fuld historik OG tags: tools/check_changelog.py måler et
           # commit-interval mellem to tags, og standard-dybden (1) giver hverken
           # tags eller historik. Målt: uden dette melder kontrollen et
           # indholdsløst grønt, og release-porten fejler på hver udgivelse.
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install (gui + dev extras)
@@ -86,14 +86,14 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Fuld historik OG tags: tools/check_changelog.py måler et
           # commit-interval mellem to tags, og standard-dybden (1) giver hverken
           # tags eller historik. Målt: uden dette melder kontrollen et
           # indholdsløst grønt, og release-porten fejler på hver udgivelse.
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Build
@@ -113,7 +113,7 @@ jobs:
           fi
       - name: twine check
         run: twine check dist/*
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -129,7 +129,7 @@ jobs:
     permissions:
       id-token: write            # OIDC — the ONLY credential; no password/token anywhere
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
@@ -149,7 +149,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
