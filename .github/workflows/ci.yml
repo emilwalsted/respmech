@@ -238,8 +238,30 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
+      # A stalled Ubuntu mirror must not cost this job its entire budget. Measured
+      # 19-08-2026: this step normally finishes in ~7 s (apt-get update against the Azure
+      # mirror; libxkbcommon0 is already on the image, so only libegl1 + libegl-mesa0,
+      # 147 kB, are actually fetched). Twice in a row it instead hung fetching
+      # noble-backports/noble-security InRelease from archive.ubuntu.com — a mirror the one
+      # package needed does not even come from — and sat silent until the job's 60-minute
+      # ceiling killed it, having installed nothing and run no project code. apt applies no
+      # network timeout of its own, so that hang is unbounded.
+      #
+      # Three layers, because they fail differently: Acquire::*::Timeout turns a stalled
+      # connection into an ERROR (a hang cannot be caught, only bounded); the `||` makes a
+      # failed index refresh non-fatal, since the runner image ships a populated index and
+      # the install below is the step's actual purpose — if the package genuinely cannot be
+      # resolved, THAT fails and is a real red; and timeout-minutes is the backstop for any
+      # hang the Acquire options do not reach.
       - name: Qt offscreen system libraries
-        run: sudo apt-get update -q && sudo apt-get install -y -q libegl1 libxkbcommon0
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+          sudo apt-get update -q $opts \
+            || echo "::warning::apt-get update failed or timed out; continuing with the image's existing package index"
+          sudo apt-get install -y -q $opts libegl1 libxkbcommon0
 
       - name: Install (gui + dev extras)
         run: |
