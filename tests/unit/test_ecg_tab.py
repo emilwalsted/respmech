@@ -285,6 +285,76 @@ def test_a_consistent_analysis_is_left_alone(qapp, tmp_path):
     assert pv._ecg_auto_repaired is False
 
 
+def test_clearing_the_emg_channels_repairs_a_stuck_auto_batch(qapp, tmp_path):
+    """The other leg validate() rejects, and the only one reachable WITHOUT loading a file.
+
+    Auto-detect also requires an EMG channel. Drop the EMG role in Setup's channel picker
+    while it is on and the LIVE settings become invalid: every preview gates out, and the
+    two controls that could clear the flag are on this tab, which _update_emg_tab_visibility
+    removes precisely when there are no EMG channels. Setup's status bar did name the way
+    out ("Auto-detect ECG needs an EMG channel assigned"), but pointing at a repair the app
+    can perform itself is not performing it.
+
+    Drives the real path — the picker's own writer, not a hand-set field — so it still holds
+    if the wiring from Setup to Preview changes."""
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    s.processing.emg.ecg_auto_detect = True
+    s.validate()                                      # precondition: a valid analysis
+    ch = s.input.channels
+    assert ch.emg, "the synthetic settings must start WITH EMG channels"
+
+    win = _win(s); pv = win.preview_screen
+    assert s.processing.emg.ecg_auto_detect is True   # untouched while the channels are there
+
+    win.settings_screen._apply_channel_mapping(
+        {"flow": ch.flow, "volume": ch.volume, "poes": ch.poes, "pgas": ch.pgas,
+         "pdi": ch.pdi, "emg": [], "entropy": list(ch.entropy)})
+
+    assert s.input.channels.emg == []
+    assert s.processing.emg.ecg_auto_detect is False, (
+        "dropping the EMG role must clear the flag that requires one")
+    s.validate()                                      # raised before the fix
+    ok, why = pv._settings_ok()
+    assert ok is True, why
+
+
+def test_an_analysis_with_auto_batch_but_no_emg_channel_is_repaired_on_load(qapp, tmp_path):
+    """Same leg, arriving from a file rather than from the picker."""
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    s.processing.emg.ecg_auto_detect = True
+    s.input.channels.emg = []                         # as a hand-edited analysis can store it
+
+    pv = _win(s).preview_screen
+
+    assert s.processing.emg.ecg_auto_detect is False
+    assert pv.ecg_auto_batch.isChecked() is False
+    s.validate()
+
+
+def test_each_repaired_leg_names_the_control_that_brings_auto_batch_back(qapp, tmp_path):
+    """A repair says which switch to use, and the two legs need different switches.
+
+    One sentence for both would send a user with no EMG channel to tick Remove ECG, which
+    is already on and would change nothing."""
+    s = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT)
+    s.processing.emg.ecg_auto_detect = True
+    s.input.channels.emg = []
+    pv = _win(s).preview_screen
+
+    assert pv._ecg_auto_repaired == "no_emg_channel"
+    seen = []
+    pv.settings_edited.connect(lambda *_: seen.append(True))
+    pv._announce_ecg_auto_repair()
+    assert seen, "the repair changes the analysis, so it must mark it dirty"
+    assert "EMG channel" in pv._ECG_REPAIR_MESSAGES["no_emg_channel"]
+    assert "Remove ECG" in pv._ECG_REPAIR_MESSAGES["remove_ecg"]
+    assert pv._ECG_REPAIR_MESSAGES["no_emg_channel"] != pv._ECG_REPAIR_MESSAGES["remove_ecg"]
+    # ...and announcing twice must not re-dirty (the constructor and every sync both arm it)
+    seen.clear()
+    pv._announce_ecg_auto_repair()
+    assert not seen
+
+
 def test_the_processed_panel_title_reflects_whether_removal_is_actually_on(qapp, tmp_path):
     """Ticket 20260804-0922: the panel over the processed EMG stack used to say
     'ECG-processed EMG channels' even with Remove ECG off, while it showed the RAW

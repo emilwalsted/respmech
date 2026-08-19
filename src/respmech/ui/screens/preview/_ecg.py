@@ -292,9 +292,23 @@ class _EcgMixin:
             # gated detail fields elsewhere on this strip. The CLI keeps raising, because a
             # hand-written config with that pair IS a mistake worth reporting rather than
             # silently altering.
+            #
+            # The SAME reasoning covers the other leg validate() rejects: auto-detect with
+            # no EMG channel assigned. It is reachable live, not just from a file — clearing
+            # the EMG role in Setup's "Assign channels from data…" leaves the flag set, and
+            # the two controls that could clear it are on this tab, which
+            # _update_emg_tab_visibility removes precisely when there are no EMG channels.
+            # The app did name the way out (Setup's status bar reads "Auto-detect ECG needs
+            # an EMG channel assigned"), but telling the user to go and re-do something the
+            # app can resolve itself is not the same as resolving it: auto-detect is a
+            # sub-option of having an EMG channel at all, so with no channel there is
+            # nothing for it to mean. Repair, announce, and let Setup go back to valid.
             if e.ecg_auto_detect and not e.remove_ecg:
                 e.ecg_auto_detect = False
-                self._ecg_auto_repaired = True
+                self._ecg_auto_repaired = "remove_ecg"
+            elif e.ecg_auto_detect and not self.state.settings.input.channels.emg:
+                e.ecg_auto_detect = False
+                self._ecg_auto_repaired = "no_emg_channel"
             self.remove_ecg.setChecked(bool(e.remove_ecg))
             self.ecg_auto_batch.setChecked(bool(e.ecg_auto_detect))
             self.ecg_min_height.setValue(float(e.ecg_min_height))
@@ -329,21 +343,35 @@ class _EcgMixin:
             f"not what the run will use — see run-report.txt afterwards for the per-file "
             f"result.")
 
-    def _announce_ecg_auto_repair(self):
-        """Tell the user that an impossible ECG combination was corrected on load.
+    #: What to say for each leg :meth:`_load_ecg_params` can repair. Both name the control
+    #: that brings auto-detect back, because the repair itself is silent otherwise and the
+    #: box the user last saw ticked is now unticked.
+    _ECG_REPAIR_MESSAGES = {
+        "remove_ecg": (
+            "ECG auto-detect was switched on with Remove ECG switched off, which cannot "
+            "run. Auto-detect has been turned off. Tick Remove ECG first if you want it "
+            "back."),
+        "no_emg_channel": (
+            "ECG auto-detect needs an EMG channel, and none is assigned. Auto-detect has "
+            "been turned off. Assign an EMG channel in Setup if you want it back."),
+    }
 
-        Not silent: the file said "auto-detect the whole batch", and the analysis now says
-        it does not. Marking it dirty is deliberate too, so saving keeps the corrected
-        pair instead of writing the invalid one back."""
-        if not self._ecg_auto_repaired:
+    def _announce_ecg_auto_repair(self):
+        """Tell the user that an impossible ECG combination was corrected.
+
+        Not silent: something said "auto-detect the whole batch", and the analysis now says
+        it does not. Marking it dirty is deliberate too, so saving keeps the corrected pair
+        instead of writing the invalid one back.
+
+        Idempotent by design — it clears the flag first. Both the constructor and every
+        sync arm it deferred, and a repair that happens during construction is therefore
+        armed twice; the second call must be a no-op rather than a second status line."""
+        reason = self._ecg_auto_repaired
+        if not reason:
             return
         self._ecg_auto_repaired = False
         self.settings_edited.emit()
-        self._set_status(
-            "This analysis had ECG auto-detect switched on with Remove ECG switched off, "
-            "which cannot run. Auto-detect has been turned off. Tick Remove ECG first if "
-            "you want it back."
-        )
+        self._set_status(self._ECG_REPAIR_MESSAGES[reason])
 
     def _on_ecg_param_changed(self, *_):
         if self._loading_ecg:

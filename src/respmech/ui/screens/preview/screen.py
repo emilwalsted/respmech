@@ -145,7 +145,9 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._manifest_cache = {}           # (path, mtime, size)-keyed probe memo for the file rail's manifest
         self._loading_noise = False
         self._loading_ecg = False
-        self._ecg_auto_repaired = False   # see _load_ecg_params' repair of a stuck auto-detect
+        # False, or the name of the leg _load_ecg_params repaired ('remove_ecg' /
+        # 'no_emg_channel') — it picks the sentence _announce_ecg_auto_repair says.
+        self._ecg_auto_repaired = False
         self._ecg_capture_subplots = []   # per-channel PlotItems of the ECG-processed stack
         # breath-overlay interaction state (feature A)
         self._channel_plots = []
@@ -661,6 +663,12 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._refresh_ecg_channels()
         self._load_noise_params()
         self._load_ecg_params()
+        # A repair is no longer only a load-time event: clearing the EMG role in Setup
+        # reaches _load_ecg_params through settings_changed, and the constructor's own
+        # deferred announcement (see __init__) has long since run by then. Deferred for the
+        # same reason it is there, and idempotent, so arming it twice costs nothing.
+        if self._ecg_auto_repaired:
+            QTimer.singleShot(0, self._announce_ecg_auto_repair)
         self._update_emg_tab_visibility()
         self._sync_rail_exclusions()   # a loaded analysis file can bring its own exclusions
         self._update_actions()
