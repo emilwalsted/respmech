@@ -254,13 +254,21 @@ jobs:
       # resolved, THAT fails and is a real red; and timeout-minutes is the backstop for any
       # hang the Acquire options do not reach.
       - name: Qt offscreen system libraries
-        timeout-minutes: 5
+        timeout-minutes: 6
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
-          sudo apt-get update -q $opts \
-            || echo "::warning::apt-get update failed or timed out; continuing with the image's existing package index"
+          # Try the install against the index the runner image already ships. That is the
+          # whole point of this step, it is ~147 kB, and it skips `apt-get update` — the one
+          # operation measured to hang. Only refresh the index if the install cannot resolve
+          # from it, which is the rare case this step was ever really guarding against.
+          if timeout 120 sudo apt-get install -y -q $opts libegl1 libxkbcommon0; then
+            exit 0
+          fi
+          echo "::warning::install from the image's package index failed; refreshing it and retrying"
+          timeout 150 sudo apt-get update -q $opts \
+            || echo "::warning::apt-get update failed or timed out; retrying the install regardless"
           sudo apt-get install -y -q $opts libegl1 libxkbcommon0
 
       - name: Install (gui + dev extras)
