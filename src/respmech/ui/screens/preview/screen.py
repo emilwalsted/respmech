@@ -985,8 +985,15 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         elif kind == "batch":
             # MECHANICS-ONLY test run: drop EMG so run_batch skips ECG removal, EMG RMS
             # and noise reduction (that work is shown separately in the EMG tab).
+            # ecg_auto_detect has to go too, and not merely because it would be pointless
+            # here: Settings.validate() rejects it BOTH without remove_ecg and without
+            # input.channels.emg, and this snapshot clears both. Leaving it set made a test
+            # run on a perfectly valid setup (Remove ECG + Auto-detect for the batch, the
+            # combination the ECG tab actively steers the user towards) die inside
+            # run_batch's validate() with a raw SettingsError traceback.
             snap.input.channels.emg = []
             snap.processing.emg.remove_ecg = False
+            snap.processing.emg.ecg_auto_detect = False
             snap.processing.emg.noise.enabled = False
             worker = BatchWorker(snap, write=False, only_files=[os.path.basename(path)])
         elif kind == "emg_all":

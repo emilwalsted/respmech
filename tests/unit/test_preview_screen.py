@@ -1407,3 +1407,35 @@ def test_closing_the_window_with_no_channels_assigned_does_not_raise(qapp):
         "fails, the test above is exercising the wrong path"
     )
     win.close()                                            # must not raise, and must reach shutdown
+
+
+# --------------------------------------------------------------------------- #
+# The mechanics-only test run must survive the ECG tab's own recommended setup
+# --------------------------------------------------------------------------- #
+def test_batch_snapshot_drops_ecg_auto_detect_with_the_rest_of_emg(qapp, monkeypatch):
+    """`_schedule("batch")` builds a MECHANICS-ONLY snapshot: it empties
+    input.channels.emg and clears remove_ecg so run_batch skips the EMG work that the
+    EMG tabs show separately. Settings.validate() rejects ecg_auto_detect without EITHER
+    of those, so leaving it set turned a perfectly ordinary setup — "Remove ECG" plus
+    "Auto-detect for the batch", the pair the ECG tab steers the user towards — into a
+    raw SettingsError traceback from inside run_batch. Assert the snapshot the worker is
+    actually handed is one run_batch will accept."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings("")
+    s.processing.emg.remove_ecg = True
+    s.processing.emg.ecg_auto_detect = True
+    assert s.input.channels.emg                       # precondition: the setup IS valid
+    s.validate()                                      # ... and validate() agrees
+
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
+
+    captured = []
+    monkeypatch.setattr(pv, "_launch", lambda kind, token, worker: captured.append(worker))
+    pv._schedule("batch")
+
+    assert captured, "the batch kind never built a worker — the gate changed, fix the test"
+    snap = captured[0]._settings
+    assert snap.processing.emg.ecg_auto_detect is False
+    snap.validate()                                   # the actual regression: this raised
+    win.close()
