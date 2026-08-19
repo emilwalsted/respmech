@@ -341,6 +341,26 @@ class ElidingCheckBox(QCheckBox):
         s.setWidth(min(s.width(), fm.averageCharWidth() * self._floor_chars + self._chrome()))
         return s
 
+    def sizeHint(self):                                  # noqa: N802 - Qt API
+        # Hint from the FULL caption, never from the currently-shown (elided) one — the same
+        # contract, and for the same reason, as ElidingLabel.sizeHint above. It matters MORE
+        # here, because this class's home is a SQUEEZING QHBoxLayout (the EMG noise strip)
+        # rather than a placing FlowLayout, and a squeeze distributes the deficit between
+        # sizeHint and minimumSizeHint. Letting the hint follow the elided text closes a
+        # feedback loop with no fixed point: eliding shrinks the hint, a smaller hint shrinks
+        # the row's deficit, less deficit grants this widget MORE width, more width un-elides
+        # it, and the hint grows straight back. Measured 19-08-2026 on the real strip: at
+        # every width from 360 to 520 px it cycled endlessly through five states, captions
+        # flicking between the full string and a bare ellipsis while the widths swung 40 <-> 99
+        # px — the "row of buttons resizing and shuffling the controls around forever" Emil
+        # reported. Pinning the hint breaks the loop while leaving the SQUEEZE intact: what a
+        # squeezing row may take is bounded by minimumSizeHint (the floor above), which is
+        # what actually caps the window/dialog minimum, and that is untouched.
+        s = super().sizeHint()
+        s.setWidth(max(s.width(),
+                       self.fontMetrics().horizontalAdvance(self._full) + self._chrome()))
+        return s
+
     def resizeEvent(self, ev):                           # noqa: N802 - Qt API
         super().resizeEvent(ev)
         self._relayout()
