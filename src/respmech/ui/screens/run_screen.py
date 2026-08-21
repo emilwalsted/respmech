@@ -188,7 +188,12 @@ class RunScreen(QWidget):
         # through the arrow separator and reading as one fused, ambiguous path.
         self._drawer_summary = ElidingLabel(mode=Qt.ElideRight)
         self._drawer_summary.setProperty("status", "muted")
-        self.btn_toggle_results = QPushButton("Run & results ▸")
+        # "&&", not "&": Qt reads a lone ampersand in button text as a mnemonic marker and
+        # eats it, underlining whatever follows. Here that is a SPACE, so the button rendered
+        # as "Run _results ▸" — visible in the shipped v2.4.0 and in the documentation
+        # screenshots taken from it. Every other ampersand in this app's widget text is
+        # already doubled for the same reason ("Preview && QC", "Process && write this file").
+        self.btn_toggle_results = QPushButton("Run && results ▸")
         # The compact button style (6 px vertical padding vs the default): this button IS
         # the collapsed drawer's whole height, so its padding is workspace budget — same
         # thirds-guard arithmetic as the margins note above, worth ~6-8 px more.
@@ -520,7 +525,10 @@ class RunScreen(QWidget):
 
     def _on_toggle_results(self, checked):
         self._results_section.setVisible(checked)
-        self.btn_toggle_results.setText("Run & results ▾" if checked else "Run & results ▸")
+        # Doubled for the same reason as the constructor's label above — this is the OTHER
+        # half of the same bug: fixing only one leaves the ampersand reappearing the first
+        # time the drawer is opened or closed.
+        self.btn_toggle_results.setText("Run && results ▾" if checked else "Run && results ▸")
         # Card framing only while the section is open; collapsed, the drawer is a summary
         # row and pays a summary row's margins — see _build's note on the thirds guard.
         self._root_lay.setContentsMargins(11, 11 if checked else 3, 11, 11 if checked else 3)
