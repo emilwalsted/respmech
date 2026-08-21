@@ -134,10 +134,20 @@ jobs:
           name: dist
           path: dist/
       - name: Publish to PyPI (Trusted Publishing)
-        # Pinned to the v1.14.0 release tag (NOT a commit SHA): this is a Docker-based
+        # Pinned to the v1.14.2 release tag (NOT a commit SHA): this is a Docker-based
         # action whose image is ghcr.io/pypa/gh-action-pypi-publish:<action_ref>, and pypa
         # only publishes tag-named images — a SHA ref yields "manifest unknown".
-        uses: pypa/gh-action-pypi-publish@v1.14.0
+        #
+        # v1.14.0 -> v1.14.2 because the action runs its OWN twine inside that image, with
+        # its own pins, and v1.14.0's are twine==6.1.0 / packaging==25.0 — too old for the
+        # Metadata-Version 2.5 hatchling now emits. It rejected the v2.4.0 wheel outright:
+        # "InvalidDistribution: Invalid distribution metadata: '2.5' is not a valid metadata
+        # version", after the build and every gate had passed. The `twine check` step above
+        # did NOT catch it, and cannot: it runs on the runner with a freshly installed twine,
+        # so it tests a different twine than the one that actually decides. v1.14.2 pins
+        # twine==7.0.0 / packaging==26.2, verified against this project's own 2.4.0 wheel and
+        # sdist in a venv built to those exact versions — both PASSED.
+        uses: pypa/gh-action-pypi-publish@v1.14.2
 
   # ── 3b. Publish to TestPyPI (manual dry-run: workflow_dispatch only) ──────────────────
   publish-testpypi:
@@ -154,10 +164,20 @@ jobs:
           name: dist
           path: dist/
       - name: Publish to TestPyPI (Trusted Publishing)
-        # Pinned to the v1.14.0 release tag (NOT a commit SHA): this is a Docker-based
+        # Pinned to the v1.14.2 release tag (NOT a commit SHA): this is a Docker-based
         # action whose image is ghcr.io/pypa/gh-action-pypi-publish:<action_ref>, and pypa
         # only publishes tag-named images — a SHA ref yields "manifest unknown".
-        uses: pypa/gh-action-pypi-publish@v1.14.0
+        #
+        # v1.14.0 -> v1.14.2 because the action runs its OWN twine inside that image, with
+        # its own pins, and v1.14.0's are twine==6.1.0 / packaging==25.0 — too old for the
+        # Metadata-Version 2.5 hatchling now emits. It rejected the v2.4.0 wheel outright:
+        # "InvalidDistribution: Invalid distribution metadata: '2.5' is not a valid metadata
+        # version", after the build and every gate had passed. The `twine check` step above
+        # did NOT catch it, and cannot: it runs on the runner with a freshly installed twine,
+        # so it tests a different twine than the one that actually decides. v1.14.2 pins
+        # twine==7.0.0 / packaging==26.2, verified against this project's own 2.4.0 wheel and
+        # sdist in a venv built to those exact versions — both PASSED.
+        uses: pypa/gh-action-pypi-publish@v1.14.2
         with:
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
