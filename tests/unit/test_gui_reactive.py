@@ -135,8 +135,20 @@ def test_setup_bar_unaffected_by_preview_autorun_and_panels_get_persistent_title
     fidelity_title = pv._fidelity_panel._title_label
     assert "prop" in fidelity_title.toolTip().lower()
     assert "worst-channel fidelity" in fidelity_title.toolTip().lower()
-    # the Mechanics caption survived every subsequent EMG job landing after it was set
-    assert "breath" in pv.mech_caption.fullText().lower()
+    # The Mechanics caption survived every subsequent EMG job landing after it was set —
+    # PUMPED for, never read bare, for the same reason _assert_panels_idle exists above.
+    # Since D15 split the mechanics render into deferred QTimer.singleShot(0) stages, the
+    # caption is written one or more event-loop turns AFTER _jobs/_draining empty, so the
+    # drain pump on its own does not mean the caption has arrived. Read bare, this is a race
+    # the fleet's slowest runners lose: publish-pypi.yml's test gate lost it on 21-08-2026
+    # (`assert 'breath' in ''`, 1 failed of 1372, on a gate that took 1:01:35) while ci.yml's
+    # own macOS jobs passed on the very same commit by timing luck — which is exactly how
+    # this class of race presents. The panel titles asserted just above are NOT affected:
+    # they are written by their jobs' own completion handlers, which run before the
+    # bookkeeping empties.
+    assert _pump_until(
+        qapp, lambda: "breath" in pv.mech_caption.fullText().lower(), 20), \
+        f"the Mechanics caption never arrived: {pv.mech_caption.fullText()!r}"
     assert "click a shaded breath" in pv.mech_caption.fullText().lower()
 
     # Switching file must not leave the FILE-SPECIFIC verdicts (ECG capture, the Mechanics
