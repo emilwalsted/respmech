@@ -84,6 +84,9 @@ path = "src/respmech/__init__.py"
 # no data, no docs, no legacy monolith.
 [tool.hatch.build.targets.wheel]
 packages = ["src/respmech"]
+# Project memory for Claude Code lives beside the code (src/respmech/ui/CLAUDE.md); it is
+# repo documentation, not part of the package.
+exclude = ["**/CLAUDE.md"]
 
 # The sdist is an explicit allow-list — a public-repo safety measure. It carries only the
 # source package, the licences and the README; it deliberately EXCLUDES tests/ (which
@@ -91,6 +94,7 @@ packages = ["src/respmech"]
 # docs/, installer/, packaging/ and scripts/. pyproject.toml is always included by hatchling.
 [tool.hatch.build.targets.sdist]
 only-include = ["src/respmech", "README.md", "LICENSE", "LICENSE pyentrp"]
+exclude = ["**/CLAUDE.md"]
 
 [tool.pytest.ini_options]
 # The package lives under src/ (the v1 monolith is frozen in legacy/, not importable).
