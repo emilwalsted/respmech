@@ -79,8 +79,9 @@ environment (e.g. required reviewer, or restrict to tags) for a manual gate befo
    The reason it is automated at all: the site's `api/notify.php` builds the
    release-notification e-mail from that section, matched by `id="vX-Y-Z"`, and
    answers 404 without it. So a missing section used to mean the mailing list
-   silently got nothing. Keep "Coming next" on respmech.dk up to date as you merge,
-   and the release announces itself.
+   silently got nothing. Keep "Coming next" on respmech.dk up to date as you merge;
+   the promotion is automatic, the announcement is not: only **Actions ▸ Announce a
+   release** in the website repo mails the list, and you run it by hand (see step 5).
 
 5. **Check the page says all of it** — from the website clone, beside this one:
 
@@ -107,9 +108,15 @@ environment (e.g. required reviewer, or restrict to tags) for a manual gate befo
    ```
 
    The website's deploy workflow runs the same check after promoting. It cannot fail
-   the deploy, but on a shortfall it **holds the notification e-mail** and goes red
-   with the recipe, because `notify.php` sends once per version and a thin mail cannot
-   be taken back.
+   the deploy, and it sends nothing: since 03-08-2026 the deploy does not call
+   `notify.php` at all, and the only thing that mails the subscribers is
+   **Actions ▸ Announce a release** in the website repo, run by hand after ticking
+   its confirmation box (that you have previewed the mail). On a shortfall the deploy
+   writes a **Not ready to announce** verdict into its run summary with the recipe,
+   and the Announce workflow runs the same check as a hard gate and refuses to send
+   while it finds one (an inconclusive check — API down, no `CHANGELOG.md` — does not
+   block), because `notify.php` sends once per version and a thin mail cannot be
+   taken back.
 
    To read the announcement itself before it goes out, `php tools/preview-mail.php`
    in the website repo renders it to a file, and **Actions ▸ Send a test release
