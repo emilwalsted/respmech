@@ -148,6 +148,12 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # False, or the name of the leg _load_ecg_params repaired ('remove_ecg' /
         # 'no_emg_channel') — it picks the sentence _announce_ecg_auto_repair says.
         self._ecg_auto_repaired = False
+        # K-225/ticket 6.4: True when _load_noise_params (load-time) or _on_ecg_param_changed
+        # (interactive) had to switch noise.enabled back off because remove_ecg went/came in
+        # False — same repair-and-announce pattern as _ecg_auto_repaired above, now that
+        # Settings.validate() enforces this pair too (see _emg_noise.py's
+        # _announce_noise_repair).
+        self._noise_repaired = False
         self._ecg_capture_subplots = []   # per-channel PlotItems of the ECG-processed stack
         # breath-overlay interaction state (feature A)
         self._channel_plots = []
@@ -376,6 +382,8 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # dirty marker both belong to a window that is still being constructed here.
         if self._ecg_auto_repaired:
             QTimer.singleShot(0, self._announce_ecg_auto_repair)
+        if self._noise_repaired:
+            QTimer.singleShot(0, self._announce_noise_repair)
 
         self.file_rail.selectionChanged.connect(self._on_file_selected)
         # the chip's themed height isn't known until the EMG sub-tab is first laid out;
@@ -669,6 +677,8 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # same reason it is there, and idempotent, so arming it twice costs nothing.
         if self._ecg_auto_repaired:
             QTimer.singleShot(0, self._announce_ecg_auto_repair)
+        if self._noise_repaired:
+            QTimer.singleShot(0, self._announce_noise_repair)
         self._update_emg_tab_visibility()
         self._sync_rail_exclusions()   # a loaded analysis file can bring its own exclusions
         self._update_actions()

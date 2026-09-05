@@ -384,6 +384,33 @@ class Settings:
                     "processing.emg.ecg_auto_detect requires input.channels.emg "
                     "to be configured")
 
+        # detect_channel is a 0-based INDEX into input.channels.emg (never a column
+        # number), so a value outside that list crashes core.pipeline mid-batch with a
+        # raw IndexError (K-222). The GUI already clamps it in Preview & QC (see
+        # ui/screens/preview/_ecg.py's channel_collision path); a hand-written or
+        # migrated settings file only ever reaches this validate() call, so the same
+        # bound is enforced here regardless of caller. An empty emg list is allowed:
+        # detect_channel only matters once remove_ecg (or an EMG-figure job) actually
+        # reads it, and the emg-required checks above already cover ecg_auto_detect.
+        if ch.emg and not (0 <= emg.detect_channel < len(ch.emg)):
+            raise SettingsError(
+                f"processing.emg.detect_channel must be a 0-based index into "
+                f"input.channels.emg (0..{len(ch.emg) - 1}), got {emg.detect_channel}")
+
+        # K-225: only the GUI's noise_enabled checkbox requires 'Remove ECG' first
+        # (screen.py's self.noise_enabled.setEnabled(has_emg and ecg_on)) — a
+        # hand-written or migrated settings.toml with noise.enabled = true and
+        # remove_ecg = false runs the profile against a signal that still contains
+        # heartbeats, modelling the cardiac artefact as steady background noise.
+        # Enforced here so the CLI and the GUI refuse the same configurations.
+        # BREAKING: rejects any existing analysis file that already combines these
+        # two flags — flagged in CHANGELOG.md.
+        if emg.noise.enabled and not emg.remove_ecg:
+            raise SettingsError(
+                "processing.emg.noise.enabled requires processing.emg.remove_ecg "
+                "to be enabled (noise reduction would otherwise treat the heartbeat "
+                "as steady background noise)")
+
         v = self.processing.volume
         if v.correct_trend:
             if not 0.0 < v.trend_peak_min_prominence_frac < 1.0:

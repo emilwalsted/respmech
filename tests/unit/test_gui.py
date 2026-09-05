@@ -65,6 +65,7 @@ def test_preview_noise_fidelity_render(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     from respmech.core.pipeline import run_batch
     s = _settings(str(tmp_path))
+    s.processing.emg.remove_ecg = True   # K-225: Settings.validate() now requires this
     s.processing.emg.noise.enabled = True
     s.processing.emg.noise.reference_file = "synth_case_A.csv"
     s.processing.emg.noise.use_expiration = False

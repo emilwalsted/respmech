@@ -387,6 +387,19 @@ class _EcgMixin:
             self.ecg_auto_batch.setChecked(False)
             self.ecg_auto_batch.blockSignals(False)
         e.ecg_auto_detect = self.ecg_auto_batch.isChecked()
+        if not e.remove_ecg and self.noise_enabled.isChecked():
+            # K-225/ticket 6.4: noise reduction requires Remove ECG too (Settings.validate),
+            # the SAME failure mode the leg above exists to prevent — leave it unrepaired
+            # and _update_actions (screen.py) would grey out noise_enabled while it stays
+            # checked, with no way to untick it short of re-enabling Remove ECG first.
+            # Silent, like the auto-detect leg above: the user is watching this checkbox
+            # untick live as a direct result of the change they just made, unlike
+            # _load_noise_params' repair of a file that arrived already in this state,
+            # which the user never saw happen and so gets an explicit status announcement.
+            self.noise_enabled.blockSignals(True)
+            self.noise_enabled.setChecked(False)
+            self.noise_enabled.blockSignals(False)
+            self.state.settings.processing.emg.noise.enabled = False
         e.ecg_min_height = float(self.ecg_min_height.value())
         e.ecg_min_distance_s = float(self.ecg_min_distance.value())
         e.ecg_min_width_s = float(self.ecg_min_width.value())

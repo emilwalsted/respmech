@@ -237,6 +237,17 @@ class MainWindow(QMainWindow):
         # needs locking too — otherwise Open/New could swap the settings out from under
         # the running worker, which is exactly what disabling the screen prevents.
         self.analysis_btn.setEnabled(False)
+        # K-094: disabling the BUTTON above only blocks its own click — the File menu
+        # (_build_menu_bar) carries the EXACT SAME QAction objects, unaffected by the
+        # button's own enabled state, and so do their shortcuts (Ctrl+N/O/S/Shift+S).
+        # 'File > New analysis' could otherwise swap the running settings out from under
+        # the worker even with the Analysis button greyed out. Save/Save as and the
+        # recents are instead gated inside _refresh_analysis_menu/_rebuild_recent_analyses
+        # (below), which run on every menu-open and would otherwise re-enable them from
+        # live dirty/recents state regardless of what is set here.
+        for act in (self._act_new, self._act_open, self._act_get_started,
+                   self._act_sample, self._act_duplicate):
+            act.setEnabled(False)
         # D24 (UI-overhaul): Preview & QC used to enforce none of this — a breath-exclusion
         # click or "Process & write this file" during a batch looked like it worked while
         # silently missing the run entirely. Unlike Settings above, this is NOT a whole-
@@ -249,6 +260,9 @@ class MainWindow(QMainWindow):
     def _on_run_finished(self):
         self.settings_screen.setEnabled(True)
         self.analysis_btn.setEnabled(True)
+        for act in (self._act_new, self._act_open, self._act_get_started,
+                   self._act_sample, self._act_duplicate):
+            act.setEnabled(True)
         self.preview_screen.set_run_active(False)
         self._run_active = False
         # Hand the bar straight to Run's OWN last message (its outcome — "Run failed — …",
@@ -428,15 +442,23 @@ class MainWindow(QMainWindow):
         self._show_settings_status()
 
     def _refresh_analysis_menu(self):
-        """Recompute the parts of the Analysis menu that depend on live state."""
+        """Recompute the parts of the Analysis menu that depend on live state.
+
+        Runs on EVERY menu-open (``aboutToShow``, both the Analysis button's menu and
+        the File menu — see _build_menu_bar), so K-094's lock has to be re-applied here
+        too: a one-time ``setEnabled(False)`` from ``_on_run_started`` alone would be
+        silently overwritten the next time either menu drops down, since this method
+        recomputes Save/Save as purely from dirty/path state with no knowledge of a
+        run in progress."""
         sc = self.settings_screen
         savable = sc.can_save()
         # Save is offered when the analysis is NEW (no file yet — the command falls through
         # to Save as…) or DIRTY (edits to write back); a clean opened file has nothing to
         # save. Save as… always names a new file, so it only needs savable settings.
         new = not getattr(self.state, "settings_path", None)
-        self._act_save.setEnabled(savable and (sc.is_dirty() or new))
-        self._act_save_as.setEnabled(savable)
+        running = self._run_active
+        self._act_save.setEnabled(not running and savable and (sc.is_dirty() or new))
+        self._act_save_as.setEnabled(not running and savable)
         self._rebuild_recent_analyses()
 
     def _rebuild_recent_analyses(self):
@@ -459,11 +481,17 @@ class MainWindow(QMainWindow):
         # entry is noise, not information.
         recents = prefs.recent_analyses()[:_MENU_RECENTS]
         self._recent_sep.setVisible(bool(recents))
+        # K-094: opening a recent swaps the settings out from under a running worker
+        # exactly like New/Open do — these are rebuilt fresh on every menu-open, so
+        # (unlike New/Open/Get started/Sample/Duplicate, locked once in
+        # _on_run_started) each one needs the running check applied here, every time.
+        running = self._run_active
         if self._file_recent_menu is not None:
-            self._file_recent_menu.setEnabled(bool(recents))
+            self._file_recent_menu.setEnabled(bool(recents) and not running)
         for i, path in enumerate(recents, 1):
             act = QAction(f"&{i}  {prefs.recent_label(path)}", self)
             act.setToolTip(path)                       # the exact path, unelided
+            act.setEnabled(not running)
             act.triggered.connect(lambda _=False, p=path: self._open_recent(p))
             self.analysis_menu.addAction(act)
             if self._file_recent_menu is not None:

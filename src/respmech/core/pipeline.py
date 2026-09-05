@@ -59,6 +59,11 @@ class FileResult:
     # exception class name, so consumers can tell a precondition failure of THIS recording
     # (TrimError, VolumeTrendError) from a real fault without parsing ``error``.
     error_kind: Optional[str] = None
+    # Per-file quality notices (K-192/K-224): the SAME text also raised via warnings.warn
+    # below, which reaches a stderr nobody sees in a packaged app -- this is what lets
+    # core.io.writers._write_run_report put the ecg_auto_detect quality check and the
+    # cardiac-gated peak's NaN reason where an app user can actually read them.
+    notices: list = field(default_factory=list)
 
 
 @dataclass
@@ -593,6 +598,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
         file = os.path.abspath(fi)
         filename = os.path.basename(file)
         _emit(progress, ProgressEvent("file_start", file=filename, message="loading"))
+        file_notices: list[str] = []          # K-192/K-224 -- surfaced in FileResult.notices below
         try:
             # Reuse the load + ECG removal if the noise-building phase already did it for this
             # file (Wave 2.4). pop() → the entry is consumed once and freed, so the cache never
@@ -638,19 +644,23 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                         and result.ecg_auto_report is not None):
                     _peaks = np.asarray(ecg_diag["peaks_s"], float)
                     if _peaks.size == 0:
-                        warnings.warn(
-                            f"{filename}: ecg_auto_detect (reference "
+                        _msg = (
+                            f"ecg_auto_detect (reference "
                             f"{result.ecg_auto_report['reference_file']}) found no R-peaks on "
                             "this file -- ECG removal likely did nothing here.")
+                        warnings.warn(f"{filename}: {_msg}")
+                        file_notices.append(_msg)
                     else:
                         _dq = emglib.detection_quality(_peaks, s.processing.emg.mindistance)
                         if not _dq["ok"]:
-                            warnings.warn(
-                                f"{filename}: ecg_auto_detect quality check failed "
+                            _msg = (
+                                f"ecg_auto_detect quality check failed "
                                 f"({_dq['reason']}) -- the shared parameters (from "
                                 f"{result.ecg_auto_report['reference_file']}) may not fit this "
                                 "file; consider processing.emg.ecg_reference_file or manual "
                                 "settings for it.")
+                            warnings.warn(f"{filename}: {_msg}")
+                            file_notices.append(_msg)
 
             _emit(progress, ProgressEvent("stage", file=filename, message="volume correction"))
             vol_uncorrected = volume                                  # trimmed, pre-zero
@@ -697,6 +707,11 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                     if not gate_ok:
                         warnings.warn(f"{filename}: cardiac-gated peak EMG reported as NaN — "
                                       f"{gate_reason}")
+                if not gate_ok:
+                    # K-224: recorded for BOTH refusal paths above (no R-peaks at all, and a
+                    # detection_quality failure) -- the first path never warned at all before,
+                    # so the "no R-peaks -- is remove_ecg on?" reason was invisible everywhere.
+                    file_notices.append(f"cardiac-gated peak EMG reported as NaN — {gate_reason}")
 
             total = sum(1 for b in breaths.values() if not b["ignored"])
             done = 0
@@ -742,7 +757,8 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
 
             result.files[filename] = FileResult(
                 file=filename, breaths_table=breaths_table, average_row=average_row,
-                processed=processed, breaths=breaths, ecg=ecg_diag, signals=signals)
+                processed=processed, breaths=breaths, ecg=ecg_diag, signals=signals,
+                notices=file_notices)
             average_rows.append(average_row)
             _emit(progress, ProgressEvent("file_done", file=filename, message=f"{total} breaths"))
 

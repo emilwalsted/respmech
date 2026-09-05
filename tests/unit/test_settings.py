@@ -78,6 +78,70 @@ def test_ecg_auto_detect_off_skips_the_cross_check():
     Settings.from_dict(d).validate()
 
 
+# -- K-222: detect_channel is a 0-based index into input.channels.emg, and the GUI
+# already clamps it (Preview & QC) — a hand-written or migrated settings file only
+# reaches this validate() call, so core.pipeline used to crash mid-batch with a raw
+# IndexError instead.
+def test_detect_channel_out_of_range_is_rejected():
+    d = _minimal()
+    d["input"]["channels"]["emg"] = [1, 2]
+    d["processing"] = {"emg": {"detect_channel": 2}}   # valid indices are 0, 1
+    with pytest.raises(SettingsError, match="detect_channel"):
+        Settings.from_dict(d).validate()
+
+
+def test_detect_channel_negative_is_rejected():
+    d = _minimal()
+    d["input"]["channels"]["emg"] = [1, 2]
+    d["processing"] = {"emg": {"detect_channel": -1}}
+    with pytest.raises(SettingsError, match="detect_channel"):
+        Settings.from_dict(d).validate()
+
+
+def test_detect_channel_in_range_is_accepted():
+    d = _minimal()
+    d["input"]["channels"]["emg"] = [1, 2]
+    d["processing"] = {"emg": {"detect_channel": 1}}
+    Settings.from_dict(d).validate()
+
+
+def test_detect_channel_default_is_fine_with_no_emg_channels():
+    # The default (0) with an empty EMG channel list must not be rejected — detect_channel
+    # only matters once something actually reads it (remove_ecg, an EMG figure job).
+    d = _minimal()
+    Settings.from_dict(d).validate()
+
+
+def test_detect_channel_out_of_range_is_fine_with_no_emg_channels():
+    # Even a nonsensical value is allowed with an empty list: the range check is gated on
+    # `ch.emg` being truthy, so a negative or huge detect_channel means nothing yet.
+    d = _minimal()
+    d["processing"] = {"emg": {"detect_channel": -5}}
+    Settings.from_dict(d).validate()
+
+
+# -- K-225: noise reduction requiring ECG removal was only a GUI activation gate
+# (screen.py's noise_enabled.setEnabled(has_emg and ecg_on)) — a hand-written settings
+# file with noise.enabled = true and remove_ecg = false ran the profile against a
+# signal that still contained heartbeats, modelling the cardiac artefact as steady
+# background noise. BREAKING per Emil's decision 05-09-2026 — flagged in CHANGELOG.md.
+def test_noise_enabled_requires_remove_ecg():
+    d = _minimal()
+    d["input"]["channels"]["emg"] = [1]
+    d["processing"] = {"emg": {"remove_ecg": False,
+                               "noise": {"enabled": True, "reference_file": "rest.csv"}}}
+    with pytest.raises(SettingsError, match="remove_ecg"):
+        Settings.from_dict(d).validate()
+    d["processing"]["emg"]["remove_ecg"] = True
+    Settings.from_dict(d).validate()  # now OK
+
+
+def test_noise_disabled_skips_the_remove_ecg_cross_check():
+    d = _minimal()
+    d["processing"] = {"emg": {"remove_ecg": False, "noise": {"enabled": False}}}
+    Settings.from_dict(d).validate()
+
+
 def test_round_trip():
     d = _minimal()
     d["processing"] = {"exclude_breaths": [{"file": "a.txt", "breaths": [1, 2]}]}
