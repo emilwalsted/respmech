@@ -1,0 +1,99 @@
+# Annotated RespMech settings file.
+#
+# A realistic starting point covering the common keys, with comments explaining each
+# block and the current schema default alongside anything overridden. Kept in sync
+# with the annotated example in documentation.html's "The settings file (TOML)"
+# section on respmech.dk — update both together (ticket K-046).
+#
+# Unlike the copy on the website, this file is directly runnable: input.folder /
+# input.files point at sample_recording.csv, the same small synthetic recording the
+# desktop app's "Explore with sample data" generates (respmech.core.sample —
+# deterministic, no patient data). From the repository root:
+#
+#     respmech validate examples/settings.toml
+#     respmech run      examples/settings.toml --dry-run
+#
+# For your own recordings: copy this file next to them, then edit [input] and
+# [input.channels] to match your export and re-run `respmech validate` before
+# anything else.
+
+schema_version = 2
+
+[input]
+folder = "input"                  # recordings to analyse; relative → resolved against THIS file's folder
+files  = "sample_recording.csv"   # case-insensitive glob; may carry a subfolder, e.g. "raw/*.csv"
+
+[input.format]
+sampling_frequency = 1000   # Hz — REQUIRED, integer; every time window is derived from this
+matlab_variant     = "mac"  # "windows" | "mac"; only affects .mat inputs
+decimal            = "."    # use "," for European-locale text/CSV
+
+[input.channels]            # 1-based column numbers (LabChart convention);
+                            # column 1 is the time axis, so signals start at 2
+flow    = 5                 # REQUIRED
+volume  = 6                 # REQUIRED unless processing.volume.integrate_from_flow = true
+poes    = 7                 # REQUIRED — oesophageal pressure
+pgas    = 8                 # REQUIRED — gastric pressure
+pdi     = 9                 # REQUIRED — transdiaphragmatic pressure
+emg     = [2, 3, 4]         # EMG channels; [] disables all EMG processing
+entropy = [2, 3, 4]         # sample-entropy channels; [] disables entropy
+
+[processing.segmentation]
+method = "flow"             # "flow" | "volume" — which signal detects breath boundaries
+buffer = 800                # samples averaged for cycle detection (scale with fs)
+
+[processing.segmentation.peak]
+height     = 0.1            # min peak height, in the segmentation signal's units
+distance_s = 0.1            # s — min time between peaks
+width_s    = 0.5            # s — min peak width
+
+[processing.volume]
+integrate_from_flow = false # true → derive volume from flow (volume channel becomes optional)
+correct_drift       = true  # remove slow baseline drift (ON by default)
+correct_trend       = false # also remove a between-breath trend in end-expiratory volume
+trend_method        = "linear"  # scipy interp1d kind for the trend envelope
+trend_peak_min_prominence_frac = 0.05  # trough depth to anchor on, as a fraction of
+                                       # THIS recording's volume range (scale-free)
+trend_peak_min_distance_s      = 0.4   # s — min time between two anchors
+# trend_peak_min_height        = 0.8   # legacy ABSOLUTE depth below the recording's
+                                       # highest volume. Omit it (recommended): a fixed
+                                       # value larger than the volume range finds no
+                                       # troughs and the correction cannot run.
+
+[processing.wob]
+calc_from          = "average"  # "average" (classic Campbell) | "individual" (per breath)
+avg_resampling_obs = 500        # samples each phase is resampled to for P/V averaging (~ fs ÷ 8-10)
+
+[processing.emg]
+rms_window_s   = 0.050          # s — sliding RMS window (effective length fs·rms_window_s - 1 samples, trailing, not centred)
+remove_ecg     = false          # subtract cardiac contamination before RMS
+detect_channel = 0              # 0-based INDEX into the emg list above (not a column number)
+normalization  = "per_file_max" # "none" | "per_file_max" | "per_file_mean" (adds a normalised sheet)
+
+[processing.emg.noise]
+enabled = false                 # spectral STFT noise reduction; needs the [emg] extra (librosa)
+
+[processing.ptp]
+baseline_window_s = 0.05        # s — window whose mean is the pressure-time-product baseline
+
+# --- Per-file overrides (zero or more of each); illustrative, none applied here ---
+# [[processing.exclude_breaths]]
+# file    = "sample_recording.csv"
+# breaths = [1, 2]                # 1-based breath numbers; always dropped from averages/workbooks
+#
+# [[processing.breath_counts]]
+# file  = "sample_recording.csv"
+# count = 12                      # override the auto-detected breath count for this file
+
+[output]
+folder = "output"                # workbooks land in <folder>/data
+# group_regex = '^(P\d+)'         # first capture group = cohort key; omit → leading filename token
+
+[output.data]
+save_average          = true
+save_breath_by_breath = true
+save_processed        = false   # large per-file processed-signal CSV; off by default
+
+[output.diagnostics]
+save_pv_average = true          # averaged Campbell diagram; needs the [plots] extra
+save_emg        = true          # per-channel EMG overviews (raw / ECG-removed / noise-reduced)
