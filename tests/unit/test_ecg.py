@@ -39,6 +39,37 @@ def test_peak_window_rms_helper():
     assert np.isnan(E.peak_window_rms(x, np.array([], dtype=int), fs))
 
 
+def test_merge_peaks_by_distance():
+    """Direct unit test for the NMS helper behind remove_ecg's dual-polarity search
+    (ticket 5.7 / K-191): a competing pair closer than min_distance keeps only the
+    taller peak, well-separated peaks from both polarities all survive, an empty
+    polarity is a no-op, and an exact-height tie keeps the positive-polarity peak
+    (argsort is called with kind='stable' precisely so this is guaranteed, not
+    incidental)."""
+    from respmech.core.emg import _merge_peaks_by_distance
+
+    # empty polarities are a no-op
+    assert list(_merge_peaks_by_distance(np.array([10, 500]), np.array([1.0, 2.0]),
+                                         np.array([], dtype=int), np.array([]), 50)) == [10, 500]
+    assert list(_merge_peaks_by_distance(np.array([], dtype=int), np.array([]),
+                                         np.array([10, 500]), np.array([1.0, 2.0]), 50)) == [10, 500]
+
+    # a close competing pair: only the taller survives
+    merged = _merge_peaks_by_distance(np.array([100]), np.array([1.0]),
+                                      np.array([120]), np.array([2.0]), 50)
+    assert list(merged) == [120]
+
+    # well-separated peaks from both polarities all survive
+    merged = _merge_peaks_by_distance(np.array([100, 1000]), np.array([1.0, 1.0]),
+                                      np.array([500, 1500]), np.array([1.0, 1.0]), 50)
+    assert list(merged) == [100, 500, 1000, 1500]
+
+    # exact tie -> positive-polarity peak wins (stable sort keeps the earlier entry)
+    merged = _merge_peaks_by_distance(np.array([100]), np.array([1.0]),
+                                      np.array([110]), np.array([1.0]), 50)
+    assert list(merged) == [100]
+
+
 def test_ecg_removal_suppresses_contamination():
     emg, true_peaks, fs = _make_signal()
     detect = emg[:, 0]
