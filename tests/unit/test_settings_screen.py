@@ -199,7 +199,8 @@ def test_entropy_fields_are_named_and_explained_for_what_they_are(qapp, tmp_path
     assert tol_label.toolTip() == tol_tip
     assert "processing.entropy.tolerance" in tol_tip
     assert "multiple of the per-column standard deviation" in tol_tip
-    assert "0.1 × SD by default" in tol_tip and "0.2 × SD" in tol_tip
+    assert "0.1-0.25 × SD" in tol_tip and "0.2 × SD" in tol_tip
+    assert "defaults to 0.1 × SD" in tol_tip
     win.close()
 
 

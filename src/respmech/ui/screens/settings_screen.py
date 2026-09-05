@@ -222,10 +222,13 @@ class SettingsScreen(QWidget):
         self.ent_tol.setDecimals(4); self.ent_tol.setSingleStep(0.05)
         # Same fix: core/compute.py multiplies this by each column's own np.std, so the
         # actual tolerance is value x SD, which neither the old label nor tooltip said.
+        # Content review, 05-09-2026: names the published interval, not just a single
+        # "common" value, so this agrees with README/the manual rather than being a
+        # narrower, uncited claim next to them.
         self._row(fent, "Tolerance (r), × SD", self.ent_tol, "processing.entropy.tolerance",
                   "Matching tolerance r, as a multiple of the per-column standard "
-                  "deviation (0.1 × SD by default; 0.2 × SD is the common literature "
-                  "value).")
+                  "deviation. Published values are typically 0.1-0.25 × SD, with 0.2 × "
+                  "SD the most common; RespMech defaults to 0.1 × SD.")
         _enthint = QLabel("Computed on the columns ticked as Entropy in the channel picker.")
         _enthint.setWordWrap(True); _enthint.setProperty("status", "muted")
         fent.addRow("", _enthint)
