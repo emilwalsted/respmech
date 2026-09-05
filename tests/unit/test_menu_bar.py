@@ -135,6 +135,59 @@ def test_no_recents_disables_open_recent_and_hides_header_separator(qapp, isolat
     win.close()
 
 
+def test_file_menus_shared_actions_lock_during_a_run(qapp, tmp_path, isolated_prefs):
+    """K-094: only ``analysis_btn`` (the header's own QToolButton) used to be locked
+    during a run — the File menu carries the EXACT SAME QAction objects (see
+    ``test_menu_bar_and_header_share_the_same_action_objects`` above) and their
+    shortcuts, so 'File > New analysis' (or Ctrl+N) could still swap the running
+    settings out from under the worker with the header button greyed out. Recents are
+    rebuilt fresh on every menu-open (_rebuild_recent_analyses), so unlike New/Open/
+    Get started/Sample/Duplicate — locked once by _on_run_started below — a recent's
+    enabled state must be re-derived from ``_run_active`` every time, which is what
+    ``win._rebuild_recent_analyses()``/``win._refresh_analysis_menu()`` do here."""
+    from respmech.ui import prefs
+    win = _make_win()
+    p = str(tmp_path / "analysis.toml")
+    open(p, "w").close()
+    prefs.add_recent_analysis(p)
+    win._rebuild_recent_analyses()
+    assert win.analysis_btn.isEnabled() is True
+    assert win._act_new.isEnabled() is True
+    assert win._recent_actions[0].isEnabled() is True
+
+    win._on_run_started()
+    assert win.analysis_btn.isEnabled() is False
+    for act in (win._act_new, win._act_open, win._act_get_started,
+               win._act_sample, win._act_duplicate):
+        assert act.isEnabled() is False
+    # Save/Save as are recomputed by _refresh_analysis_menu on every menu-open (unlike
+    # the five above, locked once): assert the LOCK survives a live-state recompute
+    # that would otherwise re-enable a savable new analysis.
+    sc = win.settings_screen
+    sc.state.settings = synth_settings(str(tmp_path))
+    sc.from_state()
+    sc._mark_dirty()
+    win._refresh_analysis_menu()
+    assert win._act_save.isEnabled() is False
+    assert win._act_save_as.isEnabled() is False
+    # Recents are rebuilt (not just re-flagged) on every open — reopen and check the
+    # freshly-built action, and the "Open Recent" submenu itself.
+    win._rebuild_recent_analyses()
+    assert win._recent_actions[0].isEnabled() is False
+    assert win._file_recent_menu.isEnabled() is False
+
+    win._on_run_finished()
+    assert win.analysis_btn.isEnabled() is True
+    for act in (win._act_new, win._act_open, win._act_get_started,
+               win._act_sample, win._act_duplicate):
+        assert act.isEnabled() is True
+    win._refresh_analysis_menu()
+    assert win._act_save.isEnabled() is True        # dirty new analysis -> savable again
+    assert win._recent_actions[0].isEnabled() is True
+    assert win._file_recent_menu.isEnabled() is True
+    win.close()
+
+
 def test_view_menu_reflects_a_locked_tab(qapp):
     win = _make_win()
     win.tabs.setTabEnabled(win._i_preview, False)

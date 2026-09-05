@@ -197,6 +197,57 @@ def test_unchecking_remove_ecg_clears_stuck_auto_batch(qapp, tmp_path):
     assert pv.ecg_caption.fullText() == ""
 
 
+def test_unchecking_remove_ecg_clears_stuck_noise_reduction(qapp, tmp_path):
+    """K-225/ticket 6.4: the SAME failure mode test_unchecking_remove_ecg_clears_stuck_auto_batch
+    guards above, now for noise reduction. Settings.validate() rejects noise.enabled=True
+    with remove_ecg=False; without this, turning Remove ECG off while noise reduction is on
+    would leave the pair stuck (checkbox disabled-but-checked, no way to untick it short of
+    re-enabling Remove ECG first)."""
+    s = synth_settings(str(tmp_path), noise=True, data_out=_DATA_OUT)
+    pv = _win(s).preview_screen
+    assert pv.noise_enabled.isChecked() is True         # synth_settings(noise=True) turns it on
+    assert s.processing.emg.remove_ecg is True          # synth_settings(noise=True) requires it
+    pv.remove_ecg.setChecked(False)
+    assert s.processing.emg.remove_ecg is False
+    assert s.processing.emg.noise.enabled is False       # cleared, not left stuck
+    assert pv.noise_enabled.isChecked() is False         # widget reflects the clear
+    s.validate()                                         # the resulting settings are valid
+
+
+def test_loading_an_analysis_with_stuck_noise_reduction_repairs_it_and_announces(qapp, tmp_path):
+    """Loading is the path the interactive guard above does not cover — same reasoning as
+    test_loading_an_analysis_with_a_stuck_auto_batch_repairs_it, for the noise/remove_ecg pair."""
+    s = synth_settings(str(tmp_path), remove_ecg=False, data_out=_DATA_OUT)
+    s.processing.emg.noise.enabled = True                # the invalid pair, as stored in the file
+    s.processing.emg.remove_ecg = False
+
+    pv = _win(s).preview_screen
+
+    assert s.processing.emg.noise.enabled is False, "the stored pair must be repaired, not just the widget"
+    assert pv.noise_enabled.isChecked() is False
+    assert pv.noise_enabled.isEnabled() is False          # still gated on Remove ECG
+    s.validate()                                          # would raise before the fix
+
+    seen = []
+    pv.settings_edited.connect(lambda *_: seen.append(True))
+    pv._announce_noise_repair()                           # what the deferred timer calls
+    assert seen, "the repair changes the analysis, so it must mark it dirty"
+    assert "Remove ECG" in pv._NOISE_REPAIR_MESSAGE
+    # ...and only once: a second call must not re-announce or re-dirty
+    seen.clear()
+    pv._announce_noise_repair()
+    assert not seen
+
+
+def test_a_consistent_noise_analysis_is_left_alone(qapp, tmp_path):
+    """The repair must not touch a legitimately enabled noise reduction."""
+    s = synth_settings(str(tmp_path), noise=True, data_out=_DATA_OUT)
+    pv = _win(s).preview_screen
+    assert s.processing.emg.noise.enabled is True
+    assert pv.noise_enabled.isChecked() is True
+    assert pv._noise_repaired is False
+
+
 def test_ecg_auto_batch_also_gates_autosuggest(qapp, tmp_path):
     # Regression: Auto-suggest writes the same 5 fields the batch auto-detect will overwrite
     # anyway, so it must grey out alongside them — otherwise a click looks like it did

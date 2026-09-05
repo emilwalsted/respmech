@@ -1307,6 +1307,12 @@ class RunScreen(QWidget):
         elif ev.kind == "file_done":
             self._ok_file_count += 1
             self._append(f"  done ({ev.message})")
+        elif ev.kind == "warning":
+            # K-108: e.g. respmech[plots] missing — figures are skipped, the run still
+            # completes. Same log the CLI prints to stderr for (see cli/__main__.py's
+            # _progress_printer), so the app surfaces it too instead of only via
+            # run-report.txt's FIGURES SKIPPED section.
+            self._append(f"\nWARNING: {ev.message}")
         elif ev.kind == "writing":
             # The compute phase left the bar at a static, determinate 100%; writing (figures
             # especially) can take longer than the compute did. Return to the animated busy
