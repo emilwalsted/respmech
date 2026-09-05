@@ -170,7 +170,7 @@ def load(filepath, settings):
                np.column_stack([get1(c, "EMG channel") for c in d.columns_emg]))
         return flow, volume, poes, pgas, pdi, ent, emg
 
-    loaders = {'.xls': loadxls, '.xlsx': loadxls, '.csv': loadcsv, '.mat': loadmat, '.txt': loadtxt}
+    loaders = {'.xlsx': loadxls, '.csv': loadcsv, '.mat': loadmat, '.txt': loadtxt}
     if fext not in loaders:
         raise DataValidationError(f"Unsupported input file type: {fext}")
     flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns = loaders[fext](filepath)
