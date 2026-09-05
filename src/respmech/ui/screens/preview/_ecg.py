@@ -506,6 +506,9 @@ class _EcgMixin:
             p = self.ecg_processed_plots.addPlot(row=i, col=0)
             p.showGrid(x=True, y=True, alpha=0.12)
             p.setLabel("left", f"col {cols[i]}" if i < len(cols) else f"EMG {i + 1}")
+            # Same reasoning as the raw EMG stack (_mechanics.py): drop pyqtgraph's
+            # "(x0.001)" SI suffix, or the rotated label overruns its neighbour.
+            p.getAxis("left").enableAutoSIPrefix(False)
             if _theme is not None:
                 _theme.align_left_axis(p)
             p.plot(t, np.asarray(ch), pen=_pen(cycle[i % len(cycle)]))
