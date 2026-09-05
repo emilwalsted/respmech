@@ -21,6 +21,7 @@ touched:
 from __future__ import annotations
 
 import os
+import sys
 from datetime import datetime
 
 import pandas as pd
@@ -30,6 +31,33 @@ from respmech.core import quantities as _units
 from respmech.core.summary import build_cohort_summary, normalize_emg_table
 
 _CREATED = f"Created with RespMech v{__version__} (github.com/emilwalsted/respmech)"
+
+
+def _environment_info() -> str:
+    """Python and the numeric/audio libraries whose own version can move a
+    Simpson- or SciPy-integration-derived number without RespMech changing at
+    all (see 'Changes from RespMech 1.x' in the manual: a SciPy point release
+    alone has shifted the Simpson-integrated WOB/PTP/EMG columns). Recorded so
+    a reader comparing an old result folder against a new run can tell whether
+    a mismatch is a real regression or a library upgrade. Lazy imports (numpy,
+    scipy) keep the module import light for callers that never write a result;
+    pandas is already a module-level import here. librosa is an optional
+    extra (the ``emg`` group) used only for spectral noise reduction, so its
+    absence is reported rather than raised. Caught broadly, not just
+    ``ImportError``: librosa transitively pulls in soundfile (needs the
+    native libsndfile) and numba/llvmlite, so a broken (not merely absent)
+    install can raise ``OSError`` or other exceptions at import time — this
+    is a provenance line, not something that should ever fail a real run."""
+    import numpy
+    import scipy
+    try:
+        import librosa
+        librosa_v = librosa.__version__
+    except Exception:
+        librosa_v = "not installed"
+    return (f"Python {sys.version.split()[0]}, numpy {numpy.__version__}, "
+            f"scipy {scipy.__version__}, pandas {pd.__version__}, "
+            f"librosa {librosa_v}")
 
 
 def _version_df():
@@ -73,6 +101,7 @@ def _provenance_rows(settings, when):
     ts = (when or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
     ip = settings.input
     rows = [("RespMech version", __version__),
+            ("Environment", _environment_info()),
             ("Generated", ts),
             ("Input folder", ip.folder),
             ("Input pattern", ip.files),
@@ -382,6 +411,7 @@ def _write_run_report(result, settings, outputfolder: str,
     L: list[str] = []
     L.append(f"RespMech v{__version__} — run report")
     L.append(f"Generated: {ts}")
+    L.append(f"Environment: {_environment_info()}")
     if not cohort_outputs:
         L.append("")
         cohort_bits = []

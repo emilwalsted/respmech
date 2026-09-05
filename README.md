@@ -194,9 +194,14 @@ manoeuvres or coughs — then exclude them by clicking them in Preview.
 
 ## Correctness
 
-The v2 engine is a port of the original v1 monolith. Golden/characterisation tests pin the
-output byte-for-byte against references baked from the original implementation, which is kept
-frozen in [`legacy/`](legacy/README.md) for exactly that purpose.
+The v2 engine is a port of the original v1 monolith. Golden/characterisation tests pin breath
+timing, volumes, ventilation, the pressure descriptors and the elastic work-of-breathing
+component byte-for-byte against references baked from the original implementation, which is
+kept frozen in [`legacy/`](legacy/README.md) for exactly that purpose. Two deliberate
+deviations from 1.x, and a further SciPy-driven drift in the Simpson-integrated columns (a
+library version difference, not a RespMech choice), are instead pinned to within 1 part in
+10⁹ (rtol 1e-9, atol 1e-12) — see [Changes from RespMech
+1.x](https://respmech.dk/documentation.html#changes-from-1x).
 
 * How the calculations work (formulas and units): [docs/REVERSE_ENGINEERING.md](docs/REVERSE_ENGINEERING.md)
 * Design and rationale: [docs/PLAN.md](docs/PLAN.md)
