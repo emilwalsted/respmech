@@ -103,6 +103,7 @@ class SciAxis(pg.AxisItem):
             for include_unit in (True, False):
                 self.label.setHtml(self._label_html(include_unit))
                 if self.label.boundingRect().width() <= avail:
+                    self.showLabel(True)
                     break
             else:
                 # neither "name + unit" nor "name alone" fits: hide rather than overrun.
