@@ -593,7 +593,7 @@ def load_raw_matrix(settings: Settings, file_path: str):
     elif ext in (".txt",):
         dec = getattr(fmt, "decimal", ".") or "."
         arr, names = _from_df(_read_table(file_path, sep="\t", decimal=dec))
-    elif ext in (".xls", ".xlsx"):
+    elif ext in (".xlsx",):
         arr, names = _from_df(pd.read_excel(file_path))
     elif ext in (".mat",):
         import scipy.io as sio  # noqa: PLC0415
@@ -660,7 +660,7 @@ def probe_data_columns(settings: Settings, file_path: str):
         if ext == ".txt":
             dec = getattr(fmt, "decimal", ".") or "."
             return len(_read_table(file_path, sep="\t", decimal=dec, nrows=1).columns)
-        if ext in (".xls", ".xlsx"):
+        if ext in (".xlsx",):
             return len(pd.read_excel(file_path, nrows=1).columns)
         if ext == ".mat":                       # no cheap header probe for MATLAB
             matrix, _names = load_raw_matrix(settings, file_path)
