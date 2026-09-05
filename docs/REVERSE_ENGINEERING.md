@@ -209,6 +209,15 @@ rule**: `integral = simpson(pressure, t)` where `t = linspace(0, n/fs, n)`.
 - `int_* ` = per-breath integral (cmH₂O·s).
 - `ptp_* = integral · breathcount · vefactor` (cmH₂O·s·min⁻¹).
 
+**Deliberate v2 divergence (v2.0.0, commit `da0420b`; see
+[`docs/PTP_INVESTIGATION.md`](PTP_INVESTIGATION.md)):** v2 drops `adjustforintegration`
+and the `- pressure[0]` step. The baseline is the MEAN of the first `n` samples of the
+phase, `n = max(1, round(processing.ptp.baseline_window_s · fs))` with
+`baseline_window_s = 0.05` s by default (end-expiratory for the inspiratory Poes/Pdi
+PTPs, end-inspiratory for the expiratory Pgas PTP): `int = simpson(p − mean(p[:n]),
+x=t)`; `ptp = int · breathcount · vefactor`. A window short enough that
+`round(baseline_window_s · fs) = 1` reproduces the legacy single-sample value.
+
 ### 5.7 Work of breathing — `calculatewob()`  ⭐ most correctness-sensitive
 Uses the **Campbell diagram** (oesophageal pressure vs inspired volume). Unit
 conversion `WOBUNITCHANGEFACTOR = 98.0638/1000` J·(cmH₂O·L)⁻¹
@@ -295,9 +304,10 @@ important for "fully correct calculations":
   (zeroing)" added `pressure = pressure.squeeze() - pressure[0]` to `calcptp`. This
   changes all `int_*` / `ptp_*` outputs by a large factor (verified: 13.06 → 2.71
   on one breath). Expected spreadsheets generated before that commit differ from
-  the current code accordingly. **Which baseline convention is physiologically
-  correct must be decided in Phase 2** (the extra `- pressure[0]` double-subtracts a
-  baseline that `adjustforintegration` already set).
+  the current code accordingly. **Resolved in v2** (see §5.6 and
+  `PTP_INVESTIGATION.md`): one end-expiratory baseline, the mean over a 50 ms
+  window. There is no double subtraction: ∫(f − f[0]) is invariant to the constant
+  pre-shift `adjustforintegration` applied, so only one baseline was ever in effect.
 - **EMG/ECG-removal is version-dependent.** The current `master` EMG conditioning
   (ECG removal + spectral noise reduction) differs from the "new ECG removal"
   version Emil validated with; EMG RMS / integrated-EMG columns differ by up to

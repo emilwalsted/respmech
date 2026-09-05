@@ -35,7 +35,7 @@ def test_campbell_has_recoil_line_and_shaded_work(qapp):
     pv._draw_campbell(fr.breaths)
     ax = pv.campbell.figure.axes[0]
     labels = [t.get_text() for t in ax.get_legend().get_texts()]
-    assert {"average breath", "elastic recoil", "inspiratory work"} <= set(labels)
+    assert {"average breath", "elastic recoil", "inspiratory resistive work"} <= set(labels)
     assert len(ax.collections) >= 1                      # the shaded work polygon
     assert any("WOB" in t.get_text() for t in ax.texts)  # the read-out
     win.close()
@@ -107,7 +107,7 @@ def test_campbell_recoil_line_and_shaded_work_match_the_new_orientation(qapp):
     # x-extent must span the inspiratory VOLUME values. Had this stayed fill_betweenx (or been
     # swapped back to it by mistake), the polygon's x-extent would instead span the Poes
     # values -- a different, wrong number range that this assertion catches.
-    poly = next(c for c in ax.collections if c.get_label() == "inspiratory work")
+    poly = next(c for c in ax.collections if c.get_label() == "inspiratory resistive work")
     verts = poly.get_paths()[0].vertices
     iv = np.asarray(b["inspiration"]["volumeavg"], float)
     assert np.isclose(verts[:, 0].min(), iv.min())

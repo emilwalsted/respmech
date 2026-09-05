@@ -1662,7 +1662,8 @@ class _MechanicsMixin:
         for b in kept:
             ax.plot(b["volume"], b["poes"], color=pal["mpl_loop"], lw=0.7, alpha=0.5, zorder=1)
         # P12: overlay the average breath bold, draw the elastic recoil (relaxation)
-        # line EELV→EILV, and shade the inspiratory work between the Poes trace and it.
+        # line EELV→EILV, and shade the inspiratory resistive work between the Poes
+        # trace and it (the elastic triangle itself is not shaded here).
         self._overlay_campbell_work(ax, kept, pal)
         ax.axhline(0, color=pal["mpl_zeroline"], lw=0.8, zorder=0)
         ax.set_xlabel(_CAMPBELL_XLABEL_VARIANTS[0])
@@ -1686,8 +1687,8 @@ class _MechanicsMixin:
         self.btn_export_fig.setEnabled(True)         # a diagram now exists to export
 
     def _overlay_campbell_work(self, ax, kept, pal):
-        """Draw the average PV loop + elastic recoil line + shaded inspiratory work,
-        so the Campbell diagram *shows* the work of breathing, not just the loops.
+        """Draw the average PV loop + elastic recoil line + shaded inspiratory
+        resistive work, so the Campbell diagram *shows* work of breathing, not just the loops.
         Defensive: any missing average field falls back to just the loops (no raise)."""
         if not kept:
             return
@@ -1711,7 +1712,7 @@ class _MechanicsMixin:
                     line_p = np.interp(iv, sorted([eelv[0], eilv[0]]),
                                        [eelv[1], eilv[1]] if eelv[0] <= eilv[0] else [eilv[1], eelv[1]])
                     ax.fill_between(iv, ip, line_p, color=pal["mpl_accent"], alpha=0.18,
-                                    zorder=2, label="inspiratory work")
+                                    zorder=2, label="inspiratory resistive work")
             wob = dict(b.get("wob") or {})
             if "wobtotal" in wob:
                 # fg on mpl_bg (not mpl_loop, the colour of the loops the text sits over)
