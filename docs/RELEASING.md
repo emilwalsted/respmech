@@ -41,13 +41,19 @@ environment (e.g. required reviewer, or restrict to tags) for a manual gate befo
      invisible until asked for again.
 2. **Bump the version** — `src/respmech/__init__.py`'s `__version__` is the single source
    of truth (the PyPI version derives from it). Keep `[tool.briefcase] version` in
-   `pyproject.toml` in sync (briefcase can't read the dynamic version):
+   `pyproject.toml` in sync (briefcase can't read the dynamic version), and bump the
+   same file's `__citation_year__` too if the release falls in a new calendar year (it
+   feeds the About dialog's citation, which has no other source for the year):
 
    ```bash
    # e.g. 2.2.0 -> 2.3.0  (edit both, they must match the tag)
    #   src/respmech/__init__.py :  __version__ = "2.3.0"
    #   pyproject.toml           :  [tool.briefcase] version = "2.3.0"
    ```
+
+   Also update the example citation in [`README.md`](../README.md) ("RespMech vX.Y.Z,
+   YEAR") to the new version — unlike the About dialog, it is a hand-written string,
+   not derived from `__version__`, so it goes stale silently if this step is skipped.
 
 3. **Check the entry actually covers the release:**
 
@@ -160,5 +166,12 @@ pip install -i https://test.pypi.org/simple/ respmech
   bump the patch (e.g. `2.3.1`) and tag again; never try to overwrite.
 - **No tokens.** Trusted Publishing means there is nothing to rotate or leak. Do not add a
   `PYPI_API_TOKEN` secret or a `twine upload` step.
-- **Zenodo DOI** — each GitHub release still gets its own citation DOI; keep referencing the
-  latest in the README/citation.
+- **Zenodo DOI** — with the GitHub↔Zenodo integration enabled (Zenodo ▸ Account ▸
+  GitHub), each new tagged release is archived automatically as a new version of the
+  same record, and the concept DOI `10.5281/zenodo.3270825` keeps resolving to the
+  newest one; that concept DOI, not a version-specific one, is what the README and the
+  site's citation reference. The integration has silently stopped archiving before (it
+  went dark after v1.0.1 in 2023, and no v2.x release was archived until it was
+  re-enabled and backfilled by hand) — after tagging, check the project's Zenodo page
+  to confirm the new version actually landed, rather than assuming the automation is
+  still working.

@@ -1,0 +1,26 @@
+{
+  "title": "RespMech",
+  "description": "Respiratory mechanics, work of breathing (Campbell diagram), diaphragm EMG and sample entropy analysis of time-series respiratory recordings.",
+  "license": {"id": "gpl-3.0-or-later"},
+  "upload_type": "software",
+  "creators": [
+    {
+      "name": "Walsted, Emil Ingerslev",
+      "orcid": "0000-0002-6640-7175",
+      "affiliation": "Bispebjerg Hospital, Copenhagen, Denmark"
+    }
+  ],
+  "keywords": [
+    "respiratory mechanics",
+    "work of breathing",
+    "diaphragm EMG",
+    "sample entropy"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://www.respmech.dk/",
+      "relation": "isDocumentedBy",
+      "resource_type": "other"
+    }
+  ]
+}

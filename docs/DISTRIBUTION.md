@@ -28,7 +28,10 @@ would need a long-lived token, which we deliberately avoid on a public repo). Fo
 dry-run, trigger the workflow manually (Actions ▸ Publish to PyPI ▸ Run workflow) to publish
 to **TestPyPI**.
 
-Keep the Zenodo DOI workflow for citation (each GitHub release gets a DOI).
+Keep the GitHub↔Zenodo integration enabled so each new release archives automatically
+and gets its own DOI under the project's concept DOI (`10.5281/zenodo.3270825`) — see
+[RELEASING.md](RELEASING.md)'s Zenodo DOI note for what to check after tagging; the
+integration has gone quiet before without any error surfacing.
 
 ## 3. Homebrew tap
 The tap is a separate repo `emilwalsted/homebrew-respmech` with

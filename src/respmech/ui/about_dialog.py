@@ -7,7 +7,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
-from respmech import __version__
+from respmech import __citation_year__, __version__
 
 try:
     from respmech.ui import theme as _theme
@@ -83,8 +83,9 @@ class AboutDialog(QDialog):
         v.addSpacing(6)
         v.addWidget(cite_head)
         v.addWidget(_selectable_label(
-            f"E Walsted, RespMech v{__version__}, {GITHUB_URL}/, "
-            "DOI: 10.5281/zenodo.3270826 (a specific version's DOI is on the README)"))
+            f"E Walsted, RespMech v{__version__}, {__citation_year__}, {GITHUB_URL}/, "
+            "DOI: 10.5281/zenodo.3270825 (for a specific version's own DOI, see the "
+            "Zenodo record linked from the README)"))
 
         v.addSpacing(6)
         v.addWidget(_selectable_label(WEBSITE_URL))

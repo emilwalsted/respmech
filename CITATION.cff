@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: RespMech
+abstract: >-
+  Respiratory mechanics, work of breathing (Campbell diagram), diaphragm EMG and
+  sample entropy analysis of time-series respiratory recordings.
+authors:
+  - family-names: Walsted
+    given-names: Emil Ingerslev
+    orcid: "https://orcid.org/0000-0002-6640-7175"
+    affiliation: "Bispebjerg Hospital, Copenhagen, Denmark"
+version: "2.4.0"
+date-released: "2026-08-21"
+license: GPL-3.0-or-later
+repository-code: "https://github.com/emilwalsted/respmech"
+url: "https://www.respmech.dk/"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.3270825"
+    description: >-
+      The concept DOI representing all versions of this software, and resolving to
+      the latest one archived on Zenodo.
+keywords:
+  - respiratory mechanics
+  - work of breathing
+  - diaphragm EMG
+  - sample entropy
