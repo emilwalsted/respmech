@@ -188,8 +188,9 @@ def test_entropy_fields_are_named_and_explained_for_what_they_are(qapp, tmp_path
     assert epochs_label.toolTip() == tip, "label and field must share the same tooltip"
     assert "processing.entropy.epochs" in tip
     assert "one more than the embedding dimension" in tip
-    assert "default 2 gives m = 1" in tip
-    assert "m = 2" in tip and "conventional in the literature" in tip
+    assert "default 3 gives m = 2" in tip
+    assert "conventional in the literature" in tip
+    assert "set 2 for the m = 1" in tip, "must tell a user how to recover the pre-change value"
     assert "2 by convention" not in tip, "the old, wrong claim must not survive verbatim"
 
     tol_label = form.labelForField(sc.ent_tol)

@@ -16,7 +16,7 @@ requires-python = ">=3.11"
 # `license-files` to install a licence into the MSI (the macOS template does not enforce it).
 # NB briefcase treats each entry as a literal path, not a glob — list the file explicitly.
 license = "GPL-3.0-or-later"
-# LICENSE = the project's GPL. "LICENSE pyentrp" = the MIT licence of the vendored
+# LICENSE = the project's GPL. "LICENSE pyentrp" = the Apache-2.0 licence of the vendored
 # pyEntropy sample-entropy code (src/respmech/core/entropy.py), shipped for attribution.
 # briefcase reads each entry as a literal path (not a glob), so both are listed explicitly.
 license-files = ["LICENSE", "LICENSE pyentrp"]
