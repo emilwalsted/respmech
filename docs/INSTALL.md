@@ -11,7 +11,7 @@ Download the installer for your platform from the
 
 | Platform | File | Notes |
 |---|---|---|
-| macOS | `RespMech-<version>.dmg` | signed + notarised; drag to Applications |
+| macOS | `RespMech-<version>.dmg` | signed + notarised; drag to Applications. Apple silicon, macOS 12+ |
 | Windows | `RespMech-<version>.msi` | signed |
 
 Nothing else to install — the bundle carries its own Python and dependencies.
@@ -33,7 +33,7 @@ no heavyweight audio stack). Add extras for more:
 |---|---|
 | `gui` | desktop app — `PySide6`, `pyqtgraph`, `matplotlib` |
 | `emg` | EMG spectral noise reduction — `librosa` |
-| `plots` | diagnostic PDF figures — `matplotlib`, `seaborn` |
+| `plots` | diagnostic PDF figures — `matplotlib` |
 
 ```bash
 respmech --version
@@ -63,7 +63,7 @@ Install extras with `pip install -e ".[<extra>]"` from a source checkout:
 | Extra | Enables |
 |---|---|
 | `emg` | EMG spectral noise reduction (`librosa`) |
-| `plots` | diagnostic PDF figures (`matplotlib`, `seaborn`) |
+| `plots` | diagnostic PDF figures (`matplotlib`) |
 | `gui` | desktop app (`PySide6`, `pyqtgraph`, `matplotlib`) |
 | `dev` | the test stack |
 
