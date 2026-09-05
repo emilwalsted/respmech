@@ -135,9 +135,10 @@ be lower than the shortest inspiration or expiration in the file).
 
 <p align="center"><img src="docs/img/campbell.png" alt="Campbell / PV loop" width="480"></p>
 
-The enclosed area of the oesophageal-pressure–volume loop is the inspiratory work of breathing:
-the faint loops are the individual breaths, the bold one their average, the diagonal the passive
-elastic-recoil line, and the shaded triangle the elastic component.
+The Campbell diagram shows the inspiratory work of breathing: the faint loops are the individual
+breaths, the bold one their average, the diagonal the elastic-recoil line joining end-expiration to
+end-inspiration, and the shaded triangle the elastic component; the resistive component is the
+bulge of the trace away from that line. The loop's own enclosed area is not the work of breathing.
 
 ## Diaphragm EMG
 
