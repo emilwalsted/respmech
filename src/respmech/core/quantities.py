@@ -30,7 +30,7 @@ from __future__ import annotations
 
 CMH2O = "cmH₂O"
 LITRE = "L"
-LPS = "L/s"
+LPS = "L·s⁻¹"
 SECOND = "s"
 DIMLESS = "—"          # a genuine ratio / dimensionless quantity
 ARB = "a.u."           # uncalibrated (EMG amplitude in this pipeline)
@@ -62,7 +62,7 @@ _RULES: list[tuple] = [
     (lambda c: c in ("ti", "te", "ttot"), SECOND),
     # --- ventilation / rate ------------------------------------------------------
     (lambda c: c == "bf", "min⁻¹"),
-    (lambda c: c == "ve", "L/min"),
+    (lambda c: c == "ve", "L·min⁻¹"),
 ]
 
 # Human-readable display names, keyed by the exact lower-cased column identifier.

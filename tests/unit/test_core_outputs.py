@@ -22,15 +22,28 @@ def test_units_resolve_by_physical_quantity():
     from respmech.core import quantities as units
     assert units.unit_for("poes_mininsp") == "cmH₂O"
     assert units.unit_for("vt") == "L"
-    assert units.unit_for("max_in_flow") == "L/s"       # 'flow' beats the volume rule
+    assert units.unit_for("max_in_flow") == "L·s⁻¹"       # 'flow' beats the volume rule
     assert units.unit_for("ti") == "s"
     assert units.unit_for("bf") == "min⁻¹"
+    assert units.unit_for("ve") == "L·min⁻¹"
     # WOB and PTP are scaled ×bcnt·vefactor in compute → per-minute quantities
     assert units.unit_for("wobtotal") == "J·min⁻¹"
     assert units.unit_for("ptp_oesinsp") == "cmH₂O·s·min⁻¹"   # rate, not the raw integral
     assert units.unit_for("int_oesinsp") == "cmH₂O·s"         # the un-scaled per-breath integral
     assert units.unit_for("sample_entropy_max") == "—"
     assert units.unit_for("file") == "" and units.unit_for("breath_no") == ""
+
+
+def test_units_use_the_dot_notation_not_the_slash_form():
+    """Harmonised 05-09-2026 (indholdsgennemgang 10.4): the Units sheet used to write
+    'L/s'/'L/min' while the manual's tables wrote 'L·s⁻¹'/'L·min⁻¹' for the same
+    columns. The dot form now wins everywhere; the slash form must not resurface."""
+    from respmech.core import quantities as units
+    for column in ("max_in_flow", "max_ex_flow", "in_flow_midvol", "ex_flow_midvol"):
+        assert units.unit_for(column) == "L·s⁻¹"
+        assert "/" not in units.unit_for(column)
+    assert units.unit_for("ve") == "L·min⁻¹"
+    assert "/" not in units.unit_for("ve")
 
 
 def test_display_for_falls_back_to_the_column_identifier():

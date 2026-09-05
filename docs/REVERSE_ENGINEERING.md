@@ -266,6 +266,25 @@ across channels. Vendored pyEntropy implementation.
   gating — STFT the signal and a **noise-profile interval**, threshold each
   frequency bin at `mean + n_std·SD` of the noise, smooth the mask, invert. Adapted
   from Tim Sainburg; **requires `librosa`**.
+  **Deliberate v2 divergence** (see [`docs/NOISE_ECG_OPTIMIZATION.md`](NOISE_ECG_OPTIMIZATION.md)):
+  v2 replaces the per-call estimate with ONE shared profile per test. `core/noise.py`
+  builds one `NoiseProfile` per EMG channel from an EMG-free rest reference
+  (`processing.emg.noise.reference_file`: by default every expiration of that
+  recording, or the explicit `reference_intervals` when `use_expiration` is off)
+  using fixed STFT parameters (`n_fft` 256, `hop_length` 64, `win_length` 256,
+  rescaled only when a pre-analysis resample changes the sampling rate), thresholds
+  each frequency bin at `mean + n_std_thresh · SD` (default 1.0; v1 used 2) of the
+  reference's dB spectrum, and applies that identical profile to every file of the
+  test. The suppression strength is also chosen once per test: with `auto_prop` on
+  (the default) the strongest `prop_decrease` on the 0.1–1.0 grid whose
+  worst-channel in-band (20–250 Hz) fidelity stays at or above `fidelity_target`
+  (0.8), falling back to the gentlest value if none qualify; with `auto_prop` off,
+  the fixed `prop_decrease` (default 0.6). Reconstruction rescales each STFT bin's
+  magnitude while keeping its own complex phase exactly; the earlier reconstruction
+  split the real/imaginary parts as if they were independent magnitude/phase terms,
+  which inflated in-band power by roughly 30–40% even at `prop_decrease = 0` —
+  fixed 05-09-2026 (`core/noise.py::NoiseProfile.apply`). `librosa` is still
+  required.
 - **RMS outlier handling** (`processoutliers`): `rms_poes = rms_max / poes_mininsp`;
   breaths outside `mean ± outlierrmssdlimit·SD` of the other breaths have their
   `rms_max`/`rms_mean` replaced by the others' mean.
@@ -318,7 +337,13 @@ important for "fully correct calculations":
   version Emil validated with; EMG RMS / integrated-EMG columns differ by up to
   ~90 % while mechanics/WOB are unaffected. Latent bug #1 additionally **crashes**
   real files that combine excluded breaths with EMG (`RIU_H5_IC`, `RIU_H6_IC`,
-  `RIU_H6_Baseline`).
+  `RIU_H6_Baseline`). **Partially addressed in v2** (see §5.10): the spectral
+  gate's reconstruction had a real bug that inflated noise-reduced EMG power by
+  ~30–40 % regardless of `prop_decrease`, fixed 05-09-2026, and the ECG
+  R-peak detector now median-corrects before peak-finding and accepts
+  negative-polarity R-peaks. Neither fix reconciles this section's original
+  comparison against the separate "new ECG removal" variant Emil validated
+  with, which predates v2 and is not otherwise documented here.
 
 ---
 
