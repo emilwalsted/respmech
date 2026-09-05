@@ -262,8 +262,43 @@ def subtractecg(ch, peaks, samplingfrequency, windowsize, cancel_check=None):
     return list(np.array(retch).T), retwindows
 
 
+def _merge_peaks_by_distance(pos, pos_h, neg, neg_h, min_distance):
+    """Union two polarities' peak indices, keeping only the taller of any two peaks
+    (one from each polarity) closer together than ``min_distance``: a single biphasic
+    R-wave must count once, not once per lobe. Ties keep the positive-polarity peak,
+    which reproduces the old positive-only detector exactly when a channel has no
+    genuine negative R-waves (see ticket 5.7 / K-191)."""
+    if pos.size == 0:
+        return neg
+    if neg.size == 0:
+        return pos
+    idx = np.concatenate([pos, neg])
+    h = np.concatenate([pos_h, neg_h])
+    keep = np.ones(idx.size, dtype=bool)
+    for oi in np.argsort(-h):              # tallest first
+        if not keep[oi]:
+            continue
+        close = (np.abs(idx - idx[oi]) < min_distance) & keep
+        close[oi] = False
+        keep[close] = False
+    return np.sort(idx[keep])
+
+
 def remove_ecg(emgecgchannels, peakch, samplingfrequency, ecgminheight, ecgmindistance, ecgminwidth, windowsize, cancel_check=None):
-    peaks, _ = signal.find_peaks(peakch, height=ecgminheight, distance=ecgmindistance * samplingfrequency, width=ecgminwidth * samplingfrequency)
+    # DC-removed, matching suggest_ecg_settings's detector exactly (ticket 5.7 / K-191):
+    # previously this ran on the raw channel while Auto-suggest derived ecgminheight from
+    # a median-subtracted copy, so a channel with a DC offset made the suggested height
+    # wrong for what this function actually saw. Peaks are searched on both polarities
+    # (previously positive-only, per find_peaks' height= convention) so a channel whose
+    # R-wave is inverted can be detected too, then merged by _merge_peaks_by_distance so
+    # a biphasic complex is still counted once.
+    xr = np.asarray(peakch, dtype=float) - np.median(peakch)
+    min_distance = ecgmindistance * samplingfrequency
+    kw = dict(height=ecgminheight, distance=min_distance, width=ecgminwidth * samplingfrequency)
+    pos, pos_props = signal.find_peaks(xr, **kw)
+    neg, neg_props = signal.find_peaks(-xr, **kw)
+    peaks = _merge_peaks_by_distance(pos, pos_props["peak_heights"], neg, neg_props["peak_heights"],
+                                     min_distance)
     processedchannels, ecgwindows = subtractecg(emgecgchannels, peaks, samplingfrequency, windowsize, cancel_check=cancel_check)
     return processedchannels, ecgwindows, peaks / samplingfrequency
 

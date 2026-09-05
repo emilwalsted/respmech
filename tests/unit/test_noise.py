@@ -51,6 +51,31 @@ def test_noise_reduction_retains_fraction_not_amplifies():
     assert np.sum(proc ** 2) <= np.sum(x ** 2) * 1.02   # ≤ input energy (small tolerance)
 
 
+def test_apply_at_prop_zero_is_amplitude_neutral():
+    """Ticket 5.2 / K-162: the reconstruction must scale magnitude and keep phase
+    exactly, not mix real/imaginary parts additively. At prop_decrease = 0 the mask
+    is all-zero, so the STFT round-trip must reproduce the input's in-band power
+    exactly (fidelity == 1.0), not inflate it by ~30-40% as the old sign(Re z) +
+    i*Im(z) reconstruction did."""
+    sr = 2000
+    prof = N.NoiseProfile.from_clip(_clip(0, 6000), sr)
+    x = _clip(5, 6000)
+    proc = prof.apply(x, prop_decrease=0.0)
+    assert N.fidelity(x, proc, sr) == pytest.approx(1.0, abs=1e-9)
+
+
+def test_fidelity_never_exceeds_one_on_pure_tone():
+    """With correct-phase reconstruction, fidelity is bounded by 1: gating can only
+    remove in-band power, never add it, at any prop_decrease."""
+    sr = 2000
+    t = np.arange(6000) / sr
+    tone = np.sin(2 * np.pi * 100 * t)                 # 100 Hz, in-band, noise-free
+    prof = N.NoiseProfile.from_clip(_clip(0, 6000), sr)  # noise-only reference
+    for prop in (0.0, 0.25, 0.5, 0.75, 1.0):
+        proc = prof.apply(tone, prop_decrease=prop)
+        assert N.fidelity(tone, proc, sr) <= 1.0 + 1e-6   # FFT round-trip float noise only
+
+
 def test_from_clip_determinism_and_serialisation():
     prof = N.NoiseProfile.from_clip(_clip(), 2000)
     x = _clip(1, 6000)

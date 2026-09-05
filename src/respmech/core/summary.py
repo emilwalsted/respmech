@@ -60,14 +60,65 @@ def _stats_frame(rows: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(recs, columns=["variable", "n", "mean", "sd", "cv_pct"])
 
 
-def normalize_emg_table(breaths_table, settings) -> "pd.DataFrame | None":
+def _rms_reference_values(breaths_table, mode) -> dict:
+    """Per-RMS-column reference value (that column's own max or mean), used either as
+    a file's own reference (the legacy per-file behaviour) or, via
+    :func:`reference_values_for_batch`, as ONE shared reference read from a
+    maximal-manoeuvre file and applied to every file in the batch (ticket 5.1)."""
+    rms_cols = [c for c in breaths_table.columns if str(c).lower().startswith("rms")]
+    out = {}
+    for c in rms_cols:
+        v = breaths_table[c].to_numpy(dtype=float)
+        if not np.isfinite(v).any():
+            out[c] = float("nan")
+            continue
+        out[c] = float(np.nanmax(v)) if mode == "per_file_max" else float(np.nanmean(v))
+    return out
+
+
+def reference_values_for_batch(result, settings) -> "dict | None":
+    """The shared cross-file reference for :func:`normalize_emg_table` (ticket 5.1 /
+    K-155, K-158), or None to fall back to each file's own reference (the previous,
+    still-default behaviour).
+
+    ``processing.emg.normalization_reference_file`` names a file already present in
+    this batch — typically a maximal inspiratory/expiratory manoeuvre recorded once
+    per subject — whose own per-column RMS max (or mean, matching ``normalization``)
+    is then used as the reference for EVERY file's ``_pct`` columns, so amplitudes
+    become comparable across subjects/sessions instead of each file trivially
+    reaching 100% at its own peak. Returns None (not an error) when no reference file
+    is configured, or the named file is not among this batch's successfully processed
+    files — normalisation then silently falls back to the per-file default rather
+    than crashing a run over a typo'd or excluded reference filename."""
+    emg = getattr(getattr(settings, "processing", None), "emg", None)
+    ref_name = getattr(emg, "normalization_reference_file", None)
+    if not ref_name:
+        return None
+    mode = getattr(emg, "normalization", "none")
+    if mode in (None, "none"):
+        return None
+    fr = getattr(result, "ok_files", {}).get(ref_name)
+    if fr is None or fr.breaths_table is None or len(fr.breaths_table) == 0:
+        return None
+    return _rms_reference_values(fr.breaths_table, mode)
+
+
+def normalize_emg_table(breaths_table, settings, reference_values=None) -> "pd.DataFrame | None":
     """Per-file-normalised EMG RMS (feature P14).
 
-    Each RMS amplitude column is re-expressed as a percentage of a per-file reference
-    (the maximum breath, or the mean breath) so EMG amplitudes — which are otherwise
-    in arbitrary, electrode-dependent units — can be compared across files/subjects.
-    Returns a ``breath_no`` + normalised-columns DataFrame, or None when normalisation
-    is off, there is no EMG, or the table is empty. The raw RMS is never changed."""
+    Each RMS amplitude column is re-expressed as a percentage of a reference value
+    computed SEPARATELY for that same column (the column's own maximum or mean
+    breath) — the default reference is this file's own column, but see
+    ``reference_values`` below for the file's amplitude to be compared across
+    subjects/electrodes instead. Returns a ``breath_no`` + normalised-columns
+    DataFrame, or None when normalisation is off, there is no EMG, or the table is
+    empty. The raw RMS is never changed.
+
+    ``reference_values``: optional ``{column: value}`` (from
+    :func:`reference_values_for_batch`) giving each RMS column's reference
+    explicitly, overriding this file's own max/mean — the shared maximal-manoeuvre
+    reference (ticket 5.1). None (the default) reproduces the original per-file
+    behaviour exactly: each column's own maximum/mean across this file's breaths."""
     mode = getattr(getattr(getattr(settings, "processing", None), "emg", None), "normalization", "none")
     if mode in (None, "none") or breaths_table is None or len(breaths_table) == 0:
         return None
@@ -87,7 +138,10 @@ def normalize_emg_table(breaths_table, settings) -> "pd.DataFrame | None":
             # same answer without the noise.
             out[f"{c}_pct"] = np.full_like(v, np.nan)
             continue
-        ref = np.nanmax(v) if mode == "per_file_max" else np.nanmean(v)
+        if reference_values is not None:
+            ref = reference_values.get(c, float("nan"))
+        else:
+            ref = np.nanmax(v) if mode == "per_file_max" else np.nanmean(v)
         out[f"{c}_pct"] = (100.0 * v / ref) if (ref and not np.isnan(ref)) else np.full_like(v, np.nan)
     return out
 
