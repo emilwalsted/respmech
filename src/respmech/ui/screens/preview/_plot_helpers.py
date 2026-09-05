@@ -51,7 +51,16 @@ class SciAxis(pg.AxisItem):
 
     The name and unit are set separately via ``set_channel_label`` so the two can stack on
     two centred lines and so the scale annotation can be inserted next to the unit.
+
+    On a short stacked panel, "Poes (cmH₂O)" on two lines is taller than the row and the
+    rotated label ran into its neighbour (measured: the unit lines of adjacent channels
+    merged into one string, e.g. "(cmH₂O)(cmH₂O)"). ``_pick_label`` re-derives which
+    wording fits — name+unit, then name alone, then nothing — the same longest-first,
+    re-measure-on-resize approach ``_FitAxis._pick_label`` already uses below, so a short
+    row drops the unit line instead of overrunning the row after it.
     """
+
+    _label_picking = False
 
     def __init__(self, *a, **k):
         self._name = ""
@@ -61,8 +70,7 @@ class SciAxis(pg.AxisItem):
     def set_channel_label(self, name, unit=""):
         self._name, self._unit = name, unit
         self.labelUnits = unit          # keep pyqtgraph's own SI-scaling of the tick values
-        self.label.setHtml(self.labelString())
-        # labelText is ufarlig at sætte her: labelString() (over) bygger sin HTML af
+        # labelText is ufarlig at sætte her: labelString() (nedenfor) bygger sin HTML af
         # _name/_unit og ignorerer labelText, så dette ændrer intet i selve aksen. Men
         # pyqtgraph's egen setLabel() ville have sat den, og krydshårets aflæsning
         # (_on_mech_mouse_moved) læser netop labelText for at navngive kanalen.
@@ -72,7 +80,38 @@ class SciAxis(pg.AxisItem):
         # labelString()'ens to-linjers HTML og ·10⁻³-annotation). Et tomt navn skal
         # stadig skjule etiketten.
         self.showLabel(bool(name))
+        if name:
+            self._pick_label()
         self._adjustSize() if hasattr(self, "_adjustSize") else None
+
+    def resizeEvent(self, ev=None):
+        super().resizeEvent(ev)
+        if self._name:
+            self._pick_label()
+
+    def _pick_label(self):
+        if self._label_picking:
+            return
+        avail = self.height() if self.orientation in ("left", "right") else self.width()
+        self._label_picking = True
+        try:
+            if avail <= 0:
+                # geometry not resolved yet (fresh axis, not yet laid out): show the full
+                # wording for now, resizeEvent re-picks once a real size is known.
+                self.label.setHtml(self._label_html(include_unit=True))
+                return
+            for include_unit in (True, False):
+                self.label.setHtml(self._label_html(include_unit))
+                if self.label.boundingRect().width() <= avail:
+                    break
+            else:
+                # neither "name + unit" nor "name alone" fits: hide rather than overrun.
+                self.showLabel(False)
+            pg.AxisItem.resizeEvent(self, None)
+        except Exception:                # pragma: no cover - the label is cosmetic
+            pass
+        finally:
+            self._label_picking = False
 
     def _scale_annotation(self):
         scale = getattr(self, "autoSIPrefixScale", 1.0)
@@ -82,19 +121,23 @@ class SciAxis(pg.AxisItem):
         exp = int(round(math.log10(1.0 / scale)))   # displayed = value·10^exp
         return "·10" + str(exp).translate(_SUP)
 
-    def labelString(self):
-        scale = self._scale_annotation()
-        if scale and self._unit:
-            second = f"({scale} {self._unit})"
+    def _label_html(self, include_unit=True):
+        scale = self._scale_annotation() if include_unit else ""
+        unit = self._unit if include_unit else ""
+        if scale and unit:
+            second = f"({scale} {unit})"
         elif scale:
             second = f"({scale})"
-        elif self._unit:
-            second = f"({self._unit})"
+        elif unit:
+            second = f"({unit})"
         else:
             second = ""
         inner = self._name + (f"<br>{second}" if second else "")
         style = ";".join(f"{k}: {v}" for k, v in self.labelStyle.items())
         return f"<span style='{style}'><div style='text-align:center'>{inner}</div></span>"
+
+    def labelString(self):
+        return self._label_html(include_unit=True)
 
 # channel -> (axis label with units, pen colour by physiological meaning)
 _CHANNELS = [
