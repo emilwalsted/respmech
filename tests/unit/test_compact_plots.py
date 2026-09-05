@@ -620,12 +620,16 @@ def test_the_noise_tab_divides_into_thirds(qapp, tmp_path):
 # -- D04 (UI-overhaul): the fidelity frontier draws its data and explains itself -----
 
 def test_fidelity_axis_expands_to_show_values_above_one(qapp, tmp_path):
-    """``core.noise.fidelity()`` is an unbounded ratio and routinely runs a little over 1
-    (``NoiseProfile.apply`` masks magnitude and the imaginary part separately, so the
-    reconstruction can hold MORE in-band power than the original) — v2.3.4 shipped a fixed
-    ``(0, 1.02)`` axis that drew every one of the bundled sample data's 30 frontier points
-    (measured 1.281-1.340) above the top of the axes: an empty-looking panel that read as
-    total signal loss rather than the routine over-1 case it actually was."""
+    """v2.3.4 shipped a fixed ``(0, 1.02)`` axis that, on the reconstruction bug fixed by
+    ticket 5.2 (``NoiseProfile.apply`` used to mask magnitude and the imaginary part
+    additively instead of scaling one complex number, so fidelity routinely drifted a
+    little over 1, measured 1.281-1.340 on the bundled sample), drew every one of the
+    sample's 30 frontier points above the top of the axes: an empty-looking panel that
+    read as total signal loss rather than the over-1 case it actually was. The
+    reconstruction is fixed and fidelity is bounded by 1 now, but the axis must still
+    expand for whatever it is handed — this test feeds ``_draw_fidelity`` a synthetic
+    over-1 frontier directly, so it stays a real regression guard regardless of what the
+    noise engine itself currently produces."""
     win, pv = _noise_tab(qapp, tmp_path)
     frontier = {0.2: [1.30, 1.28, 1.32], 0.6: [1.31, 1.29, 1.34], 1.0: [1.33, 1.30, 1.36]}
     pv._draw_fidelity({"frontier": frontier, "prop_decrease": 0.6, "fidelity_target": 0.8})
@@ -683,9 +687,9 @@ def test_fidelity_target_line_is_labelled_without_a_new_legend_entry(qapp, tmp_p
 
 def test_fidelity_panel_tooltip_explains_the_metric_without_lengthening_the_title(qapp, tmp_path):
     """Nothing else on the noise tab explains what fidelity measures. The definition (an
-    in-band power ratio over the 20-250 Hz band shown on the Detail PSD panel, and why
-    values a little over 1 are routine) belongs in the panel's tooltip, one hover away —
-    never appended to the always-visible title, which stays exactly what it was."""
+    in-band power ratio over the 20-250 Hz band shown on the Detail PSD panel, bounded by
+    1 = untouched) belongs in the panel's tooltip, one hover away — never appended to the
+    always-visible title, which stays exactly what it was."""
     from respmech.ui.screens.preview._emg_noise import _FIDELITY_TITLE
     win, pv = _noise_tab(qapp, tmp_path)
     label = pv._fidelity_panel._title_label

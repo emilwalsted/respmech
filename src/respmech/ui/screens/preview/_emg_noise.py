@@ -67,15 +67,19 @@ _FIDELITY_TITLE = "Noise fidelity frontier (1 = untouched)"
 
 #: appended to the fidelity panel's tooltip (never to the visible, elided title — see
 #: ElidingLabel) so the definition is one hover away wherever the panel's header is used.
-#: The band and the "values above 1 are routine" note answer the question nothing on this
-#: tab otherwise answers (D04, UI-overhaul); the parenthetical names the Advanced field this
-#: mirrors, in its own wording, so the two never have to be kept in sync by hand.
+#: The band answers the question nothing on this tab otherwise answers (D04, UI-overhaul);
+#: the parenthetical names the Advanced field this mirrors, in its own wording, so the two
+#: never have to be kept in sync by hand. Before ticket 5.2's reconstruction fix the STFT
+#: round-trip mixed magnitude and phase additively (masked magnitude, unmasked imaginary
+#: part) instead of scaling one complex number, so fidelity drifted a little over 1 even
+#: at prop_decrease = 0 ("values above 1 are routine" used to be the honest wording here);
+#: with the corrected reconstruction it is bounded by 1 (float round-off aside), so that
+#: caveat no longer applies and has been dropped rather than reworded.
 _FIDELITY_TOOLTIP_SUFFIX = (
     "\n\nFidelity is the fraction of a channel's inspiratory EMG power, in the 20–250 Hz "
-    "band shaded on the Detail PSD panel, that survives noise removal (1.0 = untouched). "
-    "Values a little above 1 are routine, not a defect: the spectral gate masks magnitude and "
-    "phase separately, so the reconstruction can hold slightly more in-band power than the "
-    "original did. The dotted line marks the fidelity target from Advanced → "
+    "band shaded on the Detail PSD panel, that survives noise removal (1.0 = untouched, "
+    "and the ceiling — noise removal can only ever reduce in-band power). The dotted line "
+    "marks the fidelity target from Advanced → "
     "“Fidelity target (Keep ≥)”.")
 
 

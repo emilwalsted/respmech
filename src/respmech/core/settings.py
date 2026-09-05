@@ -199,10 +199,18 @@ class EmgSettings:
     ecg_reference_file: str | None = None
     outlier_rms_sd_limit: float = 0.0
     # EMG amplitude normalisation for the OUTPUT tables (P14): each file's RMS columns
-    # are also reported as a % of a per-file reference so amplitudes compare across
+    # are also reported as a % of a reference so amplitudes compare across
     # subjects/electrodes. "none" | "per_file_max" | "per_file_mean". This adds a
-    # normalised sheet to the output; it never changes the raw computed RMS.
+    # normalised sheet to the output; it never changes the raw computed RMS. By
+    # default the reference is each file's OWN max/mean breath, per column — which
+    # makes every file's peak reach 100% by construction and does NOT make amplitudes
+    # comparable across files/subjects (documented on the website, ticket 5.1/K-155/
+    # K-158). Set normalization_reference_file to a filename already in this batch
+    # (relative to input.folder, e.g. a maximal inspiratory/expiratory manoeuvre
+    # recorded once per subject) to normalise every file against THAT file's
+    # max/mean instead of its own — see core.summary.reference_values_for_batch.
     normalization: str = "per_file_max"
+    normalization_reference_file: str | None = None
     save_sound: bool = False
     plot_yscale: list[float] = field(default_factory=lambda: [-0.1, 0.1])
     # legacy filename-keyed noise-profile intervals (kept for migration):
