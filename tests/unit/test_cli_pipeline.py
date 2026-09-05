@@ -60,6 +60,25 @@ def test_cli_migrate_and_validate(tmp_path):
     assert cli_main(["validate", str(toml)]) == 0
 
 
+def test_examples_settings_toml_validates_and_dry_runs(capsys):
+    """K-046 (indholdsgennemgang respmech.dk, ticket 7.4): a CLI-only user had no
+    settings.toml to copy anywhere but a web page. examples/settings.toml ships in the
+    repository, already wired to the committed sample_recording.csv, so both commands the
+    manual tells a CLI user to run first actually work, unedited, from a fresh checkout."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.dirname(os.path.dirname(here))
+    example = os.path.join(repo_root, "examples", "settings.toml")
+    assert os.path.isfile(example)
+    assert cli_main(["validate", example]) == 0
+    out = capsys.readouterr().out
+    assert "matches 1 file(s)" in out
+    assert cli_main(["run", example, "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "dry-run" in out
+    example_output = os.path.join(repo_root, "examples", "output")
+    assert not os.path.isdir(example_output)   # a dry run never writes anything
+
+
 def test_cli_run_dry_run(tmp_path, capsys):
     # write a minimal TOML via migrate, then dry-run
     from respmech.settingsio.toml_io import save_toml

@@ -458,6 +458,117 @@ def test_save_as_writes_the_picked_file_and_a_failed_save_stays_dirty(qapp, tmp_
     win.close()
 
 
+def test_save_as_detaches_the_sample_from_its_temp_folder(qapp, tmp_path, monkeypatch):
+    """K-047 (indholdsgennemgang respmech.dk, ticket 7.3): the built-in sample's recording,
+    output and EMG noise-reference folders all live under the OS temp directory and vanish
+    on cleanup, so a saved-then-reopened sample analysis used to stop working once that
+    happened. 'Save as…' must copy the recording out and repoint every folder at the
+    destination's own directory, and the saved TOML must keep working after the ORIGINAL
+    temp folder is deleted."""
+    from PySide6.QtWidgets import QFileDialog
+    from respmech.ui.main_window import MainWindow
+    from respmech.settingsio.toml_io import load_toml
+    from respmech.core.pipeline import match_input_files
+    import shutil
+
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    assert sc.open_sample_analysis() is True
+    old_input = sc.state.settings.input.folder
+    assert os.path.isdir(old_input)
+
+    dest_dir = tmp_path / "saved"
+    dest_dir.mkdir()
+    picked = str(dest_dir / "analysis.toml")
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: (picked, "")))
+    assert sc.save_analysis_as() is True
+    assert sc.state.is_sample is False                    # save_toml already clears the flag
+
+    # the recording was copied alongside the saved file, in a subfolder of dest_dir
+    copied = dest_dir / "input" / "sample_recording.csv"
+    assert copied.is_file()
+
+    # the TOML on disk carries relative paths, not the old absolute temp ones
+    saved_text = (dest_dir / "analysis.toml").read_text()
+    assert old_input not in saved_text
+    assert 'folder = "input"' in saved_text
+
+    # delete the ORIGINAL temp folder entirely — the saved analysis must not depend on it
+    shutil.rmtree(old_input)
+    reloaded = load_toml(picked)
+    assert reloaded.input.folder == str(dest_dir / "input")
+    assert reloaded.output.folder == str(dest_dir / "output")
+    assert reloaded.processing.emg.noise.reference_folder == str(dest_dir / "input")
+    files = match_input_files(reloaded.input.folder, reloaded.input.files)
+    assert len(files) == 1
+    win.close()
+
+
+def test_save_as_repoints_carried_folder_tags_for_the_sample_too(qapp, tmp_path, monkeypatch):
+    """Self-review finding on 7.3: a breath excluded WHILE exploring the sample stamps an
+    ExcludeEntry.folder against the sample's temp input folder (same mechanism as any
+    other analysis — see core.settings.is_carried_folder). If 'Save as…' repointed
+    input.folder but left that entry's folder untouched, the exclusion made moments
+    earlier in the very same session would read as carried over from a DIFFERENT folder
+    the instant the saved analysis is reopened — and 'Clear' on that banner would then
+    silently drop a real, just-made exclusion."""
+    from PySide6.QtWidgets import QFileDialog
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import ExcludeEntry, BreathCountEntry
+    from respmech.settingsio.toml_io import load_toml
+
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    assert sc.open_sample_analysis() is True
+    old_input = sc.state.settings.input.folder
+    sc.state.settings.processing.exclude_breaths.append(
+        ExcludeEntry(file="sample_recording.csv", breaths=[2], folder=old_input))
+    sc.state.settings.processing.breath_counts.append(
+        BreathCountEntry(file="sample_recording.csv", count=9, folder=old_input))
+
+    dest_dir = tmp_path / "saved"; dest_dir.mkdir()
+    picked = str(dest_dir / "analysis.toml")
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: (picked, "")))
+    assert sc.save_analysis_as() is True
+
+    reloaded = load_toml(picked)
+    new_input = str(dest_dir / "input")
+    assert reloaded.processing.exclude_breaths[0].folder == new_input
+    assert reloaded.processing.breath_counts[0].folder == new_input
+    win.close()
+
+
+def test_save_as_warns_when_the_samples_temp_recording_is_already_gone(qapp, tmp_path, monkeypatch):
+    """Self-review finding on 7.3: if the OS already cleared the sample's temp folder
+    before 'Save as…' runs, silently writing an empty 'input' subfolder would reproduce
+    the exact 'matches 0 file(s)' failure this fix exists to prevent, one save later and
+    with no clue why. The user must be told, not left to discover it from a cryptic
+    validate/run error."""
+    import shutil
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    from respmech.ui.main_window import MainWindow
+
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    assert sc.open_sample_analysis() is True
+    shutil.rmtree(sc.state.settings.input.folder)          # the OS beat us to it
+
+    dest_dir = tmp_path / "saved"; dest_dir.mkdir()
+    picked = str(dest_dir / "analysis.toml")
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: (picked, "")))
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning",
+                        staticmethod(lambda *a, **k: warned.append(a) or QMessageBox.Ok))
+    assert sc.save_analysis_as() is True                    # still saves — just warns
+    assert len(warned) == 1
+    assert os.path.isdir(str(dest_dir / "input"))            # created, but left empty
+    assert not os.listdir(str(dest_dir / "input"))
+    win.close()
+
+
 def test_discard_guard_is_reentrant_safe_and_hides_save_when_unsavable(qapp, tmp_path, monkeypatch):
     """Two properties of the unsaved-changes guard that keep cocoa's modal sessions in
     order: a re-entrant call (Cmd+Q while another guard prompt is up) aborts the NEW
