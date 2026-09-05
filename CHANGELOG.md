@@ -157,7 +157,7 @@ identical output.
   disagrees is named rather than silently dropped. The channel dialog suggests roles from the
   file's own column headers and handles European comma decimals on its own
 - **Your choices follow the recordings folder, not the filename.** Breath exclusions,
-  breath-count overrides and the EMG noise reference are remembered per folder, so pointing the
+  breath-count overrides and the EMG rest reference are remembered per folder, so pointing the
   same analysis at a new subject who reuses a LabChart export name no longer inherits the
   previous subject's decisions — and anything carried over is flagged rather than applied quietly
 - **Errors explain themselves, and nothing overstates what happened.** Plain-language diagnoses
