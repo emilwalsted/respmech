@@ -299,6 +299,40 @@ def test_save_emg_flag_gates_emg_figures(tmp_path):
     assert written2 == []                                            # nothing when all off
 
 
+def test_write_batch_emits_a_warning_event_when_figures_are_skipped(tmp_path, monkeypatch):
+    """K-108: without respmech[plots] (or any other figure-layer failure) the run still
+    exits 0 and every workbook is written — the only trace used to be a FIGURES SKIPPED
+    section buried inside run-report.txt. write_batch must also emit an on-screen
+    'warning' progress event, the same one the CLI prints to stderr and the GUI's Run
+    screen logs (see cli/__main__.py's _progress_printer and run_screen.py's
+    _on_progress)."""
+    from respmech.core.pipeline import run_batch
+    from respmech.core.io import writers
+
+    s = synth_settings(tmp_path)
+    result = run_batch(s)
+    monkeypatch.setattr(
+        writers, "_write_figures",
+        lambda *a, **kw: ([], [("synth_case_A.csv/PV average", "No module named 'matplotlib'")]))
+    events = []
+    writers.write_batch(result, s, str(tmp_path), progress=events.append)
+    warnings = [e for e in events if e.kind == "warning"]
+    assert len(warnings) == 1
+    assert "1 diagnostic figure(s) skipped" in warnings[0].message
+    assert "No module named 'matplotlib'" in warnings[0].message
+
+
+def test_write_batch_emits_no_warning_event_when_all_figures_succeed(tmp_path):
+    from respmech.core.pipeline import run_batch
+    from respmech.core.io.writers import write_batch
+
+    s = synth_settings(tmp_path)
+    result = run_batch(s)
+    events = []
+    write_batch(result, s, str(tmp_path), progress=events.append)
+    assert not [e for e in events if e.kind == "warning"]
+
+
 # --------------------------------------------------------------------------- #
 # writer integration — additive, golden-safe
 # --------------------------------------------------------------------------- #
@@ -439,6 +473,157 @@ def test_run_report_accounts_for_excluded_and_failed(tmp_path):
     assert "1 processed, 1 failed" in report
     assert "3 breaths (1 excluded → 2 used)" in report
     assert "[FAIL] bad.csv   ERROR: boom while loading" in report
+
+
+def test_run_report_lists_unknown_settings_keys(tmp_path):
+    """K-113: a misspelled/renamed TOML key was collected in Settings.unknown but read
+    nowhere — not respmech validate, not run-report.txt, not the GUI. The run silently
+    used the default for whatever the typo meant to override."""
+    from respmech.core.io.writers import _write_run_report
+
+    result = SimpleNamespace(ok_files={}, failed_files={})
+    s = synth_settings(tmp_path)
+    s.unknown = {"processing.volume.corect_drift": False}
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "UNKNOWN SETTINGS KEYS" in report
+    assert "processing.volume.corect_drift = False" in report
+
+
+def test_run_report_omits_unknown_keys_section_when_none(tmp_path):
+    from respmech.core.io.writers import _write_run_report
+
+    result = SimpleNamespace(ok_files={}, failed_files={})
+    s = synth_settings(tmp_path)
+    assert s.unknown == {}
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    assert "UNKNOWN SETTINGS KEYS" not in open(path, encoding="utf-8").read()
+
+
+def test_run_report_processing_block_lists_overrides_exclusions_and_grouping(tmp_path):
+    """K-215: breath-count overrides and excluded breaths rescale bf/VE or change which
+    breaths are averaged — the file list already showed excluded->used COUNTS but not
+    the override or which breath numbers, so the report could read as contradicting the
+    workbook it describes. PTP baseline window, work-of-breathing source and cohort
+    grouping were the three other analysis-used.toml-only settings this block omitted."""
+    from respmech.core.settings import BreathCountEntry, ExcludeEntry
+    from respmech.core.io.writers import _write_run_report
+
+    result = SimpleNamespace(ok_files={}, failed_files={})
+    s = synth_settings(tmp_path)
+    s.processing.breath_counts = [BreathCountEntry(file="P02_rest.csv", count=11)]
+    s.processing.exclude_breaths = [ExcludeEntry(file="P01_rest.csv", breaths=[2, 3])]
+    s.processing.ptp.baseline_window_s = 0.08
+    s.processing.wob.calc_from = "individual"
+    s.output.group_regex = r"^(P\d+)"
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "Breath-count overrides:  P02_rest.csv = 11" in report
+    assert "Excluded breaths:        P01_rest.csv: 2, 3" in report
+    assert "PTP baseline window:     0.08 s" in report
+    assert "Work of breathing:       from individual breaths" in report
+    assert r"Cohort grouping:         ^(P\d+)" in report
+
+
+def test_run_report_processing_block_names_none_when_unset(tmp_path):
+    from respmech.core.io.writers import _write_run_report
+
+    result = SimpleNamespace(ok_files={}, failed_files={})
+    s = synth_settings(tmp_path)
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "Breath-count overrides:  none" in report
+    assert "Excluded breaths:        none" in report
+    assert "Cohort grouping:         leading filename token" in report
+
+
+def test_channel_label_defensive_fallbacks():
+    """K-214's channel_label() is called with dict values pulled straight out of a
+    diagnostics blob (ecg_auto_report/FileResult.ecg/noise_report) that this module does
+    not itself construct — it must survive an absent/non-numeric index and an index the
+    given emg_columns list does not actually cover, rather than crash a run report."""
+    from respmech.core.io.writers import channel_label
+
+    assert channel_label(1, [2, 3, 4]) == "channel index 1 (column 3)"
+    assert channel_label(None, [2, 3, 4]) == "None"           # not itself constructed here
+    assert channel_label(5, [2, 3, 4]) == "channel index 5"   # out of range -> bare index
+    assert channel_label(-1, [2, 3, 4]) == "channel index -1"
+    assert channel_label(1, []) == "channel index 1"          # no channel list at all
+
+
+def test_diagnostics_names_channel_index_and_column_together(tmp_path):
+    """K-214: DIAGNOSTICS numbered EMG channels by their 0-based index into
+    input.channels.emg (ECG auto-detect line, per-file ECG line, noise-reduction line),
+    while every workbook column (rms_col_<n>) and WAV filename (EMG col <n>) use the
+    1-based data-column number — so "channel 1" in the report and "EMG col 1" in the
+    workbook could name two different channels. Both numbers now print together."""
+    from respmech.core.io.writers import _write_run_report
+
+    s = synth_settings(tmp_path)   # EMG channels [2, 3, 4] (see _helpers.synth_legacy_dict)
+    ecg_auto_report = {"reference_file": "synth_case_A.csv", "detect_channel": 1,
+                       "_diagnostics": {"confidence": "high", "est_bpm": 72.0}}
+    fr = SimpleNamespace(ecg={"n_peaks": 35, "detect_channel": 1, "suppression": 0.91},
+                        notices=[], breaths=None)
+    result = SimpleNamespace(ok_files={"synth_case_A.csv": fr}, failed_files={},
+                             noise_report={"prop_decrease": 0.6, "fidelity_target": 0.8,
+                                          "channels": [{"channel": 0, "fidelity": 0.9,
+                                                       "delta_snr_db": 3.2}]},
+                             ecg_auto_report=ecg_auto_report)
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    # index 1 -> column 3 (the second entry of [2, 3, 4], 0-based); index 0 -> column 2
+    assert "channel index 1 (column 3)" in report
+    assert "channel index 0 (column 2)" in report
+    assert report.count("channel index 1 (column 3)") == 2   # ECG auto-detect AND per-file
+
+
+def test_diagnostics_carries_per_file_quality_notices(tmp_path):
+    """K-192/K-224: the ecg_auto_detect quality-check warning and the cardiac-gated
+    peak's NaN reason were only raised via warnings.warn (stderr an app user never
+    sees) — core.pipeline now also collects them on FileResult.notices, and the run
+    report must surface them."""
+    from respmech.core.io.writers import _write_run_report
+
+    s = synth_settings(tmp_path)
+    fr = SimpleNamespace(ecg=None, breaths=None, notices=[
+        "cardiac-gated peak EMG reported as NaN — only 2 R-peaks detected"])
+    result = SimpleNamespace(ok_files={"synth_case_A.csv": fr}, failed_files={},
+                             noise_report=None, ecg_auto_report=None)
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "Quality notices:" in report
+    assert "synth_case_A.csv: cardiac-gated peak EMG reported as NaN — only 2 R-peaks " \
+           "detected" in report
+
+
+def test_full_run_with_failures_marks_cohort_files_incomplete_in_report_and_workbooks(tmp_path):
+    """K-227: Average breathdata.xlsx/Cohort summary.xlsx are built ONLY from the files
+    that succeeded, silently, unless the run was ALSO a deliberate subset (which already
+    gets its own PARTIAL RUN line). A full run with real failures gets neither warning —
+    fixed by marking both the run report and each workbook's own Provenance sheet."""
+    from respmech.core.pipeline import run_batch, FileResult
+    from respmech.core.io.writers import write_batch
+
+    s = synth_settings(tmp_path)
+    result = run_batch(s)
+    assert result.failed_files == {}          # sanity: the synthetic batch is clean
+    # inject a synthetic failure alongside the real, successful files
+    result.files["bad.csv"] = FileResult(file="bad.csv", error="boom", error_kind="RuntimeError")
+    written = write_batch(result, s, str(tmp_path), when=datetime(2026, 7, 11, 14, 0, 0))
+    report = open(os.path.join(str(tmp_path), "run-report.txt"), encoding="utf-8").read()
+    assert "COHORT FILES INCOMPLETE" in report
+    assert "1 of 3 file(s) failed" in report
+    assert "bad.csv" in report
+
+    import openpyxl
+    for name in ("Average breathdata.xlsx", "Cohort summary.xlsx"):
+        path = os.path.join(str(tmp_path), "data", name)
+        assert path in written
+        wb = openpyxl.load_workbook(path)
+        prov = {row[0].value: row[1].value for row in wb["Provenance"].iter_rows()
+               if row[0].value is not None}
+        assert prov["INCOMPLETE"].startswith("1 of 3 file(s) failed")
+        assert "bad.csv" in prov["INCOMPLETE"]
 
 
 def test_write_batch_emits_reloadable_manifest(tmp_path):

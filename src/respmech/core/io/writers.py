@@ -97,7 +97,7 @@ def _units_df(columns, settings=None):
                          "Note": [note.get(c, "") for c in um.keys()]})
 
 
-def _provenance_rows(settings, when):
+def _provenance_rows(settings, when, incomplete_note: str | None = None):
     ts = (when or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
     ip = settings.input
     rows = [("RespMech version", __version__),
@@ -121,6 +121,12 @@ def _provenance_rows(settings, when):
         # added when entropy is actually computed (an empty channel list means it is not).
         ent = settings.processing.entropy
         rows.append(("Sample entropy", f"m = {ent.epochs - 1}, r = {ent.tolerance:g} × SD"))
+    # K-227: a cohort-level workbook (Average breathdata.xlsx, Cohort summary.xlsx) built
+    # while some files failed carries nothing else to say so — inserted first so it is
+    # the first thing a reader of the Provenance sheet sees, not buried after the routine
+    # rows.
+    if incomplete_note:
+        rows.insert(0, ("INCOMPLETE", incomplete_note))
     rows.append(("Settings snapshot", "analysis-used.toml"))
     return pd.DataFrame(rows, columns=["Key", "Value"])
 
@@ -148,7 +154,8 @@ def _autofit(writer):
             ws.column_dimensions[get_column_letter(col)].width = min(w + 2, 80)
 
 
-def _write_xlsx(df: pd.DataFrame, path: str, settings=None, when=None, extra_sheets=None):
+def _write_xlsx(df: pd.DataFrame, path: str, settings=None, when=None, extra_sheets=None,
+                incomplete_note: str | None = None):
     """Write a Data sheet plus Units, any extra sheets, Provenance and Version.
 
     Only the Data sheet content is load-bearing (the golden suite pins the DataFrame,
@@ -159,7 +166,8 @@ def _write_xlsx(df: pd.DataFrame, path: str, settings=None, when=None, extra_she
         for name, edf in (extra_sheets or {}).items():
             edf.to_excel(writer, sheet_name=name, index=False)
         if settings is not None:
-            _provenance_rows(settings, when).to_excel(writer, sheet_name="Provenance", index=False)
+            _provenance_rows(settings, when, incomplete_note=incomplete_note).to_excel(
+                writer, sheet_name="Provenance", index=False)
         _version_df().to_excel(writer, sheet_name="Version", index=False)
         _autofit(writer)
 
@@ -231,10 +239,21 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
 
     if settings.output.data.save_average and result.average_table is not None and cohort_outputs:
         _emit("writing average + cohort summary")
+        # K-227: Average breathdata.xlsx and Cohort summary.xlsx are built ONLY from the
+        # files that succeeded — silently, with nothing inside either workbook to say a
+        # file is missing — unless a batch this large enough to fail was ALSO restricted
+        # to a subset (cohort_outputs=False), which already gets its own PARTIAL RUN line
+        # below. A full run with failures gets none of that, so it is marked here instead.
+        incomplete_note = (
+            f"{len(result.failed_files)} of {len(result.ok_files) + len(result.failed_files)} file(s) failed and are "
+            f"excluded from this workbook: {', '.join(sorted(result.failed_files))}"
+            if result.failed_files else None)
         p = os.path.join(datadir, "Average breathdata.xlsx")
-        _write_xlsx(result.average_table, p, settings=settings, when=when)
+        _write_xlsx(result.average_table, p, settings=settings, when=when,
+                   incomplete_note=incomplete_note)
         written.append(p)
-        written += _write_cohort_summary(result, settings, datadir, when)   # P8/P15
+        written += _write_cohort_summary(result, settings, datadir, when,
+                                         incomplete_note=incomplete_note)   # P8/P15
 
     _emit("writing diagnostic figures (the slow step)")
     # Per-file figure callback — fires only when figures run in-process (a packaged build, or
@@ -245,6 +264,16 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
                                                progress=fig_progress,
                                                cohort_outputs=cohort_outputs)  # P11
     written += fig_written
+    # K-108: without respmech[plots] (or any other figure failure) the run still exits
+    # 0 and every workbook is written — the only trace used to be a FIGURES SKIPPED
+    # section buried inside run-report.txt. One on-screen warning now accompanies it;
+    # the run still completes either way (this is a warning, never a hard failure).
+    if fig_failures and progress is not None:
+        progress(ProgressEvent(
+            "warning",
+            message=f"{len(fig_failures)} diagnostic figure(s) skipped — see the "
+                    f"FIGURES SKIPPED section of run-report.txt (e.g. "
+                    f"{fig_failures[0][0]}: {fig_failures[0][1]})."))
 
     # provenance — always written for a full run, so a folder of results carries its own
     # recipe (P7). For a subset, the full run's provenance is protected instead (A05).
@@ -283,7 +312,8 @@ def write_planned(result, settings, plan, outputfolder: str | None = None,
 # --------------------------------------------------------------------------- #
 # cohort summary (P8/P15)
 # --------------------------------------------------------------------------- #
-def _write_cohort_summary(result, settings, datadir, when) -> list[str]:
+def _write_cohort_summary(result, settings, datadir, when,
+                          incomplete_note: str | None = None) -> list[str]:
     agg = build_cohort_summary(result, settings)
     summary = agg.get("summary")
     if summary is None or len(summary) == 0:
@@ -293,7 +323,8 @@ def _write_cohort_summary(result, settings, datadir, when) -> list[str]:
         summary.to_excel(writer, sheet_name="Summary", index=False)
         if agg.get("by_group") is not None:
             agg["by_group"].to_excel(writer, sheet_name="By group", index=False)
-        _provenance_rows(settings, when).to_excel(writer, sheet_name="Provenance", index=False)
+        _provenance_rows(settings, when, incomplete_note=incomplete_note).to_excel(
+            writer, sheet_name="Provenance", index=False)
         _version_df().to_excel(writer, sheet_name="Version", index=False)
     return [path]
 
@@ -395,6 +426,39 @@ def _yn(flag) -> str:
     return "yes" if flag else "no"
 
 
+def ecg_auto_detect_summary(ecg_auto_report, emg_columns) -> str:
+    """The one-sentence summary of an ecg_auto_detect run's derived settings, shared by
+    the CLI's own stdout print (cli/__main__.py's cmd_run) and this module's own
+    run-report.txt DIAGNOSTICS block, so the two can never again describe the same run
+    in different words (found in self-review: the CLI said "settings from", this module
+    said "settings derived from" — same dict, same run, two different sentences)."""
+    diag = ecg_auto_report.get("_diagnostics", {})
+    bpm = diag.get("est_bpm")
+    return (f"settings derived from {ecg_auto_report.get('reference_file')}, "
+           f"{channel_label(ecg_auto_report.get('detect_channel'), emg_columns)}, "
+           f"confidence {diag.get('confidence')}"
+           + (f" (~{bpm:.0f} bpm)" if bpm else "") + ".")
+
+
+def channel_label(idx, emg_columns) -> str:
+    """K-214/K-215: every DIAGNOSTICS line names an EMG channel by the SAME 0-based
+    index ``processing.emg.detect_channel``/``core.noise``'s ``enumerate()`` use into
+    ``input.channels.emg`` -- but every workbook column (``rms_col_<n>``) and WAV
+    filename (``EMG col <n>``) names the same channel by its 1-based data-column
+    number, so "channel 1" in this report and "EMG col 1" in the workbook are two
+    different channels. Print both: ``channel index <idx> (column <n>)``. Falls back
+    to the bare index if it is out of range for the channel list this report was
+    written with (should not happen for a completed run, but a defensive report must
+    never crash on it)."""
+    try:
+        idx = int(idx)
+    except (TypeError, ValueError):
+        return str(idx)
+    if emg_columns and 0 <= idx < len(emg_columns):
+        return f"channel index {idx} (column {emg_columns[idx]})"
+    return f"channel index {idx}"
+
+
 def _write_run_report(result, settings, outputfolder: str,
                       written: list[str], when: datetime | None,
                       fig_failures=None, cohort_outputs: bool = True,
@@ -413,6 +477,7 @@ def _write_run_report(result, settings, outputfolder: str,
     L.append(f"RespMech v{__version__} — run report")
     L.append(f"Generated: {ts}")
     L.append(f"Environment: {_environment_info()}")
+    ok, failed = result.ok_files, result.failed_files
     if not cohort_outputs:
         L.append("")
         cohort_bits = []
@@ -429,6 +494,17 @@ def _write_run_report(result, settings, outputfolder: str,
                      f"{named} {be} UNCHANGED by this run; run the full batch to update {pron}.")
         else:
             L.append("PARTIAL RUN — restricted to a subset of the study's files.")
+    elif failed and settings.output.data.save_average:
+        # K-227: a FULL run (not a deliberate subset) where at least one file failed
+        # still writes Average breathdata.xlsx/Cohort summary.xlsx from whichever files
+        # succeeded, with nothing inside either workbook to say one is missing — unlike
+        # the subset case above, which already gets its own PARTIAL RUN line. Same
+        # incomplete_note text as the one written into each workbook's Provenance sheet
+        # (write_batch), so a reader sees the same words wherever they look.
+        L.append("")
+        L.append(f"COHORT FILES INCOMPLETE — {len(failed)} of {len(ok) + len(failed)} file(s) "
+                 f"failed. Average breathdata.xlsx and Cohort summary.xlsx are built from "
+                 f"the files that succeeded only: {', '.join(sorted(failed))}.")
     L.append("")
     # A settings key this version reads differently from the one that wrote the analysis
     # changes the numbers below, so it is recorded at the TOP of every run it affected.
@@ -442,7 +518,6 @@ def _write_run_report(result, settings, outputfolder: str,
     L.append(f"  Sampling: {ip.format.sampling_frequency} Hz")
     L.append("")
 
-    ok, failed = result.ok_files, result.failed_files
     L.append(f"FILES ({len(ok)} processed, {len(failed)} failed)")
     for fname, fr in ok.items():
         total, excl = _breath_counts(fr)
@@ -473,28 +548,61 @@ def _write_run_report(result, settings, outputfolder: str,
     L.append(f"  ECG removal:             {_yn(emg.remove_ecg)}")
     L.append(f"  EMG noise removal:       {_yn(emg.noise.enabled)}")
     L.append(f"  EMG normalisation:       {emg.normalization}")
+    # K-215: the per-file settings that rescale bf/VE (breath_counts) or change which
+    # breaths are averaged (exclude_breaths) most directly, plus the three other
+    # analysis-used.toml-only settings the site's own listing of this block omits —
+    # named here so the file list above is never read as contradicting the workbooks.
+    bc = settings.processing.breath_counts
+    if bc:
+        L.append("  Breath-count overrides:  "
+                 + ", ".join(f"{e.file} = {e.count}" for e in bc))
+    else:
+        L.append("  Breath-count overrides:  none")
+    ex = [e for e in settings.processing.exclude_breaths if e.breaths]
+    if ex:
+        L.append("  Excluded breaths:        "
+                 + ", ".join(f"{e.file}: " + ", ".join(str(b) for b in e.breaths) for e in ex))
+    else:
+        L.append("  Excluded breaths:        none")
+    L.append(f"  PTP baseline window:     {settings.processing.ptp.baseline_window_s:g} s")
+    L.append(f"  Work of breathing:       from {_wob_mode_text(settings)}")
+    L.append(f"  Cohort grouping:         "
+             + (settings.output.group_regex or "leading filename token"))
     L.append("")
+
+    # K-113: a misspelled/renamed key is collected (never fatal — Settings.from_dict)
+    # but, before this, read nowhere: not respmech validate, not this report, not the
+    # GUI. The run already used the DEFAULT for whatever the typo meant to set, so this
+    # is the one place in the output that can still catch it.
+    if settings.unknown:
+        L.append("UNKNOWN SETTINGS KEYS (not recognised — the default was used instead)")
+        for key, val in settings.unknown.items():
+            L.append(f"  {key} = {val!r}")
+        L.append("")
 
     # ECG / noise numeric diagnostics (audit #14): persist the R-peak counts, suppression,
     # chosen prop_decrease and per-channel fidelity/ΔSNR — previously only shown in-app.
     nr = getattr(result, "noise_report", None)
     ecg_auto = getattr(result, "ecg_auto_report", None)
     ecg_files = [(f, fr.ecg) for f, fr in ok.items() if getattr(fr, "ecg", None)]
-    if nr or ecg_files or ecg_auto:
+    # K-192/K-224: per-file quality notices (ecg_auto_detect mismatch, cardiac-gated
+    # peak refused) — collected on FileResult.notices by core.pipeline, alongside the
+    # SAME text raised via warnings.warn, which reaches a stderr an app user never sees.
+    file_notices = [(f, n) for f, fr in ok.items() for n in getattr(fr, "notices", ()) or ()]
+    emg_cols = list(settings.input.channels.emg or [])
+    if nr or ecg_files or ecg_auto or file_notices:
         L.append("DIAGNOSTICS")
         if ecg_auto:
-            diag = ecg_auto.get("_diagnostics", {})
-            bpm = diag.get("est_bpm")
-            L.append(f"  ECG auto-detect: settings derived from {ecg_auto.get('reference_file')}, "
-                     f"channel {ecg_auto.get('detect_channel')}, confidence {diag.get('confidence')}"
-                     + (f" (~{bpm:.0f} bpm)" if bpm else "") + ". Check the per-file R-peak counts "
-                     "below against this file count for any file the shared settings may not fit.")
+            L.append(f"  ECG auto-detect: {ecg_auto_detect_summary(ecg_auto, emg_cols)} Check "
+                     "the per-file R-peak counts below against this file count for any file "
+                     "the shared settings may not fit.")
         if ecg_files:
             L.append("  ECG removal (R-peaks captured / peak-window RMS suppression):")
             for f, d in ecg_files:
                 supp = d.get("suppression", float("nan"))
                 supp_s = f"{supp:.0%}" if supp == supp else "n/a"
-                L.append(f"    {f}: {d.get('n_peaks', 0)} peaks (channel {d.get('detect_channel')}), "
+                L.append(f"    {f}: {d.get('n_peaks', 0)} peaks "
+                         f"({channel_label(d.get('detect_channel'), emg_cols)}), "
                          f"suppression {supp_s}")
         if nr:
             L.append(f"  Noise reduction: prop_decrease {nr.get('prop_decrease')} "
@@ -502,7 +610,12 @@ def _write_run_report(result, settings, outputfolder: str,
             for ch in nr.get("channels", []):
                 fid, dsnr = ch.get("fidelity"), ch.get("delta_snr_db")
                 if fid is not None and dsnr is not None:
-                    L.append(f"    channel {ch.get('channel')}: fidelity {fid:.3f}, ΔSNR {dsnr:+.1f} dB")
+                    L.append(f"    {channel_label(ch.get('channel'), emg_cols)}: "
+                             f"fidelity {fid:.3f}, ΔSNR {dsnr:+.1f} dB")
+        if file_notices:
+            L.append("  Quality notices:")
+            for f, n in file_notices:
+                L.append(f"    {f}: {n}")
         L.append("")
 
     report_name = "run-report.txt"

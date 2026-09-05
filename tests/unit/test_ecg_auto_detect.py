@@ -264,3 +264,8 @@ def test_auto_detect_warns_per_file_when_shared_settings_do_not_fit(tmp_path):
     with pytest.warns(UserWarning, match="quality check failed|no R-peaks"):
         result = run_batch(settings)
     assert not result.failed_files, result.failed_files
+    # K-192: warnings.warn alone reaches a stderr an app user never sees — the SAME text
+    # must also land on the offending file's FileResult.notices, which is what lets
+    # core.io.writers._write_run_report put it where it is actually readable.
+    all_notices = [n for fr in result.ok_files.values() for n in fr.notices]
+    assert any("quality check failed" in n or "no R-peaks" in n for n in all_notices)
