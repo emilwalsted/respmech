@@ -101,3 +101,19 @@ def test_align_helper_is_safe_and_fixed_width(qapp):
     assert abs(p.getAxis("left").width() - theme.PLOT_AXIS_WIDTH) <= 1   # pinned to the fixed width
     theme.align_left_axis(None)                              # never raises on a bad arg
     p.close()
+
+
+def test_scitaxis_label_returns_after_a_panel_shrinks_then_grows_back(qapp):
+    """A SciAxis label that hid itself because a panel got too short to hold "name + unit"
+    (regression: found in this ticket's own self-review) must come back once the panel is
+    tall enough again — the same panel can shrink and grow repeatedly as a splitter is
+    dragged, and a permanently blank axis after one such round-trip is a real, user-visible
+    defect, not a one-off cosmetic glitch."""
+    from respmech.ui.screens.preview._plot_helpers import SciAxis
+    ax = SciAxis(orientation="left")
+    ax.set_channel_label("Oesophageal pressure", "cmH2O")
+    assert ax.label.isVisible()
+    ax.resize(20, 30)                                          # too short for any wording
+    assert not ax.label.isVisible()
+    ax.resize(20, 400)                                         # grown back — plenty of room
+    assert ax.label.isVisible(), "label must reappear once the panel is tall enough again"
