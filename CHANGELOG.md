@@ -138,12 +138,12 @@ only the action itself is ever blocked, and always with a full-sentence reason n
 Nothing in the analysis changed: a settings file run before and after this release produces
 identical output.
 
-<!-- changelog-skip 820169e D17 self-review follow-up: honest button state and partial-clear reporting in Run & results. Its user-visible effect IS in this entry, under "nothing overstates what happened" — this release's entry is deliberately high-level for a UI overhaul, so the individual review passes behind a bullet are not itemised -->
-<!-- changelog-skip c629537 D19 self-review follow-up (and a D18 regression it surfaced) in the run/cohort output path. Same reason as 820169e: covered by the "nothing overstates what happened" bullet, not itemised in a deliberately high-level entry -->
-<!-- changelog-skip bfe68a8 maintainer-only doc/screenshot regeneration script, no app behaviour changed -->
-<!-- changelog-skip f2c0a46 internal refactor: preview_screen.py split into a package, no behaviour change -->
-<!-- changelog-skip 2e6f9e9 review-pass hardening of the durability fix already described in the memory bullet; no separate user-visible behaviour -->
-<!-- changelog-skip 7bbe097 self-review polish of D25's error handling; the user-visible wording behaviour is already described in the errors bullet -->
+<!-- changelog-skip 163a542 D17 self-review follow-up: honest button state and partial-clear reporting in Run & results. Its user-visible effect IS in this entry, under "nothing overstates what happened" — this release's entry is deliberately high-level for a UI overhaul, so the individual review passes behind a bullet are not itemised -->
+<!-- changelog-skip be8ae93 D19 self-review follow-up (and a D18 regression it surfaced) in the run/cohort output path. Same reason as 163a542: covered by the "nothing overstates what happened" bullet, not itemised in a deliberately high-level entry -->
+<!-- changelog-skip ca14414 maintainer-only doc/screenshot regeneration script, no app behaviour changed -->
+<!-- changelog-skip 7da2f1f internal refactor: preview_screen.py split into a package, no behaviour change -->
+<!-- changelog-skip 39c8e1f review-pass hardening of the durability fix already described in the memory bullet; no separate user-visible behaviour -->
+<!-- changelog-skip 8dce581 self-review polish of D25's error handling; the user-visible wording behaviour is already described in the errors bullet -->
 
 - **Two tabs, not three.** *Setup* and *Preview & QC*, with *Run & results* folded into a
   drawer under a shared, searchable file list that opens itself when a run starts. Every screen
@@ -176,6 +176,12 @@ identical output.
 - **Fixes found while testing this release:** the noise-reduction tab's row of controls no
   longer resizes and reshuffles itself without settling, and a test run with both Remove ECG and
   auto-detect switched on no longer stops with a settings error
+- **A few labels changed to match what they actually do:** the Setup tab's blocking message is
+  now "Setup incomplete" (was "Settings incomplete"), the noise tab's bare "Auto" checkbox is
+  "Auto strength", the ECG tab's "Auto (whole batch)" is "Auto-detect for the batch", and the
+  mechanics "Breath-separation buffer" is "Breath-separation debounce" — same field, same
+  behaviour, just a name that no longer misdescribes it. An older screenshot or note naming the
+  old label is talking about the same control
 
 ## v2.3.4 — 2026-08-03
 
