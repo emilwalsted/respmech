@@ -677,7 +677,7 @@ def peek_columns(settings: Settings, file_path: str):
     format read-out and the QC strip can re-probe a whole folder on every input edit
     without the multi-second cost a full pandas read would add for a hundred recordings.
 
-    Delegates straight to ``probe_data_columns`` for .xlsx/.xls/.mat, where a byte-peek is
+    Delegates straight to ``probe_data_columns`` for .xlsx/.mat, where a byte-peek is
     meaningless (an .xlsx is a zip archive of XML, not delimited text — sniffing its raw
     bytes previously misreported it as "1 columns, whitespace-separated"). Honours the same
     delimiter selection as ``probe_data_columns``/``load_raw_matrix`` (';' for a
@@ -800,7 +800,7 @@ def probe_sampling_frequency(settings: Settings, file_path: str):
     60,000-row file. NEVER uses ``load_raw_matrix``, which reads every column of the whole
     file (21.7 ms/file for a single column alone).
 
-    Returns ``None`` for .mat (no comparable cheap column-0 read) or .xlsx/.xls, or when the
+    Returns ``None`` for .mat (no comparable cheap column-0 read) or .xlsx, or when the
     column does not look like regular time-in-seconds — see :func:`detect_sampling_frequency`,
     which this delegates the actual inference to. The 5000-row cap only bounds the COST for a
     delimited-text engine (pandas' C CSV parser stops reading once ``nrows`` is satisfied);

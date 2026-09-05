@@ -18,7 +18,8 @@ Nothing else to install — the bundle carries its own Python and dependencies.
 
 ## Python package (PyPI)
 
-Requires Python **3.11+**.
+Requires Python **3.11+**. The desktop installers above are built only for macOS and
+Windows; on Linux, install the Python package below.
 
 ```bash
 pip install respmech               # CLI + core analysis engine
