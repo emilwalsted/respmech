@@ -304,6 +304,31 @@ def test_provenance_names_the_wob_source(tmp_path):
     assert rows["Work of breathing"] == "individual breaths"
 
 
+def test_provenance_and_run_report_record_the_environment(tmp_path):
+    """A SciPy point release alone can move the Simpson-integrated WOB/PTP/EMG columns
+    (see 'Changes from RespMech 1.x' in the manual), so a reader comparing an old
+    result folder against a new run needs the library versions, not just the RespMech
+    version. Both provenance surfaces (the Provenance sheet and run-report.txt) must
+    carry an Environment line naming Python, numpy, scipy and pandas."""
+    import re
+    from respmech.core.io.writers import _environment_info, _provenance_rows, _write_run_report
+
+    env = _environment_info()
+    assert re.match(r"Python \d+\.\d+", env)
+    assert "numpy " in env and "scipy " in env and "pandas " in env
+    assert "librosa " in env   # either an installed version or "not installed"
+
+    s = synth_settings(tmp_path)
+    rows = dict(_provenance_rows(s, datetime(2026, 7, 11)).values)
+    assert rows["Environment"] == env
+
+    from types import SimpleNamespace as _NS
+    result = _NS(ok_files={}, failed_files={})
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert f"Environment: {env}" in report
+
+
 # ---------------------------------------------------------------------------
 # Run report + reloadable manifest (P7); sample data (P23) — waves 2, 6
 # ---------------------------------------------------------------------------
