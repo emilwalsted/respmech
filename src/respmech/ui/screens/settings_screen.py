@@ -910,7 +910,7 @@ class SettingsScreen(QWidget):
         if ext == ".csv":
             dec = getattr(self.state.settings.input.format, "decimal", ".") or "."
             return "semicolon-separated" if dec == "," else "comma-separated"
-        if ext in (".xls", ".xlsx"):
+        if ext == ".xlsx":
             return "Excel"
         if ext == ".mat":
             return "MATLAB"
