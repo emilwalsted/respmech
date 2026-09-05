@@ -22,6 +22,39 @@ pyEntropy routine's licence is correctly stated as Apache-2.0 (it was mislabelle
 in a code comment); README's two entropy references have been corrected to their
 verified PubMed listings (author names were previously garbled).
 
+**The spectral noise-reduction reconstruction is now amplitude-neutral.** The STFT
+round-trip used to reconstruct a bin's magnitude and phase additively instead of
+scaling one complex number (masked magnitude × sign of the real part, plus the
+unmasked imaginary part), so the "fidelity" metric (fraction of in-band EMG power
+retained) routinely drifted above its documented ceiling of 1.0 — by roughly 30-40%
+even at `prop_decrease = 0`, i.e. noise reduction inflated the signal it was meant to
+leave untouched. The reconstruction is corrected to scale magnitude while keeping the
+original phase exactly; at `prop_decrease = 0` the result is now numerically
+unchanged, and fidelity can no longer exceed 1 (aside from float round-off). Every
+noise-reduced EMG number changes as a result — re-run any analysis that used noise
+reduction if you need numbers comparable with an analysis from before this change.
+
+**`respmech.core.emg.remove_ecg`'s R-wave detector now matches Auto-suggest and can
+detect an inverted R-wave.** The detector used to run on the raw EMG channel while
+Auto-suggest derives `ecg_min_height` from a median-subtracted copy, so a channel
+with any DC offset made a suggested height wrong for what the detector actually saw;
+and only positive-going peaks were ever found, so a channel whose R-wave is inverted
+could not be used for ECG removal at all. Both are fixed: detection now runs on the
+same median-removed signal Auto-suggest uses, and both polarities are searched (a
+biphasic complex is still counted once — the taller lobe wins). This can move the
+detected peak set, and therefore the ECG-removed EMG, for an existing analysis.
+
+**A shared cross-file EMG-amplitude reference (`processing.emg.normalization_reference_file`).**
+The existing "% of peak/mean breath" normalisation (`processing.emg.normalization`)
+reports each file's RMS relative to that SAME file's own maximum or mean, which makes
+every file's own peak reach 100% by construction and does not, on its own, make
+amplitudes comparable across files or subjects — the manual's wording has been
+corrected to say so plainly. Setting `normalization_reference_file` to another file
+already in the batch (typically a maximal inspiratory/expiratory manoeuvre recorded
+once per subject) normalises every file's RMS against THAT file's own max/mean
+instead, so a percentage now means the same thing across the whole study. Off by
+default; existing analyses are unaffected until the field is set.
+
 <!--
 "Unreleased" above is a hand-maintained draft of the next release's entry. It is
 updated ONLY when explicitly asked to (not automatically on every commit), and it

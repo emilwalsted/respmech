@@ -149,6 +149,59 @@ def test_emg_normalization_modes():
     assert list(bt["rms_max"]) == [2.0, 4.0, 8.0]        # raw table untouched
 
 
+def test_emg_normalization_cross_file_reference(tmp_path):
+    """Ticket 5.1 / K-155, K-158: by default every file's own peak breath reaches
+    100%, which does NOT make amplitudes comparable across files (each file's
+    reference is different). ``reference_values_for_batch`` reads a shared reference
+    (a maximal-manoeuvre file) from the batch's own results and applies it to every
+    file, so a smaller file's peak now correctly reads below 100%."""
+    from respmech.core.summary import normalize_emg_table, reference_values_for_batch
+
+    manoeuvre = pd.DataFrame({"breath_no": [1], "rms_max": [10.0]})
+    subject_a = pd.DataFrame({"breath_no": [1, 2], "rms_max": [2.0, 5.0]})
+    result = SimpleNamespace(ok_files={
+        "manoeuvre.csv": SimpleNamespace(breaths_table=manoeuvre),
+        "subject_a.csv": SimpleNamespace(breaths_table=subject_a),
+    })
+    settings = SimpleNamespace(processing=SimpleNamespace(emg=SimpleNamespace(
+        normalization="per_file_max", normalization_reference_file="manoeuvre.csv")))
+
+    ref = reference_values_for_batch(result, settings)
+    assert ref == {"rms_max": 10.0}
+
+    nt = normalize_emg_table(subject_a, settings, reference_values=ref)
+    assert list(nt["rms_max_pct"]) == pytest.approx([20.0, 50.0])   # % of the SHARED reference
+
+    # the manoeuvre file itself, normalised against its own value, is unaffected (still 100%)
+    nt_ref = normalize_emg_table(manoeuvre, settings, reference_values=ref)
+    assert list(nt_ref["rms_max_pct"]) == pytest.approx([100.0])
+
+    # no reference_values passed -> unchanged per-file default (backward compatible)
+    nt_default = normalize_emg_table(subject_a, settings)
+    assert list(nt_default["rms_max_pct"]) == pytest.approx([40.0, 100.0])
+
+
+def test_emg_normalization_reference_file_falls_back_when_absent():
+    """A typo'd or excluded reference filename must not crash a run — normalisation
+    silently falls back to the per-file default (documented, not a fault)."""
+    from respmech.core.summary import reference_values_for_batch
+
+    result = SimpleNamespace(ok_files={
+        "subject_a.csv": SimpleNamespace(breaths_table=pd.DataFrame({"rms_max": [2.0]})),
+    })
+    settings = SimpleNamespace(processing=SimpleNamespace(emg=SimpleNamespace(
+        normalization="per_file_max", normalization_reference_file="missing.csv")))
+    assert reference_values_for_batch(result, settings) is None
+
+    settings_off = SimpleNamespace(processing=SimpleNamespace(emg=SimpleNamespace(
+        normalization="none", normalization_reference_file="subject_a.csv")))
+    assert reference_values_for_batch(result, settings_off) is None
+
+    settings_unset = SimpleNamespace(processing=SimpleNamespace(emg=SimpleNamespace(
+        normalization="per_file_max", normalization_reference_file=None)))
+    assert reference_values_for_batch(result, settings_unset) is None
+
+
 # --------------------------------------------------------------------------- #
 # P11 — diagnostic figures
 # --------------------------------------------------------------------------- #
@@ -265,6 +318,43 @@ def test_write_batch_adds_units_provenance_summary_without_touching_data(tmp_pat
     data_cols = [c.value for c in next(wb["Data"].iter_rows(max_row=1))]
     assert data_cols == raw_cols
     assert os.path.isfile(os.path.join(tmp_path, "data", "Cohort summary.xlsx"))
+
+
+def test_write_batch_normalizes_against_a_shared_reference_file(tmp_path):
+    """Ticket 5.1 / K-155, K-158, end to end: with normalization_reference_file set to
+    another file in the SAME batch, every file's 'EMG normalised' sheet is a % of that
+    file's own reference, not each file's own peak — so a file whose peak never
+    reaches the reference file's peak now reads below 100%, unlike the per-file
+    default (which trivially puts every file's own peak at 100%)."""
+    import openpyxl
+    from respmech.core.pipeline import run_batch
+    from respmech.core.io.writers import write_batch
+
+    s = synth_settings(tmp_path)
+    s.processing.emg.normalization = "per_file_max"
+    s.processing.emg.normalization_reference_file = "synth_case_A.csv"
+    result = run_batch(s)
+    write_batch(result, s, str(tmp_path), when=datetime(2026, 7, 11))
+
+    def _pct_col(fname):
+        wb = openpyxl.load_workbook(os.path.join(tmp_path, "data", f"{fname}.breathdata.xlsx"))
+        ws = wb["EMG normalised"]
+        header = [c.value for c in next(ws.iter_rows(max_row=1))]
+        col = next(i for i, h in enumerate(header) if str(h).endswith("_pct"))
+        return [row[col] for row in ws.iter_rows(min_row=2, values_only=True)]
+
+    pct_a = _pct_col("synth_case_A.csv")             # the reference file itself
+    pct_b = _pct_col("synth_case_B.csv")
+    assert max(pct_a) == pytest.approx(100.0)         # reference file's own peak is still 100%
+    assert max(pct_b) != pytest.approx(100.0)         # B's peak need not equal A's shared reference
+
+    # sanity check against the per-file default: turn the shared reference off and
+    # confirm B's own peak DOES reach 100% again (proves the two runs differ).
+    s.processing.emg.normalization_reference_file = None
+    result_default = run_batch(s)
+    write_batch(result_default, s, str(tmp_path), when=datetime(2026, 7, 11))
+    pct_b_default = _pct_col("synth_case_B.csv")
+    assert max(pct_b_default) == pytest.approx(100.0)
 
 
 def test_provenance_names_sample_entropy_only_when_it_is_computed(tmp_path):

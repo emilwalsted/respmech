@@ -28,7 +28,7 @@ import pandas as pd
 
 from respmech import __version__
 from respmech.core import quantities as _units
-from respmech.core.summary import build_cohort_summary, normalize_emg_table
+from respmech.core.summary import build_cohort_summary, normalize_emg_table, reference_values_for_batch
 
 _CREATED = f"Created with RespMech v{__version__} (github.com/emilwalsted/respmech)"
 
@@ -211,10 +211,11 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
 
     if settings.output.data.save_breath_by_breath:
         _emit("writing breath-by-breath data")
+        ref_values = reference_values_for_batch(result, settings)   # ticket 5.1 (None -> per-file default)
         for fname, fr in result.ok_files.items():
             p = os.path.join(datadir, f"{fname}.breathdata.xlsx")
             extra = {}
-            norm = normalize_emg_table(fr.breaths_table, settings)   # P14
+            norm = normalize_emg_table(fr.breaths_table, settings, reference_values=ref_values)   # P14
             if norm is not None and len(norm):
                 extra["EMG normalised"] = norm
             _write_xlsx(fr.breaths_table, p, settings=settings, when=when, extra_sheets=extra)

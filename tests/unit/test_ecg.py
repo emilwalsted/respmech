@@ -12,12 +12,13 @@ def _ecg_spike(w):
     return np.exp(-(t ** 2) / 0.02) * np.sin(2 * np.pi * 1.5 * t)
 
 
-def _make_signal(fs=2000, dur=12.0, hr_period=1.0, n_ch=3, seed=0, amp=1.0):
+def _make_signal(fs=2000, dur=12.0, hr_period=1.0, n_ch=3, seed=0, amp=1.0,
+                 invert=False, dc_offset=0.0):
     rng = np.random.default_rng(seed)
     n = int(dur * fs)
-    emg = rng.normal(0, 0.05, (n, n_ch))          # baseline EMG-like noise
+    emg = rng.normal(0, 0.05, (n, n_ch)) + dc_offset   # baseline EMG-like noise
     w = int(0.06 * fs)
-    spike = _ecg_spike(w) * amp
+    spike = _ecg_spike(w) * amp * (-1.0 if invert else 1.0)
     peaks = []
     p = int(0.5 * fs)
     while p + w < n:
@@ -36,6 +37,37 @@ def test_peak_window_rms_helper():
     r = E.peak_window_rms(x, peaks, fs, halfwidth_s=0.04)
     assert r > 0
     assert np.isnan(E.peak_window_rms(x, np.array([], dtype=int), fs))
+
+
+def test_merge_peaks_by_distance():
+    """Direct unit test for the NMS helper behind remove_ecg's dual-polarity search
+    (ticket 5.7 / K-191): a competing pair closer than min_distance keeps only the
+    taller peak, well-separated peaks from both polarities all survive, an empty
+    polarity is a no-op, and an exact-height tie keeps the positive-polarity peak
+    (argsort is called with kind='stable' precisely so this is guaranteed, not
+    incidental)."""
+    from respmech.core.emg import _merge_peaks_by_distance
+
+    # empty polarities are a no-op
+    assert list(_merge_peaks_by_distance(np.array([10, 500]), np.array([1.0, 2.0]),
+                                         np.array([], dtype=int), np.array([]), 50)) == [10, 500]
+    assert list(_merge_peaks_by_distance(np.array([], dtype=int), np.array([]),
+                                         np.array([10, 500]), np.array([1.0, 2.0]), 50)) == [10, 500]
+
+    # a close competing pair: only the taller survives
+    merged = _merge_peaks_by_distance(np.array([100]), np.array([1.0]),
+                                      np.array([120]), np.array([2.0]), 50)
+    assert list(merged) == [120]
+
+    # well-separated peaks from both polarities all survive
+    merged = _merge_peaks_by_distance(np.array([100, 1000]), np.array([1.0, 1.0]),
+                                      np.array([500, 1500]), np.array([1.0, 1.0]), 50)
+    assert list(merged) == [100, 500, 1000, 1500]
+
+    # exact tie -> positive-polarity peak wins (stable sort keeps the earlier entry)
+    merged = _merge_peaks_by_distance(np.array([100]), np.array([1.0]),
+                                      np.array([110]), np.array([1.0]), 50)
+    assert list(merged) == [100]
 
 
 def test_ecg_removal_suppresses_contamination():
@@ -63,6 +95,38 @@ def test_detection_is_deterministic_and_param_driven():
     # A higher threshold detects fewer/equal peaks (parameter actually drives it).
     _p3, _w3, peaks3 = E.remove_ecg(emg.copy(), emg[:, 0], **{**kw, "ecgminheight": 5.0})
     assert len(peaks3) <= len(peaks1)
+
+
+def test_inverted_r_wave_is_detected_too():
+    """Ticket 5.7 / K-191: the detector used to find positive peaks only (find_peaks'
+    height= convention), so a channel whose R-wave is inverted (negative-going) could
+    not be used for detection at all. It must now find the beats regardless of
+    polarity, and count the same as the upright case on the same recording."""
+    kw = dict(samplingfrequency=2000, ecgminheight=0.2, ecgmindistance=0.5,
+              ecgminwidth=0.001, windowsize=0.4)
+    up, true_peaks, fs = _make_signal(seed=2, invert=False)
+    down, _tp2, _fs2 = _make_signal(seed=2, invert=True)
+    _pu, _wu, peaks_up = E.remove_ecg(up.copy(), up[:, 0], **kw)
+    _pd, _wd, peaks_down = E.remove_ecg(down.copy(), down[:, 0], **kw)
+    assert len(peaks_down) == len(peaks_up) == len(true_peaks)
+    # detected instants line up between the two polarities (same underlying beats;
+    # the exact sample can jitter a bit since the added noise differs by sign too)
+    assert np.allclose(np.sort(peaks_up), np.sort(peaks_down), atol=15.0 / fs)
+
+
+def test_detection_matches_dc_removed_signal_like_auto_suggest():
+    """Ticket 5.7 / K-191: remove_ecg used to run find_peaks on the raw channel while
+    suggest_ecg_settings derives ecgminheight from a median-subtracted copy, so a
+    channel with a DC offset made a suggested height wrong for what remove_ecg
+    actually saw. Detection must now be identical regardless of a constant DC offset
+    added to the channel (median-removal cancels it exactly)."""
+    kw = dict(samplingfrequency=2000, ecgminheight=0.2, ecgmindistance=0.5,
+              ecgminwidth=0.001, windowsize=0.4)
+    plain, _tp, fs = _make_signal(seed=4, dc_offset=0.0)
+    offset, _tp2, _fs2 = _make_signal(seed=4, dc_offset=3.7)
+    _p1, _w1, peaks_plain = E.remove_ecg(plain.copy(), plain[:, 0], **kw)
+    _p2, _w2, peaks_offset = E.remove_ecg(offset.copy(), offset[:, 0], **kw)
+    assert np.array_equal(peaks_plain, peaks_offset)
 
 
 @pytest.mark.parametrize("import_ok", [True])
