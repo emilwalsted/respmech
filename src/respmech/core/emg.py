@@ -275,7 +275,9 @@ def _merge_peaks_by_distance(pos, pos_h, neg, neg_h, min_distance):
     idx = np.concatenate([pos, neg])
     h = np.concatenate([pos_h, neg_h])
     keep = np.ones(idx.size, dtype=bool)
-    for oi in np.argsort(-h):              # tallest first
+    for oi in np.argsort(-h, kind="stable"):   # tallest first; stable so an exact tie
+                                                # keeps the earlier (positive-polarity) entry
+
         if not keep[oi]:
             continue
         close = (np.abs(idx - idx[oi]) < min_distance) & keep
@@ -453,10 +455,14 @@ def suggest_ecg_settings(emg_matrix, fs, *, hr_min_bpm=40.0, hr_max_bpm=180.0, m
 
     Picks the channel whose R-waves are clearest — most periodic *and* towering over the
     baseline — then derives ``find_peaks`` parameters (as ``remove_ecg`` consumes them) that
-    capture those R-peaks and, as far as possible, only those. R-detection is on the
-    DC-removed *positive* signal, matching ``remove_ecg``'s detector, so a suggestion is
-    always directly usable. Returns a dict of the 5 settings fields plus a ``_diagnostics``
-    entry (per-channel score, estimated bpm, confidence 'high'/'low').
+    capture those R-peaks and, as far as possible, only those. R-detection here is on the
+    DC-removed *positive* signal only (channel-scoring shortcut, not a detector); this is a
+    SUBSET of what ``remove_ecg`` itself now detects, which also DC-removes but additionally
+    searches the negative polarity for an inverted R-wave (ticket 5.7 / K-191) — so a
+    suggestion derived here is always directly usable by ``remove_ecg``, but a channel whose
+    R-wave is inverted may still score low here even though ``remove_ecg`` could detect it.
+    Returns a dict of the 5 settings fields plus a ``_diagnostics`` entry (per-channel score,
+    estimated bpm, confidence 'high'/'low').
 
     On ambiguous data (no clear ECG, too few beats, a single/flat channel) it falls back to
     the MIDDLE channel (``nch // 2`` — typically the weakest-EMG, clearest-ECG electrode) with
@@ -503,7 +509,7 @@ def suggest_ecg_settings(emg_matrix, fs, *, hr_min_bpm=40.0, hr_max_bpm=180.0, m
             if not finite.all():          # interpolate the few gaps
                 idx = np.arange(n)
                 col = np.interp(idx, idx[finite], col[finite])
-            xr = col - np.median(col)      # DC-removed; positive peaks (matches remove_ecg)
+            xr = col - np.median(col)      # DC-removed; positive peaks only (scoring shortcut)
             if np.std(xr) <= 0:
                 continue
             xb = signal.sosfiltfilt(band_sos, xr) if band_sos is not None else xr
