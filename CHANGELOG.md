@@ -5,8 +5,25 @@ Dates are the release (tag) date. See [Releasing](docs/RELEASING.md) for how a
 release is cut, and the [GitHub releases](https://github.com/emilwalsted/respmech/releases)
 for the installers themselves.
 
+## Unreleased
+
+**Sample entropy's default `Template length (m + 1)` has changed from 2 to 3.** The
+previous default of 2 reported a sample entropy computed at m = 1, not the m = 2 that is
+the near-universal convention in the sample-entropy literature (Richman & Moorman 2000;
+Yentes et al. 2013) — an established discrepancy between what the field calls "the
+default" and what RespMech actually computed. Any analysis that leaves this field
+unset now reports a different sample entropy value than before. Set the field to 2 if
+you need to reproduce entropy values from an analysis run before this change; every
+other Setup field, and every other measurement, is unaffected. The Tolerance (r), × SD
+field's description was also expanded to state the literature's published interval
+(0.1-0.25 × SD, 0.2 × SD the most common) and its source, and both the manual and the
+app's own tooltips now agree on what m the current default corresponds to. The bundled
+pyEntropy routine's licence is correctly stated as Apache-2.0 (it was mislabelled MIT
+in a code comment); README's two entropy references have been corrected to their
+verified PubMed listings (author names were previously garbled).
+
 <!--
-"Unreleased" below is a hand-maintained draft of the next release's entry. It is
+"Unreleased" above is a hand-maintained draft of the next release's entry. It is
 updated ONLY when explicitly asked to (not automatically on every commit), and it
 describes everything since the last tag. When a version is tagged, fold these
 bullets into that release's own dated entry as step 1 of docs/RELEASING.md, then

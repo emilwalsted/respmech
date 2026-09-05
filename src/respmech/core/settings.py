@@ -215,7 +215,12 @@ class EmgSettings:
 
 @dataclass
 class EntropySettings:
-    epochs: int = 2
+    # `epochs` is the template length passed to the vendored pyEntropy routine, i.e. m + 1
+    # (see core/entropy.py's docstring). Changed 2 -> 3 (05-09-2026, content review): the
+    # previous default of 2 reported m = 1, not the m = 2 that is the near-universal
+    # convention in the sample-entropy literature (Richman & Moorman 2000; Yentes et al.
+    # 2013). Set 2 to reproduce the m = 1 values RespMech reported before this change.
+    epochs: int = 3
     tolerance: float = 0.1
 
 

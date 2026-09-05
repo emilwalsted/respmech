@@ -248,9 +248,14 @@ breath's value is the **maximum** window RMS over the breath. Integrated EMG =
 ±25 ms centred window — behaviour documented as-implemented.
 
 ### 5.9 Sample entropy — `entropy.sample_entropy()`
-Standard SampEn (Chebyshev norm): template length `m = entropy_epochs`, tolerance
-`r = entropy_tolerance · SD(channel)`; result `SampEn = −ln(A/B)`. Computed per
-channel per breath (whole breath, inspiration, expiration), reduced to max/min/mean
+Standard SampEn (Chebyshev norm). `entropy_epochs` is passed to the vendored routine as
+the LONGEST template length, i.e. `entropy_epochs = m + 1`; the reported statistic is the
+last element of the returned vector, SampEn(m = entropy_epochs − 1). With the default
+`entropy_epochs = 3` this is m = 2, the value conventional in the sample-entropy
+literature (set 2 for the m = 1 RespMech reported before this default changed,
+05-09-2026). Tolerance `r = entropy_tolerance · SD`, where SD is the standard deviation of
+that entropy column within the analysed segment, recomputed for each segment (whole
+breath, inspiration, expiration); result `SampEn = −ln(A/B)`, reduced to max/min/mean
 across channels. Vendored pyEntropy implementation.
 
 ### 5.10 EMG signal conditioning (optional)

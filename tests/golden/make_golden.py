@@ -94,6 +94,11 @@ def base_settings(outputfolder):
                 "save_sound": False,
                 "emgplotyscale": [-0.1, 0.1],
             },
+            # Pinned explicitly, independent of EntropySettings.epochs' live GUI default
+            # (settings.py) -- this scenario characterises v1's fixed config, not "whatever
+            # the app currently defaults to". Changing the GUI default (2 -> 3, 05-09-2026
+            # content review) does NOT require regenerating this golden reference, and was
+            # verified not to (tests/golden/test_golden.py stayed 4/4 green before and after).
             "entropy": {
                 "entropy_epochs": 2,
                 "entropy_tolerance": 0.1,

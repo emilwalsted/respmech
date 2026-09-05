@@ -161,16 +161,21 @@ Sample Entropy is calculated per breath for the selected channels and averaged l
 measurements, in Setup's "Sample entropy" card (shown once a channel is assigned to Entropy in
 the channel picker). The two settings there are named after what they literally are, not after
 the neighbouring textbook parameter: **Template length (m + 1)** is one more than the embedding
-dimension *m* used in the sample-entropy literature — the app's default of 2 gives *m* = 1, and
-3 gives the *m* = 2 that is conventional there. **Tolerance (r), × SD** is a multiple of the
-per-column standard deviation, not an absolute tolerance — the app's default of 0.1 means
-0.1 × SD, and 0.2 × SD is the common literature value. A read-out under the two fields states
-the resulting *m* and *r* in those terms, and the same wording is recorded in each output
-workbook's Provenance sheet whenever entropy is actually computed.
+dimension *m* used in the sample-entropy literature — the app's default of 3 gives *m* = 2, the
+value conventional there (set 2 for the *m* = 1 RespMech reported before this default changed).
+**Tolerance (r), × SD** is a multiple of the per-column standard deviation, not an absolute
+tolerance — published values are typically 0.1-0.25 × SD, with 0.2 × SD the most widely used
+default (Richman & Moorman, *Am J Physiol Heart Circ Physiol* 2000;278:H2039-49; Yentes et al.,
+*Ann Biomed Eng* 2013;41:349-65); RespMech defaults to the lower end, 0.1 × SD. A read-out under
+the two fields states the resulting *m* and *r* in those terms, and the same wording is recorded
+in each output workbook's Provenance sheet whenever entropy is actually computed. Because both
+*m* and *r* affect the value, and *r* is rescaled per segment against that segment's own standard
+deviation, entropy values are only comparable across files and channels that share a sampling
+frequency (and resampling setting) and the same *m* and *r*.
 
-_<a name="sampenref1">1</a>) Lozano-García M, Leonardo, Moxham J, Rafferty F., Torres A, Jolley CJ, Jané R. Assessment of Inspiratory Muscle Activation using Surface Diaphragm Mechanomyography and Crural Diaphragm Electromyography. doi:10.1109/EMBC.2018.8513046._
+_<a name="sampenref1">1</a>) Lozano-García M, Sarlabous L, Moxham J, Rafferty GF, Torres A, Jolley CJ, Jané R. Assessment of inspiratory muscle activation using surface diaphragm mechanomyography and crural diaphragm electromyography. Annu Int Conf IEEE Eng Med Biol Soc. 2018;2018:3342-3345. doi:10.1109/EMBC.2018.8513046._
 
-_<a name="sampenref2">2</a>) Aboy M, David, Austin D, Pau. Characterization of Sample Entropy in the Context of Biomedical Signal Analysis. 2007. doi:10.1109/IEMBS.2007.4353701._
+_<a name="sampenref2">2</a>) Aboy M, Cuesta-Frau D, Austin D, Micó-Tormos P. Characterization of sample entropy in the context of biomedical signal analysis. Annu Int Conf IEEE Eng Med Biol Soc. 2007;2007:5943-5946. doi:10.1109/IEMBS.2007.4353701._
 
 ---
 

@@ -209,21 +209,26 @@ class SettingsScreen(QWidget):
         self.ent_epochs = QSpinBox(); self.ent_epochs.setRange(1, 100)
         # D11 (UI-overhaul): labelled/explained as what the FIELD actually is, not what the
         # literature calls the neighbouring parameter it is one more than. core/entropy.py's
-        # own docstring says "sample_length is equal to m + 1" and sets M = sample_length - 1
-        # — the stored value (default 2) has always meant m = 1, never the "2 by convention"
-        # the old label/tooltip implied. The VALUE is unchanged; only the words about it are.
+        # own docstring says "sample_length is equal to m + 1" and sets M = sample_length - 1.
+        # Content review, 05-09-2026: the default itself changed 2 -> 3 (core/settings.py's
+        # EntropySettings.epochs), because the old default of 2 reported m = 1, not the m = 2
+        # that is the near-universal literature convention. The tooltip below now names the
+        # new default and tells a user how to recover the old value.
         self._row(fent, "Template length (m + 1)", self.ent_epochs, "processing.entropy.epochs",
                   "Template length for sample entropy, one more than the embedding "
-                  "dimension. The default 2 gives m = 1; set 3 for the m = 2 that is "
-                  "conventional in the literature.")
+                  "dimension. The default 3 gives m = 2, which is conventional in the "
+                  "literature; set 2 for the m = 1 RespMech used before this change.")
         self.ent_tol = QDoubleSpinBox(); self.ent_tol.setRange(0.0, 10.0)
         self.ent_tol.setDecimals(4); self.ent_tol.setSingleStep(0.05)
         # Same fix: core/compute.py multiplies this by each column's own np.std, so the
         # actual tolerance is value x SD, which neither the old label nor tooltip said.
+        # Content review, 05-09-2026: names the published interval, not just a single
+        # "common" value, so this agrees with README/the manual rather than being a
+        # narrower, uncited claim next to them.
         self._row(fent, "Tolerance (r), × SD", self.ent_tol, "processing.entropy.tolerance",
                   "Matching tolerance r, as a multiple of the per-column standard "
-                  "deviation (0.1 × SD by default; 0.2 × SD is the common literature "
-                  "value).")
+                  "deviation. Published values are typically 0.1-0.25 × SD, with 0.2 × "
+                  "SD the most common; RespMech defaults to 0.1 × SD.")
         _enthint = QLabel("Computed on the columns ticked as Entropy in the channel picker.")
         _enthint.setWordWrap(True); _enthint.setProperty("status", "muted")
         fent.addRow("", _enthint)
