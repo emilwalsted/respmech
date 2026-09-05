@@ -2017,6 +2017,63 @@ class SettingsScreen(QWidget):
         prefs.save_rig(self.state.settings)          # P25 remember the rig
         return True
 
+    def _detach_sample_from_temp(self, dest_path):
+        """K-047 (indholdsgennemgang respmech.dk, ticket 7.3): the built-in sample's
+        recording, output and EMG noise-reference folders all live under the OS temp
+        directory (``open_sample_analysis``/``core.sample``), which the OS may clear at
+        any time. A plain 'Save as…' used to copy those absolute temp paths verbatim into
+        the saved file, so the saved analysis stopped working the moment the temp folder
+        was cleared: ``validate`` reported 'matches 0 file(s)' and a run failed with 'No
+        input files found'.
+
+        Copies the recording out of the temp input folder into an ``input`` subfolder next
+        to the destination file, and repoints ``input.folder``/``output.folder``, the EMG
+        noise reference folder, and any exclude-breaths/breath-count entry that named the
+        same temp folder — the carried-folder tags this screen elsewhere compares against
+        the live ``input.folder`` (``core.settings.is_carried_folder``) would otherwise
+        still point at the OLD temp folder while ``input.folder`` itself moved, making a
+        breath excluded moments earlier during this same sample session falsely read as
+        "carried over from a different folder" the instant the analysis is reopened.
+        ``AppState.save_toml`` -> ``settingsio.toml_io`` already relativizes any
+        input/output folder that ends up living at/under the file's own directory, so
+        nothing here needs to compute a relative path itself — it only needs to move the
+        folders somewhere ``save_toml`` will recognise as portable. Runs before the model
+        is written, so the very first save already lands with a working, portable
+        analysis rather than needing a second pass.
+
+        If the temp recording is already gone (the OS cleared it before this save), the
+        copy is a no-op and the user is warned explicitly — silently writing an empty
+        ``input`` folder would reproduce the exact "matches 0 file(s)" failure this method
+        exists to prevent, just one save later and with no clue why."""
+        import shutil  # noqa: PLC0415
+        s = self.state.settings
+        old_input = s.input.folder
+        dest_dir = os.path.dirname(os.path.abspath(dest_path)) or "."
+        new_input = os.path.join(dest_dir, "input")
+        os.makedirs(new_input, exist_ok=True)
+        copied_any = False
+        if old_input and os.path.isdir(old_input):
+            for name in os.listdir(old_input):
+                src = os.path.join(old_input, name)
+                if os.path.isfile(src):
+                    shutil.copy2(src, os.path.join(new_input, name))
+                    copied_any = True
+        if not copied_any:
+            QMessageBox.warning(
+                self, "Save analysis",
+                "The sample's temporary recording could not be found — the operating "
+                "system may already have cleared it. The analysis will be saved, but "
+                "it has no matching input file yet; point Setup at a real recordings "
+                "folder before running it.")
+        noise = s.processing.emg.noise
+        if noise.reference_folder == old_input:
+            noise.reference_folder = new_input
+        for entry in (*s.processing.exclude_breaths, *s.processing.breath_counts):
+            if entry.folder == old_input:
+                entry.folder = new_input
+        s.input.folder = new_input
+        s.output.folder = os.path.join(dest_dir, "output")
+
     def save_analysis(self, confirm_overwrite=True):
         """Analysis > 'Save': overwrite the analysis file that was opened. Confirms first —
         this replaces a file the user may share with collaborators, and the menu item sits
@@ -2048,7 +2105,8 @@ class SettingsScreen(QWidget):
         than the currently-open file — 'Duplicate for another recordings folder…' uses it
         to suggest the SAME analysis filename inside the NEW recordings folder, since the
         currently-open path is the template being duplicated, not where the duplicate
-        belongs. Returns True iff saved."""
+        belongs. Saving the built-in sample (K-047) first detaches it from the OS temp
+        folder — see ``_detach_sample_from_temp``. Returns True iff saved."""
         from respmech.ui import prefs  # noqa: PLC0415
         self.to_state()
         blocker = self._save_blocker()
@@ -2059,6 +2117,8 @@ class SettingsScreen(QWidget):
         p, _ = QFileDialog.getSaveFileName(self, "Save analysis as", start, TOML_FILTER)
         if not p:
             return False
+        if getattr(self.state, "is_sample", False):
+            self._detach_sample_from_temp(p)
         return self._write_analysis(p)
 
     def duplicate_for_another_folder(self):

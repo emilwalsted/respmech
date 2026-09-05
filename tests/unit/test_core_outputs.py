@@ -794,6 +794,23 @@ def test_sample_recording_is_analysable(tmp_path):
     assert len([b for b in fr.breaths.values() if not b["ignored"]]) >= 4   # real breaths detected
 
 
+def test_build_sample_settings_uses_the_documented_buffer_default(tmp_path):
+    """K-030 (indholdsgennemgang respmech.dk, ticket 7.1): the sample used to run on
+    segmentation.buffer = 200 while every Default field and screenshot on the site says
+    800, with nothing explaining why. The value was never load-bearing for this recording
+    (200/800/1600 all detect the same 9 breaths — see the comment in build_sample_settings),
+    so it is now left at the schema default instead of silently diverging from it."""
+    from respmech.core.sample import write_sample_recording, build_sample_settings
+    from respmech.core.settings import Settings
+    from respmech.core.pipeline import run_batch
+    desc = write_sample_recording(str(tmp_path / "input"))
+    s = build_sample_settings(desc, str(tmp_path / "output"))
+    assert s.processing.segmentation.buffer == Settings().processing.segmentation.buffer == 800
+    result = run_batch(s)
+    fr = next(iter(result.ok_files.values()))
+    assert len([b for b in fr.breaths.values() if not b["ignored"]]) == 9
+
+
 def test_output_pdfs_are_always_light(monkeypatch):
     """An output figure is a document that leaves the app, not a view of it. The GUI's dark
     theme installs its colours into GLOBAL matplotlib rcParams, which core.plots would
