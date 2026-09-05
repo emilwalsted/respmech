@@ -8,10 +8,13 @@ hook — _update_emg_tab_visibility, which runs on every settings change — wou
 analysis's remove_ecg from true to false the moment it was opened, and persist that on the
 next Save: a change to computed output the user never made.
 
-The ECG dependency is the opposite: not a hard requirement (the core will denoise a raw
-signal quite happily) but a scientific one. Noise reduction runs on whatever the ECG stage
-produced and its reference clip is ECG-cleaned, so with the heartbeat still present the
-profile models a large periodic artefact as steady background noise.
+The ECG dependency started as a scientific requirement enforced only in the GUI (not a
+hard requirement — the core denoised a raw signal quite happily): noise reduction runs on
+whatever the ECG stage produced and its reference clip is ECG-cleaned, so with the
+heartbeat still present the profile models a large periodic artefact as steady background
+noise. K-225/ticket 6.4 (05-09-2026, Emil's explicit decision) promoted it to a hard
+requirement enforced in Settings.validate() too, accepting that this breaks any existing
+analysis file that already combined the two flags (see CHANGELOG.md).
 """
 import pytest
 
@@ -96,35 +99,64 @@ def test_the_noise_controls_are_inert_until_ecg_removal_is_on(qapp, tmp_path):
 def test_they_come_alive_the_moment_ecg_removal_is_switched_on(qapp, tmp_path):
     """Regression: the gate lives one strip away from the checkbox that drives it, and
     _on_ecg_param_changed did not refresh enablement — so the controls stayed greyed out
-    immediately after the user had done the thing the tooltip asked for."""
+    immediately after the user had done the thing the tooltip asked for.
+
+    K-225/ticket 6.4: noise.enabled=True with remove_ecg=False is now an invalid pair that
+    gets repaired at construction (see test_loading_an_analysis_with_stuck_noise_reduction_
+    repairs_it_and_announces in test_ecg_tab.py), so this can no longer start from
+    ``_preview(..., ecg=False)``'s noise=True fixture with the checkbox pre-ticked in the
+    model — that combination is corrected away before this test ever sees it. Reconstructed
+    from a VALID starting point instead (noise off, ECG removal off) and drives noise on
+    through the actual checkbox once it is enabled, which is the only way a real user could
+    ever reach it now that noise_enabled itself is gated on ecg_on (screen.py's
+    self.noise_enabled.setEnabled(has_emg and ecg_on))."""
     pv = _preview(qapp, tmp_path, ecg=False)
+    assert pv.state.settings.processing.emg.noise.enabled is False, "repaired at construction"
     assert not pv.btn_set_noise.isEnabled()
+    assert not pv.noise_enabled.isEnabled()
     pv.remove_ecg.setChecked(True)              # the real user gesture, on the ECG strip
     qapp.processEvents()
     assert pv.btn_set_noise.isEnabled(), "still disabled after Remove ECG was turned on"
-    assert pv.noise_opts.isEnabled()
     assert pv.btn_set_noise.toolTip() == "", "the stale explanation was left behind"
+    assert pv.noise_enabled.isEnabled(), "the checkbox itself must unlock too"
+    pv.noise_enabled.setChecked(True)           # now reachable — tick it, like a real user would
+    qapp.processEvents()
+    assert pv.noise_opts.isEnabled()
     pv.shutdown()
 
 
 def test_the_status_line_says_why_rather_than_only_the_tooltip(qapp, tmp_path):
-    """A disabled control with the reason hidden behind a hover is not much of a reason."""
-    from respmech.ui.screens.preview_screen import NEEDS_ECG_HINT
+    """A disabled control with the reason hidden behind a hover is not much of a reason.
+
+    K-225/ticket 6.4: the starting fixture (noise.enabled=True, remove_ecg=False) is now an
+    invalid pair the construction path repairs away (see _emg_noise.py's _load_noise_params),
+    so NEEDS_ECG_HINT's status-line branch (screen.py: 'if has_emg and noise_on and not
+    ecg_on') can no longer fire from it — noise_on is False by the time _update_actions next
+    runs. The repair's own announcement takes over the same job: telling the user, on the
+    status line rather than only in a tooltip, why the control they expected to see enabled
+    is not."""
     pv = _preview(qapp, tmp_path, ecg=False)
-    assert NEEDS_ECG_HINT in pv.status.text()
+    qapp.processEvents()          # lets the constructor's deferred _announce_noise_repair fire
+    assert "Remove ECG" in pv.status.text()
+    assert "noise reduction" in pv.status.text().lower()
     pv.shutdown()
 
 
-def test_the_gate_is_ui_policy_and_not_a_core_block(qapp, tmp_path):
-    """The core denoises a raw signal without complaint — it gates only on noise.enabled and
-    the presence of EMG channels. Pinning that keeps the UI rule honest about what it is: a
-    scientific guard rail, not a technical impossibility."""
+def test_the_gate_is_now_a_core_block_too(qapp, tmp_path):
+    """K-225/ticket 6.4 (05-09-2026, Emil's explicit decision): this used to pin the OPPOSITE
+    behaviour ("the gate is UI policy and not a core block") — the core denoised a raw signal
+    without complaint, gating only on noise.enabled and the presence of EMG channels, so a
+    hand-written or migrated settings.toml with remove_ecg=False and noise.enabled=True ran
+    the profile against a signal that still contained heartbeats. Settings.validate() now
+    enforces the SAME requirement the GUI's activation gate always has (screen.py's
+    noise_enabled.setEnabled(has_emg and ecg_on)). BREAKING: rejects any existing analysis
+    file that already combined the two flags (flagged in CHANGELOG.md)."""
     from respmech.core.pipeline import run_batch
+    from respmech.core.settings import SettingsError
     s = synth_settings(str(tmp_path), noise=True, data_out=_OUT)
     s.processing.emg.remove_ecg = False          # noise on, ECG removal off
-    result = run_batch(s)
-    assert result.failed_files == {}, result.failed_files
-    assert result.ok_files
+    with pytest.raises(SettingsError, match="remove_ecg"):
+        run_batch(s)
 
 
 # -- one writer for the noise reference ------------------------------------------

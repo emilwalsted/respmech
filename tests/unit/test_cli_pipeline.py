@@ -71,3 +71,88 @@ def test_cli_run_dry_run(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "dry-run" in out
     assert not os.path.exists(os.path.join(tmp_path, "data"))  # nothing written
+
+
+def test_cli_run_dry_run_shows_the_output_plan(tmp_path, capsys):
+    """K-108/A06: a CLI dry run used to print only per-file breath counts, a different
+    (smaller) promise than the GUI's Dry run, which shows core.io.plan.plan_outputs'
+    full ceiling (data/, diagnostics/, provenance). Both now build the SAME plan."""
+    from respmech.settingsio.toml_io import save_toml
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+    rc = cli_main(["run", str(toml), "--dry-run"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Output plan:" in out
+    assert "Run report and analysis snapshot" in out   # a Plan group every run always has
+    assert "Total:" in out
+    assert str(tmp_path) in out
+
+
+def test_cli_run_wrote_message_names_the_output_root(tmp_path, capsys):
+    """K-278: '... to <output>/data' undercounted what a run actually writes —
+    diagnostics/ figures and the two root-level provenance files are all part of the
+    count too (a 65-file run measured only 8 of them under data/)."""
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    toml = tmp_path / "s.toml"
+    from respmech.settingsio.toml_io import save_toml
+    save_toml(settings, toml)
+    rc = cli_main(["run", str(toml)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert f"Wrote " in out and f"file(s) to {tmp_path}" in out
+    assert f"to {tmp_path}/data" not in out
+
+
+def test_cli_validate_reports_unknown_keys(tmp_path, capsys):
+    """K-113: a misspelled key was collected in Settings.unknown but read nowhere —
+    respmech validate must report it (and fail, so a script that checks the exit code
+    also catches it)."""
+    from respmech.settingsio.toml_io import save_toml
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+    # append an unrecognised key by hand, under a brand-new table (a TOML file can only
+    # declare a given table once, and save_toml already wrote [processing.volume])
+    with open(toml, "a", encoding="utf-8") as f:
+        f.write("\n[processing.made_up_section]\ncorect_drift = false\n")
+    rc = cli_main(["validate", str(toml)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "unrecognised setting" in err
+    assert "processing.made_up_section" in err
+    assert "corect_drift" in err
+
+
+def test_cli_validate_probes_the_output_folder(tmp_path, capsys, monkeypatch):
+    """K-098: the same real write probe the GUI's Dry run already performs
+    (core.io.plan.probe_write_folder) — never os.access, unreliable against Windows
+    ACLs — so a read-only or missing output folder is caught here instead of after an
+    entire batch has been computed. Monkeypatched rather than chmod'd (a real
+    permission-bit test is unreliable under root, which ignores them — see
+    test_gui_hardening.py's own os.access skip-guard for the same probe)."""
+    from respmech.settingsio.toml_io import save_toml
+    from respmech.core.io import plan as plan_mod
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+    monkeypatch.setattr(plan_mod, "probe_write_folder",
+                        lambda folder: plan_mod.WriteProbe(False, "disk full"))
+    rc = cli_main(["validate", str(toml)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "not writable" in err
+    assert "disk full" in err
+
+
+def test_cli_validate_accepts_a_writable_output_folder(tmp_path, capsys):
+    """The probe itself is real (not monkeypatched here): an ordinary, writable tmp_path
+    output folder must not be flagged."""
+    from respmech.settingsio.toml_io import save_toml
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+    rc = cli_main(["validate", str(toml)])
+    assert rc == 0
+    assert "not writable" not in capsys.readouterr().err

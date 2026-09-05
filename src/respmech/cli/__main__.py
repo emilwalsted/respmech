@@ -28,6 +28,12 @@ def _progress_printer():
             print(f"\r  done ({ev.message})")
         elif ev.kind == "file_error":
             print(f"\r  ERROR: {ev.message}")
+        elif ev.kind == "warning":
+            # K-108: without respmech[plots], write_batch's figure step degrades to a
+            # silent skip (exit 0, every workbook still written) — this is the only
+            # place a terminal user sees it as it happens, alongside the FIGURES
+            # SKIPPED section write_batch always leaves in run-report.txt.
+            print(f"\nWARNING: {ev.message}", file=sys.stderr)
         elif ev.kind == "finished":
             print(f"\n{ev.message}")
     return cb
@@ -36,25 +42,41 @@ def _progress_printer():
 def cmd_run(args) -> int:
     from respmech.settingsio.toml_io import load_toml
     from respmech.core.pipeline import run_batch
-    from respmech.core.io.writers import write_batch
+    from respmech.core.io.writers import ecg_auto_detect_summary, write_batch
 
     settings = load_toml(args.settings)
     settings.validate()
     result = run_batch(settings, progress=_progress_printer())
+    emg_cols = list(settings.input.channels.emg or [])
 
     if result.ecg_auto_report:
-        d = result.ecg_auto_report
-        diag = d.get("_diagnostics", {})
-        bpm = diag.get("est_bpm")
-        print(f"\nECG auto-detect: settings from {d.get('reference_file')}, channel "
-              f"{d.get('detect_channel')}, confidence {diag.get('confidence')}"
-              + (f" (~{bpm:.0f} bpm)" if bpm else "") + ".")
+        # Shared with run-report.txt's DIAGNOSTICS block (writers.ecg_auto_detect_summary)
+        # so the two can never again describe the same run in different words.
+        print(f"\nECG auto-detect: {ecg_auto_detect_summary(result.ecg_auto_report, emg_cols)}")
 
     if not args.dry_run:
-        written = write_batch(result, settings, settings.output.folder)
-        print(f"\nWrote {len(written)} file(s) to {settings.output.folder}/data")
+        written = write_batch(result, settings, settings.output.folder,
+                              progress=_progress_printer())
+        # K-278: the old "... to <output>/data" undercounted what a run actually
+        # writes — diagnostics/ figures, WAV exports and the two root-level provenance
+        # files are all part of `written` too (a 65-file run measured only 8 of them
+        # under data/). Name the output root a real run writes into instead.
+        print(f"\nWrote {len(written)} file(s) to {settings.output.folder}")
     else:
-        print("\n[dry-run] computation complete; no files written.")
+        # K-108/A06: the same ceiling `core.io.plan.plan_outputs` builds for the GUI's
+        # Dry run, over `result.files` (ok AND failed — a plan never depends on which
+        # files happened to succeed, see the module docstring), so a CLI dry run stops
+        # promising a different set of outputs than the app does.
+        from respmech.core.io.plan import plan_outputs
+        plan = plan_outputs(settings, list(result.files), cohort_outputs=True)
+        print("\n[dry-run] computation complete; no files written. Output plan:")
+        for g in plan.groups:
+            cap = "up to " if g.is_cap else ""
+            target = g.target or "(folder root)"
+            print(f"  {g.category}: {cap}{g.count} file(s) in {target}")
+        total_cap = "up to " if plan.is_cap else ""
+        print(f"  Total: {total_cap}{plan.total_count} file(s) in {settings.output.folder}")
+        print()
         for fname, fr in result.ok_files.items():
             n = 0 if fr.breaths_table is None else len(fr.breaths_table)
             print(f"  {fname}: {n} breaths")
@@ -84,6 +106,7 @@ def cmd_validate(args) -> int:
     import os
     from respmech.settingsio.toml_io import load_toml
     from respmech.core.pipeline import match_input_files
+    from respmech.core.io.plan import probe_write_folder
 
     settings = load_toml(args.settings)
     settings.validate()
@@ -92,10 +115,31 @@ def cmd_validate(args) -> int:
     # what `respmech run` will process (case-insensitive; safe against folder metacharacters).
     files = match_input_files(settings.input.folder, settings.input.files)
     print(f"Settings valid. Input pattern '{pattern}' matches {len(files)} file(s).")
+    ok = True
     if not files:
         print("WARNING: no input files match.", file=sys.stderr)
-        return 1
-    return 0
+        ok = False
+    # K-113: Settings.unknown is collected by from_dict but was never read anywhere —
+    # a misspelled key silently ran on the default it was meant to override, with no
+    # warning from validate, the run, or run-report.txt. Report it here so the site's
+    # promise ("skim the validate output ... to catch this") is actually true.
+    if settings.unknown:
+        print(f"WARNING: {len(settings.unknown)} unrecognised setting(s) — the default "
+              "was used instead of the value below:", file=sys.stderr)
+        for key, val in settings.unknown.items():
+            print(f"  {key} = {val!r}", file=sys.stderr)
+        ok = False
+    # K-098: a real write probe (never os.access, unreliable against Windows ACLs — see
+    # core.io.plan.probe_write_folder's own docstring), the same one the GUI's Dry run
+    # already performs, so a read-only or missing output folder is caught here instead
+    # of after an entire batch has been computed. This gives `validate` a side effect
+    # (it creates, and then removes, the output folder if it does not exist yet) —
+    # accepted deliberately (Emil, 05-09-2026) for the earlier, cheaper failure.
+    probe = probe_write_folder(settings.output.folder)
+    if not probe.ok:
+        print(f"WARNING: output folder is not writable: {probe.message}", file=sys.stderr)
+        ok = False
+    return 0 if ok else 1
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -87,7 +87,11 @@ def build_breath_table(file, breaths, settings):
             f"No breaths to build a result table from in {file} — every detected breath "
             f"is excluded, or none was detected.")
 
-    if settings.processing.emg.outlierrmssdlimit > 0:
+    # K-204: outlier_rms_sd_limit filters EMG RMS outliers (rms_max/poes_mininsp), so
+    # without EMG channels there is no rms_max column to filter — processoutliers would
+    # KeyError on it. A study-wide setting left on for an analysis that happens to have
+    # no EMG channels must not fail every file; it simply has nothing to do here.
+    if settings.processing.emg.outlierrmssdlimit > 0 and len(emgcols) > 0:
         mechs = processoutliers(mechs, settings)
 
     ret = pd.DataFrame(mechs.mean()).T

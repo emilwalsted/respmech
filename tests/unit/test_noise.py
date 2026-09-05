@@ -150,12 +150,16 @@ def test_identical_transformation_regardless_of_batch_subset():
                            "columns_emg": [2, 3, 4], "columns_entropy": []}},
         "processing": {"mechanics": {"breathseparationbuffer": 200, "separateby": "flow",
                                      "avgresamplingobs": 300},
-                       "emg": {"remove_ecg": False, "remove_noise": True,
+                       "emg": {"remove_ecg": True, "remove_noise": True,
                                "noise_profile": [["synth_case_B.csv", "synth_case_A.csv", []]]}},
         "output": {"outputfolder": "/tmp/rm_noise_test",
                    "data": {"saveaveragedata": False, "savebreathbybreathdata": True}},
     }
     s, _ = migrate_dict(legacy)
+    # K-225/ticket 6.4: Settings.validate() now requires remove_ecg when noise reduction is
+    # enabled (see test_emg_processing_defaults.py); unrelated to what THIS test actually
+    # checks (batch-subset-independence of the noise transformation itself), so both sides
+    # of the full-vs-single comparison below are affected identically.
     s.processing.emg.noise.enabled = True
     s.processing.emg.noise.reference_file = "synth_case_A.csv"
     s.processing.emg.noise.use_expiration = False

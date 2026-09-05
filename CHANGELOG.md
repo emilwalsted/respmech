@@ -7,6 +7,67 @@ for the installers themselves.
 
 ## Unreleased
 
+**The CLI now validates several things only the desktop app used to catch, closing
+gaps between what the two run.**
+
+- **`processing.emg.noise.enabled` now requires `processing.emg.remove_ecg` to also be
+  on — enforced in `Settings.validate()`, not just as a GUI activation gate.** A
+  hand-written or migrated `settings.toml` that combined the two used to run the noise
+  profile against a signal that still contained heartbeats, modelling the cardiac
+  artefact as steady background noise. **This is a breaking change**: an existing
+  analysis file with `noise.enabled = true` and `remove_ecg = false` now fails
+  `respmech validate`/`respmech run` with a `SettingsError` naming both keys. Turn ECG
+  removal on first to keep running it.
+- `processing.emg.detect_channel` (a 0-based index into `input.channels.emg`) is now
+  rejected by `Settings.validate()` when it is out of range, instead of crashing the
+  batch mid-run with a raw `IndexError`.
+- A misspelled or renamed TOML key is no longer silently ignored: `respmech validate`
+  and the new `UNKNOWN SETTINGS KEYS` section of `run-report.txt` both name it,
+  alongside the default that was used instead.
+- `respmech validate` now also probes that the output folder is actually writable (the
+  same real write-and-remove check the desktop app's Dry run performs — never
+  `os.access`, which is unreliable against Windows ACLs), so a read-only or missing
+  output folder is caught before an entire batch has been computed rather than after.
+- `respmech run --dry-run` now prints the same output plan (`core.io.plan.plan_outputs`)
+  the desktop app's Dry run shows — every output group and its file count under
+  `data/`, `diagnostics/` and the provenance files — instead of only per-file breath
+  counts.
+- Running without the `plots` extra (or any other diagnostic-figure failure) now also
+  prints a `WARNING: N diagnostic figure(s) skipped …` line to stderr (and to the
+  desktop app's Run log) as it happens, in addition to the existing `FIGURES SKIPPED`
+  section of `run-report.txt`. The run still completes; this is a warning, never a
+  hard failure.
+- `respmech run`'s final line now reports the file count against the output folder
+  itself (`Wrote N file(s) to <output.folder>`) rather than `<output.folder>/data`,
+  which undercounted everything written outside `data/` (diagnostics, WAV exports, the
+  two provenance files).
+- `run-report.txt`'s `PROCESSING` block now also names any breath-count overrides,
+  excluded breaths, the PTP baseline window, the work-of-breathing source and the
+  cohort grouping regex — settings that previously only lived in `analysis-used.toml`,
+  even though they can change the reported numbers the most directly.
+- `run-report.txt`'s `DIAGNOSTICS` block now names every EMG channel by BOTH its
+  0-based index into `input.channels.emg` and its 1-based data-column number (e.g.
+  `channel index 1 (column 4)`) — previously only the index was shown, which could be
+  misread against the workbook's `rms_col_<n>` columns and `EMG col <n>` WAV filenames,
+  both 1-based.
+- Per-file quality notices (an `ecg_auto_detect` quality-check mismatch, or the reason
+  a cardiac-gated peak column came out NaN) are now also recorded in `run-report.txt`'s
+  `DIAGNOSTICS` block — previously visible only as a Python warning on stderr, which a
+  packaged desktop app never shows.
+- A batch where at least one file failed now marks `Average breathdata.xlsx` and
+  `Cohort summary.xlsx` as incomplete (an `INCOMPLETE` row in each workbook's
+  Provenance sheet, and a `COHORT FILES INCOMPLETE` line in `run-report.txt`, both
+  naming which files failed) — previously both were written from the successful files
+  alone with nothing inside either file to say one was missing.
+- `outlier_rms_sd_limit` (EMG RMS outlier filtering) no longer raises a `KeyError` on
+  an analysis with no EMG channels configured; it now has nothing to filter and does
+  nothing, matching every other EMG-only setting.
+- The desktop app's File menu (New analysis, Open analysis…, Save, Save as…, Get
+  started…, Explore with sample data, Duplicate…, and Open Recent) is now locked for
+  the duration of a run — previously only the header's Analysis button was, while the
+  File menu's identical actions (and their keyboard shortcuts) still worked and could
+  swap the running settings out from under the batch.
+
 **Sample entropy's default `Template length (m + 1)` has changed from 2 to 3.** The
 previous default of 2 reported a sample entropy computed at m = 1, not the m = 2 that is
 the near-universal convention in the sample-entropy literature (Richman & Moorman 2000;

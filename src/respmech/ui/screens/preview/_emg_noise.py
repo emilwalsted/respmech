@@ -614,6 +614,17 @@ class _EmgNoiseMixin:
     # -- noise-window options (owned here, gated on reference file) ---------
     def _load_noise_params(self):
         n = self.state.settings.processing.emg.noise
+        # K-225/ticket 6.4: Settings.validate() now rejects noise.enabled=True with
+        # remove_ecg=False (the same pair the GUI's own activation gate has always
+        # required — screen.py's noise_enabled.setEnabled(has_emg and ecg_on)), so an
+        # analysis file saved before this change (or edited by hand) can load with the
+        # box ticked AND disabled, gating every preview out as "Setup incomplete" with
+        # no way to untick it short of turning Remove ECG on first — the exact failure
+        # mode _load_ecg_params was fixed to repair for ecg_auto_detect (see its own
+        # comment). Repair here, in the one funnel every noise load goes through.
+        if n.enabled and not self.state.settings.processing.emg.remove_ecg:
+            n.enabled = False
+            self._noise_repaired = True
         self._loading_noise = True
         try:
             self.noise_enabled.setChecked(n.enabled)
@@ -659,6 +670,26 @@ class _EmgNoiseMixin:
         self.settings_edited.emit()
         self._update_actions(status=False)          # the reference/opts gate follows the toggle
         self._request_autorun({"emg_all", "emg_detail", "noise", "batch"})
+
+    _NOISE_REPAIR_MESSAGE = (
+        "EMG noise reduction was switched on with Remove ECG switched off, which "
+        "cannot run (it would model the heartbeat as steady background noise). "
+        "Noise reduction has been turned off. Tick Remove ECG first if you want it "
+        "back.")
+
+    def _announce_noise_repair(self):
+        """Tell the user that an impossible noise-reduction combination was corrected.
+
+        Same pattern as _ecg.py's _announce_ecg_auto_repair: not silent (something said
+        "reduce EMG noise" and the analysis now says it does not), marks the analysis
+        dirty so saving keeps the corrected pair, and is idempotent (clears the flag
+        first) so a repair armed twice from both a constructor deferral and a later
+        sync_from_settings never announces itself twice."""
+        if not self._noise_repaired:
+            return
+        self._noise_repaired = False
+        self.settings_edited.emit()
+        self._set_status(self._NOISE_REPAIR_MESSAGE)
 
     def _on_noise_param_changed(self, *_):
         if self._loading_noise:
