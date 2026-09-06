@@ -137,15 +137,38 @@ def _label_fits(ax):
     return ax.label.isVisible() and ax.label.boundingRect().width() <= ax.height()
 
 
+def _smallest_name_width(ax):
+    """How wide the name alone is at the smallest font the axis may shrink it to — the
+    width a hidden label has to exceed the axis by before hiding was the only option."""
+    _base, smallest, unit = ax._label_sizes()
+    ax.label.setHtml(ax._label_html(include_unit=False, size=(smallest, unit)))
+    try:
+        return ax.label.boundingRect().width()
+    finally:
+        ax._pick_label()                                       # put the real pick back
+
+
 @pytest.mark.skipif(not os.path.exists(os.path.join(INPUT, "synth_case_A.csv")),
                     reason="synthetic input absent")
-def test_mechanics_channel_stack_names_every_channel_in_windows_metrics(windows_metrics):
-    """The same stack as test_mechanics_channel_stack_is_x_aligned, in the Windows
-    runner's ~1.5x wider font. That is where "Volume" alone outgrew the 76 px axis the
-    96 px row floor leaves, and where the name+unit / name / nothing picker went blank
-    (Windows CI red, 06-09-2026, while macOS and Linux showed the label). Every channel
-    must still name itself, and no label may be wider than the axis it is rotated into —
-    a wider one runs into the row above or below (the defect 14.3 exists for)."""
+def test_mechanics_channel_stack_labels_fit_or_hide_for_cause_in_windows_metrics(windows_metrics):
+    """The same stack as test_mechanics_channel_stack_is_x_aligned, with the font widened
+    ~1.5x. That is what "Volume" alone outgrowing the 76 px axis the 96 px row floor leaves
+    looks like on a narrow-font platform, and where the name+unit / name / nothing picker
+    went blank (Windows CI red, 06-09-2026, while macOS and Linux showed the label).
+
+    Two contracts, each of which the 14.3 picker broke: no label may be wider than the axis
+    it is rotated into (a wider one runs into the row above or below — the overrun 14.3
+    exists to stop, and which its pick did not survive pyqtgraph's own relabel), and a label
+    may be hidden only when even the name alone at the smallest font the axis allows is
+    wider than the axis — never merely because the base size did not fit.
+
+    Visibility itself is NOT asserted here, deliberately: the fixture stacks its 1.45x on
+    top of whatever the runner's own font already measures, so on the macOS runner "Volume"
+    comes out at ~108 px and on the Windows runner at ~130 px, both below the legibility
+    floor for a 76 px axis. That is a synthetic font no shipped platform has (Windows itself
+    measures ~92 px, which the floor accommodates); the per-platform "every channel names
+    itself" guard is test_mechanics_channel_stack_is_x_aligned, run unmodelled on each OS.
+    A first cut of this test demanded visibility and went red on macOS for exactly this."""
     from respmech.ui.workers import stage_mechanics_preview
     from respmech.ui.main_window import MainWindow
     from respmech.ui.state import AppState
@@ -157,14 +180,23 @@ def test_mechanics_channel_stack_names_every_channel_in_windows_metrics(windows_
     pv._render_preview(stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv")))
     pv.plots.setFixedSize(640, 540)
     _viewbox_lefts(pv._channel_plots)                        # processes events → layout settles
+    shown = 0
     for p, (_key, expected_label, _colour) in zip(pv._channel_plots, _CHANNELS):
         axis = p.getAxis("left")
         name = expected_label.partition(" (")[0]
-        assert axis.labelText == name
-        assert axis.label.isVisible(), f"{name}: axis left blank in Windows metrics"
-        need, have = axis.label.boundingRect().width(), axis.height()
-        assert need <= have, f"{name}: label needs {need:.0f} px of a {have:.0f} px axis"
-        assert name in axis.label.toPlainText(), f"{name}: the label no longer names it"
+        assert axis.labelText == name                        # the crosshair's name, regardless
+        have = axis.height()
+        if axis.label.isVisible():
+            need = axis.label.boundingRect().width()
+            assert need <= have, f"{name}: label needs {need:.0f} px of a {have:.0f} px axis"
+            assert name in axis.label.toPlainText(), f"{name}: the label no longer names it"
+            shown += 1
+        else:
+            floor_need = _smallest_name_width(axis)
+            assert floor_need > have, (
+                f"{name}: hidden although the name alone at the smallest allowed font needs "
+                f"only {floor_need:.0f} px of the {have:.0f} px axis")
+    assert shown >= 1, "every label hidden — the fit assertions above never ran"
     win.close()
 
 

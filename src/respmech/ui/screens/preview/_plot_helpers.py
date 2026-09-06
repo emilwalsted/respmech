@@ -62,9 +62,9 @@ class SciAxis(pg.AxisItem):
     only past that nothing at all. The font step exists because this is the screen whose
     job is to let the user confirm the channel assignment, so a blank axis is a defect,
     not a graceful fallback: with the stack at its 96 px row floor the axis is 76 px, and
-    "Volume" alone measures ~92 px in the Windows runner's font. 14.3's two-step picker
-    (name + unit, name, nothing) hid it there while macOS and Linux, ~1.5x narrower,
-    showed it, which is what turned the Windows CI red (06-09-2026).
+    "Volume" alone measures ~92 px in the Windows runner's font (~75 px on the macOS
+    runner, ~60 px on Linux). 14.3's two-step picker (name + unit, name, nothing) hid it
+    on Windows alone, which is what turned the Windows CI red (06-09-2026).
 
     The picked wording has to survive pyqtgraph's own re-rendering. ``labelString()`` is
     what ``AxisItem._updateLabel()`` re-renders from, and pyqtgraph calls that on every
@@ -159,9 +159,8 @@ class SciAxis(pg.AxisItem):
                 # first size is the linear estimate (text scales with the font, the
                 # document's fixed margins do not), rounded DOWN to a half-point; each
                 # miss steps down another half-point until the floor is reached.
-                base, unit = self._base_font_size()
+                base, floor, unit = self._label_sizes()
                 margin = 2.0 * self.label.document().documentMargin()
-                floor = base * self._MIN_LABEL_SCALE
                 size = base * max(0.0, avail - margin) / max(1e-6, width - margin)
                 size = min(base, math.floor(size * 2.0) / 2.0)
                 while size >= floor:
@@ -196,6 +195,16 @@ class SciAxis(pg.AxisItem):
         if f.pointSizeF() > 0:
             return f.pointSizeF(), "pt"
         return float(max(1, f.pixelSize())), "px"
+
+    def _label_sizes(self):
+        """``(base, smallest, unit)``: the base font size, the smallest size the picker
+        will show the name at (``_MIN_LABEL_SCALE`` of the base, rounded UP to the
+        half-point step the shrink loop walks in, so it is a size the loop actually
+        tries), and the CSS unit both are in. A test proving a label was hidden for
+        cause measures the name at ``smallest``: wider than the axis means no wording
+        this axis is allowed to show would have fitted."""
+        base, unit = self._base_font_size()
+        return base, math.ceil(base * self._MIN_LABEL_SCALE * 2.0) / 2.0, unit
 
     def _scale_annotation(self):
         scale = getattr(self, "autoSIPrefixScale", 1.0)
