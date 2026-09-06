@@ -36,7 +36,10 @@ gaps between what the two run.**
   prints a `WARNING: N diagnostic figure(s) skipped …` line to stderr (and to the
   desktop app's Run log) as it happens, in addition to the existing `FIGURES SKIPPED`
   section of `run-report.txt`. The run still completes; this is a warning, never a
-  hard failure.
+  hard failure. Fixed a false positive from this same warning: figures drawn
+  in-process because the isolated subprocess was unavailable or disabled
+  (`RESPMECH_NO_FIGURE_SUBPROCESS=1`, or a packaged build) are not skipped — every
+  figure is still written — so that case no longer triggers the warning.
 - `respmech run`'s final line now reports the file count against the output folder
   itself (`Wrote N file(s) to <output.folder>`) rather than `<output.folder>/data`,
   which undercounted everything written outside `data/` (diagnostics, WAV exports, the

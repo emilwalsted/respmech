@@ -268,12 +268,23 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
     # 0 and every workbook is written — the only trace used to be a FIGURES SKIPPED
     # section buried inside run-report.txt. One on-screen warning now accompanies it;
     # the run still completes either way (this is a warning, never a hard failure).
-    if fig_failures and progress is not None:
+    # A subprocess-fallback note (isolated child unavailable/failed, so figures were
+    # drawn in-process instead — see _figure_process.write_figures' on_fallback) is
+    # deliberately excluded from this on-screen warning: every figure was still
+    # written, nothing was skipped, so warning about a "skipped" figure would be a
+    # false alarm (found by CI: it fires on every RESPMECH_NO_FIGURE_SUBPROCESS=1 run,
+    # which is the packaged-app-safe default in dev/test environments, not a fault).
+    # _write_figures() already folds the fallback note into fig_failures so it still
+    # reaches run-report.txt's FIGURES SKIPPED section for the record. A genuine failure
+    # still warns — see test_core_outputs.py::
+    # test_write_batch_emits_a_warning_event_when_figures_are_skipped.
+    real_fig_failures = [f for f in fig_failures if "wrote figures in-process" not in f[1]]
+    if real_fig_failures and progress is not None:
         progress(ProgressEvent(
             "warning",
-            message=f"{len(fig_failures)} diagnostic figure(s) skipped — see the "
+            message=f"{len(real_fig_failures)} diagnostic figure(s) skipped — see the "
                     f"FIGURES SKIPPED section of run-report.txt (e.g. "
-                    f"{fig_failures[0][0]}: {fig_failures[0][1]})."))
+                    f"{real_fig_failures[0][0]}: {real_fig_failures[0][1]})."))
 
     # provenance — always written for a full run, so a folder of results carries its own
     # recipe (P7). For a subset, the full run's provenance is protected instead (A05).
