@@ -1084,6 +1084,9 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
     breaths = compute.separateintobreaths(
         s.processing.mechanics.separateby, name, tcT, flowT,
         volc, poesT, pgasT, pdiT, [], [], s)
+    # K-035: the boundary breath trim KEEPS is never verified as complete — surface it
+    # here too, so the warning is visible while tuning, before a batch is ever run.
+    boundary_notices = compute.trim_boundary_notices(breaths, s)
 
     t = np.arange(len(flowT)) / fs
     series = {"flow": flowT, "volume": volc, "poes": poesT, "pgas": pgasT, "pdi": pdiT}
@@ -1100,6 +1103,7 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
         "emg_flow": np.asarray(flow, dtype=float),   # UNTRIMMED (aligns with the untrimmed 'emg')
         "trim_error": None,
         "trend_error": trend_error,
+        "boundary_notices": boundary_notices,
         # drift-corrected volume: what the trend detector actually sees, so the advanced
         # dialog can count anchors for THIS file live while the thresholds are edited.
         "vol_drift": np.asarray(voldrift, float),
