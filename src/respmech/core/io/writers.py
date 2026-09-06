@@ -275,7 +275,9 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
     # false alarm (found by CI: it fires on every RESPMECH_NO_FIGURE_SUBPROCESS=1 run,
     # which is the packaged-app-safe default in dev/test environments, not a fault).
     # _write_figures() already folds the fallback note into fig_failures so it still
-    # reaches run-report.txt's FIGURES SKIPPED section for the record.
+    # reaches run-report.txt's FIGURES SKIPPED section for the record. A genuine failure
+    # still warns — see test_core_outputs.py::
+    # test_write_batch_emits_a_warning_event_when_figures_are_skipped.
     real_fig_failures = [f for f in fig_failures if "wrote figures in-process" not in f[1]]
     if real_fig_failures and progress is not None:
         progress(ProgressEvent(
