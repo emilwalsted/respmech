@@ -677,6 +677,19 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
             # an opaque internal error.
             compute.check_breaths(breaths, filename, s)
 
+            # K-035: the boundary breath trim KEEPS is never verified as complete — warn
+            # when it is much shorter than this file's own typical breath, instead of
+            # analysing it silently as whole. Live (ProgressEvent) as well as recorded
+            # (file_notices -> run-report.txt), same as the other per-file quality
+            # notices below. The live event's own message is what the CLI/Run log
+            # actually print (unlike file_start/file_error, "warning" events have no
+            # separate filename slot in either consumer) -- prefix it here, or the
+            # printed line silently loses which file it is about.
+            for _msg in compute.trim_boundary_notices(breaths, s):
+                warnings.warn(f"{filename}: {_msg}")
+                file_notices.append(_msg)
+                _emit(progress, ProgressEvent("warning", file=filename, message=f"{filename}: {_msg}"))
+
             vefactor = 60 / (len(flow) / s.input.format.samplingfrequency)
             bcnt = len(breaths)
             for bc in s.processing.mechanics.breathcounts:
