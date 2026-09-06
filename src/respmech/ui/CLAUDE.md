@@ -282,3 +282,30 @@ generation counter at RENDER time (this ticket's pattern) answer two different q
 "is this still the current worker result?" vs. "does this still-executing, already-dispatched
 render still own the widgets it's about to touch?" — and splitting any other reactive render across
 `QTimer.singleShot(0, ...)` needs BOTH, not just the one that already existed.
+
+### A pyqtgraph axis label that picks its own wording must make `labelString()` return the pick, and "hide when it does not fit" is not a fallback on a screen whose job is to name the channel (06-09-2026)
+
+`AxisItem._updateLabel()` re-renders the label from `labelString()` on every range
+change (`setRange` → `updateAutoSIPrefix`), inside `showLabel(True)`, and from
+`setLabel`/`enableAutoSIPrefix`. A fit-picker that swaps the label's HTML directly
+(`label.setHtml(...)`) while `labelString()` still returns the full wording is undone
+the moment any of those run: 14.3's `SciAxis` picked "name alone" and had it overwritten
+inside the very `showLabel(True)` that confirmed the pick (measured: a 94 px
+"Poes (cmH₂O)" back on a 76 px axis, the overrun the picker existed to stop). `_FitAxis`
+never had the problem because it picks via `setLabel(text)`, so `labelText` IS the pick.
+`SciAxis` now keeps the pick in state (`_include_unit`/`_label_size`) that
+`labelString()` reads, and overrides `_updateLabel` to re-pick, since the SI scale it
+may just have changed is part of the wording's width.
+
+Second lesson, the one that turned Windows CI red: "name + unit, then name, then
+nothing" is platform-dependent at the stack's 96 px row floor, because the Windows
+runner's font is ~1.5x wider than macOS's (the axis is 76 px there and "Volume" alone
+measures ~92 px on Windows, ~60 px on Linux). On the mechanics stack a blank axis is a
+defect (the screen exists to confirm the channel assignment), so the picker now shrinks
+the name's font towards `_MIN_LABEL_SCALE` of the base before it hides anything, and a
+shortened wording keeps the `·10ⁿ` annotation while the ticks are scaled (dropping it
+would leave "500" meaning 0.5 L with nothing on screen saying so; pyqtgraph itself
+only pins the scale at 1.0 while the label is fully hidden). Any label-fit change on a
+stacked plot gets a `windows_metrics` test next to its plain one
+(`test_plot_alignment.py::test_mechanics_channel_stack_names_every_channel_in_windows_metrics`),
+asserting "visible AND `boundingRect().width() <= axis.height()`" per axis, never a pixel.

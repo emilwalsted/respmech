@@ -7,6 +7,7 @@ from __future__ import annotations
 import copy
 import math
 import os
+import re
 import traceback
 from dataclasses import dataclass
 
@@ -54,13 +55,39 @@ class SciAxis(pg.AxisItem):
 
     On a short stacked panel, "Poes (cmH₂O)" on two lines is taller than the row and the
     rotated label ran into its neighbour (measured: the unit lines of adjacent channels
-    merged into one string, e.g. "(cmH₂O)(cmH₂O)"). ``_pick_label`` re-derives which
-    wording fits — name+unit, then name alone, then nothing — the same longest-first,
-    re-measure-on-resize approach ``_FitAxis._pick_label`` already uses below, so a short
-    row drops the unit line instead of overrunning the row after it.
+    merged into one string, e.g. "(cmH₂O)(cmH₂O)"). ``_pick_label`` re-derives, longest
+    first and re-measured on every resize (the same approach ``_FitAxis._pick_label``
+    uses below), the wording that fits the axis: name + unit, then the name alone, then
+    the name alone at a smaller font down to ``_MIN_LABEL_SCALE`` of the base size, and
+    only past that nothing at all. The font step exists because this is the screen whose
+    job is to let the user confirm the channel assignment, so a blank axis is a defect,
+    not a graceful fallback: with the stack at its 96 px row floor the axis is 76 px, and
+    "Volume" alone measures ~92 px in the Windows runner's font. 14.3's two-step picker
+    (name + unit, name, nothing) hid it there while macOS and Linux, ~1.5x narrower,
+    showed it, which is what turned the Windows CI red (06-09-2026).
+
+    The picked wording has to survive pyqtgraph's own re-rendering. ``labelString()`` is
+    what ``AxisItem._updateLabel()`` re-renders from, and pyqtgraph calls that on every
+    range change (``setRange`` → ``updateAutoSIPrefix``), on ``showLabel(True)``, and
+    from ``setLabel``/``enableAutoSIPrefix``, so it must return the CURRENT pick, not
+    always the full wording. 14.3 returned the full wording, and its "name alone" pick
+    was overwritten inside the very ``showLabel(True)`` that confirmed it (measured: a
+    94 px "Poes (cmH₂O)" back on a 76 px axis). ``_updateLabel`` is overridden to re-pick
+    instead of re-render, since the SI scale it may just have changed is part of the
+    wording's width; the re-entrancy guard keeps the nested calls on pyqtgraph's plain path.
+
+    A shortened wording keeps the ``·10ⁿ`` annotation whenever the ticks are scaled:
+    the annotation is the only thing on screen saying "500" means 0.5 L, so it may be
+    dropped only together with the whole label, and pyqtgraph itself pins the scale at
+    1.0 while the label is hidden (``updateAutoSIPrefix`` reads ``label.isVisible()``).
     """
 
     _label_picking = False
+    # Both are read by labelString() from inside AxisItem.__init__ (setRange →
+    # updateAutoSIPrefix → _updateLabel), long before an __init__ body of ours has run.
+    _include_unit = True        # current pick: unit line on the second line?
+    _label_size = None          # current pick: None = base font, else (size, "pt"|"px")
+    _MIN_LABEL_SCALE = 0.7      # smallest font the name is shown at, as a share of the base
 
     def __init__(self, *a, **k):
         self._name = ""
@@ -69,6 +96,7 @@ class SciAxis(pg.AxisItem):
 
     def set_channel_label(self, name, unit=""):
         self._name, self._unit = name, unit
+        self._include_unit, self._label_size = True, None
         self.labelUnits = unit          # keep pyqtgraph's own SI-scaling of the tick values
         # labelText is ufarlig at sætte her: labelString() (nedenfor) bygger sin HTML af
         # _name/_unit og ignorerer labelText, så dette ændrer intet i selve aksen. Men
@@ -89,8 +117,18 @@ class SciAxis(pg.AxisItem):
         if self._name:
             self._pick_label()
 
+    def _updateLabel(self):
+        # pyqtgraph re-renders the label from labelString() here on every range change,
+        # SI-scale change, showLabel() and setLabel(). Any of those can change the
+        # wording's width (a "·10⁻³" line appears or goes), so re-pick rather than trust
+        # the last pick. Nested calls made BY the pick take pyqtgraph's own path.
+        if self._label_picking or not self._name:
+            super()._updateLabel()
+        else:
+            self._pick_label()
+
     def _pick_label(self):
-        if self._label_picking:
+        if self._label_picking or getattr(self, "label", None) is None:
             return
         avail = self.height() if self.orientation in ("left", "right") else self.width()
         self._label_picking = True
@@ -98,32 +136,76 @@ class SciAxis(pg.AxisItem):
             if avail <= 0:
                 # geometry not resolved yet (fresh axis, not yet laid out): show the full
                 # wording for now, resizeEvent re-picks once a real size is known.
-                self.label.setHtml(self._label_html(include_unit=True))
+                self._include_unit, self._label_size = True, None
+                self.label.setHtml(self.labelString())
                 return
+            was_visible = self.label.isVisible()
+            if not was_visible and self.autoSIPrefix:
+                # measure with the SI scale the ticks will carry once the label shows:
+                # pyqtgraph pins the scale at 1.0 for as long as the label is hidden.
+                self.label.setVisible(True)
+                self.updateAutoSIPrefix()
+            fits = False
+            width = 0.0
             for include_unit in (True, False):
-                self.label.setHtml(self._label_html(include_unit))
-                if self.label.boundingRect().width() <= avail:
-                    self.showLabel(True)
+                self._include_unit, self._label_size = include_unit, None
+                self.label.setHtml(self.labelString())
+                width = self.label.boundingRect().width()
+                if width <= avail:
+                    fits = True
                     break
+            if not fits and width > 0:
+                # Name alone is still too long: shrink the font towards the floor. The
+                # first size is the linear estimate (text scales with the font, the
+                # document's fixed margins do not), rounded DOWN to a half-point; each
+                # miss steps down another half-point until the floor is reached.
+                base, unit = self._base_font_size()
+                margin = 2.0 * self.label.document().documentMargin()
+                floor = base * self._MIN_LABEL_SCALE
+                size = base * max(0.0, avail - margin) / max(1e-6, width - margin)
+                size = min(base, math.floor(size * 2.0) / 2.0)
+                while size >= floor:
+                    self._label_size = (size, unit)
+                    self.label.setHtml(self.labelString())
+                    if self.label.boundingRect().width() <= avail:
+                        fits = True
+                        break
+                    size -= 0.5
+            if fits:
+                if not was_visible:
+                    self.showLabel(True)
             else:
-                # neither "name + unit" nor "name alone" fits: hide rather than overrun.
+                # nothing fits even at the smallest font: hide rather than overrun.
+                self._include_unit, self._label_size = True, None
                 self.showLabel(False)
-            pg.AxisItem.resizeEvent(self, None)
+            pg.AxisItem.resizeEvent(self, None)   # re-centre for what is now there
+            self.picture = None                   # ticks may carry a changed SI scale
+            self.update()
         except Exception:                # pragma: no cover - the label is cosmetic
             pass
         finally:
             self._label_picking = False
 
+    def _base_font_size(self):
+        """The label's font size before any shrinking, as ``(size, "pt" | "px")``: an
+        explicit ``font-size`` in ``labelStyle`` wins, else the label's own font."""
+        m = re.match(r"\s*([0-9.]+)\s*(pt|px)", str(self.labelStyle.get("font-size", "")))
+        if m:
+            return float(m.group(1)), m.group(2)
+        f = self.label.font()
+        if f.pointSizeF() > 0:
+            return f.pointSizeF(), "pt"
+        return float(max(1, f.pixelSize())), "px"
+
     def _scale_annotation(self):
         scale = getattr(self, "autoSIPrefixScale", 1.0)
         if not self.autoSIPrefix or scale == 1.0:
             return ""
-        import math
         exp = int(round(math.log10(1.0 / scale)))   # displayed = value·10^exp
         return "·10" + str(exp).translate(_SUP)
 
-    def _label_html(self, include_unit=True):
-        scale = self._scale_annotation() if include_unit else ""
+    def _label_html(self, include_unit=True, size=None):
+        scale = self._scale_annotation()             # kept in every wording but "hidden"
         unit = self._unit if include_unit else ""
         if scale and unit:
             second = f"({scale} {unit})"
@@ -134,11 +216,14 @@ class SciAxis(pg.AxisItem):
         else:
             second = ""
         inner = self._name + (f"<br>{second}" if second else "")
-        style = ";".join(f"{k}: {v}" for k, v in self.labelStyle.items())
+        style = dict(self.labelStyle)
+        if size is not None:
+            style["font-size"] = f"{size[0]:g}{size[1]}"
+        style = ";".join(f"{k}: {v}" for k, v in style.items())
         return f"<span style='{style}'><div style='text-align:center'>{inner}</div></span>"
 
     def labelString(self):
-        return self._label_html(include_unit=True)
+        return self._label_html(include_unit=self._include_unit, size=self._label_size)
 
 # channel -> (axis label with units, pen colour by physiological meaning)
 _CHANNELS = [
