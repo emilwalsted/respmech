@@ -81,6 +81,13 @@ gaps between what the two run.**
   epoch, or exclude the affected breath). This is a heuristic, not a hard boundary: a
   boundary breath only modestly shorter than usual is not flagged. The file still
   completes either way; nothing about the computed numbers changes.
+- The boundary-truncation notice's threshold (how much shorter than the file's own
+  typical breath counts as truncated) and minimum-comparison-breaths floor are now a
+  per-analysis setting (`processing.segmentation.boundary_notice_min_relative_duration`
+  / `boundary_notice_min_other_breaths` in `settings.toml`), defaulting to the same
+  0.8/3 as before. A study whose recordings have unusually high natural
+  breath-to-breath variability can raise the threshold itself instead of living with
+  more false notices; nothing changes for an analysis that does not set these fields.
 
 **Sample entropy's default `Template length (m + 1)` has changed from 2 to 3.** The
 previous default of 2 reported a sample entropy computed at m = 1, not the m = 2 that is

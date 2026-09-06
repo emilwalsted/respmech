@@ -48,6 +48,34 @@ ends of that range rather than adjust the number on feel — `tests/unit/
 test_trim_boundary_notices.py::TestTrimBoundaryNoticesPure::
 test_reproduces_k035_own_measured_case` pins the lower end.
 
+**A self-calibrating statistic is not automatically "more robust" than a fixed ratio —
+measure the ACTUAL trade-off before switching (ticket 20260906-1307, 06-09-2026).** A
+follow-up review raised a literature-backed concern (published breath-timing CVs of
+~18-25% in real resting breathing) that the 0.8 ratio above over-flags ordinary
+high-variability recordings. The seemingly obvious fix — a MAD-based robust z-score
+that adapts to each file's own measured spread instead of a fixed 80% — was built and
+Monte-Carlo-compared against the ratio check at matching CVs, using this function's
+own two known reference cases re-measured with REAL median/MAD (not assumed values):
+it does cut false positives substantially, but because a real truncation (K-035's
+reproduction: a fixed 0.5 s cut) shrinks relative to a file's OWN spread as that
+spread grows, the MAD check's sensitivity to that exact same truncation falls even
+faster than its false-positive rate does (~83% detection at CV 10% down to ~6-47% at
+CV 25-30%, depending on the z-threshold) — i.e. it gets weakest exactly on the more
+variable recordings where a human is least likely to catch a bad cut by eye. Rejected:
+not a proven improvement, a different (and for an advisory, never-fails notice, worse)
+trade-off. The full numbers and reasoning are pinned in `trim_boundary_notices`'s own
+docstring. Decision instead: keep 0.8/3 as a documented, deliberate trade-off, and
+expose both as `Settings.processing.segmentation.boundary_notice_min_relative_duration`
+/ `boundary_notice_min_other_breaths` (wired through `_legacy_ns.py` as
+`boundarynoticeminrelativeduration`/`boundarynoticeminotherbreaths`) so a study that
+knows its own recordings are unusually variable can retune it deliberately, instead of
+the whole install trading detection power away on one unverified system-wide guess.
+General lesson: when a review proposes replacing a measured threshold with a
+"smarter" adaptive statistic, simulate the ACTUAL detection-power trade-off (not just
+the false-positive side) before adopting it — an adaptive statistic can easily trade
+a nuisance failure mode (false positives) for a worse, silent one (missed detections)
+precisely where the original problem mattered most.
+
 ### Two different screenshot tools — do not confuse them (found 10-08-2026)
 
 `scripts/gen_readme_figures.py` is the **canonical generator for the 7 images in

@@ -57,6 +57,8 @@ def to_legacy_ns(s: Settings) -> SimpleNamespace:
                 peakheight=seg.peak.height,
                 peakdistance=seg.peak.distance_s,
                 peakwidth=seg.peak.width_s,
+                boundarynoticeminrelativeduration=seg.boundary_notice_min_relative_duration,
+                boundarynoticeminotherbreaths=seg.boundary_notice_min_other_breaths,
                 inverseflow=vol.inverse_flow,
                 integratevolumefromflow=vol.integrate_from_flow,
                 inversevolume=vol.inverse_volume,

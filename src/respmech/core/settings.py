@@ -83,6 +83,17 @@ class SegmentationSettings:
     method: str = "flow"                 # "flow" | "volume"
     buffer: int = 800
     peak: PeakSettings = field(default_factory=PeakSettings)
+    # K-035 boundary-truncation quality notice (compute.trim_boundary_notices): how much
+    # shorter than the file's own median a boundary breath's phase must be before it is
+    # flagged as likely truncated by trim(). 0.8 was measured, not guessed (see that
+    # function's docstring); exposed here (ticket 20260906-1307) so a recording with
+    # atypically high natural breath-to-breath variability can be re-tuned per file/study
+    # without a code change, without this codebase silently guessing a system-wide
+    # replacement statistic that was NOT demonstrated to be an unambiguous improvement.
+    boundary_notice_min_relative_duration: float = 0.8
+    # minimum number of OTHER breaths required before the comparison is trusted (an
+    # unstable median on a very short recording can otherwise flag, or hide, truncation).
+    boundary_notice_min_other_breaths: int = 3
 
 
 @dataclass
@@ -357,6 +368,15 @@ class Settings:
             raise SettingsError("processing.segmentation.method must be 'flow' or 'volume'")
         if not isinstance(seg.buffer, int):
             raise SettingsError("processing.segmentation.buffer must be an integer")
+        if not 0.0 < seg.boundary_notice_min_relative_duration <= 1.0:
+            raise SettingsError(
+                "processing.segmentation.boundary_notice_min_relative_duration must be "
+                "between 0 (exclusive) and 1 (inclusive)")
+        if not isinstance(seg.boundary_notice_min_other_breaths, int) or \
+                seg.boundary_notice_min_other_breaths < 1:
+            raise SettingsError(
+                "processing.segmentation.boundary_notice_min_other_breaths must be a "
+                "positive integer")
 
         if self.processing.wob.calc_from not in ("average", "individual"):
             raise SettingsError("processing.wob.calc_from must be 'average' or 'individual'")
