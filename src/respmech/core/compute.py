@@ -480,7 +480,11 @@ def trim_boundary_notices(breaths, settings, *, min_relative_duration=None, min_
     **Follow-up investigation (ticket 20260906-1307, a review raised after this function
     shipped): is 0.8 too aggressive on ordinary, high-variability breathing?** A reviewer's
     Monte Carlo simulation (log-normal phase durations) found 15-39% false-positive rates
-    at breath-to-breath coefficients of variation (CV) of 15-25%. Published measurements of
+    at breath-to-breath coefficients of variation (CV) of 15-25% — a PER-FILE rate (either
+    boundary check firing on a non-truncated file), not a per-check rate: independently
+    reproducing the simulation gives ~8-19% for a single boundary check alone at the same
+    CVs, which combines across the two independent checks (first inspiration, last
+    expiration) to the cited 15-39% file-level range. Published measurements of
     real resting breathing (16 healthy subjects, 40 min quiet breathing, opto-electronic
     plethysmography: CV of fractional inspiratory time TI/TTOT = 17.9±6.5%, CV of
     respiratory frequency = 20.8±11.5%, and TI/TTOT is reported as LESS variable than the
@@ -508,12 +512,17 @@ def trim_boundary_notices(breaths, settings, *, min_relative_duration=None, min_
     truncation is the costlier failure mode of the two), replacing the statistic was
     rejected: it is a different trade-off, not a demonstrated improvement.
 
-    The deliberate decision (Emil, via ticket 20260906-1307): keep 0.8/3 as the default,
-    documented here as a known, accepted trade-off rather than a proven-safe value, and
-    expose both numbers as a per-analysis setting (see above) so a study whose recordings
-    are known to have unusually high natural variability can raise the threshold (e.g. to
-    0.6-0.7) deliberately, instead of the whole install silently trading detection power
-    away for every user based on one un-validated system-wide guess.
+    The decision reached by this investigation (ticket 20260906-1307 — not yet reviewed or
+    confirmed by Emil, unlike the earlier decisions elsewhere in this codebase that carry
+    his name): keep 0.8/3 as the default, documented here as a known, accepted trade-off
+    rather than a proven-safe value, and expose both numbers as a per-analysis setting (see
+    above) so a study whose recordings are known to have unusually high natural variability
+    can raise the threshold (e.g. to 0.6-0.7) deliberately, instead of the whole install
+    silently trading detection power away for every user based on one un-validated
+    system-wide guess. Real research recordings (``tests/golden/production``, unavailable
+    in the sandbox this investigation ran in) would let a future session replace this
+    entire trade-off analysis with a measured threshold instead — see the ticket's own
+    "Opgave" for the preferred path if that data becomes reachable.
 
     A boundary breath that is ALREADY excluded (``processing.exclude_breaths`` /
     ``breaths[n]['ignored']``) still gets a notice ONLY when drift correction is on:

@@ -38,6 +38,8 @@ instead (``Settings.processing.segmentation.boundary_notice_min_relative_duratio
 ``boundary_notice_min_other_breaths``). ``TestBoundaryNoticeSettings`` below covers
 the new setting end to end (default, override via Settings, and validation).
 """
+import warnings
+
 import numpy as np
 import pytest
 
@@ -471,3 +473,49 @@ class TestBoundaryNoticeSettings:
         s.processing.segmentation.boundary_notice_min_other_breaths = 0
         with pytest.raises(Exception):
             s.validate()
+
+    def test_validate_rejects_a_non_integer_min_other_breaths(self):
+        # the isinstance(..., int) branch, distinct from the "< 1" branch above.
+        s = Settings()
+        s.input.format.sampling_frequency = FS
+        s.input.channels.flow = 5
+        s.input.channels.poes = 7
+        s.input.channels.pgas = 8
+        s.input.channels.pdi = 9
+        s.input.channels.volume = 6
+        s.processing.segmentation.boundary_notice_min_other_breaths = 3.5
+        with pytest.raises(Exception):
+            s.validate()
+
+    def test_validate_accepts_the_inclusive_upper_bound(self):
+        # 1.0 (flag anything shorter than the median at all) is the documented ceiling,
+        # not an off-by-one -- must NOT raise.
+        s = Settings()
+        s.input.format.sampling_frequency = FS
+        s.input.channels.flow = 5
+        s.input.channels.poes = 7
+        s.input.channels.pgas = 8
+        s.input.channels.pdi = 9
+        s.input.channels.volume = 6
+        s.processing.segmentation.boundary_notice_min_relative_duration = 1.0
+        s.validate()  # must not raise
+
+    def test_setting_reaches_the_real_batch_pipeline(self, tmp_path):
+        # end to end through pipeline.run_batch (the production call site), not just the
+        # pure function -- proves the setting isn't only wired at the to_legacy_ns level.
+        # A 0.3 s lead-in cut on a 4.0 s period (insp ratio ~0.85) sits BELOW the default
+        # 0.8 threshold's flag point (0.85 > 0.8, not flagged) but above a study-raised
+        # 0.9 threshold (0.85 < 0.9, flagged) -- so only the raised setting fires.
+        src, out = _dirs(tmp_path)
+        _write_recording(src / "mild_cut.csv", n_breaths=6, period_s=4.0, lead_cut_s=0.3)
+
+        default_settings = _settings(src, out)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            pipeline.run_batch(default_settings)
+        assert not any("typical inspiration" in str(w.message) for w in caught)
+
+        raised_settings = _settings(src, out)
+        raised_settings.processing.segmentation.boundary_notice_min_relative_duration = 0.9
+        with pytest.warns(UserWarning, match="typical inspiration"):
+            pipeline.run_batch(raised_settings)
