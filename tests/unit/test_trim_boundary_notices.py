@@ -27,6 +27,16 @@ from an initial 0.6, which — verified by replaying K-035's own exact reproduct
 function — did NOT catch the motivating inspiratory case at all (ratio ~0.72).
 ``test_reproduces_k035_own_measured_case`` below pins that exact scenario so the
 threshold can never regress back below it unnoticed.
+
+Follow-up (ticket 20260906-1307): a review raised a well-founded, literature-backed
+concern that 0.8 may over-flag ordinary high-variability breathing. A Monte Carlo
+comparison against a MAD-based alternative (see ``trim_boundary_notices``'s own
+docstring for the full reasoning and numbers) showed the alternative trades away
+real detection power rather than being an unambiguous improvement, so the decision
+was to keep 0.8/3 as documented defaults and expose both as a per-analysis SETTING
+instead (``Settings.processing.segmentation.boundary_notice_min_relative_duration``/
+``boundary_notice_min_other_breaths``). ``TestBoundaryNoticeSettings`` below covers
+the new setting end to end (default, override via Settings, and validation).
 """
 import numpy as np
 import pytest
@@ -379,3 +389,85 @@ class TestShortBoundaryNote:
             "the last breath's expiration (0.5 s) is much shorter ...",
         ])
         assert "first" in short and "last" in short
+
+
+class TestBoundaryNoticeSettings:
+    """Ticket 20260906-1307: the threshold/min-other-breaths pair is now a per-analysis
+    Settings/TOML field, not a hardcoded default -- so a study with atypically high
+    natural breath-to-breath variability can raise the threshold itself instead of
+    living with the system-wide default's false-positive rate."""
+
+    def test_settings_default_matches_previous_hardcoded_default(self):
+        s = Settings()
+        assert s.processing.segmentation.boundary_notice_min_relative_duration == 0.8
+        assert s.processing.segmentation.boundary_notice_min_other_breaths == 3
+
+    def test_legacy_ns_carries_the_settings_value(self):
+        s = Settings()
+        s.processing.segmentation.boundary_notice_min_relative_duration = 0.65
+        s.processing.segmentation.boundary_notice_min_other_breaths = 4
+        legacy = to_legacy_ns(s)
+        assert legacy.processing.mechanics.boundarynoticeminrelativeduration == 0.65
+        assert legacy.processing.mechanics.boundarynoticeminotherbreaths == 4
+
+    def test_lower_settings_threshold_stops_flagging_a_ratio_the_default_would_flag(self):
+        # 75% is flagged under the 0.8 default (test_a_ratio_just_under_the_threshold_
+        # is_flagged pins 79%) but must NOT be flagged once a study lowers its own
+        # threshold to 0.7 via Settings -- proving the override reaches the function
+        # via `settings`, not just via the explicit kwarg.
+        breaths = {i: _breath(100, 150) for i in range(1, 7)}
+        breaths[1] = _breath(75, 150)
+        s = Settings()
+        s.input.format.sampling_frequency = FS
+        legacy_default = to_legacy_ns(s)
+        assert len(compute.trim_boundary_notices(breaths, legacy_default)) == 1
+
+        s.processing.segmentation.boundary_notice_min_relative_duration = 0.7
+        legacy_lowered = to_legacy_ns(s)
+        assert compute.trim_boundary_notices(breaths, legacy_lowered) == []
+
+    def test_raising_settings_min_other_breaths_can_suppress_a_notice(self):
+        # 4 breaths (3 others) fires under the default floor of 3 (see
+        # test_too_few_other_breaths_skips_the_check); raising the floor to 4 via
+        # Settings must suppress it without touching the ratio at all.
+        breaths = {i: _breath(100, 150) for i in range(1, 5)}
+        breaths[1] = _breath(10, 150)
+        s = Settings()
+        s.input.format.sampling_frequency = FS
+        s.processing.segmentation.boundary_notice_min_other_breaths = 4
+        legacy = to_legacy_ns(s)
+        assert compute.trim_boundary_notices(breaths, legacy) == []
+
+    def test_explicit_kwarg_still_overrides_settings(self):
+        # backward-compatible escape hatch: a caller (or a future test) that passes the
+        # kwarg explicitly is not overridden by whatever Settings happens to carry.
+        breaths = {i: _breath(100, 150) for i in range(1, 7)}
+        breaths[1] = _breath(75, 150)
+        settings = _dummy_settings()  # ships the 0.8 default
+        assert compute.trim_boundary_notices(
+            breaths, settings, min_relative_duration=0.5) == []
+
+    @pytest.mark.parametrize("bad_value", [0.0, -0.1, 1.5])
+    def test_validate_rejects_an_out_of_range_ratio(self, bad_value):
+        s = Settings()
+        s.input.format.sampling_frequency = FS
+        s.input.channels.flow = 5
+        s.input.channels.poes = 7
+        s.input.channels.pgas = 8
+        s.input.channels.pdi = 9
+        s.input.channels.volume = 6
+        s.processing.segmentation.boundary_notice_min_relative_duration = bad_value
+        with pytest.raises(Exception):
+            s.validate()
+
+    def test_validate_rejects_a_non_positive_min_other_breaths(self):
+        s = Settings()
+        s.input.format.sampling_frequency = FS
+        s.input.channels.flow = 5
+        s.input.channels.poes = 7
+        s.input.channels.pgas = 8
+        s.input.channels.pdi = 9
+        s.input.channels.volume = 6
+        s.processing.segmentation.boundary_notice_min_other_breaths = 0
+        with pytest.raises(Exception):
+            s.validate()
