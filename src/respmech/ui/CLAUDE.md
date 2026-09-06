@@ -305,7 +305,16 @@ defect (the screen exists to confirm the channel assignment), so the picker now 
 the name's font towards `_MIN_LABEL_SCALE` of the base before it hides anything, and a
 shortened wording keeps the `·10ⁿ` annotation while the ticks are scaled (dropping it
 would leave "500" meaning 0.5 L with nothing on screen saying so; pyqtgraph itself
-only pins the scale at 1.0 while the label is fully hidden). Any label-fit change on a
-stacked plot gets a `windows_metrics` test next to its plain one
-(`test_plot_alignment.py::test_mechanics_channel_stack_names_every_channel_in_windows_metrics`),
-asserting "visible AND `boundingRect().width() <= axis.height()`" per axis, never a pixel.
+only pins the scale at 1.0 while the label is fully hidden).
+
+Third lesson, from the follow-up that went red on macOS: **`windows_metrics` stacks its
+1.45x on top of whatever the runner's own font already measures**, so under it "Volume"
+is ~108 px on the macOS runner and ~130 px on the Windows runner, both below any
+legible floor for a 76 px axis, while no shipped platform is that wide (Windows itself:
+~92 px). A pixel-tight geometry therefore cannot demand *visibility* under the fixture.
+The split that holds on all three runners: the unmodelled per-platform test
+(`test_mechanics_channel_stack_is_x_aligned`) asserts every channel names itself, and the
+modelled one (`..._labels_fit_or_hide_for_cause_in_windows_metrics`) asserts the
+mechanism: a shown label is never wider than its axis, and a hidden one is hidden only
+because the name at the smallest allowed font (`SciAxis._label_sizes()`) is wider still.
+Never a pixel literal in either.
