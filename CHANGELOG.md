@@ -67,6 +67,20 @@ gaps between what the two run.**
   the duration of a run — previously only the header's Analysis button was, while the
   File menu's identical actions (and their keyboard shortcuts) still worked and could
   swap the running settings out from under the batch.
+- **A recording cut mid-breath at either end is now flagged instead of analysed
+  silently.** Trimming only ever discarded a leading partial expiration and a trailing
+  partial inspiration — it never verified that the breath it *keeps* at either
+  boundary is itself complete. A recording that begins already in inspiration, or ends
+  still in expiration, kept that truncated boundary breath and analysed it as if
+  whole, which (with drift correction on, the default) tilted the volume baseline of
+  every OTHER breath in the file too, with no error and no warning anywhere. RespMech
+  now raises a quality notice whenever a boundary breath is much shorter than that
+  file's own typical breath — in Preview & QC while you tune, live in the Run log and
+  at the terminal while a batch runs, and in `run-report.txt`'s `DIAGNOSTICS` block
+  afterwards — naming which end looks truncated and how to fix it (re-export the
+  epoch, or exclude the affected breath). This is a heuristic, not a hard boundary: a
+  boundary breath only modestly shorter than usual is not flagged. The file still
+  completes either way; nothing about the computed numbers changes.
 
 **Sample entropy's default `Template length (m + 1)` has changed from 2 to 3.** The
 previous default of 2 reported a sample entropy computed at m = 1, not the m = 2 that is

@@ -433,6 +433,119 @@ def separateintobreaths(method, filename, timecol, flow, volume, poes, pgas, pdi
     return separateintobreathsbyflow(filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings)
 
 
+def trim_boundary_notices(breaths, settings, *, min_relative_duration=0.8, min_other_breaths=3):
+    """Per-file quality notice for a boundary breath likely truncated by ``trim`` (K-035).
+
+    ``trim`` (above) discards only a leading partial expiration and a trailing partial
+    inspiration; it never verifies that the breath it KEEPS at either boundary is
+    itself complete. There is no reliable way to tell from a single boundary SAMPLE's
+    sign alone: a first attempt at this check compared ``startix``/``endix`` against
+    the raw array's own edges and false-flagged both the built-in sample recording and
+    the committed golden synthetic inputs (``tests/golden/input``) — none of those are
+    truncated, they simply end without a hair's-breadth of margin into the next phase,
+    which is indistinguishable from real truncation at the single-sample level.
+
+    Instead, this compares the FIRST breath's inspiratory duration, and the LAST
+    breath's expiratory duration, against this file's own MEDIAN duration for that
+    phase across every OTHER detected breath — a within-file, self-calibrating
+    comparison that needs no assumption about the subject's breathing rate and
+    tolerates ordinary breath-to-breath variability. A boundary phase shorter than
+    ``min_relative_duration`` (default 80%) of that median is flagged.
+
+    The threshold was measured, not guessed, against K-035's own reported reproduction
+    (a recording cut 0.5 s into the built-in sample's first, 1.661 s inspiration, and a
+    separate one cut 0.5 s into its last, 1.440 s expiration): replaying both cuts
+    through this exact function gives ratios of 0.72 and 0.30 against the file's own
+    median — the inspiratory case in particular is NOT "comfortably" below a lower
+    threshold, it sits close to typical breath-to-breath variation. 0.8 sits roughly
+    midway between that 0.72 "known truncated" case and 0.88, the tightest natural
+    (non-truncated) ratio measured on the same built-in sample recording's own last
+    breath (its synthetic generator varies each breath's period by design). A lower
+    threshold like the 0.6 this function shipped with during development does NOT
+    catch K-035's own motivating case at all — verified by replaying it after the fact
+    — which is why 0.8 replaced it before this ticket closed.
+
+    ``min_other_breaths`` (default 3) guards against an unstable median on a very
+    short recording: with only 1-2 OTHER breaths to compare against, one atypically
+    long or short breath (a sigh, an early arousal) can swing the median enough to
+    flag a perfectly normal boundary breath, or hide a truncated one. Below that
+    count, that side's check is skipped entirely rather than guessed at.
+
+    A boundary breath that is ALREADY excluded (``processing.exclude_breaths`` /
+    ``breaths[n]['ignored']``) still gets a notice ONLY when drift correction is on:
+    excluding a breath removes it from the reported metrics, but ``correctdrift``
+    anchors on the recording's raw first/last SAMPLE regardless of which breaths are
+    excluded (see ``correctdrift`` above), so the volume baseline of every OTHER
+    breath can still be tilted even after exclusion. The wording differs for this
+    case (it does not claim the excluded breath is "analysed as if complete", which
+    would now be false, and does not suggest excluding a breath that is already
+    excluded) — with drift correction off, an already-excluded truncated boundary
+    breath has no remaining consequence worth a notice, so none is raised.
+
+    Returns a list of 0, 1 or 2 human-readable notice strings — the same shape as the
+    ``FileResult.notices`` list the K-192/K-224 quality notices already populate, so
+    this slots into the same report section and warning plumbing without a new
+    mechanism.
+    """
+    numbers = sorted(breaths)
+    if len(numbers) < 2:
+        return []
+    fs = float(settings.input.format.samplingfrequency)
+
+    def _phase_seconds(bno, phase):
+        return len(np.atleast_1d(breaths[bno][phase]["time"])) / fs
+
+    drift_on = bool(settings.processing.mechanics.correctvolumedrift)
+
+    def _notice(edge, phase, cur, median, ignored, direction, likely):
+        if ignored:
+            if not drift_on:
+                return None
+            return (
+                f"the {edge} breath's {phase} ({cur:.2f} s) is much shorter than this "
+                f"file's typical {phase} ({median:.2f} s) — it is already excluded "
+                "from the analysis, but drift correction anchors on the recording's "
+                "raw first and last sample regardless of which breaths are excluded, "
+                "so the volume baseline of the OTHER breaths in this file may still "
+                f"be tilted. Re-export the epoch so it {direction} to fix this at "
+                "the source.")
+        drift_tail = (" With drift correction on, this also tilts the volume baseline "
+                      "of every breath in the file, not just this one." if drift_on else "")
+        return (
+            f"the {edge} breath's {phase} ({cur:.2f} s) is much shorter than this "
+            f"file's typical {phase} ({median:.2f} s) — the recording likely {likely}, "
+            f"so the {edge} breath is truncated and analysed as if it were complete."
+            + drift_tail + f" Re-export the epoch so it {direction}, or exclude the "
+            f"{edge} breath in Preview & QC.")
+
+    notices = []
+    first_no, last_no = numbers[0], numbers[-1]
+
+    other_insp = [_phase_seconds(no, "inspiration") for no in numbers if no != first_no]
+    if len(other_insp) >= min_other_breaths:
+        median_insp = float(np.median(other_insp))
+        first_insp = _phase_seconds(first_no, "inspiration")
+        if median_insp > 0 and first_insp < min_relative_duration * median_insp:
+            notice = _notice("first", "inspiration", first_insp, median_insp,
+                             bool(breaths[first_no]["ignored"]),
+                             "starts in expiration", "begins mid-inspiration")
+            if notice:
+                notices.append(notice)
+
+    other_exp = [_phase_seconds(no, "expiration") for no in numbers if no != last_no]
+    if len(other_exp) >= min_other_breaths:
+        median_exp = float(np.median(other_exp))
+        last_exp = _phase_seconds(last_no, "expiration")
+        if median_exp > 0 and last_exp < min_relative_duration * median_exp:
+            notice = _notice("last", "expiration", last_exp, median_exp,
+                             bool(breaths[last_no]["ignored"]),
+                             "ends in inspiration", "ends mid-expiration")
+            if notice:
+                notices.append(notice)
+
+    return notices
+
+
 # --- pressure-time product & integration -----------------------------------
 
 def calcptp(pressure, bcnt, vefactor, samplingfreq, baseline_samples=1):
