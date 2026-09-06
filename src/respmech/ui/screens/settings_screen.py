@@ -2023,7 +2023,7 @@ class SettingsScreen(QWidget):
         directory (``open_sample_analysis``/``core.sample``), which the OS may clear at
         any time. A plain 'Save as…' used to copy those absolute temp paths verbatim into
         the saved file, so the saved analysis stopped working the moment the temp folder
-        was cleared: ``validate`` reported 'matches 0 file(s)' and a run failed with 'No
+        was cleared: ``validate`` reported 'matches 0 files' and a run failed with 'No
         input files found'.
 
         Copies the recording out of the temp input folder into an ``input`` subfolder next
@@ -2043,7 +2043,7 @@ class SettingsScreen(QWidget):
 
         If the temp recording is already gone (the OS cleared it before this save), the
         copy is a no-op and the user is warned explicitly — silently writing an empty
-        ``input`` folder would reproduce the exact "matches 0 file(s)" failure this method
+        ``input`` folder would reproduce the exact "matches 0 files" failure this method
         exists to prevent, just one save later and with no clue why."""
         import shutil  # noqa: PLC0415
         s = self.state.settings
