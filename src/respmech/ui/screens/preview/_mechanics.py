@@ -50,6 +50,24 @@ from ._plot_helpers import (BreathSpansItem, SciAxis, _CHANNELS, _pen, _plot_pal
 
 
 
+def _short_boundary_note(notices):
+    """Compress ``compute.trim_boundary_notices()``'s full sentences (K-035) to a
+    short status-bar-safe form. The status line is a single-line ``QStatusBar``
+    message that does not wrap, so the full ~300-character explanation risks being
+    clipped exactly on the screen it points the user to — see
+    ``_render_preview_stage3``'s caller for the full reasoning. The full text is
+    unabridged everywhere else (Run log, terminal, ``run-report.txt``)."""
+    parts = []
+    for n in notices:
+        edge = "first" if "first breath" in n else "last" if "last breath" in n else "boundary"
+        if "already excluded" in n:
+            parts.append(f"⚠ {edge} breath excluded, but drift baseline may still be "
+                         "tilted — re-export to fix.")
+        else:
+            parts.append(f"⚠ {edge} breath may be truncated — re-export or exclude it.")
+    return " ".join(parts)
+
+
 def _parse_breath_counts(text, entry_cls, folder=None):
     """Parse the 'filename = count' lines of the breath-count override box into entries.
     Splits on the LAST '=' so a filename may itself contain one; skips blank/malformed lines.
@@ -1037,6 +1055,15 @@ class _MechanicsMixin:
         self._trend_probe = data.get("vol_drift")
         self._trend_probe_file = data["name"]
         self._trend_probe_shape = self._trend_probe_settings()
+        # K-035: a boundary breath trim keeps but cannot verify as complete — appended to
+        # whichever status line below applies (it is independent of trend_error, and does
+        # not arise at all in the trim_error branch, where no window was even computed).
+        # SHORT form only: the status bar is a single-line QStatusBar message (no wrap),
+        # and the full notice from compute.trim_boundary_notices() can run past 300
+        # characters — long enough to be clipped on the very screen it points the user
+        # to. The full text is unabridged in the Run log, the terminal and
+        # run-report.txt, none of which are width-constrained the same way.
+        boundary_note = _short_boundary_note(data.get("boundary_notices") or [])
         if data.get("trim_error"):
             self._set_status(f"{data['name']}: showing raw channels — could not detect "
                              f"breaths. {data['trim_error']}")
@@ -1049,7 +1076,8 @@ class _MechanicsMixin:
             self._set_status(f"{data['name']}: {data['nbreaths']} breaths, showing the "
                              f"DRIFT-corrected volume — the end-expiratory trend correction "
                              f"was skipped here and will fail this file in a run. "
-                             f"{data['trend_error']}")
+                             f"{data['trend_error']}"
+                             + (f" {boundary_note}" if boundary_note else ""))
             # breaths ARE detected and clickable here (only the trend correction failed),
             # so the caption still applies — same as the plain success branch below.
             nign = sum(1 for _n, _a, _b, ig in spans if ig)
@@ -1060,7 +1088,8 @@ class _MechanicsMixin:
                 f"{data['name']}: {data['nbreaths']} breaths"
                 + (f" ({nign} excluded)" if nign else "")
                 + f", trimmed to {data['startix'] / fs:.2f}–{data['endix'] / fs:.2f} s. "
-                "Click a shaded breath to include/exclude (red = excluded).")
+                "Click a shaded breath to include/exclude (red = excluded)."
+                + (f" {boundary_note}" if boundary_note else ""))
             self._set_mech_caption(data['nbreaths'], nign)
 
     def _render_raw_stack(self, emg, fs, flow=None):

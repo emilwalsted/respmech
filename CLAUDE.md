@@ -18,6 +18,36 @@ sits alongside `docs/RELEASING.md` and `docs/SIGNING.md`.
 - `tests/golden/` — characterisation tests that pin v2 output **byte-for-byte**
   against v1 references. `docs/REVERSE_ENGINEERING.md` = the formulas/units.
 
+### A boundary sample's sign is not evidence of truncation — compare durations instead (K-035, 06-09-2026)
+
+`core.compute.trim_boundary_notices` (the K-035 fix: warns when the boundary breath
+`trim()` keeps looks truncated, instead of silently analysing it as whole) went
+through two designs. The first compared `trim()`'s own `startix`/`endix` against the
+raw array's edges (`startix == 0` / `endix == n - 1`) — mechanically correct as a
+description of when `trim()` keeps nothing beyond a boundary, but it false-flagged
+**both** the built-in sample recording and the committed golden synthetic inputs
+(`tests/golden/input/synth_case_*.csv`): none of those are truncated, they simply end
+(or begin) a hair's-breadth short of a full extra phase, which is indistinguishable
+from real truncation at the single-sample level. The general lesson: a synthetically
+generated or idealised recording routinely ends *exactly* at (or a discretisation
+step short of) a phase boundary — real truncation and a clean, minimal-margin cut are
+the same shape at the boundary sample alone. The fix compares the boundary breath's
+own phase duration against the file's own median duration for that phase across the
+OTHER detected breaths — self-calibrating, no assumption about breathing rate, and
+insensitive to where exactly the file happens to end.
+
+The chosen threshold (`min_relative_duration`, currently 0.8) is itself an empirical,
+not a guessed, number — verified by replaying K-035's own reported reproduction
+(0.5 s cut into the built-in sample's first inspiration / last expiration) through
+the shipped function: ratios of ~0.72 and ~0.30 against the file's own median. A
+threshold below ~0.75 does NOT catch the inspiratory case at all. The tightest known
+*non-truncated* ratio measured (the built-in sample's own last breath, whose synthetic
+generator varies each breath's period by design) is ~0.88. Any change to this
+threshold, or to which recordings feed `separateintobreaths`, should re-measure both
+ends of that range rather than adjust the number on feel — `tests/unit/
+test_trim_boundary_notices.py::TestTrimBoundaryNoticesPure::
+test_reproduces_k035_own_measured_case` pins the lower end.
+
 ### Two different screenshot tools — do not confuse them (found 10-08-2026)
 
 `scripts/gen_readme_figures.py` is the **canonical generator for the 7 images in
