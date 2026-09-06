@@ -433,7 +433,7 @@ def separateintobreaths(method, filename, timecol, flow, volume, poes, pgas, pdi
     return separateintobreathsbyflow(filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings)
 
 
-def trim_boundary_notices(breaths, settings, *, min_relative_duration=0.8, min_other_breaths=3):
+def trim_boundary_notices(breaths, settings, *, min_relative_duration=None, min_other_breaths=None):
     """Per-file quality notice for a boundary breath likely truncated by ``trim`` (K-035).
 
     ``trim`` (above) discards only a leading partial expiration and a trailing partial
@@ -471,6 +471,59 @@ def trim_boundary_notices(breaths, settings, *, min_relative_duration=0.8, min_o
     flag a perfectly normal boundary breath, or hide a truncated one. Below that
     count, that side's check is skipped entirely rather than guessed at.
 
+    Both defaults are read from ``settings.processing.mechanics.boundarynoticeminrelativeduration``
+    / ``boundarynoticeminotherbreaths`` (``Settings.processing.segmentation.boundary_notice_*``
+    in the typed model) when the caller does not pass an explicit override — see the
+    follow-up investigation below for why this is a per-analysis SETTING and not a
+    revised built-in statistic.
+
+    **Follow-up investigation (ticket 20260906-1307, a review raised after this function
+    shipped): is 0.8 too aggressive on ordinary, high-variability breathing?** A reviewer's
+    Monte Carlo simulation (log-normal phase durations) found 15-39% false-positive rates
+    at breath-to-breath coefficients of variation (CV) of 15-25% — a PER-FILE rate (either
+    boundary check firing on a non-truncated file), not a per-check rate: independently
+    reproducing the simulation gives ~8-19% for a single boundary check alone at the same
+    CVs, which combines across the two independent checks (first inspiration, last
+    expiration) to the cited 15-39% file-level range. Published measurements of
+    real resting breathing (16 healthy subjects, 40 min quiet breathing, opto-electronic
+    plethysmography: CV of fractional inspiratory time TI/TTOT = 17.9±6.5%, CV of
+    respiratory frequency = 20.8±11.5%, and TI/TTOT is reported as LESS variable than the
+    raw phase durations this function actually compares) confirm that range is physiologically
+    realistic, not a pessimistic guess — the false-positive risk is real.
+
+    The natural fix — replace the fixed ratio with a MAD-based robust z-score that adapts
+    to each file's OWN measured variability — was built and Monte-Carlo-compared against
+    the current ratio check at matching CVs and against this function's own two known
+    reference cases (K-035's 0.72/0.30 truncated ratios; the built-in sample's 0.8775
+    tightest natural ratio; both re-measured with the file's REAL median/MAD, not an
+    assumed one). It does reduce false positives substantially (e.g. at CV 20%, ~14% down
+    to ~1-5% depending on the z-threshold chosen) but at a cost that is NOT a wash: because
+    a real truncation is a FIXED absolute cut (K-035's reproduction: 0.5 s), its size
+    relative to the file's own natural spread shrinks as that spread grows, so the
+    MAD-based check's sensitivity to the exact same truncation falls even faster than its
+    false-positive rate does — from ~83% detection at CV 10% down to ~6-47% at CV 25-30%
+    depending on the z-threshold, i.e. it becomes LEAST sensitive precisely on the more
+    variable recordings where an ordinary-looking boundary breath is hardest for a human to
+    catch by eye. A z-threshold picked to just span this function's own two known reference
+    cases (~2.0, the midpoint of their measured z-scores -2.37 and -1.67, mirroring exactly
+    how 0.8 was picked as the midpoint of 0.72 and 0.88) still trades meaningful detection
+    power for a real but partial false-positive reduction, at every CV in the simulated
+    range. Given this notice is advisory only (it never fails a file — missing a real
+    truncation is the costlier failure mode of the two), replacing the statistic was
+    rejected: it is a different trade-off, not a demonstrated improvement.
+
+    The decision reached by this investigation (ticket 20260906-1307 — not yet reviewed or
+    confirmed by Emil, unlike the earlier decisions elsewhere in this codebase that carry
+    his name): keep 0.8/3 as the default, documented here as a known, accepted trade-off
+    rather than a proven-safe value, and expose both numbers as a per-analysis setting (see
+    above) so a study whose recordings are known to have unusually high natural variability
+    can raise the threshold (e.g. to 0.6-0.7) deliberately, instead of the whole install
+    silently trading detection power away for every user based on one un-validated
+    system-wide guess. Real research recordings (``tests/golden/production``, unavailable
+    in the sandbox this investigation ran in) would let a future session replace this
+    entire trade-off analysis with a measured threshold instead — see the ticket's own
+    "Opgave" for the preferred path if that data becomes reachable.
+
     A boundary breath that is ALREADY excluded (``processing.exclude_breaths`` /
     ``breaths[n]['ignored']``) still gets a notice ONLY when drift correction is on:
     excluding a breath removes it from the reported metrics, but ``correctdrift``
@@ -487,6 +540,13 @@ def trim_boundary_notices(breaths, settings, *, min_relative_duration=0.8, min_o
     this slots into the same report section and warning plumbing without a new
     mechanism.
     """
+    if min_relative_duration is None:
+        min_relative_duration = getattr(
+            settings.processing.mechanics, "boundarynoticeminrelativeduration", 0.8)
+    if min_other_breaths is None:
+        min_other_breaths = getattr(
+            settings.processing.mechanics, "boundarynoticeminotherbreaths", 3)
+
     numbers = sorted(breaths)
     if len(numbers) < 2:
         return []
