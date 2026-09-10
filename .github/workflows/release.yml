@@ -40,6 +40,11 @@ jobs:
   windows-msi:
     name: Windows MSI (unsigned — signed locally post-release)
     runs-on: windows-latest
+    # No concurrency.cancel-in-progress guard on this workflow, so a hung job would
+    # otherwise sit on GitHub's own 6 h default. No measured runtime was available when
+    # this was added (Actions history unreadable from a scheduled run, 403); 90 min is a
+    # 2x-margin guess Emil can tighten after watching a real release complete.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -72,6 +77,9 @@ jobs:
   macos-dmg:
     name: macOS dmg
     runs-on: macos-latest
+    # See windows-msi job's comment: no measured runtime available, 2x-margin guess.
+    # Includes notarisation, which is the slow, rate-limited part.
+    timeout-minutes: 90
     outputs:
       signed: ${{ steps.check.outputs.sign }}
     steps:
@@ -197,6 +205,8 @@ jobs:
     needs: [windows-msi, macos-dmg]
     if: startsWith(github.ref, 'refs/tags/v')   # only on a v* tag, not on manual dispatch
     runs-on: ubuntu-latest
+    # See windows-msi job's comment: no measured runtime available, 2x-margin guess.
+    timeout-minutes: 90
     permissions:
       contents: write                           # create the release + upload assets
     steps:
