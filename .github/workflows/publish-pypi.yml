@@ -44,6 +44,14 @@ jobs:
   test:
     name: Test gate (unit + numerical golden)
     runs-on: macos-latest
+    # Runs the FULL suite on macOS (see comment above), so this can legitimately take
+    # longer than ci.yml's own 240 min ceiling for the same runner. Set generously (2x
+    # margin) because the Actions history could not be read from the run that added this
+    # (REST API returns 403 in scheduled dispatcher runs) — Emil can tighten it after
+    # watching a real release complete. Without a ceiling here, a hung test-gate blocks
+    # every later release/publish indefinitely: concurrency.cancel-in-progress is false
+    # by design, and GitHub's own default is 6 hours.
+    timeout-minutes: 120
     permissions:
       contents: read
     env:
@@ -83,6 +91,10 @@ jobs:
     name: Build sdist + wheel
     needs: test
     runs-on: ubuntu-latest
+    # Same rationale as the test job's timeout: no reliable measured runtime available
+    # (Actions history unreadable, 403), so 60 min is a 2x-margin guess pending Emil
+    # tightening it after a real release.
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
@@ -125,6 +137,8 @@ jobs:
     needs: build
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    # See build job's comment: no measured runtime available, 2x-margin guess.
+    timeout-minutes: 60
     environment: pypi
     permissions:
       id-token: write            # OIDC — the ONLY credential; no password/token anywhere
@@ -155,6 +169,8 @@ jobs:
     needs: build
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    # See build job's comment: no measured runtime available, 2x-margin guess.
+    timeout-minutes: 60
     environment: testpypi
     permissions:
       id-token: write

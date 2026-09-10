@@ -30,6 +30,13 @@ jobs:
           - os: macos-latest
             qt_platform: offscreen
     runs-on: ${{ matrix.os }}
+    # On-demand only (workflow_dispatch), but still worth a ceiling so a hung capture
+    # doesn't sit on GitHub's 6 h default. Just installs deps and renders two screenshot
+    # passes (no test suite), so this should be far lighter than ci.yml's GUI-suite jobs;
+    # no measured runtime was available when this was added (Actions history unreadable
+    # from a scheduled run, 403), so 60 min is a deliberately generous guess Emil can
+    # tighten after watching a real run.
+    timeout-minutes: 60
     env:
       QT_QPA_PLATFORM: ${{ matrix.qt_platform }}
       PYQTGRAPH_QT_LIB: PySide6    # never let pyqtgraph bind PyQt6
