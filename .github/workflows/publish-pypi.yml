@@ -44,13 +44,18 @@ jobs:
   test:
     name: Test gate (unit + numerical golden)
     runs-on: macos-latest
-    # Runs the FULL suite on macOS (see comment above), so this can legitimately take
-    # longer than ci.yml's own 240 min ceiling for the same runner. Set generously (2x
-    # margin) because the Actions history could not be read from the run that added this
-    # (REST API returns 403 in scheduled dispatcher runs) — Emil can tighten it after
-    # watching a real release complete. Without a ceiling here, a hung test-gate blocks
-    # every later release/publish indefinitely: concurrency.cancel-in-progress is false
-    # by design, and GitHub's own default is 6 hours.
+    # Runs the FULL suite on macOS as a SINGLE pytest invocation (below) — the same shape
+    # ci.yml's own history describes growing from ~47 min to over 4 h from per-test Qt
+    # teardown/widget accumulation, which is why ci.yml switched macOS to a file-by-file
+    # loop and still keeps 240 min there as a pure hang guard. This job was NOT changed to
+    # that file-by-file form (out of scope for this ticket), so 120 min is a real risk of a
+    # FALSE-POSITIVE timeout on a legitimately slow-but-healthy release, not just a hang
+    # guard — flagged to Emil in the ticket. Chosen anyway because it is the ticket's own
+    # explicit fallback number for when Actions history can't be read (REST API returns
+    # 403 in scheduled dispatcher runs); watch the next real release and raise this (or
+    # switch to file-by-file like ci.yml) if it times out on a healthy run. Without ANY
+    # ceiling here, a hung test-gate blocks every later release/publish indefinitely:
+    # concurrency.cancel-in-progress is false by design, and GitHub's own default is 6 h.
     timeout-minutes: 120
     permissions:
       contents: read
