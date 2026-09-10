@@ -67,8 +67,11 @@ redeploys — so the site updates within seconds of a release.
   **Contents: write** on `emilwalsted/respmech-website`. If it is absent the step
   is skipped and the release/build is unaffected.
 - Without the hook, the website's daily poll still catches a new release within a
-  day. Setup helper + full docs: `deploy/setup.sh` and `deploy/README.md` in the
-  website repo.
+  day. Full docs: `deploy/README.md` in the website repo. Since 10-09-2026 the
+  website deploys through the shared engine `emilwalsted/onecom-deploy@deploy-v1`
+  (its SFTP secrets are set with `bin/setup-secrets respmech` from that repo; the
+  old `deploy/setup.sh` is gone), and the deploy result is read on the website
+  repo's `deploy-status` branch.
 
 > When changing `release.yml`, keep the notify step **after** `gh release create`
 > and non-fatal (guarded on the token) so it can never break an installer build.
