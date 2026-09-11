@@ -4,6 +4,30 @@ Qt/GUI gotchas for the PySide6 app: layout and font-metric budgets, styling, wor
 threads and queued signals, deferred rendering, and pyqtgraph. The project-wide rules
 stay in the repo-root `CLAUDE.md`; test-side hazards are in `tests/CLAUDE.md`.
 
+### A `QDialog` without `Qt.WA_DeleteOnClose` is never destroyed by its own `accept()`/`close()`
+
+Set the attribute explicitly on any one-shot dialog, or use the `prior=` pattern for
+a dialog a screen keeps its own reference to. Separately: `QDialog.exec()`
+unconditionally sets `Qt.WA_ShowModal`, regardless of what `setModal()` was told —
+a non-modal dialog that still wants the `exec()` calling convention has to override
+`exec()` itself rather than rely on `setModal(False)` alone (`AdvancedDialog`'s
+`modal=`/`on_apply`/`derived_debounce_ms` is the worked example). Any test helper
+that stubs `exec` to avoid blocking must patch the MOST-DERIVED class actually
+constructed — patching the base `QDialog.exec` silently misses a subclass override
+and hangs instead of failing (see `tests/CLAUDE.md`).
+
+### Status messages from other screens are suppressed during a run
+
+While a batch run is in progress, status/toast messages from screens other than the
+active one are held back; an action that gets rejected because a run is in progress
+uses the dedicated, forced signal `write_action_blocked` instead of the normal
+status-message path, so it is never accidentally swallowed by that suppression.
+Related state plumbing: `theme.set_stack_floor(..., viewport_height=...)` for the
+minimum-height floor of the screen stack, and splitter-position persistence via
+`ui/prefs` — note that `setSizes()` does not itself emit `splitterMoved`, so code
+persisting a splitter's position must not rely on that signal firing from a
+programmatic resize.
+
 ### Chips and `FlowLayout`: where a row of controls can actually wrap
 
 A row of controls only wraps where a layout can break it. `flow_layout.FlowLayout` makes the
