@@ -13,6 +13,13 @@ breath count on exclusion, unit declaration with a plausibility check, and
 filtering phantom breaths detected from flow noise. All three were deliberately
 rejected — do not re-propose them without a new, separate decision.
 
+**11-09-2026 — The resistive-work crossing in `compute.py` (recoil line crosses at
+V = 0, not at the inspiration's starting volume) stays as-is (author's decision,
+05-09-2026).** Inherited verbatim from the v1 code and locked by golden. The
+behaviour is kept and documented as known v1 heritage, with a recommendation to
+use `correct_trend` when EELV drifts — not fixed in place. This is a fourth entry
+alongside the three findings above; don't reopen without a new, separate decision.
+
 **11-09-2026 — Plain semver only, no `-rc`/`-beta` suffixes (established practice,
 `docs/RELEASING.md`).** A PyPI version is immutable once published: a broken
 release is fixed with a patch bump and a brand-new tag, never a re-push of the
