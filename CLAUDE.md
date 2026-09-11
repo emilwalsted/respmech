@@ -1,15 +1,60 @@
 # CLAUDE.md — RespMech
 
 Project memory for **RespMech** — respiratory mechanics, work of breathing and
-diaphragm-EMG analysis. Public repo `emilwalsted/respmech` (GPL-3.0-or-later).
-Author: Emil Ingerslev Walsted. See `README.md` and `docs/` for the full picture;
-this file is the quick orientation and the rules that apply everywhere.
+diaphragm-EMG analysis (respiratory mechanics, Campbell-diagram work of breathing,
+diaphragm EMG with ECG removal + spectral noise reduction, sample entropy). Public
+repo `emilwalsted/respmech` (GPL-3.0-or-later); the companion marketing site
+`respmech.dk` lives in the separate, private `respmech-website` repo. Author: Emil
+Ingerslev Walsted (ORCID [0000-0002-6640-7175](https://orcid.org/0000-0002-6640-7175));
+each release gets its own Zenodo DOI under the concept DOI
+10.5281/zenodo.3270825 (see `README.md`'s badge). See `README.md` and `docs/` for the
+full picture; this file is the quick orientation and the rules that apply everywhere.
+
+**Version status:** `src/respmech/__init__.py`'s `__version__` and `CHANGELOG.md` are
+the source of truth for what is released vs. still unreleased on `master` — read those
+directly rather than trusting a specific commit count or date written here, which goes
+stale within days.
 
 **The rest of this project's memory lives beside the code it applies to:**
 `tests/CLAUDE.md` (test-writing hazards), `src/respmech/ui/CLAUDE.md` (Qt/GUI
 gotchas) — both load automatically when you work with files there — and
 `.claude/skills/release/SKILL.md` (releasing, signing, PyPI, respmech.dk), which
 sits alongside `docs/RELEASING.md` and `docs/SIGNING.md`.
+
+## Sources of truth
+
+- **This file** for orientation and cross-cutting rules; `tests/CLAUDE.md` and
+  `src/respmech/ui/CLAUDE.md` for test- and Qt-specific hazards.
+- **`docs/`**: `REVERSE_ENGINEERING.md` (the formulas/units v2 must match),
+  `PLAN.md` (target architecture), `RELEASING.md` + `SIGNING.md` (the release
+  runbook), `DISTRIBUTION.md`, `INSTALL.md`, `NOISE_ECG_OPTIMIZATION.md`,
+  `CARDIAC_GATED_PEAK_EMG.md`, `PTP_INVESTIGATION.md`, and `beslutninger.md`
+  (dated decisions and "settled, don't reopen" points — read it before reopening
+  anything that sounds already decided).
+- **`CHANGELOG.md`** is the canonical release log.
+- This file is a distillate, not a replacement for the above; file:line references in
+  older notes go stale fast — verify against the actual code.
+
+## Non-negotiable rules
+
+- **Ask before any upload to production/a live site.** Deploys and release tags are
+  only run with explicit authorization for that specific change.
+- **Physiological correctness is sacrosanct.** Refactoring must never change a number
+  silently. `tests/golden/` pins the engine's output byte-for-byte against the v1
+  reference (`rtol=1e-9`); a golden diff is a bug in the change, not the reference,
+  unless the change is a deliberate, explained numerical change with the golden
+  re-baked in the same commit.
+- **`legacy/` is the frozen v1 oracle — never touch it.** It exists solely to
+  re-bake the golden reference; `src/respmech/` is a faithful port of it.
+- **Three clean layers**: the computation core (`core/`), the CLI and the Qt GUI
+  share one core and never import each other's concerns; plotting only consumes
+  results.
+- **A task is not done while its own CI is red.** A green local Linux run is
+  necessary, not sufficient — the Windows/macOS jobs see real portability
+  differences a Linux run structurally cannot.
+- Two decision records worth reading before you touch numbers or exclusions:
+  `docs/beslutninger.md` lists several number-changing ideas that were deliberately
+  rejected — don't re-propose them without new evidence.
 
 ## Layout / correctness
 
@@ -141,7 +186,7 @@ The pyqtgraph `QMenu` accumulation behind macOS CI's multi-hour wall is fixed
 each plot-owning widget), pinned by `tests/unit/test_plot_cleanup_contract.py`, and the
 load-bearing close ordering is documented in `ui/plot_perf.py`'s own docstring.
 
-See ticket `20260811-0910-ci-tests.md` (claude-ops) for the full investigation, every
+See the project's internal change history for 11-08-2026 for the full investigation, every
 measured number, and the review passes for both fixes.
 
 **Investigated and RULED OUT (11-08-2026): mid-session `<container>.clear()` re-renders.**
@@ -149,10 +194,10 @@ measured number, and the review passes for both fixes.
 independent full-file `RESPMECH_NET_CENSUS` runs of `test_gui_interactive.py` (57 tests):
 3,797 both with and without the fix, exact integer match, twice.
 
-**Re-verified 11-08-2026 (ticket `20260811-1232-flere-ci-fixes.md`, claude-ops), don't
-re-litigate a third time.** Re-ran the exact same measurement against the current
-baseline: **276 both with and without, exact match, 57/57 tests unchanged.** If a future
-ticket proposes this again, point it here rather than repeating the experiment.
+**Re-verified 11-08-2026, don't re-litigate a third time.** Re-ran the exact same
+measurement against the current baseline: **276 both with and without, exact match,
+57/57 tests unchanged.** If this is proposed again, point back here rather than
+repeating the experiment.
 
 ## Dev environment — check which interpreter you are actually running
 
@@ -229,3 +274,142 @@ added to an already-carried entry still reads as carried until the whole entry i
 **Wherever a write path can resolve carried-over state, refresh whatever is SHOWING it.**
 Any FUTURE state this pattern is extended to needs the same treatment: know every path that can create OR resolve it, not
 just the one this ticket happened to add a banner for.
+
+## The app's shape (v2.x) — supersedes any older "three screens" description
+
+- **Two tabs: Setup and Preview & QC** (sub-tabs: Mechanics, EMG – ECG reduction,
+  EMG – noise reduction). **Run & results is not a tab**: it's a collapsed drawer
+  ("Run & results ▸") under Preview & QC's file list, visible across sub-tabs, that
+  expands when a run starts. **A single `&` in a Qt button label is a mnemonic
+  marker**: always write `&&` ("Preview && QC", "Run && results"), including in
+  handlers that toggle ▸/▾ — a guard test rejects a lone `&` with no alphanumeric
+  follower.
+- **File selection via a searchable `FileRail`** (one shared instance between
+  Preview and Run). Each row shows a ✓/✗/• verdict, `[N excl]`, manifest ⚠
+  caveats and a ↺ for inherited folder settings; filterable and sortable
+  failed-first. There is no per-file results table separate from this.
+- **A File/View/Help menu bar** with keyboard shortcuts and an offline About box.
+  File shares New/Open/Save/Save as as the SAME `QAction` objects as the header's
+  Analysis button, plus Get started…, Explore with sample data and **Duplicate for
+  another recordings folder…** (the multi-cohort pattern). View is built
+  dynamically, one entry per tab. The startup dialog offers New/Open/Explore; the
+  recent-analyses list shows the folder next to the name — so **take screenshots
+  of it with an empty recent-analyses list**, or a local dataset folder name ends
+  up in a published image.
+- **Gating is inverted: every surface is always reachable.** It is the ACTION that
+  gets disabled (the Run button, "Process && write this file", clicking a breath),
+  never the tab, with the reason spelled out as a full sentence at the action
+  itself. The Run drawer's **commitment sheet** (files read, what will be written,
+  blockers in fix-order) is the ONLY gating surface. During a run, Preview & QC's
+  write actions lock too, while graphs/zoom/file navigation stay live. No tab
+  locking, no progressive-disclosure flow.
+- Setup is two columns (Input+Channels left, Output+Cohort summary right). The
+  channel dialog suggests roles from column names ("suggested"), detects
+  comma-decimals, and never blocks on a missing optional channel; removing the
+  EMG role clears whatever auto-detection depended on it, without asking.
+- **Four ways to open an analysis:** the Open dialog, drag-and-drop onto the path
+  fields, dropping a `.toml`/`.py` onto the window, double-clicking a `.toml` in a
+  packaged build. `open_analysis(path)` does NOT itself guard against discarding
+  unsaved changes — the caller runs `confirm_discard_changes` first.
+  `QUrl.toLocalFile()` paths are normalised with `os.path.normpath` at the drop
+  boundary (Windows separators).
+- **`exclude_breaths`/`breath_counts`/the noise reference are folder-tracked** (a
+  `folder` field; a Keep/Clear banner; hatched inherited exclusions). The
+  calculation core stays deliberately blind to this (keyed on filename;
+  `to_legacy_ns()` drops `folder`). The folder is stamped ONLY when a new entry is
+  created, never on a mere edit; any write path that can resolve carried-over
+  state must also refresh whatever is showing it (see above).
+- **A subset re-run NEVER rebuilds the cohort summary** — computing and committing
+  a cohort summary are deliberately split operations.
+
+## The single source of truth for each concern
+
+- `ui/manifest.py`: what a folder/batch contains (column counts, sampling rate,
+  LabChart warnings, `is_clean`). `group_readout()` predicts the grouping from
+  `core.summary.group_key` — always call it with the FULL matched file set.
+- `ui/file_rail.py`: which file is selected, and what the app knows about it.
+- `ui/validation.py::blockers()`: why a run can't start (collision → validation →
+  path); drives BOTH Setup's QC strip and the commitment sheet.
+  `friendly_settings_error()` turns a `Settings.validate()` exception into a
+  sentence naming the UI control — any new `validate()` check needs an entry in
+  `_FRIENDLY_SETTINGS_ERRORS`/`_FRIENDLY_PREFIXES`.
+- `core/io/plan.py::plan_outputs()`: the one place that knows what a run WILL
+  write (`is_cap=True` = a ceiling, never a promise). `write_planned()` rewrites a
+  computed result to another folder without recomputing.
+- `core/settings.py::carried_over_state()`/`is_carried_folder()`: folder-tracked
+  settings (`None` on either side always means unproven, never guessed;
+  `normcase`+`normpath`).
+- Errors with a known diagnosis go through `TextViewerDialog`'s `collapsed_detail`
+  plus a DEDICATED exception type, never a bare `ValueError`; in
+  `_build_noise_set`/`_reference_noise_clip` the exception TYPE is preserved on
+  re-raise (`stage_noise_fidelity` catches by type).
+- Point 6 (suite scaling) is closed — see "Point 6 (suite scaling)" above; don't
+  reopen the `<container>.clear()` hypothesis without a fresh `RESPMECH_NET_CENSUS`
+  measurement.
+
+## App layout, tests and CI
+
+- `src/respmech/`: `core/` (computation + IO), `ui/` (GUI), `cli/`, `settingsio/`
+  (TOML + v1-migration). Settings are declarative **TOML**; `respmech migrate
+  old.py -o new.toml` converts an old-style settings file with a migration report.
+- **Tests are the gate:** `pytest tests/unit` + `tests/golden` green. CI
+  (`ci.yml`) runs **smoke-linux** on every push (~15 min; installs Qt libs from
+  the runner image's own index and only refreshes when needed, each apt call
+  wrapped in a `timeout`); the full 2×2 (OS × Python) matrix runs only on
+  master/PR/dispatch. Every job has `timeout-minutes`; concurrency is keyed per
+  sha (push) or per PR number.
+
+## Release (one tag triggers everything)
+
+Pushing `vX.Y.Z` (must point at `master`) triggers both `release.yml` (signed dmg +
+MSI, GitHub release marked Latest) and `publish-pypi.yml` (PyPI via Trusted
+Publishing/OIDC, no tokens, behind a test gate that runs the whole suite on a
+release runner with a wide, unmeasured timeout margin — treat it as noticeably
+slower than `ci.yml`, and watch for race-sensitive asserts failing there first).
+Full runbook: `docs/RELEASING.md`
+and `docs/SIGNING.md`; the release skill (`.claude/skills/release/SKILL.md`) walks
+through it step by step. In short: add the `CHANGELOG.md` entry (folding in
+`## Unreleased` if one exists), bump `__version__` in one place
+(`src/respmech/__init__.py`, keep `pyproject.toml`'s briefcase version in sync),
+verify coverage with `tools/check_changelog.py`, and only ever use plain semver
+(`vX.Y.Z`, never `-rc`/`-beta` — a PyPI version is immutable, so a broken release
+is fixed with a patch bump and a new tag, never a re-push of the same tag).
+Windows MSI signing is a manual, local, post-release step
+(`scripts/sign-msi-certum.sh <tag>`) — see `docs/SIGNING.md`.
+
+## App ↔ website coupling
+
+- **A release notifies the website.** The last step of the release workflow sends
+  a `repository_dispatch` to the website repo, which bumps its version and
+  redeploys; if that hook is ever unavailable, the website's own daily poll picks
+  up the release within a day regardless. Keep the notify step non-fatal and
+  strictly after `gh release create`.
+- **The changelog is mirrored, not duplicated by hand:** the website's changelog
+  page renders `CHANGELOG.md` trimmed to what a user of the app cares about, and
+  its own hand-written "Coming next" section is promoted to `vX.Y.Z` automatically
+  at release time — keep it current, in the site's own voice, while merging.
+- **The release e-mail is never sent automatically by anything on the app side.**
+  Only the website's own announce workflow mails subscribers, and only when
+  triggered separately.
+
+## Physiology / algorithm anchors (from `docs/`)
+
+- **EMG is quantified relative to a patient+test-specific maximum**, so every file
+  in one test undergoes the IDENTICAL transformation. The optimisation target is
+  the largest SNR improvement with fidelity ≥ 0.8 (retain ≥ 80% of inspiratory EMG
+  power). The noise profile is built once per test from an expiration-based rest
+  reference.
+- **Cardiac-gated peak EMG** (`processing.emg.robust_peak`, opt-in, default off):
+  blanks the RMS envelope around R-peaks. Adds columns only; the golden passes
+  with the feature both on and off; gated columns go NaN on unreliable R-peak
+  detection.
+- **PTP baseline: the principle from `PTP_INVESTIGATION.md` stands** — one
+  end-expiratory baseline, never a double subtraction. v2 uses the **mean over a
+  50 ms window** (`processing.ptp.baseline_window_s`, default 0.05), not the
+  noise-sensitive single-sample `pressure[0]`. Don't reopen this.
+- **v1↔v2 deviations are catalogued** in the reverse-engineering documentation:
+  the PTP window (deliberate), a legacy entropy-trim bug (v1 was wrong), and a
+  scipy-Simpson drift.
+- Sample-entropy fields are named "Template length (m + 1)" and "Tolerance (r), ×
+  SD", with provenance recorded. Ground truth is the input run through the
+  newest algorithm, never an old spreadsheet.
