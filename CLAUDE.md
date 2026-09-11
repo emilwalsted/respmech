@@ -7,7 +7,7 @@ repo `emilwalsted/respmech` (GPL-3.0-or-later); the companion marketing site
 `respmech.dk` lives in the separate, private `respmech-website` repo. Author: Emil
 Ingerslev Walsted (ORCID [0000-0002-6640-7175](https://orcid.org/0000-0002-6640-7175));
 each release gets its own Zenodo DOI under the concept DOI
-10.5281/zenodo.3270826 (see `README.md`'s badge). See `README.md` and `docs/` for the
+10.5281/zenodo.3270825 (see `README.md`'s badge). See `README.md` and `docs/` for the
 full picture; this file is the quick orientation and the rules that apply everywhere.
 
 **Version status:** `src/respmech/__init__.py`'s `__version__` and `CHANGELOG.md` are
@@ -293,7 +293,9 @@ just the one this ticket happened to add a banner for.
   Analysis button, plus Get started…, Explore with sample data and **Duplicate for
   another recordings folder…** (the multi-cohort pattern). View is built
   dynamically, one entry per tab. The startup dialog offers New/Open/Explore; the
-  recent-analyses list shows the folder next to the name.
+  recent-analyses list shows the folder next to the name — so **take screenshots
+  of it with an empty recent-analyses list**, or a local dataset folder name ends
+  up in a published image.
 - **Gating is inverted: every surface is always reachable.** It is the ACTION that
   gets disabled (the Run button, "Process && write this file", clicking a breath),
   never the tab, with the reason spelled out as a full sentence at the action
@@ -362,7 +364,9 @@ just the one this ticket happened to add a banner for.
 Pushing `vX.Y.Z` (must point at `master`) triggers both `release.yml` (signed dmg +
 MSI, GitHub release marked Latest) and `publish-pypi.yml` (PyPI via Trusted
 Publishing/OIDC, no tokens, behind a test gate that runs the whole suite on a
-runner that can be twice as slow as `ci.yml`). Full runbook: `docs/RELEASING.md`
+release runner with a wide, unmeasured timeout margin — treat it as noticeably
+slower than `ci.yml`, and watch for race-sensitive asserts failing there first).
+Full runbook: `docs/RELEASING.md`
 and `docs/SIGNING.md`; the release skill (`.claude/skills/release/SKILL.md`) walks
 through it step by step. In short: add the `CHANGELOG.md` entry (folding in
 `## Unreleased` if one exists), bump `__version__` in one place
