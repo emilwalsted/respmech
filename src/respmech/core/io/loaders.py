@@ -13,6 +13,8 @@ import scipy.io as sio
 import scipy.integrate
 import pandas as pd
 
+from respmech.core.quality import detect_constant_channel, detect_merged_time_blocks
+
 
 class DataValidationError(ValueError):
     """Raised when an input column is missing, non-numeric, NaN, or mismatched."""
@@ -214,3 +216,94 @@ def load(filepath, settings):
     emgcolumns = np.asarray(emgcolumns, dtype=float)
 
     return flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns
+
+
+# --- cheap pre-run quality probes --------------------------------------------
+#
+# These read a NEW-style ``core.settings.Settings`` (not the legacy namespace ``load()``
+# above uses) and a file path -- the same ``(settings, file_path) -> ...`` shape as
+# ``ui.workers``'s manifest probers (``peek_columns``/``probe_sampling_frequency``/
+# ``peek_header_warning``), so ``ui.manifest.build_manifest`` can default to them
+# directly. They live here (not in ``core.quality``, which stays pandas-free) because
+# they need the same tolerant CSV/TSV reader as ``load()`` above; ``respmech validate``
+# (``cli/__main__.py``) calls them directly, without ever importing ``ui.manifest`` or
+# Qt.
+
+def _delimited_ext(file_path):
+    ext = os.path.splitext(file_path)[1].lower()
+    return ext if ext in (".csv", ".txt") else None
+
+
+def probe_merged_time_blocks(settings, file_path, *, max_rows=5000):
+    """Cheap per-file probe for :func:`respmech.core.quality.detect_merged_time_blocks`:
+    reads only column 0 (the time axis), capped at 5000 rows for the same reason
+    ``ui.workers.probe_sampling_frequency`` caps its own column-0 read -- a live Setup
+    scan re-probes a whole folder on every input edit. A merge that starts within the
+    capped window (as the reported case did -- three LabChart blocks overlapping from
+    the very first sample) is still caught; one that only begins later in a very long
+    recording is not -- the same documented trade-off ``peek_header_warning`` makes for
+    its own 8 KB head-only sniff. Returns ``None`` for .xlsx/.mat (no cheap capped read
+    available) or any unreadable/short file."""
+    ext = _delimited_ext(file_path)
+    if ext is None:
+        return None
+    fmt = settings.input.format
+    dec = getattr(fmt, "decimal", ".") or "."
+    sep = "\t" if ext == ".txt" else (";" if dec == "," else ",")
+    try:
+        df = _read_table(file_path, sep=sep, decimal=dec, usecols=[0], nrows=max_rows)
+    except Exception:                       # noqa: BLE001 — best-effort, never blocks the scan
+        return None
+    if df.shape[1] == 0:
+        return None
+    col = pd.to_numeric(df.iloc[:, 0], errors="coerce").to_numpy(dtype=float)
+    return detect_merged_time_blocks(col)
+
+
+#: (label, ``Channels`` attribute) for the single-column roles checked by
+#: :func:`probe_constant_channels` — deliberately excludes ``volume`` (often DERIVED via
+#: ``processing.mechanics.integrate_from_flow`` rather than a real recorded channel; not
+#: named in the ticket this probe was built for) and mirrors ``core.io.loaders.
+#: validatedata``'s own channel labels where they overlap.
+_CONSTANT_CHECK_SINGLE = (("Flow", "flow"), ("Poes", "poes"), ("Pgas", "pgas"), ("Pdi", "pdi"))
+
+
+def probe_constant_channels(settings, file_path, *, max_rows=5000):
+    """Cheap per-file probe for :func:`respmech.core.quality.detect_constant_channel`,
+    run over every ASSIGNED channel (flow, Poes, Pgas, Pdi, each EMG, each entropy
+    column) — returns a tuple of ``"<name> (column <n>)"`` strings, one per channel
+    found constant, or ``()`` when none are (including when no channel is assigned yet,
+    or the file cannot be read this cheaply). Capped at the same 5000 rows as
+    :func:`probe_merged_time_blocks`: a channel that is constant for the whole
+    recording — the reported case, and the one that matters for the hard block in
+    ``core.compute.separateintobreathsbyflow`` — reads as constant in the first 5000
+    rows too; a channel that only goes flat later is not caught here (same class of
+    trade-off, not a new one)."""
+    ext = _delimited_ext(file_path)
+    if ext is None:
+        return ()
+    ch = settings.input.channels
+    named = [(label, getattr(ch, attr, None)) for label, attr in _CONSTANT_CHECK_SINGLE]
+    for i, c in enumerate(ch.emg or []):
+        named.append((f"EMG #{i + 1}", c))
+    for i, c in enumerate(ch.entropy or []):
+        named.append((f"Entropy #{i + 1}", c))
+    assigned = [(name, col) for name, col in named if col]
+    if not assigned:
+        return ()
+    fmt = settings.input.format
+    dec = getattr(fmt, "decimal", ".") or "."
+    sep = "\t" if ext == ".txt" else (";" if dec == "," else ",")
+    try:
+        df = _read_table(file_path, sep=sep, decimal=dec, nrows=max_rows)
+    except Exception:                       # noqa: BLE001 — best-effort, never blocks the scan
+        return ()
+    ncols = df.shape[1]
+    out = []
+    for name, col in assigned:
+        if col < 1 or col > ncols:
+            continue                        # out of range: a real mismatch, reported at run time
+        series = pd.to_numeric(df.iloc[:, col - 1], errors="coerce").to_numpy(dtype=float)
+        if detect_constant_channel(series):
+            out.append(f"{name} (column {col})")
+    return tuple(out)

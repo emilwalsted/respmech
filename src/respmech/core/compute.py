@@ -25,6 +25,7 @@ from collections import OrderedDict
 from respmech.core import emg as emglib
 from respmech.core import entropy as entlib
 from respmech.core._cancel import check
+from respmech.core.quality import detect_constant_channel
 
 
 # --- volume conditioning ---------------------------------------------------
@@ -283,7 +284,32 @@ class DegenerateBreathError(ValueError):
     incomplete breath right at the start or end of a recording."""
 
 
-def _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols, filename):
+class ConstantChannelError(ValueError):
+    """Raised when the flow channel does not vary at all across the whole recording.
+
+    Breath separation on flow (``separateintobreathsbyflow``) walks the signal looking
+    for a sign change between inspiration (flow < 0) and expiration (flow > 0); a
+    perfectly constant flow (most commonly a mis-assigned or unused/grounded column)
+    satisfies neither condition, so the walk's index never advances -- an infinite loop,
+    not merely a wrong answer, confirmed by tracing the loop rather than assumed. Checked
+    and raised up front instead."""
+
+
+def _breath_onset_time(insp, exp):
+    """The breath's own start time in the recording, read straight from its (already
+    phase-sliced) time arrays -- used only for a degenerate-breath message (see
+    ``_make_breath`` below), so it must work even when the six-way concatenation that
+    triggers ``DegenerateBreathError`` itself failed. Returns ``None`` when neither
+    phase has a usable time sample (both empty, or all non-finite)."""
+    for phase in (insp, exp):
+        t = np.asarray(phase.get("time")).reshape(-1)
+        t = t[np.isfinite(t)]
+        if t.size:
+            return float(t[0])
+    return None
+
+
+def _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols, filename, is_boundary):
     # The try is scoped to only the six joins below (not the whole dict literal), so a
     # ValueError from an unrelated future addition here is never mislabeled as a
     # degenerate breath (self-review finding, D25).
@@ -295,13 +321,25 @@ def _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols, filename):
         pgas = np.concatenate((insp["pgas"], exp["pgas"])).squeeze()
         pdi = np.concatenate((insp["pdi"], exp["pdi"])).squeeze()
     except ValueError as e:
+        if is_boundary:
+            raise DegenerateBreathError(
+                f"Breath #{breathcnt} in {filename} is degenerate (its inspiration and "
+                f"expiration phases could not be joined into one breath) and cannot be "
+                f"analysed. This usually happens at an incomplete breath right at the "
+                f"start or end of a recording — exclude it in Preview & QC, or check the "
+                f"breath-separation settings under Preview & QC ▸ Mechanics ▸ Advanced… ▸ "
+                f"Breath detection.") from e
+        onset = _breath_onset_time(insp, exp)
+        where = f"at t≈{onset:.2f} s into the recording" if onset is not None else "mid-recording"
         raise DegenerateBreathError(
             f"Breath #{breathcnt} in {filename} is degenerate (its inspiration and "
             f"expiration phases could not be joined into one breath) and cannot be "
-            f"analysed. This usually happens at an incomplete breath right at the "
-            f"start or end of a recording — exclude it in Preview & QC, or check the "
-            f"breath-separation settings under Preview & QC ▸ Mechanics ▸ Advanced… ▸ "
-            f"Breath detection.") from e
+            f"analysed. This breath is {where}, well away from either boundary of the "
+            f"file, so a truncated recording is unlikely to be the cause here — more "
+            f"likely candidates are noise around zero flow, a mis-assigned flow channel, "
+            f"or more than one recording merged together in this file. Exclude it in "
+            f"Preview & QC, or check the breath-separation settings under Preview & QC ▸ "
+            f"Mechanics ▸ Advanced… ▸ Breath detection.") from e
     return OrderedDict([
         ('number', breathcnt),
         ('name', 'Breath #' + str(breathcnt)),
@@ -360,6 +398,18 @@ def _phase_dicts(sl_in, sl_ex, timecol, flow, volume, poes, pgas, pdi, entropyco
 
 
 def separateintobreathsbyflow(filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings):
+    # A constant flow satisfies neither `flow[i] < 0` nor `flow[i] > 0` below, so `i`
+    # never advances past `instart` and the `while i < j` loop below never terminates --
+    # an infinite loop, not merely a wrong answer (traced, not assumed; see
+    # ConstantChannelError's own docstring). Checked up front instead of left to hang.
+    if detect_constant_channel(flow):
+        raise ConstantChannelError(
+            f"The flow channel in {filename} is constant (it does not vary at all), so "
+            f"breaths cannot be split on it. This usually means the wrong column is "
+            f"assigned as the flow channel, or this input has no real flow signal — "
+            f"check the channel assignment in Setup ('Assign channels from data…'), or "
+            f"switch 'Signal used to split breaths' to volume under Preview & QC ▸ "
+            f"Mechanics ▸ Advanced… ▸ Breath detection.")
     breaths = OrderedDict()
     j = len(flow)
     bufferwidth = settings.processing.mechanics.breathseparationbuffer
@@ -377,6 +427,7 @@ def separateintobreathsbyflow(filename, timecol, flow, volume, poes, pgas, pdi, 
         while (i < j and ((flow[i] > 0) or (np.mean(flow[i:min(j, i + bufferwidth)]) > 0))):
             i += 1
         exend = min(i - 1, j)
+        is_boundary = (breathcnt == 1) or (i >= j)
         exp, insp, entcols, emgcols = _phase_dicts(
             (instart, inend), (exstart, exend), timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns)
         if breathcnt in ib:
@@ -384,7 +435,7 @@ def separateintobreathsbyflow(filename, timecol, flow, volume, poes, pgas, pdi, 
         else:
             breathno += 1
             ignored = False
-        breaths[breathcnt] = _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols, filename)
+        breaths[breathcnt] = _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols, filename, is_boundary)
     return breaths
 
 
@@ -436,6 +487,7 @@ def separateintobreathsbyvolume(filename, timecol, flow, volume, poes, pgas, pdi
             exend = expeaks[breathcnt - 1] - 1
         else:
             exend = len(invol) - 1
+        is_boundary = (breathcnt == 1) or (breathcnt == len(inpeaks))
         exp, insp, entcols, emgcols = _phase_dicts(
             (instart, inend), (exstart, exend), timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns)
         if breathcnt in ib:
@@ -443,7 +495,7 @@ def separateintobreathsbyvolume(filename, timecol, flow, volume, poes, pgas, pdi
         else:
             breathno += 1
             ignored = False
-        breaths[breathcnt] = _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols, filename)
+        breaths[breathcnt] = _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols, filename, is_boundary)
     return breaths
 
 
