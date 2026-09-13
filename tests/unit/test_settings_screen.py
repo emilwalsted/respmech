@@ -761,6 +761,59 @@ def test_qc_strip_also_flags_a_header_block_folder(qapp, tmp_path):
     win.close()
 
 
+def test_qc_strip_flags_a_merged_multi_block_export(qapp, tmp_path):
+    """ticket 20260913-2054: a time column with duplicated timestamps early in the
+    file (interleaved multi-block export), clean afterwards -- the Setup QC strip must
+    surface it, mirroring the header-block caution pattern above."""
+    import numpy as np
+    import pandas as pd
+    from respmech.ui.main_window import MainWindow
+    n = 3000
+    t_clean = np.arange(n) / 1000.0
+    t_merged = np.sort(np.concatenate([t_clean[:600], t_clean]))
+    m = len(t_merged)
+    pd.DataFrame({
+        "time": t_merged, "e1": np.zeros(m), "e2": np.zeros(m), "e3": np.zeros(m),
+        "flow": np.sin(np.linspace(0, 10, m)), "volume": np.linspace(0, 1, m),
+        "poes": np.linspace(-5, -3, m), "pgas": np.linspace(6, 8, m),
+        "pdi": np.linspace(11, 13, m),
+    }).to_csv(tmp_path / "merged.csv", index=False)
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
+    sc._on_inputs_changed()
+    sc.samp_freq.setValue(1000); sc.out_folder.setText(str(tmp_path / "out"))
+    _assign(sc, flow=5, volume=6, poes=7, pgas=8, pdi=9)
+    assert sc.qc.property("status") == "warn"
+    assert "merged.csv" in sc.qc.text()
+    assert "merged row-by-row" in sc.qc.text() or "duplicated" in sc.qc.text()
+    win.close()
+
+
+def test_qc_strip_flags_a_constant_assigned_channel(qapp, tmp_path):
+    """ticket 20260913-2054: an assigned channel (Pdi here) that never varies must be
+    named on the Setup QC strip, same pattern as the header-block/merged-block cautions
+    above."""
+    import numpy as np
+    import pandas as pd
+    from respmech.ui.main_window import MainWindow
+    n = 2000
+    pd.DataFrame({
+        "time": np.arange(n) / 1000.0, "e1": np.zeros(n), "e2": np.zeros(n), "e3": np.zeros(n),
+        "flow": np.sin(np.linspace(0, 10, n)), "volume": np.linspace(0, 1, n),
+        "poes": np.linspace(-5, -3, n), "pgas": np.linspace(6, 8, n),
+        "pdi": np.zeros(n),
+    }).to_csv(tmp_path / "flatpdi.csv", index=False)
+    win = MainWindow(AppState()); sc = win.settings_screen
+    sc.in_folder.setText(str(tmp_path)); sc.in_files.setText("*.csv")
+    sc._on_inputs_changed()
+    sc.samp_freq.setValue(1000); sc.out_folder.setText(str(tmp_path / "out"))
+    _assign(sc, flow=5, volume=6, poes=7, pgas=8, pdi=9)
+    assert sc.qc.property("status") == "warn"
+    assert "flatpdi.csv" in sc.qc.text()
+    assert "Pdi" in sc.qc.text()
+    win.close()
+
+
 def test_format_readout_no_longer_misreports_xlsx(qapp, tmp_path):
     pytest.importorskip("openpyxl")
     from respmech.ui.main_window import MainWindow

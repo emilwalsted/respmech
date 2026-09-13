@@ -47,6 +47,19 @@ def test_a_sample_index_column_is_not_mistaken_for_merged_time():
     assert detect_merged_time_blocks(idx) is None
 
 
+def test_a_duplicated_sample_index_column_is_also_not_flagged():
+    """The bare index above (no duplicates at all) would pass even without the
+    integer-step guard, simply because it never reaches the duplicate-counting logic —
+    this is the guard's actual load-bearing case: an index column that ALSO has a few
+    duplicated/restarting values (e.g. a re-started counter across merged blocks) must
+    still read as 'not a time axis' rather than being flagged."""
+    n = 100000
+    idx = np.arange(n, dtype=float)
+    for i in (1000, 50000, 90000):
+        idx[i] = idx[i - 1]
+    assert detect_merged_time_blocks(idx) is None
+
+
 def test_irregular_spacing_is_not_mistaken_for_merged_time():
     """A column that is not a clean sample clock in the first place (e.g. an actual
     signal channel, not a time axis) must not be flagged just because it happens to
@@ -58,23 +71,111 @@ def test_irregular_spacing_is_not_mistaken_for_merged_time():
 
 
 def test_a_single_duplicate_sample_in_a_huge_file_is_not_flagged():
-    """Neither threshold alone is enough — a lone rounding-glitch duplicate must not
-    trip this (min_duplicates), even though it would clear the fraction threshold on
-    its own in a large enough file only if that file were tiny; conversely a huge file
-    with exactly one duplicate never clears the fraction floor either. Confirms both
-    guards are load-bearing, not just one."""
+    """A lone rounding-glitch duplicate must not trip this on its own -- both the
+    absolute floor (1 < min_duplicates) and the fraction floor (1/19999 << 2%) reject
+    it independently here, so this alone does not prove either threshold is load-
+    bearing (see the two isolating tests below for that)."""
     t = np.arange(20000) / 1000.0
     t = t.copy()
     t[500] = t[499]                       # exactly one duplicated timestamp
     assert detect_merged_time_blocks(t) is None
 
 
+def test_min_duplicates_floor_is_load_bearing_in_isolation():
+    """Isolates ONLY the absolute floor: 2 duplicates, spread out so the surviving
+    positive steps stay uniform (ratio well under the 0.25 irregularity guard) and
+    ``min_duplicate_fraction`` is passed as 0 so the fraction test can never be what
+    rejects this on its own. If ``min_duplicates`` were removed or miscompared, this
+    would flag -- confirmed by deleting the check and re-running by hand."""
+    n = 1000
+    t = np.arange(n) / 1000.0
+    t = t.copy()
+    t[500] = t[499]
+    t[700] = t[699]                        # 2 duplicates, below min_duplicates=3
+    assert detect_merged_time_blocks(t, min_duplicate_fraction=0) is None
+
+
+def test_min_duplicate_fraction_floor_is_load_bearing_in_isolation():
+    """Isolates ONLY the fraction floor: 3 duplicates (clears the default
+    ``min_duplicates``) spread across a 100,000-sample file so the fraction
+    (3/99999 ≈ 0.003%) stays far below the 2% default -- with ``min_duplicates``
+    passed as 1 so the absolute floor can never be what rejects this on its own."""
+    n = 100000
+    t = np.arange(n) / 1000.0
+    t = t.copy()
+    for i in (1000, 50000, 90000):
+        t[i] = t[i - 1]
+    assert detect_merged_time_blocks(t, min_duplicates=1) is None
+
+
 def test_a_couple_of_duplicates_in_a_tiny_file_is_not_flagged():
     t = np.arange(25) / 1000.0
     t = t.copy()
     t[10] = t[9]
-    t[11] = t[9]                          # 2 duplicates in a 25-sample file (>2% fraction)
-    assert detect_merged_time_blocks(t) is None   # below the absolute min_duplicates floor
+    t[11] = t[9]
+    assert detect_merged_time_blocks(t) is None
+
+
+def test_a_coarse_time_column_uniform_end_to_end_is_not_flagged():
+    """A time column printed at coarser precision than its true sampling interval (a
+    real, plain export quirk -- e.g. 2000 Hz rounded to 3 decimal places) gives a high,
+    but UNIFORM, rate of zero-diffs end to end. This must not read as a merged block:
+    a genuine merge's duplicate run ends once only one recording is left, so its own
+    tail is clean, which this column's is not (measured: ~50% non-increasing steps
+    throughout, tail included -- the exact false positive this check exists to avoid)."""
+    fs = 2000
+    n = 60000
+    t = np.round(np.arange(n) / fs, 3)
+    assert detect_merged_time_blocks(t) is None
+
+
+def test_a_genuine_merge_with_a_clean_tail_is_still_flagged_despite_the_coarse_check():
+    """The tail-cleanliness requirement added for the case above must not itself
+    swallow the reported shape: a real interleaved merge (duplicates concentrated
+    early, clean for the rest of the file) still gets flagged."""
+    n = 5000
+    t_clean = np.arange(n) / 1000.0
+    t_merged = np.sort(np.concatenate([t_clean[:1000], t_clean]))
+    msg = detect_merged_time_blocks(t_merged)
+    assert msg is not None and "merged row-by-row" in msg
+
+
+def test_concatenated_blocks_each_restarting_their_own_time_base_are_flagged():
+    """The OTHER real shape a multi-block export can take: blocks simply appended one
+    after another (LabChart's ordinary 'export all blocks' behaviour), each restarting
+    near t=0 -- a single large BACKWARD JUMP per boundary, not a run of duplicates.
+    Confirmed this shape slips past the duplicate-based check alone (2-4 jumps in a
+    multi-thousand-sample file clear neither the count nor the fraction floor) before
+    this dedicated jump check was added."""
+    block1 = np.arange(700000) / 1000.0
+    block2 = np.arange(103600) / 1000.0
+    block3 = np.arange(33250) / 1000.0
+    t = np.concatenate([block1, block2, block3])
+    msg = detect_merged_time_blocks(t)
+    assert msg is not None
+    assert "restarting its own time base" in msg
+    assert "sample 700000" in msg
+    assert "700" in msg and "s" in msg          # jump magnitude (~700 s, the first block's length)
+
+
+def test_a_small_forward_gap_is_not_mistaken_for_a_restarted_block():
+    """A legitimate PAUSE in acquisition (a forward jump -- missing data, never
+    analysed as breaths either way) must not trip the backward-jump check, which only
+    ever looks at NEGATIVE steps."""
+    t = np.concatenate([np.arange(5000) / 1000.0, 100.0 + np.arange(5000) / 1000.0])
+    assert detect_merged_time_blocks(t) is None
+
+
+def test_an_implausible_inferred_rate_is_not_flagged_either_way():
+    """Consistency with ui.workers.detect_sampling_frequency's own plausibility band
+    (10-200000 Hz): a column that otherwise looks regular but implies a rate outside
+    that band is not trustworthy as 'looks like time' in the first place, so neither
+    check fires on it -- the two functions must never disagree about this. A step of
+    0.5 s (2 Hz, below the 10 Hz floor) is deliberately non-integer, so this is not
+    accidentally caught by the earlier sample-index guard instead (which would make
+    this pass for the wrong reason)."""
+    t = np.arange(5000) * 0.5                # step 0.5 s -> 2 Hz, below the 10 Hz floor
+    assert detect_merged_time_blocks(t) is None
 
 
 def test_golden_synthetic_inputs_are_never_flagged():
@@ -225,3 +326,28 @@ def test_probe_constant_channels_ignores_an_out_of_range_column(tmp_path):
     s = _settings(str(tmp_path), flow=2, poes=99, pgas=None, pdi=None)
     out = probe_constant_channels(s, str(path))
     assert out == ()
+
+
+def test_probe_constant_channels_does_not_crash_on_a_nan_channel_setting(tmp_path):
+    """A channel setting can carry ``float('nan')`` for "not really assigned" rather
+    than ``None`` (mirrors ``core.io.loaders._column``'s own guard, which handles both)
+    -- a hand-edited or migrated TOML is the realistic source. Before the NaN guard,
+    ``if col`` (NaN is truthy) let this straight through to a crashing
+    ``df.iloc[:, nan - 1]``."""
+    n = 100
+    path = tmp_path / "f.csv"
+    pd.DataFrame({"time": np.arange(n) / 1000.0,
+                 "flow": np.sin(np.linspace(0, 10, n))}).to_csv(path, index=False)
+    s = _settings(str(tmp_path), flow=2, poes=float("nan"), pgas=None, pdi=None)
+    assert probe_constant_channels(s, str(path)) == ()
+
+
+def test_probe_constant_channels_does_not_crash_on_a_float_channel_setting(tmp_path):
+    """A plain (non-integer) float column setting -- e.g. ``flow = 2.0`` surviving a
+    hand-written TOML -- must be treated as column 2, not crash or silently mismatch."""
+    n = 100
+    path = tmp_path / "f.csv"
+    pd.DataFrame({"time": np.arange(n) / 1000.0,
+                 "flow": np.zeros(n)}).to_csv(path, index=False)
+    s = _settings(str(tmp_path), flow=2.0, poes=None, pgas=None, pdi=None)
+    assert probe_constant_channels(s, str(path)) == ("Flow (column 2)",)

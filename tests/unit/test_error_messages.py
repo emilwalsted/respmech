@@ -131,17 +131,18 @@ def test_degenerate_breath_boundary_keeps_the_start_or_end_explanation():
     assert "t≈" not in msg
 
 
-def test_constant_flow_raises_a_named_error_instead_of_hanging():
-    """Traced, not assumed: a perfectly constant flow satisfies neither `flow[i] < 0`
-    nor `flow[i] > 0`, so the segmentation loop's index never advances and the ORIGINAL
-    (unguarded) code loops forever -- confirmed by tracing the raw loop logic
-    (ticket 20260913-2054). This must raise promptly instead."""
-    from respmech.core.compute import ConstantChannelError, separateintobreathsbyflow
+def test_constant_zero_flow_raises_a_named_error_instead_of_hanging():
+    """Traced, not assumed: a flow constant at exactly zero satisfies neither
+    `flow[i] < 0` nor `flow[i] > 0`, so the segmentation loop's index never advances.
+    With no EMG/entropy columns configured (as here), the ORIGINAL (unguarded) code
+    genuinely loops forever -- confirmed with a hard-killed subprocess, not merely
+    assumed. This must raise promptly instead."""
+    from respmech.core.compute import ConstantFlowError, separateintobreathsbyflow
     n = 500
     zeros = np.zeros(n)
     timecol = np.arange(n) / float(FS)
     s = _dummy_settings()
-    with pytest.raises(ConstantChannelError) as exc_info:
+    with pytest.raises(ConstantFlowError) as exc_info:
         separateintobreathsbyflow("flat.csv", timecol, zeros, zeros, zeros, zeros, zeros,
                                   np.zeros((n, 0)), np.zeros((n, 0)), s)
     msg = str(exc_info.value)
@@ -149,16 +150,77 @@ def test_constant_flow_raises_a_named_error_instead_of_hanging():
     assert "constant" in msg.lower()
 
 
-def test_constant_channel_error_is_a_valueerror():
+def test_constant_nonzero_flow_also_raises_instead_of_silently_completing():
+    """A flow constant at a non-zero value does NOT hang this loop -- one of the two
+    inner while-loops always advances, so the walk consumes the file as one bogus
+    'breath' and returns without ever raising. That silent wrong answer is exactly why
+    the up-front check (`detect_constant_channel`) rejects ANY constant flow, zero or
+    not, rather than only guarding the hang."""
+    from respmech.core.compute import ConstantFlowError, separateintobreathsbyflow
+    n = 500
+    flow = np.full(n, 5.0)
+    zeros = np.zeros(n)
+    timecol = np.arange(n) / float(FS)
+    s = _dummy_settings()
+    with pytest.raises(ConstantFlowError):
+        separateintobreathsbyflow("flat_positive.csv", timecol, flow, zeros, zeros, zeros, zeros,
+                                  np.zeros((n, 0)), np.zeros((n, 0)), s)
+
+
+def test_a_flat_zero_stretch_partway_through_the_file_also_raises_not_hangs():
+    """The up-front whole-array check cannot see a flow that is only LOCALLY flat (a
+    genuine pause at exactly zero, or a merged-block boundary landing on zero) -- this
+    proves the IN-LOOP guard catches it too, after correctly processing the real
+    oscillation that precedes it (the error names the timestamp where the flat stretch
+    begins, not the start of the file)."""
+    from respmech.core.compute import ConstantFlowError, separateintobreathsbyflow
+    fs = 200
+    n_active = 2000                                    # 10 s of real oscillation
+    n_flat = 2000                                       # then flat at exactly zero
+    t_active = np.arange(n_active) / fs
+    flow = np.concatenate([np.sin(2 * np.pi * 0.5 * t_active), np.zeros(n_flat)])
+    n = len(flow)
+    zeros = np.zeros(n)
+    timecol = np.arange(n) / float(fs)
+    s = _dummy_settings()
+    s.processing.mechanics.breathseparationbuffer = 50  # small enough not to smear the transition
+    with pytest.raises(ConstantFlowError) as exc_info:
+        separateintobreathsbyflow("pause.csv", timecol, flow, zeros, zeros, zeros, zeros,
+                                  np.zeros((n, 0)), np.zeros((n, 0)), s)
+    msg = str(exc_info.value)
+    assert "pause.csv" in msg
+    assert "t≈10.00 s" in msg
+    assert "flat" in msg.lower()
+
+
+def test_constant_flow_error_is_a_valueerror():
     """Same family as TrimError / NoBreathsError / DegenerateBreathError, so the batch
     catches it per file rather than aborting the run."""
-    from respmech.core.compute import ConstantChannelError
-    assert issubclass(ConstantChannelError, ValueError)
+    from respmech.core.compute import ConstantFlowError
+    assert issubclass(ConstantFlowError, ValueError)
 
 
-def test_constant_channel_error_has_a_run_screen_fix_hint():
+def test_constant_flow_error_has_a_run_screen_fix_hint():
     from respmech.ui.screens.run_screen import _FIX_HINTS
-    assert "ConstantChannelError" in _FIX_HINTS
+    assert "ConstantFlowError" in _FIX_HINTS
+
+
+def test_run_batch_reports_constant_flow_as_a_named_failure_not_a_hang(tmp_path):
+    """The full pipeline entry point (not just the segmentation function directly):
+    a file with a constant-zero flow channel must surface as a named per-file failure
+    (`error_kind`) with the rest of the batch unaffected, exactly like the other
+    precondition failures in this file's other end-to-end test."""
+    from respmech.core import pipeline
+    src, out = tmp_path / "in", tmp_path / "out"
+    src.mkdir(); out.mkdir()
+    _write_recording(src / "good.csv", cut_offset=1, n_breaths=6)
+    n = 2000
+    zeros = np.zeros(n)
+    np.savetxt(src / "flat.csv", np.column_stack(
+        [np.arange(n) / FS, zeros, zeros, zeros, zeros, zeros, zeros, zeros, zeros]), delimiter=",")
+    result = pipeline.run_batch(_batch_settings(src, out))
+    assert result.failed_files["flat.csv"].error_kind == "ConstantFlowError"
+    assert "good.csv" in result.ok_files
 
 
 def _write_recording(path, cut_offset, n_breaths=3, period_s=4.0, vt=0.6):

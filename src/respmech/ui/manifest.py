@@ -122,7 +122,7 @@ class Manifest:
         """Included files with at least one assigned channel (flow, Poes, Pgas, Pdi,
         EMG, entropy) that never varies across the recording. See
         ``core.quality.detect_constant_channel``. A constant FLOW channel is a hard
-        precondition failure at run time too (``core.compute.ConstantChannelError`` —
+        precondition failure at run time too (``core.compute.ConstantFlowError`` —
         segmentation on a flat flow signal cannot make progress); every other constant
         channel here is advisory only."""
         return tuple(f for f in self.included_files if f.constant_channels)

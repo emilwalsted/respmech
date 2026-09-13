@@ -133,7 +133,14 @@ def cmd_validate(args) -> int:
         if constant:
             print(f"WARNING: {os.path.basename(f)}: constant channel(s) that never "
                   f"vary: {', '.join(constant)}", file=sys.stderr)
-            ok = False
+            # A constant FLOW channel really will fail the run (ConstantFlowError --
+            # segmentation cannot proceed) and is worth failing validate over too; any
+            # OTHER constant channel is advisory only, same as Manifest.
+            # constant_channel_files' own docstring promises the GUI's QC strip -- a
+            # permanently unused pressure port (e.g. no Pdi balloon) is a legitimate
+            # real setup, and validate should not fail every time on it.
+            if any(name.startswith("Flow ") for name in constant):
+                ok = False
     # K-113: Settings.unknown is collected by from_dict but was never read anywhere —
     # a misspelled key silently ran on the default it was meant to override, with no
     # warning from validate, the run, or run-report.txt. Report it here so the site's
