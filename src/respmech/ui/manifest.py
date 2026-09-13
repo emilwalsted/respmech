@@ -55,6 +55,13 @@ class FileEntry:
                                         # preamble/header block, not channel data (see
                                         # workers.peek_header_warning); None when clean, or
                                         # not probed (excluded, or .xlsx/.mat)
+    merged_block_warning: str | None = None   # column 0 looks like duplicated/merged
+                                        # time blocks (core.quality.detect_merged_time_blocks
+                                        # via core.io.loaders.probe_merged_time_blocks);
+                                        # None when clean, or not probed (excluded, .xlsx/.mat)
+    constant_channels: tuple = ()       # names of assigned channels that never vary
+                                        # (core.io.loaders.probe_constant_channels); empty
+                                        # when clean, or not probed (excluded, .xlsx/.mat)
 
 
 @dataclass
@@ -103,12 +110,32 @@ class Manifest:
         return tuple(f for f in self.included_files if f.header_warning)
 
     @property
+    def merged_block_warnings(self):
+        """Included files whose column 0 looks like a regular time axis corrupted by
+        duplicated or non-increasing timestamps — the signature of more than one
+        recording merged into a single file by timestamp. See
+        ``core.quality.detect_merged_time_blocks``."""
+        return tuple(f for f in self.included_files if f.merged_block_warning)
+
+    @property
+    def constant_channel_files(self):
+        """Included files with at least one assigned channel (flow, Poes, Pgas, Pdi,
+        EMG, entropy) that never varies across the recording. See
+        ``core.quality.detect_constant_channel``. A constant FLOW channel is a hard
+        precondition failure at run time too (``core.compute.ConstantFlowError`` —
+        segmentation on a flat flow signal cannot make progress); every other constant
+        channel here is advisory only."""
+        return tuple(f for f in self.included_files if f.constant_channels)
+
+    @property
     def is_clean(self):
         """No caveats at all: nothing was narrowed, nothing disagrees on columns or
-        frequency, and no included file's head looks like a header block. The condition
+        frequency, no included file's head looks like a header block, none looks like a
+        merged multi-block export, and no assigned channel is constant. The condition
         ``_update_qc`` must require before it may say so."""
         return (not self.mask_narrowed_from and not self.outliers
-               and not self.freq_mismatches and not self.header_warnings)
+               and not self.freq_mismatches and not self.header_warnings
+               and not self.merged_block_warnings and not self.constant_channel_files)
 
 
 def narrow_mask(folder, mask):
@@ -252,7 +279,8 @@ def group_readout(filenames, settings, file_limit=3, group_limit=6):
 
 
 def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=None,
-                   header_prober=None, cache=None):
+                   header_prober=None, merged_block_prober=None, constant_channel_prober=None,
+                   cache=None):
     """Build a :class:`Manifest` describing every file ``mask`` matches in ``folder``.
 
     Column counts and detected sampling frequencies are probed at most ONCE per
@@ -278,7 +306,15 @@ def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=N
 
     Frequency and header probing both run only for INCLUDED files (the majority
     column-count group) — an outlier is already excluded from the batch on column count
-    alone, so neither its frequency nor its header shape would ever be acted on."""
+    alone, so neither its frequency nor its header shape would ever be acted on.
+
+    ``merged_block_prober(settings, path) -> str|None`` and
+    ``constant_channel_prober(settings, path) -> tuple[str, ...]`` (the merged-block/
+    constant-channel ticket) default to :func:`respmech.core.io.loaders.
+    probe_merged_time_blocks`/``probe_constant_channels`` — Qt-free themselves (unlike the
+    three probers above, which lazily reach into ``ui.workers``), so ``respmech validate``
+    (``cli/__main__.py``) calls them directly and never imports this module or Qt at all.
+    Also included-files-only, for the same reason as frequency/header."""
     if columns_prober is None or freq_prober is None or header_prober is None:
         from respmech.ui import workers as _workers   # lazy: keeps this module importable
                                                         # without pulling PySide6 in for a
@@ -289,6 +325,14 @@ def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=N
             freq_prober = _workers.probe_sampling_frequency
         if header_prober is None:
             header_prober = _workers.peek_header_warning
+    if merged_block_prober is None or constant_channel_prober is None:
+        from respmech.core.io import loaders as _loaders   # lazy: pandas is loaders'
+                                                            # own cost, not this Qt-free,
+                                                            # import-light module's
+        if merged_block_prober is None:
+            merged_block_prober = _loaders.probe_merged_time_blocks
+        if constant_channel_prober is None:
+            constant_channel_prober = _loaders.probe_constant_channels
     if cache is None:
         cache = {}
 
@@ -300,6 +344,13 @@ def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=N
     # probed under the OLD separator back out of a cache that is otherwise keyed purely on
     # file identity.
     decimal = getattr(settings.input.format, "decimal", ".") or "."
+    # constant-channel results depend on WHICH columns are assigned, unlike the other
+    # probes above — folded into that probe's own cache key so re-assigning a channel
+    # (without touching the file or the decimal separator) can never serve a stale
+    # verdict computed under the OLD assignment back out of the cache.
+    ch = settings.input.channels
+    channels_key = (ch.flow, ch.poes, ch.pgas, ch.pdi,
+                    tuple(ch.emg or ()), tuple(ch.entropy or ()))
 
     effective_mask, narrowed_from, dropped = narrow_mask(folder, mask)
     narrowed_out_count = sum(dropped.values())
@@ -345,6 +396,8 @@ def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=N
         included = columns == majority
         detected_fs = None
         header_warning = None
+        merged_block_warning = None
+        constant_channels = ()
         if included:
             fkey = ("fs", token, decimal) if token is not None else None
             if fkey is not None and fkey in cache:
@@ -360,10 +413,25 @@ def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=N
                 header_warning = header_prober(settings, path)
                 if hkey is not None:
                     cache[hkey] = header_warning
+            mkey = ("merged", token, decimal) if token is not None else None
+            if mkey is not None and mkey in cache:
+                merged_block_warning = cache[mkey]
+            else:
+                merged_block_warning = merged_block_prober(settings, path)
+                if mkey is not None:
+                    cache[mkey] = merged_block_warning
+            ckey = ("const", token, decimal, channels_key) if token is not None else None
+            if ckey is not None and ckey in cache:
+                constant_channels = cache[ckey]
+            else:
+                constant_channels = constant_channel_prober(settings, path)
+                if ckey is not None:
+                    cache[ckey] = constant_channels
         reason = None if included else f"{columns} column{'s' if columns != 1 else ''} (majority is {majority})"
         entries.append(FileEntry(path=path, filename=filename, ext=ext, columns=columns,
                                  detected_fs=detected_fs, included=included, exclude_reason=reason,
-                                 header_warning=header_warning))
+                                 header_warning=header_warning, merged_block_warning=merged_block_warning,
+                                 constant_channels=constant_channels))
 
     return Manifest(folder=folder, mask=effective_mask, settings_fs=settings_fs,
                     mask_narrowed_from=narrowed_from,

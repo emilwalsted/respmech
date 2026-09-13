@@ -1782,6 +1782,17 @@ class SettingsScreen(QWidget):
             out.append(f"{n_hdr} of {len(m.files)} files may not be real channel data (a "
                        f"header block, or too few columns): "
                        f"{self._named_list(m.header_warnings)}")
+        if m.merged_block_warnings:
+            n_mrg = len(m.merged_block_warnings)
+            out.append(f"{n_mrg} of {len(m.files)} files look like more than one "
+                       f"recording merged by timestamp (duplicated/decreasing time "
+                       f"steps): {self._named_list(m.merged_block_warnings)}")
+        if m.constant_channel_files:
+            n_const = len(m.constant_channel_files)
+            names = [f"{f.filename} ({', '.join(f.constant_channels)})"
+                    for f in m.constant_channel_files]
+            out.append(f"{n_const} of {len(m.files)} files have a constant assigned "
+                       f"channel that never varies: {self._named_by_filename(names)}")
         return out
 
     def _output_is_input_folder(self):

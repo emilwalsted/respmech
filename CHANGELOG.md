@@ -149,6 +149,45 @@ once per subject) normalises every file's RMS against THAT file's own max/mean
 instead, so a percentage now means the same thing across the whole study. Off by
 default; existing analyses are unaffected until the field is set.
 
+**Two new pre-run quality checks catch problems that used to surface only as a
+confusing, misleading downstream error (or, for a flow channel flat at zero, an
+outright hang).** Both are checked by the desktop app's Setup screen (a caution on the
+QC strip) and by `respmech validate`, from the same shared logic:
+
+- A recording whose time column looks like a regular sample clock but has duplicated
+  or decreasing timestamps — the signature of more than one recording (e.g. several
+  LabChart blocks) merged row-by-row by timestamp, OR simply concatenated one after
+  another (each restarting its own time base, seen as a single large backward jump) —
+  is now flagged by name in either shape, instead of silently letting segmentation
+  jump between different recordings from sample to sample. A time column that is
+  merely printed at coarser precision than its true sampling interval (giving a
+  uniform rate of identical-looking timestamps end to end, tail included) is not
+  mistaken for this: a genuine merge's own duplicate run ends once only one recording
+  remains, which this check now requires.
+- An assigned channel (flow, Poes, Pgas, Pdi, an EMG channel, or an entropy channel)
+  that never varies — across the whole recording, or across a stretch reached partway
+  through — is now flagged by name and column number; for anything other than flow
+  this is advisory only (`respmech validate` reports it but does not fail on it — a
+  permanently unused pressure port is a legitimate setup). **A flow channel flat at
+  exactly zero specifically now raises a named error (`ConstantFlowError`) instead of
+  running at all**, whether that is the whole recording or only a stretch of it (e.g.
+  a genuine pause with no flow): breath segmentation cannot make progress past a point
+  where flow is neither negative nor positive. This was traced, not assumed: with no
+  EMG/entropy channels configured the previous behaviour was an unrecoverable hang;
+  with at least one configured, it was instead a bare `ValueError: negative dimensions
+  are not allowed` naming neither the file nor the cause. This is technically a
+  breaking change for an analysis that happens to have an intentionally flat-zero flow
+  channel or pause, which is not a realistic configuration to analyse as breaths
+  either way.
+- `DegenerateBreathError`'s message ("an incomplete breath right at the start or end
+  of a recording") is now only shown for an actual first-or-last breath. A degenerate
+  breath in the middle of a recording gets its own message instead, naming the
+  breath's own timestamp and the more likely mid-recording causes (noise around zero
+  flow, a mis-assigned flow channel, or merged data, per the check above) — reported
+  by a user whose file's real problem was the merged-timestamps case above, but whose
+  only symptom was a misleading "start or end" error for one breath in the middle of
+  the recording.
+
 <!--
 "Unreleased" above is a hand-maintained draft of the next release's entry. It is
 updated ONLY when explicitly asked to (not automatically on every commit), and it

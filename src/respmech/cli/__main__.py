@@ -107,6 +107,7 @@ def cmd_validate(args) -> int:
     from respmech.settingsio.toml_io import load_toml
     from respmech.core.pipeline import match_input_files
     from respmech.core.io.plan import probe_write_folder
+    from respmech.core.io.loaders import probe_constant_channels, probe_merged_time_blocks
 
     settings = load_toml(args.settings)
     settings.validate()
@@ -119,6 +120,27 @@ def cmd_validate(args) -> int:
     if not files:
         print("WARNING: no input files match.", file=sys.stderr)
         ok = False
+    # Merged-block / constant-channel probes (the same core.quality-backed checks
+    # ui.manifest.build_manifest runs for the GUI's Setup QC strip): a headless `validate`
+    # never builds a Manifest (that would pull ui.manifest -> ui.workers -> PySide6 into a
+    # CLI-only install), so these are called directly on core.io.loaders instead.
+    for f in files:
+        merged = probe_merged_time_blocks(settings, f)
+        if merged:
+            print(f"WARNING: {os.path.basename(f)}: {merged}", file=sys.stderr)
+            ok = False
+        constant = probe_constant_channels(settings, f)
+        if constant:
+            print(f"WARNING: {os.path.basename(f)}: constant channel(s) that never "
+                  f"vary: {', '.join(constant)}", file=sys.stderr)
+            # A constant FLOW channel really will fail the run (ConstantFlowError --
+            # segmentation cannot proceed) and is worth failing validate over too; any
+            # OTHER constant channel is advisory only, same as Manifest.
+            # constant_channel_files' own docstring promises the GUI's QC strip -- a
+            # permanently unused pressure port (e.g. no Pdi balloon) is a legitimate
+            # real setup, and validate should not fail every time on it.
+            if any(name.startswith("Flow ") for name in constant):
+                ok = False
     # K-113: Settings.unknown is collected by from_dict but was never read anywhere —
     # a misspelled key silently ran on the default it was meant to override, with no
     # warning from validate, the run, or run-report.txt. Report it here so the site's

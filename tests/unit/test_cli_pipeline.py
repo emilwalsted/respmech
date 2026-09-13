@@ -175,3 +175,110 @@ def test_cli_validate_accepts_a_writable_output_folder(tmp_path, capsys):
     rc = cli_main(["validate", str(toml)])
     assert rc == 0
     assert "not writable" not in capsys.readouterr().err
+
+
+def _write_layout_csv(path, n, *, time_col, extra_cols=None):
+    """A minimal CSV matching the synthetic layout's column order (time, flow, volume,
+    poes, pgas, pdi) so ``respmech validate``'s new merged-block/constant-channel probes
+    (ticket 20260913-2054) have something plausible to read column indices from — the
+    values themselves are not physiologically meaningful, only the two properties each
+    test below cares about (column 0's timestamps, or one column's variance)."""
+    import numpy as np
+    cols = {"time": time_col, "flow": np.sin(np.linspace(0, 10, n)),
+            "volume": np.linspace(0, 1, n), "poes": np.linspace(-5, -3, n),
+            "pgas": np.linspace(6, 8, n), "pdi": np.linspace(11, 13, n)}
+    if extra_cols:
+        cols.update(extra_cols)
+    pd.DataFrame(cols).to_csv(path, index=False)
+
+
+def _validate_settings_toml(tmp_path, folder, *, flow=2, volume=3, poes=4, pgas=5, pdi=6):
+    from respmech.settingsio.toml_io import save_toml
+    legacy = {"input": {"inputfolder": str(folder), "files": "*.csv",
+                        "format": {"samplingfrequency": 1000},
+                        "data": {"column_flow": flow, "column_volume": volume,
+                                 "column_poes": poes, "column_pgas": pgas,
+                                 "column_pdi": pdi, "columns_emg": [], "columns_entropy": []}},
+             "output": {"outputfolder": str(tmp_path / "out")}}
+    settings, _ = migrate_dict(legacy)
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+    return toml
+
+
+def test_cli_validate_warns_about_merged_time_blocks(tmp_path, capsys):
+    """Acceptance criterion 1 (ticket 20260913-2054): a CSV whose column 0 looks like
+    two recordings merged by timestamp (duplicated/decreasing steps over an otherwise
+    regular ~1000 Hz axis) must be flagged by `respmech validate`."""
+    import numpy as np
+    n = 3000
+    t_clean = np.arange(n) / 1000.0
+    t_merged = np.sort(np.concatenate([t_clean[:600], t_clean]))   # first 600 samples duplicated
+    _write_layout_csv(tmp_path / "merged.csv", len(t_merged), time_col=t_merged)
+    toml = _validate_settings_toml(tmp_path, tmp_path)
+    rc = cli_main(["validate", str(toml)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "merged.csv" in err
+    assert "merged row-by-row" in err
+
+
+def test_cli_validate_does_not_warn_on_a_normal_time_column(tmp_path, capsys):
+    """A plain, regular time axis (no duplicates) must not trip the merged-block check —
+    the negative case for the test above."""
+    import numpy as np
+    n = 3000
+    _write_layout_csv(tmp_path / "clean.csv", n, time_col=np.arange(n) / 1000.0)
+    toml = _validate_settings_toml(tmp_path, tmp_path)
+    rc = cli_main(["validate", str(toml)])
+    assert rc == 0
+    assert "merged row-by-row" not in capsys.readouterr().err
+
+
+def test_cli_validate_warns_about_a_constant_assigned_channel(tmp_path, capsys):
+    """Acceptance criterion 2: an assigned channel that never varies (here Pdi, wired
+    to a genuinely all-zero column — the reported bug's own failure mode) must be
+    flagged by name. A non-flow constant channel is advisory only, though (a
+    permanently unused pressure port is a legitimate real setup) — reported, but does
+    NOT fail validate (see the constant-FLOW test below for the case that does)."""
+    import numpy as np
+    n = 2000
+    _write_layout_csv(tmp_path / "flatpdi.csv", n, time_col=np.arange(n) / 1000.0,
+                      extra_cols={"pdi": np.zeros(n)})
+    toml = _validate_settings_toml(tmp_path, tmp_path)
+    rc = cli_main(["validate", str(toml)])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "flatpdi.csv" in err
+    assert "Pdi" in err
+    assert "constant channel" in err
+
+
+def test_cli_validate_fails_on_a_constant_flow_channel(tmp_path, capsys):
+    """Unlike a non-flow constant channel above, a constant FLOW channel really does
+    fail the run (`ConstantFlowError`), so `respmech validate` fails on it too."""
+    import numpy as np
+    n = 2000
+    _write_layout_csv(tmp_path / "flatflow.csv", n, time_col=np.arange(n) / 1000.0,
+                      extra_cols={"flow": np.zeros(n)})
+    toml = _validate_settings_toml(tmp_path, tmp_path)
+    rc = cli_main(["validate", str(toml)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "flatflow.csv" in err
+    assert "Flow" in err
+
+
+def test_cli_validate_the_golden_synthetic_files_have_no_new_caveats(tmp_path, capsys):
+    """Acceptance criterion 1's negative case, against the committed golden input rather
+    than a hand-built file: the real synth_case_*.csv recordings (with their real
+    channel assignment) must trip neither new check."""
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    from respmech.settingsio.toml_io import save_toml
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+    rc = cli_main(["validate", str(toml)])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "merged row-by-row" not in err
+    assert "constant channel" not in err
