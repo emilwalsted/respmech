@@ -238,18 +238,35 @@ def test_cli_validate_does_not_warn_on_a_normal_time_column(tmp_path, capsys):
 def test_cli_validate_warns_about_a_constant_assigned_channel(tmp_path, capsys):
     """Acceptance criterion 2: an assigned channel that never varies (here Pdi, wired
     to a genuinely all-zero column — the reported bug's own failure mode) must be
-    flagged by name."""
+    flagged by name. A non-flow constant channel is advisory only, though (a
+    permanently unused pressure port is a legitimate real setup) — reported, but does
+    NOT fail validate (see the constant-FLOW test below for the case that does)."""
     import numpy as np
     n = 2000
     _write_layout_csv(tmp_path / "flatpdi.csv", n, time_col=np.arange(n) / 1000.0,
                       extra_cols={"pdi": np.zeros(n)})
     toml = _validate_settings_toml(tmp_path, tmp_path)
     rc = cli_main(["validate", str(toml)])
-    assert rc == 1
+    assert rc == 0
     err = capsys.readouterr().err
     assert "flatpdi.csv" in err
     assert "Pdi" in err
     assert "constant channel" in err
+
+
+def test_cli_validate_fails_on_a_constant_flow_channel(tmp_path, capsys):
+    """Unlike a non-flow constant channel above, a constant FLOW channel really does
+    fail the run (`ConstantFlowError`), so `respmech validate` fails on it too."""
+    import numpy as np
+    n = 2000
+    _write_layout_csv(tmp_path / "flatflow.csv", n, time_col=np.arange(n) / 1000.0,
+                      extra_cols={"flow": np.zeros(n)})
+    toml = _validate_settings_toml(tmp_path, tmp_path)
+    rc = cli_main(["validate", str(toml)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "flatflow.csv" in err
+    assert "Flow" in err
 
 
 def test_cli_validate_the_golden_synthetic_files_have_no_new_caveats(tmp_path, capsys):

@@ -284,15 +284,32 @@ class DegenerateBreathError(ValueError):
     incomplete breath right at the start or end of a recording."""
 
 
-class ConstantChannelError(ValueError):
-    """Raised when the flow channel does not vary at all across the whole recording.
+class ConstantFlowError(ValueError):
+    """Raised when the flow channel does not vary enough for breath separation to make
+    progress -- either across the WHOLE recording, or across a stretch of it reached
+    partway through (e.g. a flat, zero-flow pause between breaths).
 
     Breath separation on flow (``separateintobreathsbyflow``) walks the signal looking
-    for a sign change between inspiration (flow < 0) and expiration (flow > 0); a
-    perfectly constant flow (most commonly a mis-assigned or unused/grounded column)
-    satisfies neither condition, so the walk's index never advances -- an infinite loop,
-    not merely a wrong answer, confirmed by tracing the loop rather than assumed. Checked
-    and raised up front instead."""
+    for a sign change between inspiration (flow < 0) and expiration (flow > 0); a flow
+    that is exactly constant AT ZERO over some stretch (most commonly a mis-assigned or
+    unused/grounded column, but also a genuine pause at exactly zero flow) satisfies
+    neither condition there, so the walk's index cannot advance past that point. A
+    constant NON-zero flow does not hang this same loop (one of the two conditions is
+    always true, so the walk consumes the rest of the file as one bogus "breath" and
+    returns instead of getting stuck) -- checked and rejected the same way regardless,
+    since a flow that never crosses zero cannot be split into real breaths either way.
+
+    The zero-flow case was traced, not assumed, and its failure mode depends on
+    whether any EMG/entropy columns are configured: with none, the walk's index truly
+    never advances and the loop runs forever (confirmed with a hard-killed subprocess);
+    with at least one EMG/entropy column configured, ``_phase_dicts`` instead raises a
+    bare ``ValueError: negative dimensions are not allowed`` on the very first
+    iteration (the degenerate ``(0, -1)`` phase slice this loop produces here computes
+    a negative array length for those columns specifically). Both are confusing dead
+    ends compared to this named, actionable error, so both are checked the same way:
+    up front (the whole-recording case, cheaply, before the loop even starts) and
+    inside the loop itself (the general case, wherever a flat-at-zero stretch is
+    reached) instead of ever reaching either one."""
 
 
 def _breath_onset_time(insp, exp):
@@ -398,12 +415,13 @@ def _phase_dicts(sl_in, sl_ex, timecol, flow, volume, poes, pgas, pdi, entropyco
 
 
 def separateintobreathsbyflow(filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings):
-    # A constant flow satisfies neither `flow[i] < 0` nor `flow[i] > 0` below, so `i`
-    # never advances past `instart` and the `while i < j` loop below never terminates --
-    # an infinite loop, not merely a wrong answer (traced, not assumed; see
-    # ConstantChannelError's own docstring). Checked up front instead of left to hang.
+    # A flow constant at exactly zero satisfies neither `flow[i] < 0` nor `flow[i] > 0`
+    # below, so `i` never advances past `instart` -- an infinite loop (or, with any
+    # EMG/entropy column configured, a confusing "negative dimensions" crash instead;
+    # see ConstantFlowError's own docstring for both, traced not assumed). Cheap
+    # whole-recording case, checked up front.
     if detect_constant_channel(flow):
-        raise ConstantChannelError(
+        raise ConstantFlowError(
             f"The flow channel in {filename} is constant (it does not vary at all), so "
             f"breaths cannot be split on it. This usually means the wrong column is "
             f"assigned as the flow channel, or this input has no real flow signal — "
@@ -427,6 +445,22 @@ def separateintobreathsbyflow(filename, timecol, flow, volume, poes, pgas, pdi, 
         while (i < j and ((flow[i] > 0) or (np.mean(flow[i:min(j, i + bufferwidth)]) > 0))):
             i += 1
         exend = min(i - 1, j)
+        # General case: the whole-array check above cannot see a flow that is only
+        # LOCALLY flat (e.g. a genuine pause at exactly zero flow between breaths, or a
+        # merged-block boundary that happens to land on zero) -- if NEITHER inner loop
+        # advanced `i` past `instart`, the walk is stuck and would otherwise repeat this
+        # same iteration forever (self-review finding: confirmed by tracing a
+        # concatenated sine+zeros signal, which the whole-array check alone does not
+        # catch since the array as a WHOLE still varies).
+        if i == instart:
+            raise ConstantFlowError(
+                f"The flow channel in {filename} is flat (does not cross zero) at "
+                f"t≈{timecol[i]:.2f} s, so breath separation cannot continue past this "
+                f"point. This can happen at a genuine pause with exactly zero flow "
+                f"between breaths, or where more than one recording has been merged "
+                f"into this file — check the flow channel around this timestamp, or "
+                f"switch 'Signal used to split breaths' to volume under Preview & QC ▸ "
+                f"Mechanics ▸ Advanced… ▸ Breath detection.")
         is_boundary = (breathcnt == 1) or (i >= j)
         exp, insp, entcols, emgcols = _phase_dicts(
             (instart, inend), (exstart, exend), timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns)
