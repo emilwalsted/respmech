@@ -155,6 +155,20 @@ def test_degenerate_breath_error_has_a_run_screen_fix_hint():
     assert "DegenerateBreathError" in _FIX_HINTS
 
 
+def test_volume_segmentation_error_is_a_valueerror():
+    """Same family as TrimError / NoBreathsError / DegenerateBreathError, so the
+    batch catches it per file rather than aborting the run."""
+    from respmech.core.compute import VolumeSegmentationError
+    assert issubclass(VolumeSegmentationError, ValueError)
+
+
+def test_volume_segmentation_error_has_a_run_screen_fix_hint():
+    """VolumeSegmentationError is a per-file precondition failure exactly like its
+    siblings, so it must be keyed in run_screen's _FIX_HINTS the same way."""
+    from respmech.ui.screens.run_screen import _FIX_HINTS
+    assert "VolumeSegmentationError" in _FIX_HINTS
+
+
 # --- no core/ message may leak a v1-only settings key --------------------------
 
 _PKG_DIR = Path(respmech.__file__).parent

@@ -1,8 +1,14 @@
 """End-to-end regression for ticket 20260913-2053: a real recording with an all-zero,
-integer-typed Pgas (and separately Pdi) column crashed ``run_batch`` with
-``UFuncTypeError`` from the VMR division in ``compute.compute_breath`` instead of
-producing a result. Uses the committed synthetic golden recording with one column
-overwritten to round-trip as int64, exactly as a real "dummy" pressure channel does.
+integer-typed Pgas column crashed ``run_batch`` with ``UFuncTypeError`` from the VMR
+division in ``compute.compute_breath`` instead of producing a result -- the only
+``np.zeros_like``/``np.divide`` combination anywhere in the codebase that depends on
+channel dtype, and it depends only on Pgas (the VMR numerator). Pdi and Poes are
+included here too, parametrized, as a plain "does an all-integer column of THIS
+channel crash the batch" regression -- true today only for Pgas, but worth pinning
+for all three now that the fix (the loader casting every channel to float64) makes no
+channel-specific distinction. Uses the committed synthetic golden recording with one
+column overwritten to round-trip as int64, exactly as a real "dummy" pressure channel
+does.
 """
 import os
 

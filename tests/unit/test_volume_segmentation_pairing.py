@@ -37,18 +37,21 @@ def _settings(fs=FS):
     return to_legacy_ns(s)
 
 
-def _drop_one_expiratory_peak(monkeypatch):
-    """Patch scipy's find_peaks so the SECOND call (separateintobreathsbyvolume's
-    expeaks, called after inpeaks) returns one fewer peak than it really found --
-    simulating an expiratory peak suppressed below threshold by a zero-flow pause,
-    without needing to hand-tune a waveform to reproduce that shape exactly."""
+def _drop_one_expiratory_peak(monkeypatch, invol):
+    """Patch scipy's find_peaks so the call on anything OTHER than ``invol`` itself
+    (i.e. separateintobreathsbyvolume's expeaks call, on its derived exvol array)
+    returns one fewer peak than it really found -- simulating an expiratory peak
+    suppressed below threshold by a zero-flow pause, without needing to hand-tune a
+    waveform to reproduce that shape exactly. Identifying the expeaks call by object
+    identity (rather than "the second call") keeps this robust to an unrelated
+    future find_peaks call (e.g. a trend-anchor probe) being added earlier in the
+    same code path -- it would not match ``invol`` and so would not be mistaken for
+    the inpeaks call either."""
     real_find_peaks = _signal.find_peaks
-    calls = {"n": 0}
 
     def fake_find_peaks(x, **kw):
-        calls["n"] += 1
         peaks, props = real_find_peaks(x, **kw)
-        if calls["n"] == 2:
+        if x is not invol:
             peaks = peaks[:-1]
         return peaks, props
 
@@ -68,7 +71,7 @@ def test_sanity_clean_recording_pairs_every_breath():
 def test_too_few_expiratory_peaks_raises_a_named_error_not_indexerror(monkeypatch):
     t, volume = _volume_recording(n_breaths=4)
     zeros = np.zeros(len(volume))
-    _drop_one_expiratory_peak(monkeypatch)
+    _drop_one_expiratory_peak(monkeypatch, volume)
     with pytest.raises(compute.VolumeSegmentationError) as exc_info:
         compute.separateintobreathsbyvolume(
             "rec.csv", t, zeros, volume, zeros, zeros, zeros, [], [], _settings())
@@ -76,17 +79,6 @@ def test_too_few_expiratory_peaks_raises_a_named_error_not_indexerror(monkeypatc
     assert "rec.csv" in msg
     assert "inspiratory" in msg.lower()
     assert "expiratory" in msg.lower()
-
-
-def test_volume_segmentation_error_is_a_valueerror():
-    """Same family as the other segmentation-precondition errors (NoBreathsError,
-    DegenerateBreathError, ...), so the batch catches it per file."""
-    assert issubclass(compute.VolumeSegmentationError, ValueError)
-
-
-def test_volume_segmentation_error_has_a_run_screen_fix_hint():
-    from respmech.ui.screens.run_screen import _FIX_HINTS
-    assert "VolumeSegmentationError" in _FIX_HINTS
 
 
 def test_batch_reports_a_named_error_kind_not_indexerror(tmp_path, monkeypatch):
@@ -114,7 +106,23 @@ def test_batch_reports_a_named_error_kind_not_indexerror(tmp_path, monkeypatch):
     s.processing.segmentation.method = "volume"
     s = s.validate()
 
-    _drop_one_expiratory_peak(monkeypatch)
+    # Through run_batch the pipeline reloads and re-derives its own volume array, so
+    # the identity-based patch above (which needs a reference to that exact array)
+    # isn't available here; fall back to call order, which is safe for this specific
+    # settings combination (segmentation.method="volume", correct_trend=False, no
+    # EMG/ECG processing) where separateintobreathsbyvolume's inpeaks/expeaks calls
+    # are the only two find_peaks calls in the whole run.
+    real_find_peaks = _signal.find_peaks
+    calls = {"n": 0}
+
+    def fake_find_peaks(x, **kw):
+        calls["n"] += 1
+        peaks, props = real_find_peaks(x, **kw)
+        if calls["n"] == 2:
+            peaks = peaks[:-1]
+        return peaks, props
+
+    monkeypatch.setattr(_signal, "find_peaks", fake_find_peaks)
     result = run_batch(s)
     fr = result.failed_files["rec.csv"]
     assert fr.error_kind == "VolumeSegmentationError"
