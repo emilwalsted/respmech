@@ -400,6 +400,173 @@ def test_manifest_does_not_false_flag_a_clean_wide_file(tmp_path):
     assert m.is_clean
 
 
+# --------------------------------------------------------------------------- #
+# merged multi-block export / constant channel detection (ticket 20260913-2054):
+# core.quality's predicates, probed via core.io.loaders and surfaced on the Manifest
+# exactly like header_warnings above.
+# --------------------------------------------------------------------------- #
+def _settings_with_channels(folder, mask, *, flow=2, poes=3, pgas=4, pdi=5, volume=None,
+                            emg=None, entropy=None, fs=1000):
+    legacy = {"input": {"inputfolder": folder, "files": mask,
+                        "format": {"samplingfrequency": fs},
+                        "data": {"column_flow": flow, "column_poes": poes,
+                                 "column_pgas": pgas, "column_pdi": pdi,
+                                 "column_volume": float("nan") if volume is None else volume,
+                                 "columns_emg": emg or [], "columns_entropy": entropy or []}},
+             "output": {"outputfolder": os.path.join(folder, "out")}}
+    s, _ = migrate_dict(legacy)
+    return s
+
+
+def _write_columns(path, columns):
+    """A CSV with ``columns`` (an ordered dict of column name -> array) written verbatim —
+    unlike ``_write_delim``, every column's actual values matter to these tests."""
+    import pandas as pd
+    pd.DataFrame(columns).to_csv(path, index=False)
+
+
+def test_manifest_flags_merged_time_blocks_as_a_warning(tmp_path):
+    import numpy as np
+    n = 3000
+    t_clean = np.arange(n) / 1000.0
+    t_merged = np.sort(np.concatenate([t_clean[:600], t_clean]))
+    _write_columns(tmp_path / "merged.csv", {
+        "time": t_merged, "flow": np.zeros(len(t_merged)), "poes": np.zeros(len(t_merged)),
+        "pgas": np.zeros(len(t_merged)), "pdi": np.zeros(len(t_merged))})
+    s = _settings_with_channels(str(tmp_path), "*.csv")
+    m = build_manifest(str(tmp_path), "*.csv", s)
+    assert {f.filename for f in m.merged_block_warnings} == {"merged.csv"}
+    assert not m.is_clean
+
+
+def test_manifest_a_clean_folder_has_no_merged_block_warnings(tmp_path):
+    import numpy as np
+    n = 3000
+    _write_columns(tmp_path / "clean.csv", {
+        "time": np.arange(n) / 1000.0, "flow": np.sin(np.linspace(0, 10, n)),
+        "poes": np.linspace(-5, -3, n), "pgas": np.linspace(6, 8, n),
+        "pdi": np.linspace(11, 13, n)})
+    s = _settings_with_channels(str(tmp_path), "*.csv")
+    m = build_manifest(str(tmp_path), "*.csv", s)
+    assert m.merged_block_warnings == ()
+    assert m.is_clean
+
+
+def test_manifest_merged_block_prober_is_injectable_and_skipped_for_excluded_files(tmp_path):
+    for n in ("a", "b", "c"):
+        _write_delim(tmp_path / f"{n}.csv", 9)
+    _write_delim(tmp_path / "d.csv", 8)               # column-count outlier, excluded
+    s = _settings(str(tmp_path), "*.csv")
+    seen = []
+
+    def fake(_settings, path):
+        seen.append(os.path.basename(path))
+        return None
+
+    m = build_manifest(str(tmp_path), "*.csv", s, merged_block_prober=fake)
+    assert sorted(seen) == ["a.csv", "b.csv", "c.csv"]   # d.csv (excluded) never probed
+    assert m.merged_block_warnings == ()
+
+
+def test_manifest_merged_block_prober_result_is_cached(tmp_path):
+    _write_delim(tmp_path / "a.csv", 9)
+    s = _settings(str(tmp_path), "*.csv")
+    calls = {"n": 0}
+
+    def counting(_settings, _path):
+        calls["n"] += 1
+        return None
+
+    cache = {}
+    build_manifest(str(tmp_path), "*.csv", s, merged_block_prober=counting, cache=cache)
+    build_manifest(str(tmp_path), "*.csv", s, merged_block_prober=counting, cache=cache)
+    assert calls["n"] == 1
+
+
+def test_manifest_flags_a_constant_assigned_channel_by_name(tmp_path):
+    import numpy as np
+    n = 2000
+    _write_columns(tmp_path / "flatpdi.csv", {
+        "time": np.arange(n) / 1000.0, "flow": np.sin(np.linspace(0, 10, n)),
+        "poes": np.linspace(-5, -3, n), "pgas": np.linspace(6, 8, n), "pdi": np.zeros(n)})
+    s = _settings_with_channels(str(tmp_path), "*.csv")
+    m = build_manifest(str(tmp_path), "*.csv", s)
+    assert len(m.constant_channel_files) == 1
+    f = m.constant_channel_files[0]
+    assert f.filename == "flatpdi.csv"
+    assert f.constant_channels == ("Pdi (column 5)",)
+    assert not m.is_clean
+
+
+def test_manifest_a_clean_folder_has_no_constant_channel_files(tmp_path):
+    import numpy as np
+    n = 2000
+    _write_columns(tmp_path / "clean.csv", {
+        "time": np.arange(n) / 1000.0, "flow": np.sin(np.linspace(0, 10, n)),
+        "poes": np.linspace(-5, -3, n), "pgas": np.linspace(6, 8, n),
+        "pdi": np.linspace(11, 13, n)})
+    s = _settings_with_channels(str(tmp_path), "*.csv")
+    m = build_manifest(str(tmp_path), "*.csv", s)
+    assert m.constant_channel_files == ()
+    assert m.is_clean
+
+
+def test_manifest_constant_channel_prober_is_injectable_and_skipped_for_excluded_files(tmp_path):
+    for n in ("a", "b", "c"):
+        _write_delim(tmp_path / f"{n}.csv", 9)
+    _write_delim(tmp_path / "d.csv", 8)
+    s = _settings(str(tmp_path), "*.csv")
+    seen = []
+
+    def fake(_settings, path):
+        seen.append(os.path.basename(path))
+        return ()
+
+    m = build_manifest(str(tmp_path), "*.csv", s, constant_channel_prober=fake)
+    assert sorted(seen) == ["a.csv", "b.csv", "c.csv"]
+    assert m.constant_channel_files == ()
+
+
+def test_manifest_constant_channel_cache_is_keyed_on_channel_assignment(tmp_path):
+    """Unlike every other probe, this one's answer depends on WHICH columns are
+    assigned — re-assigning a channel (without touching the file) must not serve a
+    stale verdict computed under the old assignment back out of the cache."""
+    import numpy as np
+    n = 2000
+    _write_columns(tmp_path / "a.csv", {
+        "time": np.arange(n) / 1000.0, "flow": np.sin(np.linspace(0, 10, n)),
+        "poes": np.linspace(-5, -3, n), "pgas": np.linspace(6, 8, n), "pdi": np.zeros(n)})
+    cache = {}
+    s_pdi = _settings_with_channels(str(tmp_path), "*.csv", pdi=5)
+    m1 = build_manifest(str(tmp_path), "*.csv", s_pdi, cache=cache)
+    assert m1.constant_channel_files and m1.constant_channel_files[0].constant_channels == ("Pdi (column 5)",)
+    # Re-assign Pdi to a column that varies (Pgas's own column) — same file, same cache.
+    s_pgas = _settings_with_channels(str(tmp_path), "*.csv", pdi=4)
+    m2 = build_manifest(str(tmp_path), "*.csv", s_pgas, cache=cache)
+    assert m2.constant_channel_files == ()
+
+
+def test_manifest_supplying_all_five_probers_never_imports_workers_or_loaders(tmp_path, monkeypatch):
+    """Same promise as the three-prober test below, extended to the two new probers:
+    injecting all five must let a caller (e.g. a future test, or a headless tool) build
+    a Manifest without pulling in ui.workers (PySide6) OR core.io.loaders (pandas cost
+    this module's own import deliberately avoids — see the module docstring)."""
+    import sys
+    _write_delim(tmp_path / "a.csv", 9)
+    s = _settings(str(tmp_path), "*.csv")
+    monkeypatch.delitem(sys.modules, "respmech.ui.workers", raising=False)
+    monkeypatch.delitem(sys.modules, "respmech.core.io.loaders", raising=False)
+    m = build_manifest(str(tmp_path), "*.csv", s,
+                       columns_prober=lambda _s, _p: 9,
+                       freq_prober=lambda _s, _p: None,
+                       header_prober=lambda _s, _p: None,
+                       merged_block_prober=lambda _s, _p: None,
+                       constant_channel_prober=lambda _s, _p: ())
+    assert "respmech.ui.workers" not in sys.modules
+    assert "respmech.core.io.loaders" not in sys.modules
+    assert m.majority_columns == 9
+
+
 def test_manifest_supplying_all_three_probers_never_imports_workers(tmp_path, monkeypatch):
     """The docstring's promise ('inject your own probers to test this function without
     importing workers at all') must still hold now that there are THREE probers, not two —

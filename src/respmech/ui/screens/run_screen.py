@@ -59,6 +59,9 @@ _FIX_HINTS = {
     "VolumeSegmentationError": "Preview & QC ▸ Mechanics ▸ Advanced… ▸ 'Signal used to "
                                "split breaths' and the 'Breath peak' thresholds; or "
                                "switch 'Signal used to split breaths' to flow.",
+    "ConstantFlowError": "Setup ▸ channel assignment ('Assign channels from data…'); "
+                         "or switch 'Signal used to split breaths' to volume under "
+                         "Preview & QC ▸ Mechanics ▸ Advanced….",
 }
 
 
