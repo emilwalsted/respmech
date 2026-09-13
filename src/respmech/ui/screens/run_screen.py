@@ -56,6 +56,8 @@ _FIX_HINTS = {
     "DegenerateBreathError": "Preview & QC ▸ Mechanics ▸ Advanced… ▸ Breath detection "
                              "(peak thresholds / breath-separation buffer); or exclude "
                              "the breath by clicking it in the Preview & QC channel view.",
+    "VolumeSegmentationError": "Preview & QC ▸ Mechanics ▸ Advanced… ▸ 'Signal used to "
+                               "split breaths' and the 'Breath peak' thresholds.",
 }
 
 
