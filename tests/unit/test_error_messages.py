@@ -85,12 +85,80 @@ def test_degenerate_breath_gives_a_respmech_error_not_numpys():
            "volume": np.array([0.25]).squeeze(), "poes": np.array([0.1]).squeeze(),
            "pgas": np.array([1.0]).squeeze(), "pdi": np.array([0.9]).squeeze()}
     with pytest.raises(DegenerateBreathError) as exc_info:
-        compute._make_breath(7, exp, insp, False, [], [], "rec.csv")
+        compute._make_breath(7, exp, insp, False, [], [], "rec.csv", is_boundary=True)
     msg = str(exc_info.value)
     assert "Breath #7" in msg
     assert "rec.csv" in msg
     assert "dimension" not in msg.lower()   # the raw numpy wording is gone
     assert "exclude it" in msg or "exclude" in msg
+
+
+def test_degenerate_breath_mid_recording_names_the_time_not_start_or_end():
+    """A degenerate breath that is NOT the first or last one detected must not blame
+    "an incomplete breath ... at the start or end" (misleading when it plainly is not,
+    the ticket 20260913-2054 bug report) -- it should instead give the breath's own
+    timestamp and name likely mid-recording causes (noise, a mis-assigned channel, or
+    merged data), per that ticket's acceptance criterion 3."""
+    insp = {"time": np.array([12.0, 12.01, 12.02]), "flow": np.array([0.0, 0.1, 0.2]),
+            "volume": np.array([0.0, 0.1, 0.2]), "poes": np.array([0.0, 0.1, 0.2]),
+            "pgas": np.array([0.0, 0.1, 0.2]), "pdi": np.array([0.0, 0.1, 0.2])}
+    exp = {"time": np.array([12.03]).squeeze(), "flow": np.array([0.05]).squeeze(),
+           "volume": np.array([0.25]).squeeze(), "poes": np.array([0.1]).squeeze(),
+           "pgas": np.array([1.0]).squeeze(), "pdi": np.array([0.9]).squeeze()}
+    with pytest.raises(DegenerateBreathError) as exc_info:
+        compute._make_breath(6, exp, insp, False, [], [], "rec.csv", is_boundary=False)
+    msg = str(exc_info.value)
+    assert "Breath #6" in msg
+    assert "rec.csv" in msg
+    assert "start or end" not in msg
+    assert "t≈12.00 s" in msg
+    assert "merged" in msg.lower()
+
+
+def test_degenerate_breath_boundary_keeps_the_start_or_end_explanation():
+    """The FIRST or LAST detected breath keeps the original, pre-existing wording --
+    only a mid-recording degenerate breath gets the new message above."""
+    insp = {"time": np.array([0.0, 0.01, 0.02]), "flow": np.array([0.0, 0.1, 0.2]),
+            "volume": np.array([0.0, 0.1, 0.2]), "poes": np.array([0.0, 0.1, 0.2]),
+            "pgas": np.array([0.0, 0.1, 0.2]), "pdi": np.array([0.0, 0.1, 0.2])}
+    exp = {"time": np.array([0.03]).squeeze(), "flow": np.array([0.05]).squeeze(),
+           "volume": np.array([0.25]).squeeze(), "poes": np.array([0.1]).squeeze(),
+           "pgas": np.array([1.0]).squeeze(), "pdi": np.array([0.9]).squeeze()}
+    with pytest.raises(DegenerateBreathError) as exc_info:
+        compute._make_breath(1, exp, insp, False, [], [], "rec.csv", is_boundary=True)
+    msg = str(exc_info.value)
+    assert "start or end" in msg
+    assert "t≈" not in msg
+
+
+def test_constant_flow_raises_a_named_error_instead_of_hanging():
+    """Traced, not assumed: a perfectly constant flow satisfies neither `flow[i] < 0`
+    nor `flow[i] > 0`, so the segmentation loop's index never advances and the ORIGINAL
+    (unguarded) code loops forever -- confirmed by tracing the raw loop logic
+    (ticket 20260913-2054). This must raise promptly instead."""
+    from respmech.core.compute import ConstantChannelError, separateintobreathsbyflow
+    n = 500
+    zeros = np.zeros(n)
+    timecol = np.arange(n) / float(FS)
+    s = _dummy_settings()
+    with pytest.raises(ConstantChannelError) as exc_info:
+        separateintobreathsbyflow("flat.csv", timecol, zeros, zeros, zeros, zeros, zeros,
+                                  np.zeros((n, 0)), np.zeros((n, 0)), s)
+    msg = str(exc_info.value)
+    assert "flat.csv" in msg
+    assert "constant" in msg.lower()
+
+
+def test_constant_channel_error_is_a_valueerror():
+    """Same family as TrimError / NoBreathsError / DegenerateBreathError, so the batch
+    catches it per file rather than aborting the run."""
+    from respmech.core.compute import ConstantChannelError
+    assert issubclass(ConstantChannelError, ValueError)
+
+
+def test_constant_channel_error_has_a_run_screen_fix_hint():
+    from respmech.ui.screens.run_screen import _FIX_HINTS
+    assert "ConstantChannelError" in _FIX_HINTS
 
 
 def _write_recording(path, cut_offset, n_breaths=3, period_s=4.0, vt=0.6):
