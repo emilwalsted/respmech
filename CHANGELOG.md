@@ -57,6 +57,15 @@ gaps between what the two run.**
   a cardiac-gated peak column came out NaN) are now also recorded in `run-report.txt`'s
   `DIAGNOSTICS` block — previously visible only as a Python warning on stderr, which a
   packaged desktop app never shows.
+- Fixed a crash when an assigned pressure or flow channel is an all-integer column in
+  the source file (for example an unused "dummy" port wired to a constant `0`): the
+  loader now casts every channel to float64 on load, so arithmetic further down the
+  pipeline (the VMR ratio, in particular) no longer depends on the input file's own
+  dtype. Previously this could fail with a raw `UFuncTypeError` instead of a result.
+- Volume-based breath segmentation (`processing.segmentation.method = "volume"`) no
+  longer crashes with a bare `IndexError` when it cannot pair every inspiratory peak
+  with an expiratory one (which can happen with slow breathing and pauses at zero flow
+  between phases) — it now raises a named, explanatory error instead.
 - A batch where at least one file failed now marks `Average breathdata.xlsx` and
   `Cohort summary.xlsx` as incomplete (an `INCOMPLETE` row in each workbook's
   Provenance sheet, and a `COHORT FILES INCOMPLETE` line in `run-report.txt`, both

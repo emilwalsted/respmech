@@ -388,6 +388,13 @@ def separateintobreathsbyflow(filename, timecol, flow, volume, poes, pgas, pdi, 
     return breaths
 
 
+class VolumeSegmentationError(ValueError):
+    """Raised when volume-based breath segmentation cannot pair every detected
+    inspiratory peak with an expiratory one (a precondition failure, not a bug):
+    a pause at zero flow between phases (slow, quiet breathing) can suppress an
+    expiratory peak below the configured thresholds and leave too few to pair."""
+
+
 def separateintobreathsbyvolume(filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings):
     from scipy import signal
     breaths = OrderedDict()
@@ -403,6 +410,19 @@ def separateintobreathsbyvolume(filename, timecol, flow, volume, poes, pgas, pdi
     peakwidth = settings.processing.mechanics.peakwidth
     inpeaks, _ = signal.find_peaks(invol, height=peakheight, distance=peakdistance * samplingfrequency, width=peakwidth * samplingfrequency)
     expeaks, _ = signal.find_peaks(exvol, height=peakheight, distance=peakdistance * samplingfrequency, width=peakwidth * samplingfrequency)
+    # The loop below indexes expeaks[breathcnt - 2] and expeaks[breathcnt - 1] for
+    # breathcnt up to len(inpeaks); the highest index it ever needs is
+    # len(inpeaks) - 2, so it needs at least len(inpeaks) - 1 expiratory peaks.
+    # Fewer than that used to read past the end of expeaks and raise a bare
+    # IndexError instead of naming the problem.
+    if len(inpeaks) > 1 and len(expeaks) < len(inpeaks) - 1:
+        raise VolumeSegmentationError(
+            f"Volume-based breath segmentation found {len(inpeaks)} inspiratory peaks "
+            f"but only {len(expeaks)} expiratory peaks in {filename}, so at least one "
+            f"breath could not be paired with its expiration. This can happen with slow "
+            f"breathing and pauses at zero flow between phases. Check 'Signal used to "
+            f"split breaths' and the 'Breath peak' thresholds under Preview & QC ▸ "
+            f"Mechanics ▸ Advanced…, or switch to flow-based segmentation.")
     for inpeak in inpeaks:
         breathcnt += 1
         if breathcnt == 1:
@@ -834,7 +854,11 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
 
     vmrnumerator = (pgas_endinsp - pgas_endexp)
     vmrdenominator = (poes_endinsp - poes_endexp)
-    vmr = np.divide(vmrnumerator, vmrdenominator, out=np.zeros_like(vmrnumerator), where=vmrdenominator != 0)
+    # dtype=float is an extra safeguard, not the primary fix: the loader (core/io/loaders.py)
+    # now casts every channel to float64 on load, so vmrnumerator/vmrdenominator should
+    # already be float here. This keeps the division itself from raising even if some future
+    # caller feeds compute_breath() an int array directly.
+    vmr = np.divide(vmrnumerator, vmrdenominator, out=np.zeros_like(vmrnumerator, dtype=float), where=vmrdenominator != 0)
 
     tlr_insp = abs((poes_midvolexp - poes_midvolinsp) / (flow_midvolexp - flow_midvolinsp))
     insp_pdi_rise = pdi_maxinsp - min(insp["pdi"])
