@@ -180,25 +180,6 @@ def load(filepath, settings):
         volume = volume.squeeze()
     poes, pgas, pdi = poes.squeeze(), pgas.squeeze(), pdi.squeeze()
 
-    # Downstream arithmetic (VMR's np.divide, volume integration, PTP baselines, ...)
-    # assumes float64 throughout. A column that is all-integer in the source file (a
-    # constant-zero "dummy" channel wired to an unused pressure port, or a genuinely
-    # integer-valued instrument export) otherwise reaches pandas/scipy as int64, and an
-    # int64 zeros_like()/divide() combination then raises UFuncTypeError instead of
-    # producing a result. Cast every channel here, once, so nothing downstream needs to
-    # care about the input file's original dtype. A no-op for the already-float golden
-    # fixtures.
-    flow = flow.astype(np.float64, copy=False)
-    if len(volume) > 0:
-        volume = volume.astype(np.float64, copy=False)
-    poes = poes.astype(np.float64, copy=False)
-    pgas = pgas.astype(np.float64, copy=False)
-    pdi = pdi.astype(np.float64, copy=False)
-    if len(entropycolumns) > 0:
-        entropycolumns = entropycolumns.astype(np.float64, copy=False)
-    if len(emgcolumns) > 0:
-        emgcolumns = emgcolumns.astype(np.float64, copy=False)
-
     if settings.processing.mechanics.inverseflow:
         flow = -flow
     if settings.processing.mechanics.integratevolumefromflow:
@@ -207,5 +188,29 @@ def load(filepath, settings):
     if settings.processing.mechanics.inversevolume:
         volume = -volume
 
+    # validatedata() must see the RAW (possibly int64, possibly still-object) arrays:
+    # _checkcolumn's text-column check (above) only works before a cast to float, since
+    # casting a genuinely non-numeric column first would turn its friendly
+    # DataValidationError ("... contains text values...") into a bare, uncaught
+    # "could not convert string to float" ValueError instead.
     validatedata(flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings)
+
+    # Downstream arithmetic (VMR's np.divide, PTP baselines, ...) assumes float64
+    # throughout. A column that is all-integer in the source file (a constant-zero
+    # "dummy" channel wired to an unused pressure port, or a genuinely integer-valued
+    # instrument export) otherwise reaches pandas/scipy as int64, and an int64
+    # zeros_like()/divide() combination then raises UFuncTypeError instead of producing
+    # a result. Cast every channel here, once validation has confirmed it is safe to, so
+    # nothing downstream needs to care about the input file's original dtype.
+    # np.asarray(..., dtype=float) is a no-op for the already-float golden fixtures and
+    # handles an unassigned channel's bare ``[]`` the same way as a populated array, so
+    # no length guard is needed (matches the idiom used throughout core/ for this).
+    flow = np.asarray(flow, dtype=float)
+    volume = np.asarray(volume, dtype=float)
+    poes = np.asarray(poes, dtype=float)
+    pgas = np.asarray(pgas, dtype=float)
+    pdi = np.asarray(pdi, dtype=float)
+    entropycolumns = np.asarray(entropycolumns, dtype=float)
+    emgcolumns = np.asarray(emgcolumns, dtype=float)
+
     return flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns

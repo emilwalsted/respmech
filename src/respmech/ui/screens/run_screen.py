@@ -57,7 +57,8 @@ _FIX_HINTS = {
                              "(peak thresholds / breath-separation buffer); or exclude "
                              "the breath by clicking it in the Preview & QC channel view.",
     "VolumeSegmentationError": "Preview & QC ▸ Mechanics ▸ Advanced… ▸ 'Signal used to "
-                               "split breaths' and the 'Breath peak' thresholds.",
+                               "split breaths' and the 'Breath peak' thresholds; or "
+                               "switch 'Signal used to split breaths' to flow.",
 }
 
 

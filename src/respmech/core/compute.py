@@ -390,11 +390,9 @@ def separateintobreathsbyflow(filename, timecol, flow, volume, poes, pgas, pdi, 
 
 class VolumeSegmentationError(ValueError):
     """Raised when volume-based breath segmentation cannot pair every detected
-    inspiratory peak with an expiratory one (a precondition failure, not a bug).
-    Each breath but the last needs exactly one expiratory peak between its
-    inspiratory peak and the next; a pause at zero flow between phases (slow,
-    quiet breathing) can suppress an expiratory peak below the configured
-    thresholds and leave too few to pair."""
+    inspiratory peak with an expiratory one (a precondition failure, not a bug):
+    a pause at zero flow between phases (slow, quiet breathing) can suppress an
+    expiratory peak below the configured thresholds and leave too few to pair."""
 
 
 def separateintobreathsbyvolume(filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings):
