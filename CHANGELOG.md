@@ -149,6 +149,34 @@ once per subject) normalises every file's RMS against THAT file's own max/mean
 instead, so a percentage now means the same thing across the whole study. Off by
 default; existing analyses are unaffected until the field is set.
 
+**Two new pre-run quality checks catch problems that used to surface only as a
+confusing, misleading downstream error (or, for a constant flow channel, an outright
+hang).** Both are checked by the desktop app's Setup screen (a caution on the QC strip)
+and by `respmech validate`, from the same shared logic:
+
+- A recording whose time column looks like a regular sample clock but has duplicated
+  or decreasing timestamps — the signature of more than one recording (e.g. several
+  LabChart blocks) exported into one file and merged row-by-row by timestamp — is now
+  flagged by name, instead of silently letting segmentation jump between different
+  recordings from sample to sample.
+- An assigned channel (flow, Poes, Pgas, Pdi, an EMG channel, or an entropy channel)
+  that never varies across the whole recording — most commonly a mis-assigned or
+  unused/grounded column — is now flagged by name and column number. **A constant flow
+  channel specifically now raises a named error (`ConstantChannelError`) instead of
+  running at all**: breath segmentation on a perfectly flat flow signal cannot make
+  progress (traced, not assumed — the previous behaviour was an unrecoverable hang,
+  not merely a wrong answer). This is technically a breaking change for an analysis
+  that happens to have an intentionally-flat flow channel, which is not a realistic
+  configuration.
+- `DegenerateBreathError`'s message ("an incomplete breath right at the start or end
+  of a recording") is now only shown for an actual first-or-last breath. A degenerate
+  breath in the middle of a recording gets its own message instead, naming the
+  breath's own timestamp and the more likely mid-recording causes (noise around zero
+  flow, a mis-assigned flow channel, or merged data, per the check above) — reported
+  by a user whose file's real problem was the merged-timestamps case above, but whose
+  only symptom was a misleading "start or end" error for one breath in the middle of
+  the recording.
+
 <!--
 "Unreleased" above is a hand-maintained draft of the next release's entry. It is
 updated ONLY when explicitly asked to (not automatically on every commit), and it
