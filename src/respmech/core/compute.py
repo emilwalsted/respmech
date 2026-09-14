@@ -583,7 +583,7 @@ def trim_boundary_notices(breaths, settings, *, min_relative_duration=None, min_
     follow-up investigation below for why this is a per-analysis SETTING and not a
     revised built-in statistic.
 
-    **Follow-up investigation (ticket 20260906-1307, a review raised after this function
+    **Follow-up investigation (06-09-2026, a review raised after this function
     shipped): is 0.8 too aggressive on ordinary, high-variability breathing?** A reviewer's
     Monte Carlo simulation (log-normal phase durations) found 15-39% false-positive rates
     at breath-to-breath coefficients of variation (CV) of 15-25% — a PER-FILE rate (either
@@ -618,7 +618,7 @@ def trim_boundary_notices(breaths, settings, *, min_relative_duration=None, min_
     truncation is the costlier failure mode of the two), replacing the statistic was
     rejected: it is a different trade-off, not a demonstrated improvement.
 
-    The decision reached by this investigation (ticket 20260906-1307 — not yet reviewed or
+    The decision reached by this investigation (06-09-2026 — not yet reviewed or
     confirmed by Emil, unlike the earlier decisions elsewhere in this codebase that carry
     his name): keep 0.8/3 as the default, documented here as a known, accepted trade-off
     rather than a proven-safe value, and expose both numbers as a per-analysis setting (see
@@ -627,8 +627,9 @@ def trim_boundary_notices(breaths, settings, *, min_relative_duration=None, min_
     silently trading detection power away for every user based on one un-validated
     system-wide guess. Real research recordings (``tests/golden/production``, unavailable
     in the sandbox this investigation ran in) would let a future session replace this
-    entire trade-off analysis with a measured threshold instead — see the ticket's own
-    "Opgave" for the preferred path if that data becomes reachable.
+    entire trade-off analysis with a measured threshold instead — the preferred path, if
+    that data becomes reachable, is to replace the simulated Monte Carlo comparison above
+    with one measured directly against real recordings.
 
     A boundary breath that is ALREADY excluded (``processing.exclude_breaths`` /
     ``breaths[n]['ignored']``) still gets a notice ONLY when drift correction is on:

@@ -1,4 +1,4 @@
-"""End-to-end regression for ticket 20260913-2053: a real recording with an all-zero,
+"""End-to-end regression (13-09-2026): a real recording with an all-zero,
 integer-typed Pgas column crashed ``run_batch`` with ``UFuncTypeError`` from the VMR
 division in ``compute.compute_breath`` instead of producing a result -- the only
 ``np.zeros_like``/``np.divide`` combination anywhere in the codebase that depends on

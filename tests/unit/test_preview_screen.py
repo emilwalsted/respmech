@@ -1300,11 +1300,11 @@ def test_toggle_breath_is_locked_while_a_run_is_active_and_says_why(qapp, tmp_pa
 
 
 # --------------------------------------------------------------------------- #
-# Point 6 (respmech CI ticket 20260811-0910) — suite-scaling: PlotItem/ViewBox menus are
+# Point 6 (suite-scaling, 11-08-2026) — PlotItem/ViewBox menus are
 # now closed at PreviewScreen shutdown, via plot_perf.close_plots().
 # --------------------------------------------------------------------------- #
 def test_closing_the_window_closes_the_mechanics_stacks_current_plot_items(qapp, tmp_path):
-    """Point 6 (respmech CI ticket 20260811-0910, suite scaling). ``PlotItem``/``ViewBox``
+    """Point 6 (suite scaling, 11-08-2026). ``PlotItem``/``ViewBox``
     build their own context menus EAGERLY at construction (one ``ctrlMenu`` + six
     submenus per ``PlotItem``, one ``ViewBoxMenu`` per ``ViewBox``) -- and the GUI suite
     never deletes a closed ``MainWindow`` (deleting one segfaults on Python 3.11, see
@@ -1321,9 +1321,9 @@ def test_closing_the_window_closes_the_mechanics_stacks_current_plot_items(qapp,
     mid-session (``self.plots.clear()`` followed by fresh ``addPlot()`` calls, which
     several code paths do routinely) discards the PREVIOUS render's ``PlotItem``s from
     ``pv.plots.ci.items`` without closing them first -- a second, larger, NOT YET fixed
-    leak source the ticket documents separately. An end-to-end app-wide menu count would
+    leak source documented separately below. An end-to-end app-wide menu count would
     conflate the two and either flake on render count or silently stop testing the
-    mechanism this ticket actually landed.
+    mechanism this fix actually landed.
     """
     from respmech.ui.main_window import MainWindow
 
@@ -1348,7 +1348,7 @@ def test_closing_the_window_closes_the_mechanics_stacks_current_plot_items(qapp,
 
 
 def test_closing_the_window_closes_setups_channel_summary_plots(qapp, tmp_path):
-    """Point 6 continued (ticket 20260811-0910): the dominant remaining leak source once
+    """Point 6 continued (11-08-2026): the dominant remaining leak source once
     the mechanics stack's own shutdown-time close landed. Setup's read-only channel
     summary (ChannelSummary -> ColumnStack) builds its own PlotWidgets -- one ctrlMenu per
     assigned channel -- OUTSIDE PreviewScreen entirely, and MainWindow.closeEvent used to

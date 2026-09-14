@@ -401,7 +401,7 @@ def test_manifest_does_not_false_flag_a_clean_wide_file(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# merged multi-block export / constant channel detection (ticket 20260913-2054):
+# merged multi-block export / constant channel detection (13-09-2026):
 # core.quality's predicates, probed via core.io.loaders and surfaced on the Manifest
 # exactly like header_warnings above.
 # --------------------------------------------------------------------------- #

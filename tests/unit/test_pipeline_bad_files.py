@@ -10,7 +10,7 @@ per-file loop in ``run_batch`` is: it bubbled out of ``run_batch`` as a raw exce
 before a single file was processed, and whether that happened depended on the bad
 file's position in the sorted file list (auto_prop's 40000-sample collection loop could
 finish -- and never reach the bad file -- before hitting it, or could hit it first and
-abort). See ticket 20260804-0935 for the full analysis.
+abort). See the 04-08-2026 investigation for the full analysis.
 
 The one case that must NOT be silently skipped is the noise ``reference_file`` itself:
 if that specific file cannot be read, the shared profile cannot be built at all, and
