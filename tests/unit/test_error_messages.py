@@ -96,7 +96,7 @@ def test_degenerate_breath_gives_a_respmech_error_not_numpys():
 def test_degenerate_breath_mid_recording_names_the_time_not_start_or_end():
     """A degenerate breath that is NOT the first or last one detected must not blame
     "an incomplete breath ... at the start or end" (misleading when it plainly is not,
-    the ticket 20260913-2054 bug report) -- it should instead give the breath's own
+    the 13-09-2026 bug report) -- it should instead give the breath's own
     timestamp and name likely mid-recording causes (noise, a mis-assigned channel, or
     merged data), per that ticket's acceptance criterion 3."""
     insp = {"time": np.array([12.0, 12.01, 12.02]), "flow": np.array([0.0, 0.1, 0.2]),

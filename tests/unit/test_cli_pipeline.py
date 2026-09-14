@@ -61,7 +61,7 @@ def test_cli_migrate_and_validate(tmp_path):
 
 
 def test_examples_settings_toml_validates_and_dry_runs(capsys):
-    """K-046 (indholdsgennemgang respmech.dk, ticket 7.4): a CLI-only user had no
+    """K-046 (05-09-2026 content review, finding 7.4): a CLI-only user had no
     settings.toml to copy anywhere but a web page. examples/settings.toml ships in the
     repository, already wired to the committed sample_recording.csv, so both commands the
     manual tells a CLI user to run first actually work, unedited, from a fresh checkout."""
@@ -180,7 +180,7 @@ def test_cli_validate_accepts_a_writable_output_folder(tmp_path, capsys):
 def _write_layout_csv(path, n, *, time_col, extra_cols=None):
     """A minimal CSV matching the synthetic layout's column order (time, flow, volume,
     poes, pgas, pdi) so ``respmech validate``'s new merged-block/constant-channel probes
-    (ticket 20260913-2054) have something plausible to read column indices from — the
+    (13-09-2026) have something plausible to read column indices from — the
     values themselves are not physiologically meaningful, only the two properties each
     test below cares about (column 0's timestamps, or one column's variance)."""
     import numpy as np
@@ -207,7 +207,7 @@ def _validate_settings_toml(tmp_path, folder, *, flow=2, volume=3, poes=4, pgas=
 
 
 def test_cli_validate_warns_about_merged_time_blocks(tmp_path, capsys):
-    """Acceptance criterion 1 (ticket 20260913-2054): a CSV whose column 0 looks like
+    """Acceptance criterion 1 (13-09-2026): a CSV whose column 0 looks like
     two recordings merged by timestamp (duplicated/decreasing steps over an otherwise
     regular ~1000 Hz axis) must be flagged by `respmech validate`."""
     import numpy as np

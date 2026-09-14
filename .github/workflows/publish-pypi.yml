@@ -48,11 +48,11 @@ jobs:
     # ci.yml's own history describes growing from ~47 min to over 4 h from per-test Qt
     # teardown/widget accumulation, which is why ci.yml switched macOS to a file-by-file
     # loop and still keeps 240 min there as a pure hang guard. This job was NOT changed to
-    # that file-by-file form (out of scope for this ticket), so 120 min is a real risk of a
+    # that file-by-file form (out of scope for this change), so 120 min is a real risk of a
     # FALSE-POSITIVE timeout on a legitimately slow-but-healthy release, not just a hang
-    # guard — flagged to Emil in the ticket. Chosen anyway because it is the ticket's own
-    # explicit fallback number for when Actions history can't be read (REST API returns
-    # 403 in scheduled dispatcher runs); watch the next real release and raise this (or
+    # guard — flagged to Emil separately. Chosen anyway as an explicit fallback number for
+    # when Actions history cannot be read (the REST API can return 403 in some automated
+    # environments); watch the next real release and raise this (or
     # switch to file-by-file like ci.yml) if it times out on a healthy run. Without ANY
     # ceiling here, a hung test-gate blocks every later release/publish indefinitely:
     # concurrency.cancel-in-progress is false by design, and GitHub's own default is 6 h.
@@ -64,10 +64,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # Fuld historik OG tags: tools/check_changelog.py måler et
-          # commit-interval mellem to tags, og standard-dybden (1) giver hverken
-          # tags eller historik. Målt: uden dette melder kontrollen et
-          # indholdsløst grønt, og release-porten fejler på hver udgivelse.
+          # Full history AND tags: tools/check_changelog.py measures a
+          # commit interval between two tags, and the default depth (1) gives
+          # neither tags nor history. Measured: without this, the check
+          # reports a content-free green, and the release gate fails on
+          # every release.
           fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
@@ -105,10 +106,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # Fuld historik OG tags: tools/check_changelog.py måler et
-          # commit-interval mellem to tags, og standard-dybden (1) giver hverken
-          # tags eller historik. Målt: uden dette melder kontrollen et
-          # indholdsløst grønt, og release-porten fejler på hver udgivelse.
+          # Full history AND tags: tools/check_changelog.py measures a
+          # commit interval between two tags, and the default depth (1) gives
+          # neither tags nor history. Measured: without this, the check
+          # reports a content-free green, and the release gate fails on
+          # every release.
           fetch-depth: 0
       - uses: actions/setup-python@v6
         with:

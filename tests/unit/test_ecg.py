@@ -157,7 +157,7 @@ def test_pipeline_reports_ecg_suppression(import_ok, tmp_path):
 
 def test_stage_ecg_reduction_reports_suppression_matching_the_pipeline(tmp_path):
     """The 'EMG - ECG reduction' tab (ui.workers.stage_ecg_reduction) is a live TUNING
-    surface, but until ticket 20260804-0922 it never computed the peak-window-RMS
+    surface, but until the 04-08-2026 fix it never computed the peak-window-RMS
     suppression core.pipeline._ecg_remove reports for a real run — so 'Min height'/'Min
     gap' were dialled in on nothing but eyeballing the traces. It must now report a
     positive suppression, on a syntetic signal with known R-peaks, of the same order of

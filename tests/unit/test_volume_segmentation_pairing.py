@@ -1,5 +1,5 @@
 """Volume-based breath segmentation must not crash with a bare IndexError when it
-cannot pair every inspiratory peak with an expiratory one (ticket 20260913-2053).
+cannot pair every inspiratory peak with an expiratory one (13-09-2026).
 
 A real ~33 s recording with slow breathing and pauses at zero flow between phases
 found more inspiratory than the expected number of expiratory peaks and crashed

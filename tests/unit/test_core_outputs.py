@@ -35,7 +35,7 @@ def test_units_resolve_by_physical_quantity():
 
 
 def test_units_use_the_dot_notation_not_the_slash_form():
-    """Harmonised 05-09-2026 (indholdsgennemgang 10.4): the Units sheet used to write
+    """Harmonised 05-09-2026 (content review, finding 10.4): the Units sheet used to write
     'L/s'/'L/min' while the manual's tables wrote 'L·s⁻¹'/'L·min⁻¹' for the same
     columns. The dot form now wins everywhere; the slash form must not resurface."""
     from respmech.core import quantities as units
@@ -808,7 +808,7 @@ def test_sample_recording_is_analysable(tmp_path):
 
 
 def test_build_sample_settings_uses_the_documented_buffer_default(tmp_path):
-    """K-030 (indholdsgennemgang respmech.dk, ticket 7.1): the sample used to run on
+    """K-030 (05-09-2026 content review, finding 7.1): the sample used to run on
     segmentation.buffer = 200 while every Default field and screenshot on the site says
     800, with nothing explaining why. The value was never load-bearing for this recording
     (200/800/1600 all detect the same 9 breaths — see the comment in build_sample_settings),

@@ -2029,7 +2029,7 @@ class SettingsScreen(QWidget):
         return True
 
     def _detach_sample_from_temp(self, dest_path):
-        """K-047 (indholdsgennemgang respmech.dk, ticket 7.3): the built-in sample's
+        """K-047 (05-09-2026 content review, finding 7.3): the built-in sample's
         recording, output and EMG noise-reference folders all live under the OS temp
         directory (``open_sample_analysis``/``core.sample``), which the OS may clear at
         any time. A plain 'Save as…' used to copy those absolute temp paths verbatim into

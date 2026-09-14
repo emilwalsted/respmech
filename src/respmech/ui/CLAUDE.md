@@ -37,7 +37,7 @@ unbreakable item whose minimum is still the sum of its contents. Build chips wit
 sets `QSizePolicy.Preferred` + `setHeightForWidth(True)`: under `Maximum` Qt caps the widget
 at its one-line `sizeHint` height and paints the wrapped row outside it.
 
-### Three more Windows-metrics fixes worth reusing (ticket 20260810-1059, ui-overhaul)
+### Three more Windows-metrics fixes worth reusing (found 10-08-2026, ui-overhaul)
 
 - **A `QHeaderView.maximumSectionSize()` cap and a header's own legibility are different
   budgets, and Qt's `resizeColumnsToContents()` conflates them.** `result_table.py`'s
