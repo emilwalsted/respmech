@@ -235,7 +235,7 @@ def test_the_summary_has_no_visible_axis(qapp):
         assert plot.getAxis("bottom").isVisible() is False
 
 
-# -- plot cleanup (point 6, ticket 20260811-0910) -----------------------------------------
+# -- plot cleanup (point 6, suite-scaling, 11-08-2026) -----------------------------------------
 def test_rebuilding_the_mapping_closes_the_previous_stacks_plots(qapp):
     """Every show_mapping() rebuild used to just setParent(None) the old ColumnStack and
     drop the reference — never closing its PlotWidgets' own context menus. _clear() now

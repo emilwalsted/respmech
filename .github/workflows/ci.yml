@@ -16,7 +16,7 @@ concurrency:
   # Keyed by github.ref alone, EVERY push to the same branch shared one group, so a
   # second commit could cancel the first commit's still-running check (Windows
   # GUI-smoke + full unit suite) before it reported anything — a real, secondary
-  # contributor to red-looking CI on a branch fed by chained ticket dispatch (commits
+  # contributor to red-looking CI on a branch fed by rapid automated pushes (commits
   # sometimes under 30 minutes apart). Key push runs by commit SHA (unique per commit,
   # never cancelled by a later one); PR runs still key by PR number, where cancelling a
   # stale review of an old head is the intended use of cancel-in-progress.
@@ -33,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false   # let every OS/version combo report, don't cancel siblings on first red
       # Full 4-way (2 OS × 2 Python) where the verdict gates a merge or a release:
-      # master pushes, PRs, manual dispatch. Feature-branch pushes (the chained-ticket
+      # master pushes, PRs, manual dispatch. Feature-branch pushes (a rapid automated
       # cadence: 3–8 commits/day) run ONE Python per OS instead — the failure axis this
       # matrix exists for is the OS (fonts/encoding/paths), not the Python minor, and
       # halving the macOS demand is what keeps the account's macOS runner queue from
@@ -65,10 +65,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # Fuld historik OG tags: tools/check_changelog.py måler et
-          # commit-interval mellem to tags, og standard-dybden (1) giver hverken
-          # tags eller historik. Målt: uden dette melder kontrollen et
-          # indholdsløst grønt, og release-porten fejler på hver udgivelse.
+          # Full history AND tags: tools/check_changelog.py measures a
+          # commit interval between two tags, and the default depth (1) gives
+          # neither tags nor history. Measured: without this, the check
+          # reports a content-free green, and the release gate fails on
+          # every release.
           fetch-depth: 0
 
       - uses: actions/setup-python@v6
@@ -118,7 +119,7 @@ jobs:
       # that completes it (~45-55 min at 1285 tests), and that single big run is the
       # ordering-contract coverage every other job now forgoes (Linux went file-by-file
       # for memory, macOS below for time). If Windows ever stops completing it, the
-      # suite-scaling ticket is overdue, not another per-OS carve-out.
+      # suite-scaling follow-up is overdue, not another per-OS carve-out.
       - name: Unit suite (headless, offscreen Qt)
         if: runner.os != 'macOS'
         run: |
@@ -168,7 +169,7 @@ jobs:
       # (Linux's file-by-file run cut 32 min to ~14), so shedding it per file is what
       # returns a verdict in under an hour. The one-process ordering-contract coverage
       # stays on Windows above, which completes it; the real cure remains the
-      # suite-scaling ticket (cap the widget population), after which this can fold
+      # suite-scaling follow-up (cap the widget population), after which this can fold
       # back into the single invocation. No --deselect here: macOS has a real Menlo,
       # so the font-resolution test runs (the deselect on smoke-linux is that job's
       # sandbox artefact, not this one's).
@@ -210,9 +211,9 @@ jobs:
           if [ "$fails" -ne 0 ]; then exit 1; fi
           echo "Unit suite passed file by file (per-file exit codes beyond the summaries are Qt teardown noise)."
 
-  # The fast first verdict, and the job every Claude ticket can reproduce EXACTLY:
-  # ticket sandboxes are Linux, so "the suite is green in my sandbox" and "smoke-linux
-  # is green" are the same claim. It exists so a portability break surfaces in
+  # The fast first verdict: this job runs on Linux, the same platform most local
+  # development happens on, so "the suite is green in my sandbox" and
+  # "smoke-linux is green" are the same claim. It exists so a portability break surfaces in
   # ~15 minutes on every push instead of hours later in the win/mac queue — the
   # win/mac matrix above remains the portability proof (fonts/encoding/paths differ);
   # a green here does NOT imply a green there.
@@ -306,10 +307,10 @@ jobs:
       #     the teardown net was built and validated first — it segfaults within four
       #     tests on py3.12 too, so the conftest's "cannot be validated without shipping
       #     it" warning stands beyond py3.11. Capping the population for real is the
-      #     suite-scaling ticket, and doing it is what would also cure macOS's 3½-hour
+      #     suite-scaling follow-up, and doing it is what would also cure macOS's 3½-hour
       #     runs and win back a one-process Linux job.
-      # Per-file runs are the composition ticket sandboxes actually exercise while
-      # iterating, every file's peak stays far below the ceiling, and the pattern is
+      # Per-file runs are the same composition ordinary local iteration actually exercises
+      # while developing, every file's peak stays far below the ceiling, and the pattern is
       # proven: all 72 files ran green in an 8 GB container before this landed. The
       # one-process whole-suite claim stays covered by the win/mac jobs, which complete
       # it. Per-file pass/fail mirrors the win/mac step's summary-grep logic — keep the
@@ -362,10 +363,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # Fuld historik OG tags: tools/check_changelog.py måler et
-          # commit-interval mellem to tags, og standard-dybden (1) giver hverken
-          # tags eller historik. Målt: uden dette melder kontrollen et
-          # indholdsløst grønt, og release-porten fejler på hver udgivelse.
+          # Full history AND tags: tools/check_changelog.py measures a
+          # commit interval between two tags, and the default depth (1) gives
+          # neither tags nor history. Measured: without this, the check
+          # reports a content-free green, and the release gate fails on
+          # every release.
           fetch-depth: 0
 
       - uses: actions/setup-python@v6

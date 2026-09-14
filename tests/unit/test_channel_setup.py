@@ -94,7 +94,7 @@ def test_dialog_has_a_control_and_plot_per_column(qapp):
                                       "pgas": None, "pdi": None, "emg": [], "entropy": []}
 
 
-# -- plot cleanup (point 6, ticket 20260811-0910) -----------------------------------------
+# -- plot cleanup (point 6, suite-scaling, 11-08-2026) -----------------------------------------
 def test_closing_the_dialog_closes_its_plots(qapp):
     """Each column's PlotWidget builds its own ctrlMenu eagerly at construction
     (ColumnStack.build) and nothing used to release it when the dialog closed -- unlike

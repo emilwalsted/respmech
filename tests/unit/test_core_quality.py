@@ -1,4 +1,4 @@
-"""Unit tests for core/quality.py's two data-quality predicates (ticket 20260913-2054)
+"""Unit tests for core/quality.py's two data-quality predicates (13-09-2026)
 and the core.io.loaders probes that feed them from a file on disk.
 
 Background: a user's LabChart CSV was actually three merged blocks (duplicated

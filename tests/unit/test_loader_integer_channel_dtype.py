@@ -1,5 +1,5 @@
 """A channel written as an all-integer column in the source file must not reach
-downstream arithmetic as int64 (ticket 20260913-2053).
+downstream arithmetic as int64 (13-09-2026).
 
 A real recording had two pressure channels wired to unused ("dummy") ports and
 written as a literal ``0`` throughout, so pandas inferred ``int64`` for those

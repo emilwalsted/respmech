@@ -36,7 +36,7 @@ def test_shows_only_the_chosen_columns_in_the_given_order(qapp):
     assert [h.text().split()[1] for h in st.headers] == ["5", "2", "3"]
 
 
-# -- close_plots() (point 6, ticket 20260811-0910) ---------------------------------------
+# -- close_plots() (point 6, suite-scaling, 11-08-2026) ---------------------------------------
 def test_close_plots_closes_every_embedded_plotitem_and_empties_the_list(qapp):
     """Each PlotWidget's own ctrlMenu/ViewBox are released (see close_plots()'s docstring
     for why nothing else ever does this), and self.plots is emptied so nothing iterates a

@@ -104,7 +104,7 @@ def test_ecg_auto_batch_greys_out_the_fields_it_overrides(qapp, tmp_path):
 
 
 def test_ecg_auto_batch_blanks_the_stale_numeric_fields(qapp, tmp_path):
-    """Ticket 20260804-0923: greyed out is not enough — the min height/min gap fields kept
+    """04-08-2026: greyed out is not enough — the min height/min gap fields kept
     showing the last manual/Auto-suggest numbers even though a real run ignores them
     entirely and auto-detects its own from the reference file. They must show a dash
     while auto-batch governs them, and the REAL number again the moment it is unticked —
@@ -189,7 +189,7 @@ def test_unchecking_remove_ecg_clears_stuck_auto_batch(qapp, tmp_path):
     assert s.processing.emg.ecg_auto_detect is False         # cleared, not left stuck
     assert pv.ecg_auto_batch.isChecked() is False             # widget reflects the clear
     s.validate()                                              # the resulting settings are valid
-    # ticket 20260804-0923: the forced uncheck must also un-blank the fields and clear the
+    # 04-08-2026: the forced uncheck must also un-blank the fields and clear the
     # caption — a stuck-open dash or a stale "Auto (whole batch) is on" sentence here would
     # be its own, quieter version of the bug this ticket fixes.
     assert pv.ecg_min_height.lineEdit().text() != "—"
@@ -407,7 +407,7 @@ def test_each_repaired_leg_names_the_control_that_brings_auto_batch_back(qapp, t
 
 
 def test_the_processed_panel_title_reflects_whether_removal_is_actually_on(qapp, tmp_path):
-    """Ticket 20260804-0922: the panel over the processed EMG stack used to say
+    """04-08-2026: the panel over the processed EMG stack used to say
     'ECG-processed EMG channels' even with Remove ECG off, while it showed the RAW
     channels underneath (R-takker in full swing) -- reading as 'the removal is broken'
     rather than 'the removal is off'. It must now name which is true, and carry the
@@ -444,7 +444,7 @@ def test_the_processed_panel_title_reflects_whether_removal_is_actually_on(qapp,
 
 
 def test_the_processed_panel_title_reset_reflects_the_current_setting_not_a_hardcoded_on(qapp, tmp_path):
-    """Ticket 20260804-0922 follow-up (self-review finding): the capture panel's reset
+    """04-08-2026 follow-up (self-review finding): the capture panel's reset
     text is neutral ("Raw capture channel..."), but the processed panel's ON title is
     itself a claim -- so a reset that always hard-codes ON would show "ECG-processed EMG
     channels" on a freshly blanked panel even when remove_ecg is off, exactly the
@@ -462,7 +462,7 @@ def test_the_processed_panel_title_reset_reflects_the_current_setting_not_a_hard
 
 
 def test_a_failed_detection_never_claims_ecg_processed_over_the_raw_fallback(qapp, tmp_path):
-    """Ticket 20260804-0922 follow-up (self-review finding): stage_ecg_reduction falls
+    """04-08-2026 follow-up (self-review finding): stage_ecg_reduction falls
     back to the RAW channels whenever detection/removal raises, regardless of the
     remove_ecg setting (data['ecg_applied'] stays True). The error-branch title must
     therefore say OFF, or it reproduces the exact bug this ticket exists to fix --
@@ -483,7 +483,7 @@ def test_a_failed_detection_never_claims_ecg_processed_over_the_raw_fallback(qap
 
 
 def test_emg_all_result_label_composes_ecg_and_noise_independently(qapp, tmp_path):
-    """Ticket 20260804-0922: the EMG result status line hard-coded '(ECG + noise)'
+    """04-08-2026: the EMG result status line hard-coded '(ECG + noise)'
     whenever noise_applied was true, regardless of whether ECG removal actually ran, so
     turning ECG removal off while noise reduction stayed on kept claiming ECG removal
     had happened. All four combinations must be named independently and correctly."""

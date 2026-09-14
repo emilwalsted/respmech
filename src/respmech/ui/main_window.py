@@ -609,8 +609,7 @@ class MainWindow(QMainWindow):
         self._view_actions = []
         # One action per ACTUAL tab, not a fixed Setup/Preview/Run trio: Run & results
         # stopped being its own tab in B03 (it lives inside Preview & QC as a drawer), so
-        # there is no third tab to name here any more — see
-        # memory/respmech-skill-udestaaende.md's B03 entry.
+        # there is no third tab to name here any more.
         for i in range(self.tabs.count()):
             act = QAction(self.tabs.tabText(i), self)
             if i < 9:
