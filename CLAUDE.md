@@ -94,7 +94,7 @@ test_trim_boundary_notices.py::TestTrimBoundaryNoticesPure::
 test_reproduces_k035_own_measured_case` pins the lower end.
 
 **A self-calibrating statistic is not automatically "more robust" than a fixed ratio —
-measure the ACTUAL trade-off before switching (ticket 20260906-1307, 06-09-2026).** A
+measure the ACTUAL trade-off before switching (06-09-2026 review).** A
 follow-up review raised a literature-backed concern (published breath-timing CVs of
 ~18-25% in real resting breathing) that the 0.8 ratio above over-flags ordinary
 high-variability recordings. The seemingly obvious fix — a MAD-based robust z-score
@@ -137,7 +137,7 @@ changes underneath them — fix BOTH if you change how a screen is reached, sele
 ### CI showing red does not always mean a test failed (found 07-08-2026)
 
 Two independent, unrelated defects made CI look permanently red on a branch fed by
-rapid successive pushes (`ui-overhaul` under chained ticket dispatch), while every
+rapid successive automated pushes (`ui-overhaul`), while every
 individual test passed. Both are fixed, but the diagnostic habit is the lasting lesson:
 if local reproduction of every CI step is 100% green, look at the *workflow
 infrastructure* next, not just the tests.
@@ -149,11 +149,12 @@ default.
 Regression tests: `tests/unit/test_check_changelog.py::test_a_non_utf8_default_locale_does_not_crash_the_tool`,
 `tests/unit/test_ci_workflow_concurrency.py`.
 
-### A ticket is not done while its own CI run is red (added 10-08-2026)
+### A change is not done while its own CI run is red (added 10-08-2026)
 
-Every ticket session runs on **Linux**, and a green local `pytest tests/unit
-tests/golden` there is necessary but **not sufficient**: the win/mac smoke fails on
-real portability differences a Linux run structurally cannot see.
+Automated verification of a push against this repo typically runs on **Linux**, and a
+green local `pytest tests/unit tests/golden` there is necessary but **not sufficient**:
+the win/mac smoke fails on real portability differences a Linux run structurally
+cannot see.
 
 The protocol, after **every** push:
 
@@ -162,7 +163,7 @@ The protocol, after **every** push:
 2. Watch it to a verdict: `gh run watch <run-id> --exit-status` (or poll
    `gh run view <run-id>`). **`GUI smoke · ubuntu-latest` (~15 min) is the same claim
    as your local suite and must be green. The Windows jobs (~35 min) must be green
-   before the ticket reports success.** Read failures with
+   before the work is reported done.** Read failures with
    `gh run view <run-id> --log-failed`.
 3. macOS can queue for hours behind earlier runs — do not block the hand-off on it,
    but check the latest *completed* macOS smoke on the branch before starting new
@@ -171,9 +172,9 @@ The protocol, after **every** push:
    `windows_metrics` fixture / `QFont.setStretch(145)` (see `tests/CLAUDE.md`). A
    pixel-marginal row that fits your DejaVu does not fit Segoe, and macOS adds
    button chrome DejaVu maths won't predict.
-5. If `gh` is unavailable in the session, say so in the hand-off instead of implying
+5. If `gh` is unavailable, say so in the hand-off instead of implying
    green: "suite green locally; CI not checked" is honest and lets the next session
-   check. Never report a ticket done while its run shows a failed job.
+   check. Never report work done while its run shows a failed job.
 
 Related, and the reason a red run is worth re-running rather than shrugging off:
 **A test that passes alone but fails in a big suite run is not automatically

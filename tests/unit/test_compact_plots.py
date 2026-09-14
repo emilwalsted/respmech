@@ -581,9 +581,9 @@ def test_the_noise_tab_divides_into_thirds(qapp, tmp_path):
     ~22 px row of chrome (offscreen/Windows/Linux — on a real macOS run Qt merges it into
     the system menu bar and it costs the window nothing), which at 800 px pushed
     chrome+settings to 43% — a fixed cost is a smaller SHARE of a taller window, so this
-    raises the total rather than loosening the "roughly a third" invariant itself. See
-    memory/respmech-skill-udestaaende.md's B03 entry for the same rule applied the other
-    way (a permanent addition eating into this same budget).
+    raises the total rather than loosening the "roughly a third" invariant itself. The
+    same rule applies the other way round for a permanent addition eating into this
+    same budget.
 
     NOT raised again for the Windows overage reported 10-08-2026 (43.06% vs 0.42 at this
     same 850 px): unlike the 800->850 move, bumping the height further would not be testing
@@ -594,8 +594,8 @@ def test_the_noise_tab_divides_into_thirds(qapp, tmp_path):
     Padding this test's window taller would make the assertion pass while leaving the real,
     smaller window exactly as cramped. This needs the chrome itself compressed (or its
     budget re-derived from font height) in the noise tab's own product code — a product
-    decision, not a test-fixture number — and is tracked as open in ticket
-    20260810-1059-ci-fixes.md rather than guessed at here."""
+    decision, not a test-fixture number — and is tracked as an open follow-up
+    (10-08-2026) rather than guessed at here."""
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QSplitter
     win, pv = _noise_tab(qapp, tmp_path, 850)

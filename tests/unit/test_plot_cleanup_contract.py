@@ -1,4 +1,4 @@
-"""Point 6 durability (claude-ops ticket 20260811-1735): the invariant "closing a plot
+"""Point 6 durability (11-08-2026): the invariant "closing a plot
 owner releases its menus" used to live in ONE place — MainWindow.closeEvent's explicit
 orchestration (screen.shutdown() calls + channel_summary.close_plots()). Qt never
 delivers closeEvent to a child widget when its PARENT window closes, so any composition

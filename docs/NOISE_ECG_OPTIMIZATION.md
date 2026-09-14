@@ -114,8 +114,9 @@ A long, diaphragm-quiet noise sample gives a stable per-frequency estimate. Fron
 at 2 kHz) slightly beats 512 for this band.
 
 ### 3c. Rendered figures (real H5/H6 EMG)
-Signal figures are kept **out of this public repo**; they live in Emil's Dropbox:
-`/Users/emilwalsted/Dropbox/RespMech/figures/`
+Signal figures are kept **out of this public repo** (real research recordings, not
+committable here); they are kept privately alongside the other `tests/golden/production`
+material referenced elsewhere in this file.
 - `H5_RIU_H5_Peak180W_ch4_time.png` / `_psd.png` — raw vs current (near-no-op) vs
   proposed; proposed removes the 20–50 Hz noise floor while preserving the 80–200 Hz
   EMG (ΔSNR +2.35 dB, fidelity 0.94).

@@ -311,7 +311,7 @@ def build_sample_settings(desc: dict, output_folder: str):
     ch.flow, ch.volume = m["flow"], m["volume"]
     ch.poes, ch.pgas, ch.pdi = m["poes"], m["pgas"], m["pdi"]
     ch.emg, ch.entropy = list(m["emg"]), list(m["entropy"])
-    # K-030 (indholdsgennemgang respmech.dk, ticket 7.1): the sample used to set 200,
+    # K-030 (05-09-2026 content review, finding 7.1): the sample used to set 200,
     # below the schema default of 800, though not because 800 breaks this recording — at
     # FS=1000, buffer 200/800/1600 all detect the same 9 breaths with the same VT and WOB
     # on this file (measured, ticket D29/UI-overhaul). The value was never load-bearing

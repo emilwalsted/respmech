@@ -459,7 +459,7 @@ def test_save_as_writes_the_picked_file_and_a_failed_save_stays_dirty(qapp, tmp_
 
 
 def test_save_as_detaches_the_sample_from_its_temp_folder(qapp, tmp_path, monkeypatch):
-    """K-047 (indholdsgennemgang respmech.dk, ticket 7.3): the built-in sample's recording,
+    """K-047 (05-09-2026 content review, finding 7.3): the built-in sample's recording,
     output and EMG noise-reference folders all live under the OS temp directory and vanish
     on cleanup, so a saved-then-reopened sample analysis used to stop working once that
     happened. 'Save as…' must copy the recording out and repoint every folder at the
@@ -762,7 +762,7 @@ def test_qc_strip_also_flags_a_header_block_folder(qapp, tmp_path):
 
 
 def test_qc_strip_flags_a_merged_multi_block_export(qapp, tmp_path):
-    """ticket 20260913-2054: a time column with duplicated timestamps early in the
+    """13-09-2026: a time column with duplicated timestamps early in the
     file (interleaved multi-block export), clean afterwards -- the Setup QC strip must
     surface it, mirroring the header-block caution pattern above."""
     import numpy as np
@@ -790,7 +790,7 @@ def test_qc_strip_flags_a_merged_multi_block_export(qapp, tmp_path):
 
 
 def test_qc_strip_flags_a_constant_assigned_channel(qapp, tmp_path):
-    """ticket 20260913-2054: an assigned channel (Pdi here) that never varies must be
+    """13-09-2026: an assigned channel (Pdi here) that never varies must be
     named on the Setup QC strip, same pattern as the header-block/merged-block cautions
     above."""
     import numpy as np

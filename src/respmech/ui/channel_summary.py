@@ -153,7 +153,7 @@ class ChannelSummary(QWidget):
         window closes is never rebuilt, so nothing ever calls ``_clear()`` again for it.
         Preview & QC's screen has an explicit ``shutdown()`` for exactly this; this is its
         counterpart for Setup's channel summary — see ``MainWindow.closeEvent``, which
-        calls both. Measured 11-08-2026 (point 6, ticket 20260811-0910): this was the
+        calls both. Measured 11-08-2026 (point 6, suite-scaling): this was the
         SOLE remaining leak source after Preview & QC's own shutdown-time fix landed — a
         bare, freshly-built ``MainWindow`` that renders nothing at all still measured 83
         surviving ``QMenu``s after ``close()`` (0 with both fixes), because unlike a

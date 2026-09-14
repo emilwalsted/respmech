@@ -86,7 +86,7 @@ class SegmentationSettings:
     # K-035 boundary-truncation quality notice (compute.trim_boundary_notices): how much
     # shorter than the file's own median a boundary breath's phase must be before it is
     # flagged as likely truncated by trim(). 0.8 was measured, not guessed (see that
-    # function's docstring); exposed here (ticket 20260906-1307) so a recording with
+    # function's docstring); exposed here (06-09-2026 review) so a recording with
     # atypically high natural breath-to-breath variability can be re-tuned per file/study
     # without a code change, without this codebase silently guessing a system-wide
     # replacement statistic that was NOT demonstrated to be an unambiguous improvement.

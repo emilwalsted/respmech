@@ -1,4 +1,4 @@
-"""Unit tests for the K-035 boundary-truncation quality notice (ticket 20260906-1109).
+"""Unit tests for the K-035 boundary-truncation quality notice (06-09-2026).
 
 Background: ``compute.trim`` discards only a leading partial expiration and a trailing
 partial inspiration; it has no way to tell whether the breath it KEEPS at either
@@ -6,10 +6,9 @@ boundary is itself complete. A recording that begins already in inspiration, or 
 still in expiration, keeps that truncated boundary breath and analyses it as if
 whole — and, with drift correction on (the default), that truncation also tilts the
 volume baseline of every OTHER breath in the file, with no error and (until this
-change) no warning anywhere. See K-035
-(leverancer/2026-09-05-respmech-indholdsgennemgang/…-bilag.md, line ~488) and the
-closed ticket 20260905-1156 for the full investigation and the originally measured
-numbers (breath 1 Ti 1.161 s vs 1.661 s uncut, vol_endexp drift -0.269 to -0.684 L).
+change) no warning anywhere. See the 05-09-2026 content review (finding K-035) for
+the full investigation and the originally measured numbers (breath 1 Ti 1.161 s vs
+1.661 s uncut, vol_endexp drift -0.269 to -0.684 L).
 
 The detection compares the first/last breath's inspiratory/expiratory duration
 against this file's own median for OTHER breaths, rather than testing the raw
@@ -28,7 +27,7 @@ function — did NOT catch the motivating inspiratory case at all (ratio ~0.72).
 ``test_reproduces_k035_own_measured_case`` below pins that exact scenario so the
 threshold can never regress back below it unnoticed.
 
-Follow-up (ticket 20260906-1307): a review raised a well-founded, literature-backed
+Follow-up (06-09-2026): a review raised a well-founded, literature-backed
 concern that 0.8 may over-flag ordinary high-variability breathing. A Monte Carlo
 comparison against a MAD-based alternative (see ``trim_boundary_notices``'s own
 docstring for the full reasoning and numbers) showed the alternative trades away
@@ -153,7 +152,7 @@ class TestTrimBoundaryNoticesPure:
         assert notices == []
 
     def test_reproduces_k035_own_measured_case(self):
-        """Pin the exact scenario from K-035's own reproduction (leverancer/…-bilag.md):
+        """Pin the exact scenario from K-035's own reproduction:
         breath 1 Ti 1.161 s against a file median of ~1.6 s. This is the case an
         earlier, lower threshold (0.6) shipped during development did NOT catch."""
         insp_typ = round(1.6045 * FS)         # measured median from the built-in sample
@@ -394,7 +393,7 @@ class TestShortBoundaryNote:
 
 
 class TestBoundaryNoticeSettings:
-    """Ticket 20260906-1307: the threshold/min-other-breaths pair is now a per-analysis
+    """06-09-2026: the threshold/min-other-breaths pair is now a per-analysis
     Settings/TOML field, not a hardcoded default -- so a study with atypically high
     natural breath-to-breath variability can raise the threshold itself instead of
     living with the system-wide default's false-positive rate."""

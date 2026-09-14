@@ -880,8 +880,7 @@ def test_apply_commits_the_edited_keys_and_triggers_a_recompute_without_closing(
     Spies on ``_request_autorun`` directly, not just ``settings_edited`` — deleting the
     ``_request_autorun()`` call from ``_commit`` while leaving ``settings_edited.emit()`` in
     place would still mark the analysis "modified" and pass a signal-only assertion, without
-    ever actually scheduling the recompute the ticket names explicitly ("udløser en
-    genberegning")."""
+    ever actually scheduling the recompute Apply is explicitly required to trigger."""
     pv = _preview(qapp, tmp_path)
     s = pv.state.settings
     edits = []
