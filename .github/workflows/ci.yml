@@ -8,7 +8,11 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    # Not release-request: that branch only ever carries an EMPTY commit on top of
+    # master's already-tested tip (release-request.yml), so a run there proves nothing
+    # and only competes with the release's own macOS jobs. The exclusion must come
+    # AFTER the positive pattern.
+    branches: ["**", "!release-request"]
   pull_request:
   workflow_dispatch:
 
