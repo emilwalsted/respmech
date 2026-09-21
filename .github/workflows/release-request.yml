@@ -1,0 +1,102 @@
+name: Release request (server-side tag)
+
+# A second way to cut a release, for maintainer environments that can push
+# branches but are not allowed to push tags. The normal way is unchanged: push a
+# vX.Y.Z tag on master (docs/RELEASING.md).
+#
+# The request is an EMPTY commit whose first line is exactly "Release vX.Y.Z",
+# directly on top of master's current tip, pushed to the branch "release-request":
+#
+#   git fetch origin
+#   git checkout -B release-request origin/master
+#   git commit --allow-empty -m "Release v2.5.0"
+#   git push --force origin release-request
+#
+# This workflow checks that commit (.github/scripts/release_tag.sh: exact first
+# line, strict semver, one plain empty commit on master's tip, version equals
+# __version__, an existing tag is never moved) and then creates the annotated tag
+# ON MASTER'S TIP. From there the tag-triggered release.yml and publish-pypi.yml
+# take over, exactly as if the tag had been pushed by hand.
+#
+# THE ONE THING THAT IS EASY TO GET WRONG. A tag pushed with the workflow's own
+# GITHUB_TOKEN does NOT trigger other workflows (GitHub's documented rule: events
+# created with GITHUB_TOKEN do not start new workflow runs). release.yml and
+# publish-pypi.yml are both `on: push: tags`, so such a tag would be created and
+# then nothing at all would happen, silently. It could not be repaired from here
+# either: a repeated request finds the tag "already present" and pushes nothing.
+# workflow_dispatch is not a way around it: publish-pypi.yml deliberately sends a
+# manual run to TestPyPI, never to real PyPI. So the tag is pushed with a separate
+# credential, the secret RELEASE_TAG_TOKEN (a fine-grained personal access token
+# limited to THIS repository, "Contents: Read and write" and nothing else), and
+# WITHOUT that secret this workflow refuses before it creates anything. There is
+# deliberately no fallback to GITHUB_TOKEN, which is why the job itself only has
+# read permission.
+#
+# WHAT GUARDS THIS, STATED PLAINLY. For a push event GitHub takes this workflow
+# file AND the script from the pushed commit, so the checks in the script protect
+# against mistakes, not against someone with write access, who could push a
+# different workflow (or simply push the tag). The enforced gate is the
+# "release-tag" environment: RELEASE_TAG_TOKEN is stored as a secret OF THAT
+# ENVIRONMENT, the environment requires the maintainer's review, and GitHub hands
+# an environment secret to a job only after that review is given. A fork or a pull
+# request cannot trigger this workflow at all (`on: push` runs only for pushes to
+# this repository, and secrets are never handed to a fork).
+
+on:
+  push:
+    branches: [release-request]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-request
+  cancel-in-progress: false
+
+jobs:
+  release-tag:
+    name: Create the release tag
+    # A fork that enables Actions must never tag itself from its own copy of this file.
+    if: github.repository == 'emilwalsted/respmech'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Pauses here until the maintainer approves; only then is the secret available.
+    environment: release-tag
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Refuse without RELEASE_TAG_TOKEN
+        env:
+          HAS_RELEASE_TAG_TOKEN: ${{ secrets.RELEASE_TAG_TOKEN != '' }}
+        run: |
+          if [ "$HAS_RELEASE_TAG_TOKEN" != "true" ]; then
+            echo "::error::RELEASE_TAG_TOKEN is not set for the release-tag environment. Refusing to create a tag that would start no release. See docs/RELEASING.md."
+            exit 1
+          fi
+
+      # The token given to checkout is the identity `git push` uses later: see
+      # "THE ONE THING THAT IS EASY TO GET WRONG" above.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TAG_TOKEN }}
+
+      - name: Create and push the tag (.github/scripts/release_tag.sh)
+        env:
+          DEFAULT_BRANCH: master
+          REQUEST_SHA: ${{ github.sha }}
+          DRY_RUN: "false"
+        run: |
+          set +e
+          OUT="$(bash .github/scripts/release_tag.sh 2>&1)"
+          RC=$?
+          set -e
+          printf '%s\n' "$OUT"
+          {
+            echo "## Release request"
+            echo '```'
+            printf '%s\n' "$OUT"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$RC"
