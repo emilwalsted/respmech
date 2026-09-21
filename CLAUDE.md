@@ -377,6 +377,15 @@ verify coverage with `tools/check_changelog.py`, and only ever use plain semver
 is fixed with a patch bump and a new tag, never a re-push of the same tag).
 Windows MSI signing is a manual, local, post-release step
 (`scripts/sign-msi-certum.sh <tag>`) — see `docs/SIGNING.md`.
+An environment that can push branches but not tags requests the tag instead: an empty
+commit with the first line `Release vX.Y.Z` on top of `master`, pushed to the branch
+`release-request`, makes `release-request.yml` create the tag on `master`'s tip
+(`.github/scripts/release_tag.sh`, pinned by `tests/unit/test_release_tag_script.py`), after
+the maintainer has approved the run in the `release-tag` environment. The tag is pushed with
+the `RELEASE_TAG_TOKEN` secret of that environment and the workflow refuses without it: a
+tag pushed with the workflow's own `GITHUB_TOKEN` starts neither release workflow, silently,
+and cannot be repaired by a second request. See `docs/RELEASING.md`, "Requesting a release
+without pushing a tag".
 
 ## App ↔ website coupling
 

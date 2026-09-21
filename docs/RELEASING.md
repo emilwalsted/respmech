@@ -151,6 +151,55 @@ equals the tag → publishes to PyPI; and separately builds and attaches the ins
 GitHub release. (The Windows MSI is Authenticode-signed locally afterwards — see
 [SIGNING.md](SIGNING.md).)
 
+## Requesting a release without pushing a tag
+
+Some maintainer environments can push branches but are not allowed to push tags. For those
+there is a second way to perform step 8, and only step 8 (everything before it is unchanged):
+[`release-request.yml`](../.github/workflows/release-request.yml) creates the tag server-side
+when it sees an **empty** commit whose first line is exactly `Release vX.Y.Z`, directly on top
+of `master`'s current tip, on the branch `release-request`:
+
+```bash
+git fetch origin
+git checkout -B release-request origin/master
+git commit --allow-empty -m "Release v2.3.0"   # must equal __version__
+git push --force origin release-request
+```
+
+The run then **waits for the maintainer's approval** (the `release-tag` environment, below).
+Once approved, [`.github/scripts/release_tag.sh`](../.github/scripts/release_tag.sh) checks the
+request and creates an annotated tag **on `master`'s tip**, not on the request commit, so the
+tag points at `master` exactly as a hand-pushed one does. It refuses, without creating
+anything, when the first line is not the exact form (plain semver only), when the request is
+not one plain empty commit (the tag lands on its parent, so a change carried by the request
+would silently miss the release), when `master` has moved since the request, when the version
+differs from `__version__` on `master`, or when the tag already exists on another commit (a
+tag is never moved). The reason is in the run's summary. Re-running a request that already
+succeeded is harmless. `ci.yml` deliberately does not run for this branch.
+
+**One-time setup, and the one thing that is easy to get wrong:** a tag pushed with the
+workflow's own `GITHUB_TOKEN` does **not** start other workflows, so `release.yml` and
+`publish-pypi.yml` would never run, nothing would say why, and a repeated request could not
+repair it (it would find the tag already present and push nothing). The tag is therefore
+pushed with `RELEASE_TAG_TOKEN`: a fine-grained personal access token limited to this
+repository, with *Contents: Read and write* and nothing else (in particular not *Workflows*,
+which would let the token rewrite the release workflows). Without the secret the workflow
+refuses before it creates anything; there is no fallback. When the token expires the checkout
+step fails visibly: create a new token and replace the secret. Should the very first real
+request be rejected at `git push` with a message about creating or updating a workflow
+without the `workflows` permission, no tag was created: push the tag by hand as in step 8 and
+revisit the token.
+
+**What actually guards it:** for a push, GitHub takes the workflow file *and* the script from
+the pushed commit, so the script's checks protect against mistakes, not against anyone with
+write access to the repository (who could equally push the tag itself). The enforced gate is
+the `release-tag` environment (GitHub ▸ Settings ▸ Environments): `RELEASE_TAG_TOKEN` is
+stored as a secret **of that environment**, not of the repository, and the environment has
+the maintainer as required reviewer. GitHub hands an environment secret to a job only after
+the review is given, so nothing is tagged, built or published without that one approval,
+whoever pushed the request. Keep it that way: never add `RELEASE_TAG_TOKEN` as a plain
+repository secret, and revoke the token if it may have leaked.
+
 ## Dry-run to TestPyPI
 
 Before a real release, GitHub ▸ Actions ▸ **Publish to PyPI** ▸ *Run workflow* publishes the

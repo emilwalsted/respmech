@@ -13,6 +13,11 @@ What follows is the project memory that sits above both.
 - Trigger: push a `v*` tag (or manual dispatch). Builds a Windows **MSI** and a
   macOS **dmg** with briefcase, then (on a tag) the `publish-release` job creates
   a GitHub **release** (marked **Latest**) with the installers attached.
+- From an environment that can push branches but not tags, request the tag instead of
+  pushing it: an empty `Release vX.Y.Z` commit on top of `master`, pushed to the branch
+  `release-request` (`release-request.yml`). The run waits for the maintainer's approval
+  in the `release-tag` environment and then creates the tag on `master`'s tip. See
+  `docs/RELEASING.md`, "Requesting a release without pushing a tag".
 - macOS signing is **secret-gated** (Developer ID + notarisation when the Apple
   secrets are present, else ad-hoc). The Windows MSI is built unsigned and
   **Certum-signed locally** after release (`scripts/sign-msi-certum.sh`); see
