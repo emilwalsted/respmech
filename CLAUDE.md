@@ -44,8 +44,19 @@ sits alongside `docs/RELEASING.md` and `docs/SIGNING.md`.
   reference (`rtol=1e-9`); a golden diff is a bug in the change, not the reference,
   unless the change is a deliberate, explained numerical change with the golden
   re-baked in the same commit.
-- **`legacy/` is the frozen v1 oracle — never touch it.** It exists solely to
-  re-bake the golden reference; `src/respmech/` is a faithful port of it.
+- **`legacy/` is the frozen v1 oracle — never touch it without Emil's explicit
+  permission for that specific change.** It exists solely to re-bake the golden
+  reference; `src/respmech/` is a faithful port of it. Exactly one sanctioned
+  exception exists, granted by Emil on 23-09-2026: the one-line crash fix in
+  `legacy/emg.py`'s `saveemgplots()`, where the ignored-breath `Rectangle` width
+  was built as a one-element array, so the *forced* EMG overview plot killed
+  every run that excluded a breath — on the pinned golden stack (numpy 1.26 /
+  matplotlib 3.9) just as much as on a modern one. It is what made the
+  `flow_exclude_emg` golden scenario possible at all. Do not revert it, and do
+  not read it as a precedent: a future run that finds another bug in `legacy/`
+  **reports it and waits for Emil's permission**, however obvious the bug or
+  however small the fix. `git log -- legacy/` is the complete list of sanctioned
+  changes.
 - **Three clean layers**: the computation core (`core/`), the CLI and the Qt GUI
   share one core and never import each other's concerns; plotting only consumes
   results.
@@ -60,6 +71,8 @@ sits alongside `docs/RELEASING.md` and `docs/SIGNING.md`.
 
 - `legacy/` — the **frozen v1 monolith**; the v2 engine is a faithful port of it.
   It is the oracle the golden tests compare against — never delete it or clean it up.
+  See the non-negotiable rule above for the single sanctioned edit to it, and for
+  what to do (report, don't fix) when a run finds another bug in there.
 - `tests/golden/` — characterisation tests that pin v2 output **byte-for-byte**
   against v1 references. `docs/REVERSE_ENGINEERING.md` = the formulas/units.
 
