@@ -3,6 +3,18 @@
 **Do not modify, refactor or "clean up" the files in this folder.** They are a frozen
 snapshot of RespMech v1.0.0, kept deliberately. This is not dead code.
 
+The one exception, granted by Emil on 23-09-2026: `emg.py`'s `saveemgplots()` built the
+ignored-breath `Rectangle`'s width as a one-element array, so the *forced* EMG overview
+plot raised `ValueError: setting an array element with a sequence` for any run that
+excluded a breath — and `analyse()`'s excepthook swallowed it, leaving the run with no
+output at all. It crashed on the pinned golden stack (numpy 1.26 / matplotlib 3.9) as
+well as on a modern one, so it blocked the oracle itself; fixing it is what made the
+`flow_exclude_emg` golden scenario possible. The fix is one line and changes no number.
+
+That exception does **not** generalise. If you find another bug in here — however
+obvious, however small the fix — report it to Emil and wait for his permission before
+touching it. `git log -- legacy/` is the complete list of sanctioned changes.
+
 | File | What it is |
 |---|---|
 | `respmech.py` | The original single-file analysis monolith (load → correct → segment → mechanics/WOB/entropy → plots/output). |

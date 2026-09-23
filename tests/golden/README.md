@@ -22,11 +22,22 @@ within a tight tolerance.
 | `flow_wob_average`    | flow | average    | on  | core mechanics + WOB + entropy + EMG RMS |
 | `flow_wob_individual` | flow | individual | on  | per-breath WOB path |
 | `flow_integratevol`   | flow | average    | on  | volume integrated from flow (`cumtrapz`) |
+| `flow_exclude_emg`    | flow | average    | on  | `excludebreaths` + `breathcounts` with the EMG pipeline active |
 | `flow_exclude_noemg`  | flow | average    | off | `excludebreaths` + `breathcounts` override + processed-data export |
 
 For each scenario the reference stores: the merged **average** breath data, the
 **per-file** breath-by-breath tables, and a compact **processed-data** summary
 (shape + per-column sum/mean/min/max).
+
+**Breath numbers are engine-relative — mind this when reading the exclusion
+scenarios.** `excludebreaths` names breaths by *number*, and v1 and v2 do not number
+these files identically: on `input/synth_case_A.csv` the v1 oracle detects 9 breaths
+where the v2 core detects 8, v1's extra one being a leading sliver (`integral_emg_col_2`
+≈ 0.0005 against ≈ 0.025 for the real breaths). So `[["synth_case_A.csv", [3]]]` drops
+v1's third breath and v2's third breath, which are *different physical breaths*. Both
+scenarios above are baked from the v2 core, like every other entry in
+`golden_reference.json`, so they lock v2's own behaviour and are internally consistent.
+Whether the same off-by-one shows up on real recordings has **not** been checked here.
 
 ## Known gaps (to be locked against real production data)
 
@@ -47,10 +58,15 @@ These are current-code bugs discovered while characterising behaviour. They are
 captured here so the refactor fixes them deliberately (and updates the golden
 reference with justification):
 
-1. **EMG overview plot crashes on an ignored breath** — in `emg.py`
-   `saveemgplots()` the ignored-breath `Rectangle` width is built as a 1-element
-   array, raising a matplotlib shape error. The forced EMG overview plot therefore
-   cannot be produced when any breath is excluded.
+1. ~~**EMG overview plot crashes on an ignored breath**~~ — **FIXED 23-09-2026.** In
+   `legacy/emg.py`'s `saveemgplots()` the ignored-breath `Rectangle` width was built as
+   a 1-element array, so the *forced* EMG overview plot raised
+   `ValueError: setting an array element with a sequence` for any run that excluded a
+   breath — and `analyse()`'s excepthook swallowed it into `Error log.txt`, so the run
+   produced no output rather than an obvious failure. It crashed on the pinned stack
+   above as well as on a modern one. Fixed with Emil's explicit permission (the single
+   sanctioned edit to `legacy/` — see `../../CLAUDE.md`), which is what allows the
+   `flow_exclude_emg` scenario to exist.
 2. **Entropy computed on untrimmed / misaligned data** — `analyse()` never trims
    `entropycolumns`, yet indexes it with trimmed-coordinate breath boundaries; it
    also overwrites entropy columns that overlap EMG columns, which additionally
