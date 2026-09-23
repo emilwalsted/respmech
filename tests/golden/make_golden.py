@@ -138,10 +138,15 @@ def deep_update(base, overrides):
     return base
 
 
-# NOTE: The forced "EMG raw channel overview" plot in emg.py crashes on an
-# *ignored* breath (a latent bug: Rectangle width is built as a 1-element array).
-# So EMG-on scenarios carry no excluded breaths; excludebreaths / breathcounts
-# numerics are covered by a dedicated EMG-off scenario instead.
+# NOTE: The forced "EMG raw channel overview" plot in legacy/emg.py USED TO crash on
+# an *ignored* breath (latent bug #1 in README.md: the Rectangle width was built as a
+# 1-element array). That is why EMG-on scenarios originally carried no excluded
+# breaths and excludebreaths/breathcounts were covered by an EMG-off scenario only.
+# The crash was fixed on 23-09-2026 with Emil's explicit sign-off -- the one
+# sanctioned edit to the frozen oracle, see the repo-root CLAUDE.md -- so
+# "flow_exclude_emg" below now locks that combination with the EMG pipeline ACTIVE.
+# "flow_exclude_noemg" stays: it is the only scenario exercising the processed-data
+# export, which getprocesseddata() only supports at exactly 5 EMG channels.
 SCENARIOS = {
     "flow_wob_average": {},
     "flow_wob_individual": {
@@ -154,6 +159,16 @@ SCENARIOS = {
         # Exercises the flow->volume integration path (scipy cumtrapz), which
         # is a distinct real code path and is broken on modern scipy.
         "processing": {"mechanics": {"integratevolumefromflow": True}},
+    },
+    # The EMG-on half of the exclusion pair: same excludebreaths/breathcounts as
+    # flow_exclude_noemg, but with the default EMG channels left in, so the RMS /
+    # integral EMG columns are locked for a run that ignores a breath. Unreachable
+    # until the legacy plot crash above was fixed.
+    "flow_exclude_emg": {
+        "processing": {"mechanics": {
+            "excludebreaths": [["synth_case_A.csv", [3]]],
+            "breathcounts": [["synth_case_B.csv", 6]],
+        }},
     },
     "flow_exclude_noemg": {
         "input": {"data": {"columns_emg": [], "columns_entropy": [10, 11, 12]}},
