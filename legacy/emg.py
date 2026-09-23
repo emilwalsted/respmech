@@ -480,7 +480,7 @@ def saveemgplots(outpdf, breaths, timecol, rows, titles, ylabels, title, rms=[],
             breath= breaths[breathno]
             if breath["ignored"]:
                 blab += " (ignored)"
-                poly = Rectangle([breath["time"][0], yl[0]],[breath["time"][len(breath["time"])-1]]-breath["time"][0], yl[1]-yl[0], alpha=0.1, color="#FF0000", fill=True)
+                poly = Rectangle([breath["time"][0], yl[0]], breath["time"][-1]-breath["time"][0], yl[1]-yl[0], alpha=0.1, color="#FF0000", fill=True)
                 ax.add_patch(poly)
             
             ax.axvline(x=breath["time"][0], linewidth=0.5, linestyle="--", color="k")
