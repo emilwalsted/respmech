@@ -72,6 +72,16 @@ def test_effective_signals_falls_back_to_derived_when_explicit_is_empty():
     assert effective_signals(settings) == frozenset({"flow"})
 
 
+def test_effective_signals_rejects_a_bare_string_instead_of_silently_splitting_it():
+    """`frozenset("flow")` would silently give {'f','l','o','w'}, not {'flow'} — an
+    easy `signals = "flow"` vs. `signals = ["flow"]` typo once a real,
+    hand-editable ``AnalysisSettings.signals`` field exists. Must raise, not
+    corrupt the signal set in silence."""
+    settings = _settings(_ch(flow=5), analysis_signals="flow")
+    with pytest.raises(TypeError):
+        effective_signals(settings)
+
+
 @pytest.mark.parametrize("assigned, expected_mode", [
     ({"flow": 5, "poes": 7, "pgas": 8, "pdi": 9}, "full"),
     ({"flow": 5, "poes": 7, "pgas": 8, "pdi": 9, "emg": [2]}, "full"),
@@ -135,6 +145,18 @@ def test_volume_requires_flow_and_either_a_channel_or_integrate_from_flow():
     assert caps.volume is True
 
 
+def test_from_settings_tolerates_a_settings_double_with_no_processing_attribute():
+    """Several existing test doubles elsewhere in the suite build a bare
+    `SimpleNamespace(input=..., processing=SimpleNamespace(emg=...))` for
+    unrelated purposes, without a `.processing.volume`. `from_settings` must read
+    that as "integrate_from_flow is off", not raise -- consistent with
+    `effective_signals`'s own defensive `settings.analysis` lookup."""
+    settings = SimpleNamespace(input=SimpleNamespace(channels=_ch(flow=5)))
+    caps = Capabilities.from_settings(settings)
+    assert caps.flow is True
+    assert caps.volume is False
+
+
 def test_required_roles_excludes_entropy_and_includes_volume_when_applicable():
     caps = Capabilities.from_settings(_settings(_ch(flow=5, volume=6, emg=[2], entropy=[10])))
     assert caps.required_roles() == frozenset({"flow", "volume", "emg"})
@@ -151,3 +173,15 @@ def test_analyses_labels_grow_with_capabilities():
         "Breath timing", "Work of breathing", "Gastric pressure",
         "Transdiaphragmatic pressure", "Ventilatory muscle ratio", "EMG", "Sample entropy",
     )
+
+
+def test_analyses_pressure_labels_require_flow_like_registry_does():
+    """A pgas/pdi channel assigned with no flow channel is a state `validate()`
+    would reject once it exists, but `Capabilities.from_settings` itself does not
+    validate — it only derives. `analyses()` must not claim "Gastric pressure" /
+    "Transdiaphragmatic pressure" / "Ventilatory muscle ratio" for such a state,
+    since registry.py's own pressures_pgas/pressures_pdi/vmr rows all require
+    flow too (segmentation itself needs it) and would resolve zero columns."""
+    caps = Capabilities.from_settings(_settings(_ch(pgas=8, pdi=9, poes=7)))
+    assert caps.flow is False
+    assert caps.analyses() == ()
