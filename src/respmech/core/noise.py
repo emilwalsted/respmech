@@ -101,7 +101,7 @@ class NoiseProfile:
         # magnitude/phase terms instead of a single complex number, so the round trip
         # was not amplitude-neutral: even prop_decrease = 0 (mask == 0, sig_db_masked
         # == sig_db) inflated in-band power by roughly 30-40% instead of reproducing
-        # `signal` exactly. See ticket 5.2 / K-162.
+        # `signal` exactly.
         mag = np.abs(sig_stft)
         phase = np.divide(sig_stft, mag, out=np.ones_like(sig_stft), where=mag > 0)
         sig_amp = _db_to_amp(sig_db_masked) * phase

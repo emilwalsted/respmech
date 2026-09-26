@@ -1314,7 +1314,7 @@ class RunScreen(QWidget):
             self._ok_file_count += 1
             self._append(f"  done ({ev.message})")
         elif ev.kind == "warning":
-            # K-108: e.g. respmech[plots] missing — figures are skipped, the run still
+            # E.g. respmech[plots] missing — figures are skipped, the run still
             # completes. Same log the CLI prints to stderr for (see cli/__main__.py's
             # _progress_printer), so the app surfaces it too instead of only via
             # run-report.txt's FIGURES SKIPPED section.

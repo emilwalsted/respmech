@@ -64,7 +64,8 @@ def _rms_reference_values(breaths_table, mode) -> dict:
     """Per-RMS-column reference value (that column's own max or mean), used either as
     a file's own reference (the legacy per-file behaviour) or, via
     :func:`reference_values_for_batch`, as ONE shared reference read from a
-    maximal-manoeuvre file and applied to every file in the batch (ticket 5.1)."""
+    maximal-manoeuvre file and applied to every file in the batch (documented on
+    the website)."""
     rms_cols = [c for c in breaths_table.columns if str(c).lower().startswith("rms")]
     out = {}
     for c in rms_cols:
@@ -77,8 +78,8 @@ def _rms_reference_values(breaths_table, mode) -> dict:
 
 
 def reference_values_for_batch(result, settings) -> "dict | None":
-    """The shared cross-file reference for :func:`normalize_emg_table` (ticket 5.1 /
-    K-155, K-158), or None to fall back to each file's own reference (the previous,
+    """The shared cross-file reference for :func:`normalize_emg_table` (documented on
+    the website), or None to fall back to each file's own reference (the previous,
     still-default behaviour).
 
     ``processing.emg.normalization_reference_file`` names a file already present in
@@ -117,8 +118,9 @@ def normalize_emg_table(breaths_table, settings, reference_values=None) -> "pd.D
     ``reference_values``: optional ``{column: value}`` (from
     :func:`reference_values_for_batch`) giving each RMS column's reference
     explicitly, overriding this file's own max/mean — the shared maximal-manoeuvre
-    reference (ticket 5.1). None (the default) reproduces the original per-file
-    behaviour exactly: each column's own maximum/mean across this file's breaths."""
+    reference (documented on the website). None (the default) reproduces the
+    original per-file behaviour exactly: each column's own maximum/mean across
+    this file's breaths."""
     mode = getattr(getattr(getattr(settings, "processing", None), "emg", None), "normalization", "none")
     if mode in (None, "none") or breaths_table is None or len(breaths_table) == 0:
         return None

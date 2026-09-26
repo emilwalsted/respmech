@@ -645,9 +645,9 @@ def trim_boundary_notices(breaths, settings, *, min_relative_duration=None, min_
     breath has no remaining consequence worth a notice, so none is raised.
 
     Returns a list of 0, 1 or 2 human-readable notice strings — the same shape as the
-    ``FileResult.notices`` list the K-192/K-224 quality notices already populate, so
-    this slots into the same report section and warning plumbing without a new
-    mechanism.
+    ``FileResult.notices`` list the other per-file quality notices (ecg_auto_detect
+    mismatch, cardiac-gated peak EMG) already populate, so this slots into the same
+    report section and warning plumbing without a new mechanism.
     """
     if min_relative_duration is None:
         min_relative_duration = getattr(

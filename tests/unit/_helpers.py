@@ -38,10 +38,18 @@ def synth_legacy_dict(out="", *, samplingfrequency=1000, remove_ecg=False, remov
     }
 
 
-def synth_settings(out="", *, noise=False, **kw):
+def synth_settings(out="", *, noise=False, channels=None, **kw):
     """Migrated ``Settings`` over the canonical synthetic input, folders resolved.
     ``noise=True`` wires the shared-profile EMG noise reduction (reference synth_case_A,
-    expiration window) exactly as the reactive-preview tests expect."""
+    expiration window) exactly as the reactive-preview tests expect.
+
+    ``channels``: optional ``{role: value}`` applied to ``input.channels`` AFTER
+    migration, overriding/removing individual roles — e.g.
+    ``channels={'pgas': None, 'pdi': None}`` drops those two pressure roles, leaving
+    flow/poes/volume/emg at their canonical synthetic-input assignment. Entropy is
+    sent separately (it is its own kwarg on the returned Settings, not a channels=
+    key): it is an independent capability (R8), not a channel role fase 0 varies.
+    ``None`` (the default) changes nothing — every existing call site is unaffected."""
     from respmech.settingsio.migrate import migrate_dict
     if noise:
         kw.setdefault("remove_ecg", True)
@@ -55,6 +63,9 @@ def synth_settings(out="", *, noise=False, **kw):
         n.use_expiration = False
         n.reference_intervals = [[1.0, 5.0]]
         n.auto_prop = True
+    if channels:
+        for role, value in channels.items():
+            setattr(s.input.channels, role, value)
     return s
 
 

@@ -17,13 +17,21 @@ within a tight tolerance.
 (`input/synth_case_A.csv`, `input/synth_case_B.csv`, produced by
 `generate_data.py`):
 
-| Scenario | Separation | WOB method | EMG | Notes |
-|---|---|---|---|---|
-| `flow_wob_average`    | flow | average    | on  | core mechanics + WOB + entropy + EMG RMS |
-| `flow_wob_individual` | flow | individual | on  | per-breath WOB path |
-| `flow_integratevol`   | flow | average    | on  | volume integrated from flow (`cumtrapz`) |
-| `flow_exclude_emg`    | flow | average    | on  | `excludebreaths` + `breathcounts` with the EMG pipeline active |
-| `flow_exclude_noemg`  | flow | average    | off | `excludebreaths` + `breathcounts` override + processed-data export |
+| Scenario | Oracle | Separation | WOB method | EMG | Notes |
+|---|---|---|---|---|---|
+| `flow_wob_average`    | legacy | flow | average    | on  | core mechanics + WOB + entropy + EMG RMS |
+| `flow_wob_individual` | legacy | flow | individual | on  | per-breath WOB path |
+| `flow_integratevol`   | legacy | flow | average    | on  | volume integrated from flow (`cumtrapz`) |
+| `flow_exclude_emg`    | legacy | flow | average    | on  | `excludebreaths` + `breathcounts` with the EMG pipeline active |
+| `flow_exclude_noemg`  | legacy | flow | average    | off | `excludebreaths` + `breathcounts` override + processed-data export |
+
+`Oracle` names which generator is authoritative for that scenario's committed
+numbers: `legacy` = the frozen v1 oracle (`make_golden.py --write`, cross-checked
+by `golden_newcore.py`); `v2` = bagt directly from the v2 core
+(`golden_newcore.py --write`), for a scenario whose settings the legacy dict/
+`migrate_dict` path has no shape for at all. Every scenario today is `legacy`;
+`V2_SCENARIOS` in `make_golden.py` is the (currently empty) table a feature ticket
+adds a `v2` row to.
 
 For each scenario the reference stores: the merged **average** breath data, the
 **per-file** breath-by-breath tables, and a compact **processed-data** summary
@@ -116,12 +124,37 @@ pip install -r tests/golden/requirements-golden.txt
 # Regenerate the synthetic input (rarely needed; output is committed)
 python tests/golden/generate_data.py
 
-# (Re)generate the golden reference — only when a change is intentional
+# (Re)generate the LEGACY_SCENARIOS entries — only when a change is intentional.
+# Merges onto golden_reference.json rather than overwriting it, so any committed
+# V2_SCENARIOS entry survives. Never touches (and cannot produce) a V2_SCENARIOS
+# entry: the frozen v1 oracle has no shape for the settings a v2 scenario needs
+# (typed breaths, references, separators, ...).
 python tests/golden/make_golden.py --write
 
-# Verify current code still matches the golden reference
+# (Re)generate a V2_SCENARIOS entry — bagt directly from the v2 core, never
+# through the legacy oracle. Regenerates every scenario in SCENARIOS (legacy AND
+# v2); the legacy entries it writes must still match make_golden.py's own output.
+python tests/golden/golden_newcore.py --write
+
+# Verify current code still matches the golden reference (both LEGACY_SCENARIOS
+# and V2_SCENARIOS, run through the v2 core either way — see golden_newcore.py)
 pytest tests/golden/test_golden.py -v
 ```
+
+**LEGACY_SCENARIOS vs. V2_SCENARIOS.** `make_golden.py` splits its scenario table
+in two: `LEGACY_SCENARIOS` (the five above — a legacy-dict override on
+`base_settings()`, migrated via `migrate_dict`, runnable by the frozen v1 oracle)
+and `V2_SCENARIOS` (name → a committed `tests/golden/scenarios/<name>.toml` file,
+loaded via `load_toml`; empty until the first feature ticket that needs one).
+`SCENARIOS = {**LEGACY_SCENARIOS, **V2_SCENARIOS}` is the union `test_golden.py`
+parametrises over, but `make_golden.py`'s own `run_all()` (the legacy oracle) only
+ever iterates `LEGACY_SCENARIOS` — a v2 scenario's settings have no legacy-dict
+shape at all. `golden_newcore.py::run_scenario` dispatches per scenario: legacy
+entries still go through `migrate_dict` exactly as before (byte-identical), v2
+entries load their own TOML file. There is deliberately no override hook layered
+on top of `migrate_dict` for v2 scenarios (a `V2_OVERRIDES`-style shortcut) — a v2
+scenario is its own committed TOML file, not a legacy dict with v2-only fields
+bolted on.
 
 ## Tolerance
 
