@@ -267,7 +267,7 @@ def _merge_peaks_by_distance(pos, pos_h, neg, neg_h, min_distance):
     (one from each polarity) closer together than ``min_distance``: a single biphasic
     R-wave must count once, not once per lobe. Ties keep the positive-polarity peak,
     which reproduces the old positive-only detector exactly when a channel has no
-    genuine negative R-waves (see ticket 5.7 / K-191)."""
+    genuine negative R-waves."""
     if pos.size == 0:
         return neg
     if neg.size == 0:
@@ -287,7 +287,7 @@ def _merge_peaks_by_distance(pos, pos_h, neg, neg_h, min_distance):
 
 
 def remove_ecg(emgecgchannels, peakch, samplingfrequency, ecgminheight, ecgmindistance, ecgminwidth, windowsize, cancel_check=None):
-    # DC-removed, matching suggest_ecg_settings's detector exactly (ticket 5.7 / K-191):
+    # DC-removed, matching suggest_ecg_settings's detector exactly:
     # previously this ran on the raw channel while Auto-suggest derived ecgminheight from
     # a median-subtracted copy, so a channel with a DC offset made the suggested height
     # wrong for what this function actually saw. Peaks are searched on both polarities
@@ -458,7 +458,7 @@ def suggest_ecg_settings(emg_matrix, fs, *, hr_min_bpm=40.0, hr_max_bpm=180.0, m
     capture those R-peaks and, as far as possible, only those. R-detection here is on the
     DC-removed *positive* signal only (channel-scoring shortcut, not a detector); this is a
     SUBSET of what ``remove_ecg`` itself now detects, which also DC-removes but additionally
-    searches the negative polarity for an inverted R-wave (ticket 5.7 / K-191) — so a
+    searches the negative polarity for an inverted R-wave — so a
     suggestion derived here is always directly usable by ``remove_ecg``, but a channel whose
     R-wave is inverted may still score low here even though ``remove_ecg`` could detect it.
     Returns a dict of the 5 settings fields plus a ``_diagnostics`` entry (per-channel score,

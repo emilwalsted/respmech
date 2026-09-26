@@ -29,7 +29,7 @@ def _progress_printer():
         elif ev.kind == "file_error":
             print(f"\r  ERROR: {ev.message}")
         elif ev.kind == "warning":
-            # K-108: without respmech[plots], write_batch's figure step degrades to a
+            # Without respmech[plots], write_batch's figure step degrades to a
             # silent skip (exit 0, every workbook still written) — this is the only
             # place a terminal user sees it as it happens, alongside the FIGURES
             # SKIPPED section write_batch always leaves in run-report.txt.
@@ -63,7 +63,7 @@ def cmd_run(args) -> int:
         # under data/). Name the output root a real run writes into instead.
         print(f"\nWrote {len(written)} file(s) to {settings.output.folder}")
     else:
-        # K-108/A06: the same ceiling `core.io.plan.plan_outputs` builds for the GUI's
+        # The same ceiling `core.io.plan.plan_outputs` builds for the GUI's
         # Dry run, over `result.files` (ok AND failed — a plan never depends on which
         # files happened to succeed, see the module docstring), so a CLI dry run stops
         # promising a different set of outputs than the app does.
@@ -141,7 +141,7 @@ def cmd_validate(args) -> int:
             # real setup, and validate should not fail every time on it.
             if any(name.startswith("Flow ") for name in constant):
                 ok = False
-    # K-113: Settings.unknown is collected by from_dict but was never read anywhere —
+    # Settings.unknown is collected by from_dict but was never read anywhere —
     # a misspelled key silently ran on the default it was meant to override, with no
     # warning from validate, the run, or run-report.txt. Report it here so the site's
     # promise ("skim the validate output ... to catch this") is actually true.

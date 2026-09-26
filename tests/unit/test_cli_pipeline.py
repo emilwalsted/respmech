@@ -6,10 +6,11 @@ import pandas as pd
 import pytest
 
 from respmech.cli.__main__ import main as cli_main
+from respmech.core._legacy_ns import to_legacy_ns
 from respmech.core.io.writers import write_batch
-from respmech.core.pipeline import run_batch
+from respmech.core.pipeline import run_batch, segment_file
 from respmech.settingsio.migrate import migrate_dict
-from _helpers import INPUT, requires_synth, synth_legacy_dict  # noqa: F401
+from _helpers import INPUT, requires_synth, synth_legacy_dict, synth_settings  # noqa: F401
 
 
 pytestmark = requires_synth()
@@ -45,6 +46,67 @@ def test_run_batch_and_write(tmp_path):
     assert "wobtotal" in avg.columns
     # the raw result table is unchanged — the extras live in separate sheets/files
     assert "rms_col_2_pct" not in avg.columns
+
+
+def test_segment_file_equals_run_batch_breath_keys(tmp_path):
+    """``segment_file()``, called directly on one file, must build the exact same
+    breaths run_batch's main loop builds for that file at the SAME point in the
+    pipeline (right after segmentation, before calculatemechanics runs and adds its
+    own keys such as 'mechanics'/'wob'/'rms') — the extraction (M-06) is supposed
+    to be a pure move, never a behaviour change. ``ref_breaths`` here is
+    ``result.ok_files[...].breaths``: calculatemechanics mutates those SAME dicts
+    in place (adding keys, never touching 'time'/'flow'/'emgcols'), so the base
+    _make_breath key set is a SUBSET of ref's keys, and the shared columns'
+    values must still be identical."""
+    import numpy as np
+
+    base_keys = {"number", "name", "expiration", "inspiration", "time", "flow",
+                 "volume", "poes", "pgas", "pdi", "breathcnt", "ignored", "kind",
+                 "has_phases", "entcols", "emgcols", "filename"}
+
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    result = run_batch(settings)
+    ref_breaths = result.ok_files["synth_case_A.csv"].breaths
+
+    s = to_legacy_ns(settings)
+    path = os.path.join(settings.input.folder, "synth_case_A.csv")
+    breaths, trimmed = segment_file(settings, s, path, cache={}, cancel_check=None)
+
+    assert set(breaths) == set(ref_breaths), "breath numbers differ"
+    for no, ref in ref_breaths.items():
+        got = breaths[no]
+        assert set(got) == base_keys, f"breath #{no}: unexpected segment_file key set {set(got)}"
+        assert base_keys <= set(ref), f"breath #{no}: run_batch dropped a base key"
+        for phase in ("inspiration", "expiration"):
+            assert set(got[phase]) <= set(ref[phase]), f"breath #{no} {phase}: key mismatch"
+        np.testing.assert_array_equal(got["time"], ref["time"])
+        np.testing.assert_array_equal(got["flow"], ref["flow"])
+        np.testing.assert_array_equal(np.asarray(got["emgcols"]), np.asarray(ref["emgcols"]))
+        assert got["ignored"] == ref["ignored"]
+        assert got["kind"] == ref["kind"]
+        assert got["has_phases"] == ref["has_phases"]
+
+    # segment_file's own returned Trimmed matches the file this batch actually ran.
+    assert trimmed.startix >= 0 and trimmed.endix > trimmed.startix
+    assert len(trimmed.flow) == trimmed.endix - trimmed.startix
+
+
+def test_synth_settings_channels_none_drops_the_role(tmp_path):
+    """synth_settings(channels={...}) sets the given roles on the migrated Settings
+    without touching anything else — the fase-0 helper feature keyed by this
+    ticket's acceptance criteria (a settings object with pgas/pdi absent, standard
+    behaviour otherwise unaffected)."""
+    default = synth_settings(str(tmp_path))
+    assert default.input.channels.pgas is not None
+    assert default.input.channels.pdi is not None
+
+    s = synth_settings(str(tmp_path), channels={"pgas": None, "pdi": None})
+    assert s.input.channels.pgas is None
+    assert s.input.channels.pdi is None
+    # untouched roles keep the canonical synthetic-input assignment
+    assert s.input.channels.flow == default.input.channels.flow
+    assert s.input.channels.poes == default.input.channels.poes
+    assert s.input.channels.emg == default.input.channels.emg
 
 
 def test_cli_migrate_and_validate(tmp_path):
