@@ -223,6 +223,14 @@ QC strip) and by `respmech validate`, from the same shared logic:
      that can become absent in a future signal set) -- golden 5/5 byte-identical, no
      analysis can reach any of the new guarded branches yet -->
 
+<!-- changelog-skip 9408f72 internal, behaviour-neutral groundwork for the same future
+     modular analysis pipeline: run_batch's per-file trim/EMG-condition/volume-correct/
+     segment sequence was extracted into its own segment_file() function, called from
+     the exact same place -- golden 5/5 byte-identical, no user-visible change. Also
+     splits the golden test harness's scenario table into legacy- and v2-core-bagt
+     halves (the latter still empty) and removes a handful of internal ticket-id
+     references from source comments/docstrings (public-repo hygiene only) -->
+
 <!--
 "Unreleased" above is a hand-maintained draft of the next release's entry. It is
 updated ONLY when explicitly asked to (not automatically on every commit), and it
