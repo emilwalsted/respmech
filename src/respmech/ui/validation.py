@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 import re
 
+from respmech.core.analysis.signals import SINGLE_SIGNALS, Capabilities
+
 # NB ``match_input_files`` is imported lazily inside ``matching_files`` below. It needs
 # nothing but os/fnmatch, but importing it at module level drags the whole compute core
 # -- scipy.interpolate, pandas, scipy.signal -- into GUI startup, which cost 1.4 s of the
@@ -255,28 +257,52 @@ def blockers(settings, matches: list | None = None) -> list:
 
 
 def channel_collision(settings) -> str | None:
-    """A HARD channel-mapping error (message, else None): a required channel
-    (flow/poes/pgas/pdi) not assigned at all, one pointing at column 1 — the time axis —
-    or two of them sharing a column.
+    """A HARD channel-mapping error (message, else None): a single-column signal role this
+    analysis's DECLARED signal set requires (M-12: ``Capabilities.required_roles()``, no
+    longer a hardcoded flow/poes/pgas/pdi) not assigned at all, one pointing at column 1 —
+    the time axis — or two of them sharing a column.
 
     Moved here from the Settings screen (ticket B04) so the Run screen's always-visible
     commitment sheet can name exactly the same blocker Setup's live QC strip already
     names for the identical mapping — the two must never disagree about why a run is
     blocked, the same reasoning that keeps ``path_problem`` above shared rather than
     duplicated per screen."""
+    try:
+        caps = Capabilities.from_settings(settings)
+    except TypeError:
+        # A malformed ``analysis.signals`` (e.g. a hand-edited bare string instead of a
+        # list) is a ``Settings.validate()`` concern, already translated there
+        # (``_FRIENDLY_PREFIXES``) — return None so ``blockers()``'s subsequent
+        # ``validate()`` call is what reports it, cleanly, instead of this function
+        # raising and crashing the whole render path (this ran inside every screen's
+        # live re-validation before this ticket touched it too).
+        return None
+    if not caps.declared:
+        return ("No signal assigned yet — click 'Assign channels from data…', "
+                "or choose a signal set (Setup ▸ Signals)")
     ch = settings.input.channels
-    req = [("flow", ch.flow), ("poes", ch.poes), ("pgas", ch.pgas), ("pdi", ch.pdi)]
-    unset = [n for n, c in req if c is None]
+    # Only the single-column roles (never "volume"/"emg" — those aren't a
+    # single-column-per-role concern: Volume is satisfied by a column OR
+    # integrate_from_flow, EMG by a non-empty list, neither of which "points at column 1"
+    # or "collides on a column" the way a single role can).
+    required = [n for n in SINGLE_SIGNALS if n in caps.required_roles()]
+    unset = [n for n in required if getattr(ch, n) is None]
     if unset:
         return (f"{', '.join(unset)} not assigned — "
                 "click 'Assign channels from data…'")
-    on_time = [n for n, c in req if c == 1]
+    # The time-axis/duplicate checks run over every ASSIGNED single role, not just the
+    # required ones: an analysis can carry a role's column value left over from a signal
+    # set it no longer declares (M-10's apply_signal_set clears these on an in-app change,
+    # but a hand-edited TOML can still do it), and such a stray value pointing at the time
+    # axis or colliding with another column is still worth catching here.
+    assigned = [(n, getattr(ch, n)) for n in SINGLE_SIGNALS if getattr(ch, n) is not None]
+    on_time = [n for n, c in assigned if c == 1]
     if on_time:
         return (f"{', '.join(on_time)} point at column 1 (the time axis) — "
                 "click 'Assign channels from data…'")
-    cols = [c for _n, c in req if c]
+    cols = [c for _n, c in assigned]
     dup = sorted({c for c in cols if cols.count(c) > 1})
     if dup:
-        names = [n for n, c in req if c in dup]
+        names = [n for n, c in assigned if c in dup]
         return f"{', '.join(names)} are mapped to the same column"
     return None

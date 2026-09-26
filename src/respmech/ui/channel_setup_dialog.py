@@ -23,8 +23,9 @@ from PySide6.QtCore import QSize
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel,
                                QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
+from respmech.core.analysis.signals import SINGLE_SIGNALS
 from respmech.ui import wheel as _wheel
-from respmech.ui.column_stack import (REQUIRED, REQUIRED_LABELS, ROLES, SINGLE, ColumnStack,
+from respmech.ui.column_stack import (REQUIRED_LABELS, ROLES, SINGLE, ColumnStack,
                                       as_2d, infer_roles_from_names,
                                       name_suffix as _name_suffix,
                                       plot_palette, role_color)
@@ -35,7 +36,7 @@ except Exception:  # pragma: no cover
     _theme = None
 
 # kept as module-level aliases: the tests and _index_of_role read them by these names
-_ROLES, _SINGLE, _REQUIRED, _REQUIRED_LABELS = ROLES, SINGLE, REQUIRED, REQUIRED_LABELS
+_ROLES, _SINGLE, _REQUIRED_LABELS = ROLES, SINGLE, REQUIRED_LABELS
 _as_2d, _role_color, _plot_pal = as_2d, role_color, plot_palette   # legacy aliases
 
 # ticket D01: pandas' own ParserError for a ragged row reads e.g. "Error tokenizing data.
@@ -139,8 +140,9 @@ class ChannelSetupDialog(QDialog):
     :meth:`integrate_from_flow`, next to :meth:`selected_mapping`, so the caller decides
     when and where to write it into settings (it is not part of the mapping dict: Volume
     is the one required-in-spirit role a batch can satisfy WITHOUT a column). Volume is
-    deliberately absent from ``column_stack.REQUIRED`` — a flow-only rig with no separate
-    volume channel is a supported setup (see the README), not missing data — so the OK
+    deliberately absent from the declared-required roles (``_required_roles``, derived from
+    ``declared`` below via ``Capabilities.required_roles()``) — a flow-only rig with no
+    separate volume channel is a supported setup (see the README), not missing data — so the OK
     gate below is satisfied by EITHER a Volume column or this checkbox, never both at
     once required. Auto-ticked at open when nothing has claimed the Volume role yet (no
     column, and the caller's own setting was already off): the exact state an unedited
@@ -163,10 +165,30 @@ class ChannelSetupDialog(QDialog):
     an existing mapping behaves exactly as before, and the entropy checkboxes are never
     seeded this way. A seeded row is marked "suggested" in its header
     (:meth:`_build_header`) until the user edits that row, so a guess can never look like a
-    confirmed choice."""
+    confirmed choice.
+
+    ``declared`` (ticket M-12, R7): the analysis's DECLARED signal set — a frozenset drawn
+    from ``core.analysis.signals.SINGLE_SIGNALS`` plus ``"emg"`` (e.g. the ``declared``
+    field of a ``Capabilities`` a caller with a real ``Settings`` builds via
+    ``Capabilities.from_settings(settings)``). It does two things: filters the per-column
+    role dropdown down to only the roles this analysis actually names (plus "volume",
+    offered whenever "flow" is declared, since Volume is never itself a declared signal —
+    see ``core.analysis.signals``), and scopes the OK gate to only what THIS analysis
+    needs (:meth:`_enabled_analyses`) instead of the old hardcoded
+    ``column_stack.REQUIRED``, which forced every analysis to assign flow+poes+pgas+pdi
+    regardless of its own signal set — a "Flow + Poes" analysis could never reach OK
+    without also assigning Pdi. ``None`` (every caller before this ticket) means "no
+    signal-set concept in play": the dropdown stays UNFILTERED (every role, EMG included —
+    EMG has always been offered regardless of what counted as "required") and the
+    required-for-OK set is exactly that old hardcoded full pressure family (never EMG), so
+    every pre-existing caller/test behaves unchanged. A caller relying on ``apply_signal_set``
+    (the ONE funnel that changes the signal set, see ``settings_screen.py``) never opens
+    this dialog with a channel already assigned outside ``declared`` — that tragt clears a
+    role's column the moment it leaves the set — so a mismatch between ``initial`` and
+    ``declared`` is not a state this dialog needs to reconcile itself."""
 
     def __init__(self, files, fs, initial=None, loader=None, parent=None, excluded=None,
-                integrate_from_flow=False, suggest_from_names=True):
+                integrate_from_flow=False, suggest_from_names=True, declared=None):
         super().__init__(parent)
         self.setModal(True)
         # Opening size, clamped to the screen in showEvent. The HEIGHT is content-derived
@@ -184,6 +206,38 @@ class ChannelSetupDialog(QDialog):
         # with the true size of the matched folder, instead of silently only ever
         # describing the majority subset this dialog itself was handed.
         self._excluded = list(excluded or [])
+
+        # M-12: see the class docstring's ``declared`` paragraph. ``None`` (every caller
+        # before this ticket) means "no signal-set concept in play"; an explicitly EMPTY
+        # set means "nothing declared yet" (a signal set was never chosen). BOTH leave the
+        # dropdown UNFILTERED (every role, EMG included — EMG has always been offered
+        # regardless of what was "required", and there is nothing narrower to filter an
+        # empty set TO), but only ``None`` keeps the old hardcoded full pressure family as
+        # required-for-OK; an explicitly empty set requires nothing declared-specific at
+        # all, which ``_refresh_info`` reads as its own "can ANY analysis run" fallback.
+        self._declared = frozenset(declared) if declared is not None else None
+        if self._declared:
+            # A non-empty explicit set: the dropdown offered per column is "(unused)"
+            # always, plus every role this analysis actually declared, plus "volume"
+            # whenever "flow" is declared (Volume is never itself a declared SIGNAL -- see
+            # core.analysis.signals -- so it is filtered here, alongside the declared
+            # roles, rather than folded into _required_roles below).
+            self._roles = [(key, label) for key, label in _ROLES
+                           if key == "" or key in self._declared
+                           or (key == "volume" and "flow" in self._declared)]
+            # The roles a column MUST carry for this analysis to be complete: the
+            # single-column roles (flow/poes/pgas/pdi) actually in the declared set, plus
+            # "emg" when EMG is declared.
+            self._required_roles = frozenset(SINGLE_SIGNALS) & self._declared
+            if "emg" in self._declared:
+                self._required_roles = self._required_roles | {"emg"}
+        else:
+            self._roles = list(_ROLES)
+            self._required_roles = (frozenset(SINGLE_SIGNALS) if self._declared is None
+                                    else frozenset())
+        # Ordered for stable message text (_refresh_info).
+        self._required_order = [r for r in ("flow", "poes", "pgas", "pdi", "emg")
+                                if r in self._required_roles]
 
         # The first file is the default, but a file can pass the cheap column probe and
         # still fail a full read (e.g. a ragged row) — fall forward to the first file that
@@ -388,7 +442,7 @@ class ChannelSetupDialog(QDialog):
             head.addWidget(note)
             return
         combo = QComboBox()
-        for _key, label in _ROLES:
+        for _key, label in self._roles:
             combo.addItem(label)
         combo.setCurrentIndex(self._index_of_role(self._preselect.get(i, "")))
         combo.currentIndexChanged.connect(lambda _idx, ci=i: self._on_role_changed(ci))
@@ -519,16 +573,21 @@ class ChannelSetupDialog(QDialog):
         self._recolor(col_index)
         self._refresh_info()
 
-    @staticmethod
-    def _index_of_role(role):
-        for i, (key, _label) in enumerate(_ROLES):
+    def _index_of_role(self, role):
+        """The filtered dropdown's index for ``role`` — instance method, not the module's
+        full ``_ROLES``, since M-12 filters the per-column dropdown to the declared roles
+        (``self._roles``). A role not offered in this analysis's dropdown (e.g. a stale
+        mapping predating a signal-set change) falls back to "(unused)" at index 0 — see
+        the class docstring's ``declared`` paragraph for why that mismatch should not
+        arise in practice."""
+        for i, (key, _label) in enumerate(self._roles):
             if key == role:
                 return i
         return 0
 
     def _role_of(self, col_index):
         combo = self._combos[col_index]
-        return "" if combo is None else _ROLES[combo.currentIndex()][0]   # None == the time column
+        return "" if combo is None else self._roles[combo.currentIndex()][0]   # None == the time column
 
     def _dismiss_suggestion(self, col_index):
         """Ticket D27: a role seeded from the column's own name must stop looking like a
@@ -588,10 +647,15 @@ class ChannelSetupDialog(QDialog):
                     self._dismiss_suggestion(i)
         self._refresh_info()
 
-    def _missing_required(self):
-        """Required single roles (flow/poes/pgas/pdi) not yet assigned to any column."""
+    def _enabled_analyses(self):
+        """Declared-required roles (``self._required_roles`` — the single-column roles this
+        analysis's signal set actually names, plus "emg" when EMG is declared, see the class
+        docstring's ``declared`` paragraph) already satisfied by the per-column assignment
+        made so far. Replaces the old ``_missing_required``, which checked a HARDCODED full
+        set (``column_stack.REQUIRED``) regardless of what the analysis actually declared —
+        a "Flow + Poes" analysis could never reach OK without also assigning Pdi."""
         present = {self._role_of(i) for i in range(self._ncols)}
-        return [r for r in _REQUIRED if r not in present]
+        return present & self._required_roles
 
     def _volume_assigned(self):
         """True once some column carries the Volume role — as distinct from Volume being
@@ -606,24 +670,49 @@ class ChannelSetupDialog(QDialog):
         return self._volume_from_flow.isChecked()
 
     def _refresh_info(self):
-        """Show progress, and gate OK on the required roles being assigned, AND Volume
+        """Show progress, and gate OK on the DECLARED roles being assigned, AND Volume
         being satisfied — a column OR the "derive from flow" checkbox, never both required
         at once (ticket D02: a flow-only rig with no separate volume channel is a
         supported setup, not missing data) — so a partial mapping can never silently leave
         a required channel at a stale/wrong column, and OK can never be reached with
-        neither volume source chosen."""
-        missing = self._missing_required()
-        volume_ok = self._volume_assigned() or self._volume_from_flow.isChecked()
-        if missing:
-            names = ", ".join(_REQUIRED_LABELS[r] for r in missing)
-            text = f"Assign {names} to continue"
+        neither volume source chosen.
+
+        M-12: when this analysis has declared NOTHING at all (``self._required_roles`` is
+        empty — a signal set was never chosen, e.g. a brand-new, still-blank analysis),
+        there is no declared-required list to check assignment against. Rather than read
+        that as "nothing missing, so OK is ready" (which would enable OK with literally
+        nothing assigned), fall back to "can ANY analysis run at all" — Flow (mechanics) or
+        an EMG channel — matching ``Capabilities.analyses()``'s own flow/emg-gated labels
+        for that shape."""
+        flow_declared = not self._declared or "flow" in self._declared
+        # M-12: the checkbox only makes sense once Flow is part of the signal set, and once
+        # some column HASN'T already claimed Volume (a real column already satisfies it, so
+        # showing an unticked, moot checkbox beside it would only look like an open question).
+        self._volume_from_flow.setVisible(flow_declared and not self._volume_assigned())
+        volume_ok = (not flow_declared) or self._volume_assigned() \
+            or self._volume_from_flow.isChecked()
+        if not self._required_roles:
+            enabled_now = {self._role_of(i) for i in range(self._ncols)} & {"flow", "emg"}
+            missing_text = None if enabled_now else (
+                "No analysis can run: assign Flow (mechanics) or at least one EMG channel")
+        else:
+            missing = [r for r in self._required_order if r not in self._enabled_analyses()]
+            missing_text = None
+            if missing:
+                names = ", ".join(_REQUIRED_LABELS[r] for r in missing)
+                missing_text = f"Assign {names} to continue"
+        if missing_text:
+            text = missing_text
+            ok_ready = False
         elif not volume_ok:
             text = "Assign Volume, or tick 'derive from flow', to continue"
+            ok_ready = False
         else:
             assigned = sum(1 for i in range(self._ncols) if self._display_role(i))
             text = f"Ready — {assigned} column{'s' if assigned != 1 else ''} assigned"
             if self._volume_from_flow.isChecked() and not self._volume_assigned():
                 text += "  ·  volume derived from flow"
+            ok_ready = True
         # A role kept on a column that displays a different one would otherwise be invisible.
         # Say so in BOTH branches: while a required role is missing is exactly when the user
         # is still editing and might act on it.
@@ -638,7 +727,7 @@ class ChannelSetupDialog(QDialog):
                     "names, check them.")
         self.info.setText(text)
         if getattr(self, "_ok_btn", None) is not None:
-            self._ok_btn.setEnabled(not missing and volume_ok)
+            self._ok_btn.setEnabled(ok_ready)
 
     def _kept_notes(self):
         """Human phrases for everything selected_mapping will re-emit but cannot show."""

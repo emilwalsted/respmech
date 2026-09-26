@@ -24,6 +24,10 @@ from PySide6.QtCore import QObject, Signal, Slot
 
 from respmech.core.settings import Settings
 from respmech.core._cancel import Cancelled
+from respmech.core.analysis.signals import SINGLE_SIGNALS, effective_signals
+
+#: M-12's ``peek_header_warning`` floor -- see that function's own docstring.
+_SINGLE_SIGNAL_SET = frozenset(SINGLE_SIGNALS)
 
 
 # ``run_batch`` and ``write_batch`` are the two imports that pulled scipy and pandas into
@@ -723,14 +727,21 @@ def peek_columns(settings: Settings, file_path: str):
 def peek_header_warning(settings: Settings, file_path: str):
     """Cheap two-line consistency probe for the manifest scanner (ticket D01): flags a file
     whose FIRST non-blank line looks like it belongs to an instrument export's preamble
-    rather than real channel data — either because that line's own field count is under 3
-    (a real multi-channel recording needs at least a time column plus two signals; a header
-    line like LabChart's 'Interval=<TAB>0.001 s' has exactly two), or because the first two
-    non-blank lines disagree on field count. Delimited-text files only (.csv/.txt); returns
-    ``None`` for any other extension, an unreadable head, a head this function's fixed
-    encoding chain cannot decode (see below — narrower than it sounds), or a first line
-    that is itself empty — the same "nothing to say" cases ``peek_columns`` already
-    returns ``None`` for. Never raises.
+    rather than real channel data — either because that line's own field count is under
+    the analysis's own floor (M-12: ``1 + `` the number of single-column signal roles
+    (flow/poes/pgas/pdi) actually DECLARED, e.g. 5 for a full analysis, 2 for flow-only —
+    a real recording needs at least a time column plus one field per declared role; a
+    header line like LabChart's 'Interval=<TAB>0.001 s' has exactly two, well under even a
+    flow-only floor of 2 once volume/poes/pgas/pdi are also declared). Nothing is declared
+    yet at all (no channel assigned and no explicit ``analysis.signals`` — this probe runs
+    as part of the manifest scan, which happens BEFORE channel assignment): keep this
+    function's historical, signal-set-agnostic floor of 3 rather than reading "nothing
+    declared" as "expect just one field", which would silence the check almost entirely.
+    Or because the first two non-blank lines disagree on field count. Delimited-text files
+    only (.csv/.txt); returns ``None`` for any other extension, an unreadable head, a head
+    this function's fixed encoding chain cannot decode (see below — narrower than it
+    sounds), or a first line that is itself empty — the same "nothing to say" cases
+    ``peek_columns`` already returns ``None`` for. Never raises.
 
     Deliberately its OWN small decode block rather than sharing ``peek_columns``'s: the two
     probes answer different questions (this one wants up to two non-blank lines,
@@ -784,7 +795,9 @@ def peek_header_warning(settings: Settings, file_path: str):
     dec = getattr(fmt, "decimal", ".") or "."
     sep = "\t" if ext == ".txt" else (";" if dec == "," else ",")
     counts = [len(ln.split(sep)) for ln in lines]
-    if counts[0] < 3:
+    declared = effective_signals(settings)
+    floor = 1 + len(declared & _SINGLE_SIGNAL_SET) if declared else 3
+    if counts[0] < floor:
         plural = "" if counts[0] == 1 else "s"
         return (f"the first row has only {counts[0]} field{plural} — too few to be "
                "channel data")
