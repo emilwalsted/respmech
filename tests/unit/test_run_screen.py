@@ -1078,8 +1078,16 @@ def test_commitment_sheet_names_a_channel_collision_before_a_path_problem(qapp, 
     commitment sheet and Setup's QC strip can never name a different TOP blocker for the
     identical settings. A REAL path problem is introduced alongside the collision (not
     just the collision alone) — otherwise the test cannot tell "collision wins over a
-    path problem" from "collision is reported because nothing else is wrong"."""
+    path problem" from "collision is reported because nothing else is wrong".
+
+    M-12: ``analysis.signals`` is pinned explicitly to the full pressure family FIRST —
+    ``synth_settings``'s default settings carry an EMPTY, DERIVED signal set (no explicit
+    list), so simply unassigning the Flow channel would also make the declared set stop
+    naming Flow (derivation follows the live channel assignment), turning this into a
+    "Flow required by the pressures" ``Settings.validate()`` blocker instead of the
+    channel_collision this test means to exercise."""
     win = _win(tmp_path); rn = win.run_screen
+    rn.state.settings.analysis.signals = ["flow", "poes", "pgas", "pdi"]
     rn.state.settings.input.channels.flow = None    # a hard collision (not assigned)
     rn.state.settings.input.files = "*.nomatch"     # AND a real path problem, present at once
     rn.refresh_actions()
