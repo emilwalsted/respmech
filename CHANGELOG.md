@@ -7,6 +7,31 @@ for the installers themselves.
 
 ## Unreleased
 
+**Poes, Pgas and Pdi are no longer mandatory in `Settings.validate()`.** A new,
+optional `[analysis] signals` table names which of Flow/Poes/Pgas/Pdi/EMG an analysis
+actually uses; left out (the default), the signal set is derived from whichever
+channels are assigned, so nothing changes for an existing analysis. An explicit set is
+only useful once a later release adds a way to choose it (a signal-set picker, and the
+Setup screen honouring it) — this release only teaches the settings model and its
+validation to understand the concept, and to keep an explicit set reconciled with the
+channels actually assigned.
+
+- `Settings.validate()` now requires only 'Flow' or 'EMG' to be present, not all four
+  legacy roles: an analysis with no Poes/Pgas/Pdi channel assigned (and none named in
+  `analysis.signals`) validates fine, and simply computes fewer columns. Requesting a
+  pressure signal (Poes/Pgas/Pdi) without Flow, or an unrecognised signal name, is
+  still rejected — breath segmentation needs Flow either way.
+- A hand-edited `settings.toml` that assigns a channel without adding it to an
+  explicit `analysis.signals` list is reconciled automatically on load (never on any
+  other write path): the channel's role is added to the list, and a plain-English
+  notice says so (visible in the desktop app and in `run-report.txt`, the same way
+  every other schema-upgrade notice already is).
+- Saving an analysis omits the `[analysis]` table entirely while its signal set still
+  matches the assigned channels (the ordinary case) — an explicit table is only
+  written once it genuinely diverges. The run manifest (`analysis-used.toml`) always
+  records the actual, effective set, explicit or not, so a run's own provenance is
+  never ambiguous about which signals it used.
+
 **The CLI now validates several things only the desktop app used to catch, closing
 gaps between what the two run.**
 
