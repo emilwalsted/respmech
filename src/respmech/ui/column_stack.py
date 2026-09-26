@@ -54,10 +54,13 @@ ROLE_NAMES = {
 }
 #: roles that may be assigned to at most one column (the multi-column roles are emg/entropy)
 SINGLE = {"flow", "volume", "poes", "pgas", "pdi"}
-#: roles the core analysis always requires (volume is optional — it can be integrated from
-#: flow instead; emg/entropy are optional)
-REQUIRED = ("flow", "poes", "pgas", "pdi")
-REQUIRED_LABELS = {"flow": "Flow", "poes": "Poes", "pgas": "Pgas", "pdi": "Pdi"}
+#: label text for a role named in a "required" message (channel_setup_dialog's OK gate,
+#: ui/validation.py::channel_collision). Which roles are actually required is no longer a
+#: fixed tuple here (ticket M-12) -- it is derived per analysis from
+#: ``core.analysis.signals.Capabilities.required_roles()``, since a "Flow + Poes" analysis
+#: must never be forced to also assign Pdi. "emg" is included because a declared signal set
+#: can now make EMG required too (an EMG-only or "Flow + Also EMG" analysis).
+REQUIRED_LABELS = {"flow": "Flow", "poes": "Poes", "pgas": "Pgas", "pdi": "Pdi", "emg": "EMG"}
 
 #: height of one column preview, in pixels
 ROW_HEIGHT = 74
