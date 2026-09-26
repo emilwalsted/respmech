@@ -7,12 +7,15 @@ writing uses ``tomli_w``.
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from pathlib import Path
 
 import tomli_w
 
 from respmech.core.settings import Settings
+
+_INDEX_RE = re.compile(r"^\[(\d+)\]$")
 
 
 def _rebase_folders(settings: Settings, base: str) -> None:
@@ -50,7 +53,7 @@ def load_toml(path: str | Path) -> Settings:
 
 
 def dumps_toml(settings: Settings) -> str:
-    return tomli_w.dumps(_toml_clean(settings.to_dict()))
+    return tomli_w.dumps(_merge_unknown(_toml_clean(settings.to_dict()), settings.unknown))
 
 
 def _relativize_folder(folder: str, base: str) -> str:
@@ -77,7 +80,7 @@ def save_toml(settings: Settings, path: str | Path) -> None:
     # (dumps_toml, written into the output folder) deliberately keeps absolute paths for
     # reproducibility, so it is not routed through here.
     base = os.path.dirname(os.path.abspath(str(path)))
-    data = _toml_clean(settings.to_dict())
+    data = _merge_unknown(_toml_clean(settings.to_dict()), settings.unknown)
     for section in ("input", "output"):
         sec = data.get(section)
         if isinstance(sec, dict) and sec.get("folder"):
@@ -104,3 +107,70 @@ def _toml_clean(obj):
     if isinstance(obj, list):
         return [_toml_clean(v) for v in obj]
     return obj
+
+
+def _merge_unknown(data: dict, unknown: dict) -> dict:
+    """Fold ``Settings.unknown``'s dotted-path entries back into ``data`` before it is
+    written as TOML, so a key/table this version does not recognise survives a save
+    instead of being silently dropped (a hand-edited or newer-version analysis file
+    otherwise lost its extra tables the moment RespMech re-saved it).
+
+    ``core.settings._build`` archives an unrecognised key in exactly three shapes, and
+    every path in ``unknown`` is one of them:
+
+    * a whole unknown top-level or nested TABLE (``"processing.lung_volumes"`` ->
+      a dict) -- inserted as a table at that path;
+    * a whole unknown LIST OF TABLES (``"processing.breath_types"`` -> a list) --
+      inserted as a list at that path;
+    * a single unrecognised FIELD inside one element of an otherwise-known list
+      dataclass (``"processing.exclude_breaths.[0].some_future_field"``) -- inserted
+      into that element only.
+
+    Every path segment before the last therefore already corresponds to an
+    already-serialised known field in ``data`` (an unknown value is archived whole,
+    never recursed into further) -- except a list index whose entry has since been
+    removed from the in-memory settings, which is dropped silently: the element it
+    belonged to no longer exists, so there is nowhere left to put it back.
+
+    KNOWN, ACCEPTED LIMITATIONS (found by self-review, deliberately not fixed here --
+    this ticket's scope is making the existing M-01 archival format round-trip through
+    a save, not redesigning it; each is pinned by a test in test_settings.py so a
+    future change to this function doesn't silently alter the accepted shape):
+
+    * A per-element unknown field is keyed by its list POSITION at load time
+      (``"...[0].kind"``), not by a stable identity. If an EARLIER entry in that same
+      list is removed from the in-memory settings before a save (not merely appended
+      to or left alone), the value reattaches to whatever entry now sits at that index
+      instead of being dropped -- silent misattribution to the wrong entry, which is
+      worse than the "index now out of range" case above. This cannot happen from
+      today's code (nothing yet lets a list carrying unknown per-entry data be edited
+      in the same session), but will need a stable per-entry identity or per-entry
+      unknown storage instead of this flat, position-keyed dict once such editing
+      exists.
+    * A literal ``.`` inside a TOML key name (e.g. a quoted ``"weird.key" = 5``) is
+      indistinguishable from a path separator once archived as a string, so a save
+      re-splits it and rebuilds it as a NESTED table instead of the original flat key.
+      The value survives; only the shape changes. This can never collide with a real
+      dataclass field (Python field names cannot contain ``.``), so it is a narrow
+      concern for a hand-edited or foreign-tool TOML file using dotted key namespacing,
+      not for RespMech's own output.
+    """
+    for path, value in unknown.items():
+        segments = path.split(".")
+        cur = data
+        for seg in segments[:-1]:
+            m = _INDEX_RE.match(seg)
+            if m:
+                idx = int(m.group(1))
+                if not isinstance(cur, list) or idx >= len(cur):
+                    cur = None
+                    break
+                cur = cur[idx]
+            else:
+                if not isinstance(cur, dict):
+                    cur = None
+                    break
+                cur = cur.setdefault(seg, {})
+        if isinstance(cur, dict):
+            cur[segments[-1]] = value
+    return data
