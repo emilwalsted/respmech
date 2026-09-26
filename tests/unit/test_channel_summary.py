@@ -272,3 +272,69 @@ def test_close_plots_closes_the_current_stack_without_rebuilding(qapp):
 def test_close_plots_never_raises_with_nothing_assigned(qapp):
     """An unpopulated summary (self.stack is None) has nothing to close."""
     ChannelSummary().close_plots()
+
+
+# -- M-11: 'Analyses: …' and the Flow-conditional Volume row -------------------
+def _capabilities(**kw):
+    """A bare Capabilities, built directly rather than via from_settings — these tests are
+    about the summary's OWN reaction to a given shape, not about deriving one."""
+    from respmech.core.analysis.signals import Capabilities
+    fields = dict(flow=False, volume=False, poes=False, pgas=False, pdi=False,
+                 emg=False, entropy=False, declared=frozenset(), mode="custom")
+    fields.update(kw)
+    return Capabilities(**fields)
+
+
+def test_no_capabilities_given_renders_exactly_as_before(qapp):
+    """The default (``capabilities=None``, every caller before this ticket) must add no
+    row at all — this is the backward-compatibility contract every other test in this
+    file already relies on without saying so."""
+    ch = _channels(flow=5, poes=7, pgas=8, pdi=9)
+    texts = ChannelSummary().show_mapping(ch).texts()
+    assert not any(t.startswith("Analyses:") for t in texts)
+
+
+def test_analyses_row_names_what_the_signal_set_produces(qapp):
+    caps = _capabilities(flow=True, poes=True, declared=frozenset({"flow", "poes"}),
+                         mode="poes_only")
+    ch = _channels(flow=5, poes=7)
+    texts = ChannelSummary().show_mapping(ch, capabilities=caps).texts()
+    assert texts[0] == "Analyses: " + ", ".join(caps.analyses())
+    assert "Breath timing" in texts[0] and "Work of breathing" in texts[0]
+
+
+def test_analyses_row_appears_even_with_nothing_assigned_yet(qapp):
+    """The row describes the DECLARED set, not the mapping — a signal set is chosen
+    before any channel is, so it must say something from the very first frame."""
+    caps = _capabilities(flow=True, declared=frozenset({"flow"}), mode="flow_only")
+    texts = ChannelSummary().show_mapping(_channels(), capabilities=caps).texts()
+    assert texts == ["Analyses: Breath timing"]
+
+
+def test_volume_row_hidden_when_flow_is_not_in_the_declared_set(qapp):
+    """An EMG-only analysis has no use for a Volume row at all — unlike the flow-only
+    case (ticket D02), there is no rig here where naming Volume's absence is informative."""
+    caps = _capabilities(emg=True, declared=frozenset({"emg"}), mode="emg_only")
+    ch = _channels(emg=[2])                            # no volume column either way
+    texts = ChannelSummary().show_mapping(ch, capabilities=caps).texts()
+    assert not any("Volume" in t for t in texts)
+
+
+def test_volume_row_still_shown_when_flow_is_declared(qapp):
+    """The pre-existing D02 behaviour (an unassigned Volume role still gets a row) must
+    survive once a real Capabilities is passed, as long as Flow is actually declared."""
+    caps = _capabilities(flow=True, declared=frozenset({"flow"}), mode="flow_only")
+    ch = _channels(flow=5)
+    texts = ChannelSummary().show_mapping(ch, capabilities=caps).texts()
+    assert "Volume: not assigned" in texts
+
+
+def test_volume_trailing_note_also_gated_on_flow_with_a_readable_file(qapp):
+    """Same gate as above, but through the WITH-MATRIX branch (the trailing note appended
+    after the ColumnStack), not the no-file fallback list."""
+    caps_no_flow = _capabilities(emg=True, declared=frozenset({"emg"}), mode="emg_only")
+    ch = _channels(emg=[2])
+    m, names = _matrix()
+    texts = ChannelSummary().show_mapping(ch, matrix=m, names=names,
+                                          capabilities=caps_no_flow).texts()
+    assert not any("Volume" in t for t in texts)

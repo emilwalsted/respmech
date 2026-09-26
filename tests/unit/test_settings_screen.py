@@ -1928,3 +1928,151 @@ def test_apply_signal_set_no_prompt_when_flow_membership_is_unchanged(qapp, tmp_
     assert sc.state.settings.processing.exclude_breaths != []
     win.close()
 
+
+# ---------------------------------------------------------------------------
+# M-11: Setup Signals row, ChannelSummary's use of it, _channel_view_signature,
+# and the 'settings.unknown' notice
+# ---------------------------------------------------------------------------
+def _chip_texts(sc):
+    from PySide6.QtWidgets import QLabel
+    return [sc._signals_flow.itemAt(i).widget().text()
+            for i in range(sc._signals_flow.count())
+            if isinstance(sc._signals_flow.itemAt(i).widget(), QLabel)]
+
+
+def test_signals_row_shows_a_chip_per_declared_signal(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)          # flow/volume/poes/pgas/pdi/emg all assigned -> derived full+emg
+    assert _chip_texts(sc) == ["Flow", "Poes", "Pgas", "Pdi", "EMG"]
+    assert sc.btn_change_signals.text() == "Change…"
+    # the button is always the LAST item, after every chip
+    last = sc._signals_flow.itemAt(sc._signals_flow.count() - 1).widget()
+    assert last is sc.btn_change_signals
+    win.close()
+
+
+def test_signals_row_shrinks_with_a_reduced_signal_set(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.apply_signal_set(["flow", "poes"])
+    assert _chip_texts(sc) == ["Flow", "Poes"]
+    win.close()
+
+
+def test_signals_row_updates_immediately_on_a_fresh_new_analysis(qapp, tmp_path):
+    """new_analysis_from_startup calls from_state() BEFORE apply_signal_set — a caller
+    ordering that, without apply_signal_set refreshing the view itself, would leave the
+    row showing the stale (pre-reset) chips until an unrelated field happened to change."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    assert _chip_texts(sc) == ["Flow", "Poes", "Pgas", "Pdi", "EMG"]
+    sc.new_analysis_from_startup(signals=["emg"])
+    assert _chip_texts(sc) == ["EMG"]
+    win.close()
+
+
+def test_change_signals_button_applies_the_chosen_set(qapp, tmp_path, monkeypatch):
+    from respmech.ui.main_window import MainWindow
+    from PySide6.QtWidgets import QDialog
+    import respmech.ui.signal_set_dialog as ssd
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    calls = []
+    monkeypatch.setattr(sc, "apply_signal_set", lambda signals: calls.append(signals))
+
+    class _FakeDialog:
+        def __init__(self, parent=None):
+            self.signals = ["flow"]
+
+        def exec(self):
+            return QDialog.Accepted
+    monkeypatch.setattr(ssd, "SignalSetDialog", _FakeDialog)
+    sc._change_signals()
+    assert calls == [["flow"]]
+    win.close()
+
+
+def test_change_signals_cancel_leaves_the_set_untouched(qapp, tmp_path, monkeypatch):
+    from respmech.ui.main_window import MainWindow
+    from PySide6.QtWidgets import QDialog
+    import respmech.ui.signal_set_dialog as ssd
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    calls = []
+    monkeypatch.setattr(sc, "apply_signal_set", lambda signals: calls.append(signals))
+
+    class _FakeDialog:
+        def __init__(self, parent=None):
+            self.signals = None
+
+        def exec(self):
+            return QDialog.Rejected
+    monkeypatch.setattr(ssd, "SignalSetDialog", _FakeDialog)
+    sc._change_signals()
+    assert calls == []
+    win.close()
+
+
+def test_channel_view_signature_changes_with_analysis_signals_alone(qapp, tmp_path):
+    """The acceptance criterion this ticket names explicitly: a signature must move even
+    when NOTHING about the channel mapping changes, only the declared signal set."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    before = sc._channel_view_signature()
+    sc.state.settings.analysis.signals = ["flow", "emg"]
+    after = sc._channel_view_signature()
+    assert before != after
+    win.close()
+
+
+def test_signals_row_wraps_under_windows_font_metrics(qapp, tmp_path, windows_metrics):
+    """The same _WRAPPED-ratio guard test_window_fits_screen.py established for the EMG
+    control strips (minimum width = widest single chip, never the sum) — applied here
+    directly, at the row's own widest case (all five chips), rather than only
+    transitively through the whole-window test."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)          # all five chips present, the row's widest case
+    lay = sc._signals_flow
+    natural = lay.sizeHint().width()
+    minimum = lay.minimumSize().width()
+    assert natural > 0 and minimum > 0
+    assert minimum / natural < 0.65, f"minimum {minimum} / natural {natural} did not shrink"
+    win.close()
+
+
+def test_unknown_settings_note_shown_once_on_open_and_not_after_save(qapp, tmp_path, monkeypatch):
+    """M-11: a key ``Settings.from_dict`` could not place anywhere gets ONE information box
+    at open time, naming the key, and is never repeated by a save — ``save_toml`` clears
+    ``notices`` (the schema-upgrade list) but deliberately never touches ``unknown``, so the
+    key survives the round-trip unchanged, exactly as the note promises."""
+    from PySide6.QtWidgets import QFileDialog
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    p = str(tmp_path / "unknown.toml")
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (p, "")))
+    assert sc.save_analysis_as() is True   # a normal, valid analysis first
+    with open(p, "a") as fh:
+        fh.write('\n[some_future_section]\nfoo = 1\n')
+
+    calls = []
+    monkeypatch.setattr(ss.QMessageBox, "information",
+                        staticmethod(lambda *a, **k: calls.append(a[-1])))
+    assert sc.open_analysis(p) is True
+    assert len(calls) == 1
+    assert "some_future_section" in calls[0]
+    assert "does not understand" in calls[0]
+    assert "kept unchanged when you save" in calls[0]
+
+    calls.clear()
+    sc.save_analysis(confirm_overwrite=False)
+    assert calls == []                                    # not repeated by a save
+    assert "some_future_section" in sc.state.settings.unknown   # still round-tripped
+    win.close()
+

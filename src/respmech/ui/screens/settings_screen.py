@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDou
                                QScrollArea, QSpinBox, QVBoxLayout, QWidget)
 from PySide6.QtCore import Signal, QTimer, Qt
 
-from respmech.core.analysis.signals import SINGLE_SIGNALS, effective_signals
+from respmech.core.analysis.signals import Capabilities, SINGLE_SIGNALS, effective_signals
 from respmech.core.settings import BreathCountEntry, Settings, SettingsError
 from respmech.ui.dialogs import open_error_dialog, short_error
 from respmech.ui.migration_report_dialog import open_migration_report
@@ -36,6 +36,13 @@ from respmech.ui.channel_summary import ChannelSummary
 # the guided-flow default file mask (multi-pattern; narrowed to the found extension on the
 # channel-setup OK so the single-pattern core batch runner still finds the files)
 _DEFAULT_MASK = "*.csv; *.txt"
+
+# M-11: the Setup Signals row's chip captions, one per name in
+# core.analysis.signals.SINGLE_SIGNALS plus 'emg' — the same vocabulary
+# apply_signal_set/effective_signals/SignalSetDialog already share, read in the order a
+# 'full' analysis lists its own components (Capabilities.analyses()'s own ordering).
+_SIGNAL_CHIP_ORDER = ("flow", "poes", "pgas", "pdi", "emg")
+_SIGNAL_CHIP_LABELS = {"flow": "Flow", "poes": "Poes", "pgas": "Pgas", "pdi": "Pdi", "emg": "EMG"}
 
 # The Setup Behold/Ryd banner's wording, one phrase per `core.settings.CarriedOverState`
 # kind (see its `kinds_present()`) — table-driven so a future kind (M-19/M-21/M-34's own
@@ -122,6 +129,22 @@ class SettingsScreen(QWidget):
         gin = QGroupBox("Input")
         f = QFormLayout(gin)
         f.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
+        # Signals row (M-11, R7): one chip per signal this analysis declares, plus the
+        # 'Change...' door onto apply_signal_set (SignalSetDialog) — the same funnel the
+        # New-analysis picker uses, so Setup and 'File > New' can never disagree about what
+        # changing the set does. A FlowLayout, not a plain QHBoxLayout: five chips plus a
+        # button is exactly the "row that must not force the window wide" case flow_layout.py
+        # exists for (see its own module docstring) — rebuilt on every render rather than
+        # diffed, since it is at most six small labels.
+        self.signals_row = QWidget()
+        self._signals_flow = install_flow(self.signals_row, h=6, v=4)
+        self.btn_change_signals = QPushButton("Change…")
+        self.btn_change_signals.setProperty("compact", True)
+        self.btn_change_signals.setToolTip(_tip(
+            "analysis.signals", "Change which signals this analysis declares."))
+        self.btn_change_signals.clicked.connect(self._change_signals)
+        self._signals_flow.addWidget(self.btn_change_signals)
+        f.addRow("Signals", self.signals_row)
         self.in_folder = QLineEdit()   # absolute path + Browse button: full width is the point
         self.in_files = QLineEdit()
         self.in_files.setProperty("formField", "compact")   # a short glob mask, not a path (theme.py)
@@ -1415,6 +1438,11 @@ class SettingsScreen(QWidget):
         if "emg" not in new_set:
             ch.emg = []
 
+        # M-11: analysis.signals is now part of _channel_view_signature, so this always
+        # detects a real change and rebuilds — the Signals row and 'Analyses: …' must
+        # reflect the newly declared set immediately, not only once some unrelated field
+        # happens to touch the signature next (e.g. the guided flow's own folder reset).
+        self._refresh_channel_view()
         self.settings_changed.emit()
 
     def _analysis_dialog_start(self):
@@ -1675,12 +1703,50 @@ class SettingsScreen(QWidget):
     def _channel_view_signature(self):
         """What the summary actually depends on. Rebuilding a stack of pyqtgraph plots on
         every keystroke would be unusable, so the render is skipped unless one of these
-        moved."""
+        moved.
+
+        M-11: includes ``analysis.signals`` (as a tuple — the list itself is mutable and
+        so unhashable/uncomparable-by-identity, and ``apply_signal_set`` replaces it
+        wholesale rather than mutating in place) — the Signals row and the 'Analyses: …'
+        line both depend on it, and it can change (via 'Change…'/File > New) without any
+        channel column moving at all."""
         ch = self.state.settings.input.channels
         f = self.state.settings.input.format
         return (ch.flow, ch.volume, ch.poes, ch.pgas, ch.pdi, tuple(ch.emg), tuple(ch.entropy),
                 self.state.settings.processing.volume.integrate_from_flow,  # Preview-owned now
-                f.sampling_frequency, f.decimal, self.in_folder.text(), self.in_files.text())
+                f.sampling_frequency, f.decimal, self.in_folder.text(), self.in_files.text(),
+                tuple(self.state.settings.analysis.signals))
+
+    def _update_signals_row(self, capabilities):
+        """Rebuild the Setup Signals row's chips from ``capabilities.declared`` — the same
+        set ``Capabilities.from_settings`` derived (explicit ``analysis.signals``, or the
+        assigned channels when it is empty, see ``core.analysis.signals.effective_signals``).
+        Rebuilt wholesale (never diffed): at most five small labels, so the cost is
+        negligible next to the ColumnStack rebuild this is always called alongside."""
+        lay = self._signals_flow
+        while lay.count():
+            item = lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+        for name in _SIGNAL_CHIP_ORDER:
+            if name in capabilities.declared:
+                chip = QLabel(_SIGNAL_CHIP_LABELS[name])
+                chip.setProperty("chip", True)
+                lay.addWidget(chip)
+        lay.addWidget(self.btn_change_signals)
+
+    def _change_signals(self):
+        """Setup's 'Change…' door (M-11) onto ``apply_signal_set`` — the SAME funnel the
+        New-analysis picker uses (R7's one-funnel rule), via the same ``SignalSetDialog``.
+        For an EMG-only analysis this is meant to be the ONE place the recording-content
+        question is re-asked (M-28); until that preset is reachable (still disabled in
+        ``SignalSetDialog`` — see its own docstring) there is nothing EMG-only-specific to
+        do here yet, so every analysis reopens the identical dialog."""
+        from respmech.ui.signal_set_dialog import SignalSetDialog  # noqa: PLC0415
+        dlg = SignalSetDialog(self)
+        if dlg.exec() == QDialog.Accepted and dlg.signals is not None:
+            self.apply_signal_set(dlg.signals)
 
     def _refresh_channel_view(self, force=False):
         """Re-render the read-only channel summary. The traces need a readable data file; the
@@ -1690,6 +1756,8 @@ class SettingsScreen(QWidget):
             return
         self._channel_view_sig = sig
         s = self.state.settings
+        capabilities = Capabilities.from_settings(s)
+        self._update_signals_row(capabilities)
         matrix = names = None
         files = self._valid_input_files()
         if files:
@@ -1706,7 +1774,8 @@ class SettingsScreen(QWidget):
         self.channel_summary.show_mapping(
             s.input.channels, matrix=matrix, names=names,
             fs=s.input.format.sampling_frequency or 1000,
-            integrate_from_flow=s.processing.volume.integrate_from_flow)
+            integrate_from_flow=s.processing.volume.integrate_from_flow,
+            capabilities=capabilities)
 
     def _current_channel_mapping(self):
         ch = self.state.settings.input.channels
@@ -2088,13 +2157,29 @@ class SettingsScreen(QWidget):
         return True
 
     def surface_notices(self):
-        """Tell the user about any schema upgrade applied while loading this analysis.
+        """Tell the user about any schema upgrade applied while loading this analysis, and
+        (M-11) about any key this version could not make sense of at all.
 
         A setting this version reads differently from the version that saved the file
         changes the results, so it is said on screen at open time — not only in the run
-        report, which is written after the numbers already exist."""
+        report, which is written after the numbers already exist.
+
+        ``settings.unknown`` (populated by ``Settings.from_dict`` while parsing a .toml,
+        never touched again) is a SEPARATE case from the upgrade notices above: an upgrade
+        means this version understood the old key and translated it, an unknown key means
+        it did not recognise it at all — most often a newer analysis opened in an older
+        RespMech. Shown once, here, alongside the upgrade notices (both fire only from the
+        open paths that call this — see ``_load``/``main_window.begin_session`` — never
+        after a save), never repeated on every edit."""
         for note in self.state.settings.notices:
             QMessageBox.information(self, "Analysis updated for this version", note)
+        unknown = self.state.settings.unknown
+        if unknown:
+            keys = ", ".join(sorted(unknown))
+            QMessageBox.information(
+                self, "RespMech",
+                "This analysis carries settings this version does not understand: "
+                f"{keys}. They are kept unchanged when you save.")
 
     def can_save(self):
         """Whether the current settings may be written to an analysis file."""

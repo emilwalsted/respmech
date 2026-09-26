@@ -167,10 +167,32 @@ class ChannelSummary(QWidget):
             self.stack.close_plots()
 
     def show_mapping(self, channels, *, matrix=None, names=None, fs=1000,
-                     integrate_from_flow=False):
+                     integrate_from_flow=False, capabilities=None):
         """Rebuild the readout. ``matrix``/``names`` are optional: with no readable file yet
-        the rows still say which column each role points at, just without the traces."""
+        the rows still say which column each role points at, just without the traces.
+
+        ``capabilities`` (a ``core.analysis.signals.Capabilities``, optional) adds an
+        'Analyses: …' row naming what this analysis's signal set actually produces
+        (``Capabilities.analyses()``) — shown ahead of the channel rows, and even before
+        any channel is assigned, since it describes the DECLARED set, not the mapping.
+        ``None`` (every caller before this ticket, and every test that predates it)
+        renders exactly as before: no such row, and the trailing Volume note below always
+        considers itself relevant. A caller that HAS a full ``Settings`` should build one
+        via ``Capabilities.from_settings(settings)``."""
         self._clear()
+        if capabilities is not None:
+            analyses = capabilities.analyses()
+            lab = QLabel("Analyses: " + (", ".join(analyses) if analyses else "none yet"))
+            lab.setWordWrap(True)
+            lab.setToolTip(_tip(
+                "analysis.signals", "The result columns this analysis's signal set produces."))
+            lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            self._box.addWidget(lab)
+            self.rows.append(lab)
+        # M-11: Volume is only ever relevant when Flow is actually part of the declared
+        # signal set — with no ``capabilities`` given (every pre-existing caller/test),
+        # this stays True, i.e. unchanged behaviour.
+        show_volume = capabilities is None or capabilities.flow
         cols = assigned_columns(channels)
         if not cols:
             self._empty.setText(EMPTY_TEXT)
@@ -183,6 +205,8 @@ class ChannelSummary(QWidget):
             # No readable file yet: fall back to a plain list, so the mapping is still visible
             # the moment it exists rather than only once a file can be loaded.
             for role in ORDER:
+                if role == "volume" and not show_volume:
+                    continue
                 text = describe(channels, role, integrate_from_flow)
                 if text is None:
                     continue
@@ -226,8 +250,9 @@ class ChannelSummary(QWidget):
         # ticket D02: Volume has no column of its own to draw here whenever it is either
         # unassigned or being derived from flow — a trailing label names it either way,
         # matching describe()'s no-matrix listing above instead of silently omitting the
-        # one role the graphs cannot represent.
-        if integrate_from_flow or not getattr(channels, "volume", None):
+        # one role the graphs cannot represent. M-11: never shown at all when Flow itself
+        # is not part of the declared signal set (show_volume, see above).
+        if show_volume and (integrate_from_flow or not getattr(channels, "volume", None)):
             text = describe(channels, "volume", integrate_from_flow)
             lab = QLabel(text)
             lab.setToolTip(_tip(*ROLE_HELP["volume"]))
