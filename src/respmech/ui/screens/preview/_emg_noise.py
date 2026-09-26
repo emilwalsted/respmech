@@ -69,7 +69,7 @@ _FIDELITY_TITLE = "Noise fidelity frontier (1 = untouched)"
 #: ElidingLabel) so the definition is one hover away wherever the panel's header is used.
 #: The band answers the question nothing on this tab otherwise answers (D04, UI-overhaul);
 #: the parenthetical names the Advanced field this mirrors, in its own wording, so the two
-#: never have to be kept in sync by hand. Before ticket 5.2's reconstruction fix the STFT
+#: never have to be kept in sync by hand. Before the reconstruction fix the STFT
 #: round-trip mixed magnitude and phase additively (masked magnitude, unmasked imaginary
 #: part) instead of scaling one complex number, so fidelity drifted a little over 1 even
 #: at prop_decrease = 0 ("values above 1 are routine" used to be the honest wording here);
