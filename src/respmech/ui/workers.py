@@ -1092,7 +1092,7 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
     series = {"flow": flowT, "volume": volc, "poes": poesT, "pgas": pgasT, "pdi": pdiT}
     spans, cum = [], 0
     for bno, b in breaths.items():
-        length = len(np.atleast_1d(b["poes"]))
+        length = len(np.atleast_1d(b["time"]))
         spans.append((bno, cum / fs, (cum + length) / fs, bool(b["ignored"])))
         cum += length
     label_y = float(np.nanmax(series["flow"])) if len(series["flow"]) else 0.0
