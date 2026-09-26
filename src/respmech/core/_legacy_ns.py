@@ -36,12 +36,15 @@ def to_legacy_ns(s: Settings) -> SimpleNamespace:
                 decimalcharacter=s.input.format.decimal,
             ),
             data=SimpleNamespace(
-                column_poes=ch.poes,
-                column_pgas=ch.pgas,
-                column_pdi=ch.pdi,
-                # legacy code uses np.isnan(column_volume) to mean "absent"
+                # legacy code uses np.isnan(column_X) to mean "absent" (loaders.py); flow
+                # keeps raising via _column today regardless of None vs NaN (Settings.validate
+                # still requires it), so this is forward-compat plumbing for a future change
+                # that relaxes that requirement, not yet observable behaviour for flow.
+                column_poes=ch.poes if ch.poes is not None else math.nan,
+                column_pgas=ch.pgas if ch.pgas is not None else math.nan,
+                column_pdi=ch.pdi if ch.pdi is not None else math.nan,
                 column_volume=ch.volume if ch.volume is not None else math.nan,
-                column_flow=ch.flow,
+                column_flow=ch.flow if ch.flow is not None else math.nan,
                 columns_entropy=list(ch.entropy),
                 columns_emg=list(ch.emg),
             ),
