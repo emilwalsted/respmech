@@ -20,6 +20,17 @@ class DataValidationError(ValueError):
     """Raised when an input column is missing, non-numeric, NaN, or mismatched."""
 
 
+def _absent(value):
+    """True when a column setting means 'not assigned'. Volume already treated this as
+    absent (``np.isnan(column_volume)``, the model's only channel optional today);
+    poes/pgas/pdi now do the same. Flow's resolution deliberately still goes straight
+    through ``_column`` below unconditionally, unchanged, because ``Settings.validate()``
+    still requires it and ``tests/unit/test_unassigned_channels.py`` pins that an
+    unassigned flow raises — ``_column``'s own guard uses this same test, so an absent
+    flow raises through THAT path instead of the short-circuit its siblings get."""
+    return value is None or (isinstance(value, float) and np.isnan(value))
+
+
 def _column(value, name, ncols, filepath):
     """Resolve a 1-based column setting to a 0-based index, or say exactly what is wrong.
 
@@ -28,9 +39,11 @@ def _column(value, name, ncols, filepath):
     and surfaced as "unsupported operand type(s) for -: 'NoneType' and 'int'", and — worse —
     column 0 became ``iloc[:, -1]``, silently analysing the LAST column of the recording
     instead of reporting anything at all."""
-    # NaN reaches here only from a hand-edited settings file (the model uses None, and
-    # _legacy_ns maps only the optional volume column to NaN, which callers test first).
-    if value is None or (isinstance(value, float) and np.isnan(value)):
+    # NaN reaches here only from a hand-edited settings file, or a caller (loaders.py's
+    # own optional-channel branches below) that already tested for absence itself; the
+    # model uses None, and _legacy_ns.to_legacy_ns maps every optional column (volume,
+    # poes, pgas, pdi; flow forward-compatibly, see its own comment there) to NaN.
+    if _absent(value):
         raise DataValidationError(
             f"{name} is not assigned. Pick a column with 'Assign channels from data…' in Setup.")
     v = int(value)
@@ -79,24 +92,34 @@ def _alleq(iterable):
 
 
 def validatedata(flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings):
-    _checkcolumn("Flow column", flow)
-    _checkcolumn("Volume column", volume)
-    _checkcolumn("Oesophageal pressure column", poes)
-    _checkcolumn("Gastric pressure column", pgas)
-    _checkcolumn("Trans-diaphragmatic pressure column", pdi)
-
-    collens = [len(flow), len(volume), len(poes), len(pgas), len(pdi)]
-    coltitles = ["Flow", "Volume", "Poes", "Pgas", "Pdi"]
+    # (validation text, array, length-check title) triples. A channel that is legitimately
+    # ABSENT (an empty array — volume today, poes/pgas/pdi once reachable) is dropped
+    # here, before _checkcolumn and before it can ever enter the length-consistency check
+    # below: an absent channel has nothing to validate, and its length of 0 is not a
+    # mismatch against the recording's real sample count, it is simply not part of this
+    # recording at all.
+    triples = [
+        ("Flow column", flow, "Flow"),
+        ("Volume column", volume, "Volume"),
+        ("Oesophageal pressure column", poes, "Poes"),
+        ("Gastric pressure column", pgas, "Pgas"),
+        ("Trans-diaphragmatic pressure column", pdi, "Pdi"),
+    ]
     if len(entropycolumns) > 0:
         for i in range(0, entropycolumns.shape[1]):
-            _checkcolumn("Entropy column #" + str(i + 1), entropycolumns[:, i])
-            collens.append(len(entropycolumns[:, i]))
-            coltitles.append("Entropy #" + str(i + 1))
+            triples.append(("Entropy column #" + str(i + 1), entropycolumns[:, i],
+                            "Entropy #" + str(i + 1)))
     if len(emgcolumns) > 0:
         for i in range(0, emgcolumns.shape[1]):
-            _checkcolumn("EMG column #" + str(i + 1), emgcolumns[:, i])
-            collens.append(len(emgcolumns[:, i]))
-            coltitles.append("EMG #" + str(i + 1))
+            triples.append(("EMG column #" + str(i + 1), emgcolumns[:, i],
+                            "EMG #" + str(i + 1)))
+
+    present = [(text, arr, title) for text, arr, title in triples if len(arr) > 0]
+    for text, arr, _ in present:
+        _checkcolumn(text, arr)
+
+    collens = [len(arr) for _, arr, _ in present]
+    coltitles = [title for _, _, title in present]
     if not _alleq(collens):
         cols = "Column lengths:\n" + "".join(
             f"{coltitles[s]}: {collens[s]} observations.\n" for s in range(len(collens)))
@@ -113,12 +136,16 @@ def load(filepath, settings):
     def _cols_from_df(df):
         n = df.shape[1]
         col = lambda v, name: _column(v, name, n, filepath)          # noqa: E731
+        # flow always resolves through _column unconditionally (see _absent's docstring):
+        # unassigned flow must still raise today, unchanged from before this function grew
+        # optional-channel support for its three siblings below.
         flow = df.iloc[:, col(d.column_flow, "Flow channel")].to_numpy()
-        volume = ([] if np.isnan(d.column_volume)
-                  else df.iloc[:, col(d.column_volume, "Volume channel")].to_numpy())
-        poes = df.iloc[:, col(d.column_poes, "Oesophageal pressure channel")].to_numpy()
-        pgas = df.iloc[:, col(d.column_pgas, "Gastric pressure channel")].to_numpy()
-        pdi = df.iloc[:, col(d.column_pdi, "Trans-diaphragmatic pressure channel")].to_numpy()
+        opt = lambda v, name: (np.asarray([], dtype=float) if _absent(v)          # noqa: E731
+                               else df.iloc[:, col(v, name)].to_numpy())
+        volume = opt(d.column_volume, "Volume channel")
+        poes = opt(d.column_poes, "Oesophageal pressure channel")
+        pgas = opt(d.column_pgas, "Gastric pressure channel")
+        pdi = opt(d.column_pdi, "Trans-diaphragmatic pressure channel")
         # NO .squeeze() on these two: entropy/EMG are (samples, channels) matrices and every
         # consumer indexes them 2-D. Squeezing collapsed a single-channel selection to 1-D,
         # which made validatedata's .shape[1] raise "IndexError: tuple index out of range"
@@ -161,11 +188,13 @@ def load(filepath, settings):
         # round to the end of the list and analyse a wholly unrelated channel.
         n = len(cols)
         get1 = lambda v, name: get(_column(v, name, n, f) + 1)       # noqa: E731
-        flow = get1(d.column_flow, "Flow channel")
-        volume = [] if np.isnan(d.column_volume) else get1(d.column_volume, "Volume channel")
-        poes = get1(d.column_poes, "Oesophageal pressure channel")
-        pgas = get1(d.column_pgas, "Gastric pressure channel")
-        pdi = get1(d.column_pdi, "Trans-diaphragmatic pressure channel")
+        flow = get1(d.column_flow, "Flow channel")          # unconditional, see _absent's docstring
+        opt1 = lambda v, name: (np.asarray([], dtype=float) if _absent(v)          # noqa: E731
+                                else get1(v, name))
+        volume = opt1(d.column_volume, "Volume channel")
+        poes = opt1(d.column_poes, "Oesophageal pressure channel")
+        pgas = opt1(d.column_pgas, "Gastric pressure channel")
+        pdi = opt1(d.column_pdi, "Trans-diaphragmatic pressure channel")
         ent = ([] if len(d.columns_entropy) == 0 else
                np.column_stack([get1(c, "Entropy channel") for c in d.columns_entropy]))
         emg = ([] if len(d.columns_emg) == 0 else
@@ -177,14 +206,27 @@ def load(filepath, settings):
         raise DataValidationError(f"Unsupported input file type: {fext}")
     flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns = loaders[fext](filepath)
 
-    flow = flow.squeeze()
+    # guarded on length, not just for volume: an absent channel is an empty ndarray now
+    # (never a bare Python list), so .squeeze() would not crash even unguarded, but an
+    # absent channel has nothing to squeeze either — same defensive shape for all five.
+    if len(flow) > 0:
+        flow = flow.squeeze()
     if len(volume) > 0:
         volume = volume.squeeze()
-    poes, pgas, pdi = poes.squeeze(), pgas.squeeze(), pdi.squeeze()
+    if len(poes) > 0:
+        poes = poes.squeeze()
+    if len(pgas) > 0:
+        pgas = pgas.squeeze()
+    if len(pdi) > 0:
+        pdi = pdi.squeeze()
 
-    if settings.processing.mechanics.inverseflow:
+    # flow is always present today (Settings.validate requires it; a future signal-set
+    # model is expected to introduce flow-less analyses), but guarding on len(flow) now
+    # means this section already behaves correctly once that lands, instead of dividing
+    # by a zero-length flow's sampling count or feeding cumulative_trapezoid an empty pair.
+    if settings.processing.mechanics.inverseflow and len(flow) > 0:
         flow = -flow
-    if settings.processing.mechanics.integratevolumefromflow:
+    if settings.processing.mechanics.integratevolumefromflow and len(flow) > 0:
         xval = np.linspace(0, len(flow) / settings.input.format.samplingfrequency, len(flow))
         volume = np.concatenate([-sp.integrate.cumulative_trapezoid(flow, xval), [0.0000001]])
     if settings.processing.mechanics.inversevolume:

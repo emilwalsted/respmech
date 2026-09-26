@@ -203,6 +203,12 @@ QC strip) and by `respmech validate`, from the same shared logic:
      analysis pipeline: a Qt-free capabilities/signal-set skeleton (its own new module and
      tests only), nothing in compute/pipeline calls into it yet, no user-visible change -->
 
+<!-- changelog-skip 604d7f7 internal, behaviour-neutral groundwork for the same future
+     modular analysis pipeline: loaders.py/settings adapter can now treat an absent
+     poes/pgas/pdi column as an empty array instead of always raising, but the public
+     settings API still requires all four columns today, so no analysis can actually
+     reach this path yet; only a hand-built settings adapter in a new test exercises it -->
+
 <!--
 "Unreleased" above is a hand-maintained draft of the next release's entry. It is
 updated ONLY when explicitly asked to (not automatically on every commit), and it
