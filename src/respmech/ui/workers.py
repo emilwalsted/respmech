@@ -730,13 +730,18 @@ def peek_header_warning(settings: Settings, file_path: str):
     rather than real channel data — either because that line's own field count is under
     the analysis's own floor (M-12: ``1 + `` the number of single-column signal roles
     (flow/poes/pgas/pdi) actually DECLARED, e.g. 5 for a full analysis, 2 for flow-only —
-    a real recording needs at least a time column plus one field per declared role; a
-    header line like LabChart's 'Interval=<TAB>0.001 s' has exactly two, well under even a
-    flow-only floor of 2 once volume/poes/pgas/pdi are also declared). Nothing is declared
+    a real recording needs at least a time column plus one field per declared role).
+    EMG never LOWERS this floor below the historical baseline of 3 (self-review finding:
+    EMG has no fixed column count, so letting an EMG-only set collapse the floor to 1
+    would silence the check almost entirely — including for the exact motivating case
+    below, a 2-field LabChart preamble on an EMG-only recording). Nothing is declared
     yet at all (no channel assigned and no explicit ``analysis.signals`` — this probe runs
     as part of the manifest scan, which happens BEFORE channel assignment): keep this
     function's historical, signal-set-agnostic floor of 3 rather than reading "nothing
     declared" as "expect just one field", which would silence the check almost entirely.
+    A header line like LabChart's 'Interval=<TAB>0.001 s' has exactly two fields, so it is
+    still caught whenever the floor is 3 (nothing declared, or EMG declared) but would
+    slip through only a flow-only set with no volume/pressures/EMG (floor 2).
     Or because the first two non-blank lines disagree on field count. Delimited-text files
     only (.csv/.txt); returns ``None`` for any other extension, an unreadable head, a head
     this function's fixed encoding chain cannot decode (see below — narrower than it
@@ -795,8 +800,29 @@ def peek_header_warning(settings: Settings, file_path: str):
     dec = getattr(fmt, "decimal", ".") or "."
     sep = "\t" if ext == ".txt" else (";" if dec == "," else ",")
     counts = [len(ln.split(sep)) for ln in lines]
-    declared = effective_signals(settings)
-    floor = 1 + len(declared & _SINGLE_SIGNAL_SET) if declared else 3
+    try:
+        declared = effective_signals(settings)
+    except TypeError:
+        # A malformed ``analysis.signals`` (e.g. a hand-edited bare string instead of a
+        # list) is a ``Settings.validate()`` concern to report, not this cheap probe's —
+        # self-review finding: this call was unguarded and broke the function's own
+        # documented "Never raises" contract, which crashed the ENTIRE manifest scan
+        # (``ui.manifest.build_manifest``'s per-file loop has no surrounding try/except
+        # of its own either). Fall back to the historical, signal-set-agnostic floor.
+        declared = frozenset()
+    if not declared:
+        floor = 3          # nothing declared yet (a pre-signal-set manifest scan)
+    else:
+        # EMG has no fixed column count (a rig can carry any number of EMG channels), so
+        # "1 + declared single-column roles" alone would collapse to 1 for an EMG-only
+        # set -- self-review finding: that is low enough to let ANY non-blank line pass,
+        # including the exact classic LabChart preamble this function's own docstring
+        # names as the motivating case ("Interval=<TAB>0.001 s", 2 fields). EMG therefore
+        # never LOWERS the floor below the historical baseline of 3, though a set with
+        # enough OTHER declared roles can still raise it past that baseline.
+        floor = 1 + len(declared & _SINGLE_SIGNAL_SET)
+        if "emg" in declared:
+            floor = max(floor, 3)
     if counts[0] < floor:
         plural = "" if counts[0] == 1 else "s"
         return (f"the first row has only {counts[0]} field{plural} — too few to be "
