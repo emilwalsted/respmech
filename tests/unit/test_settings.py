@@ -68,7 +68,10 @@ def test_nested_optional_dataclass_round_trips():
 
 
 @pytest.mark.parametrize("extra,unknown_key", [
-    pytest.param({"analysis": {"signals": ["flow"]}}, "analysis",
+    # "analysis" is no longer an unknown top-level table as of this ticket
+    # (Settings.analysis: AnalysisSettings) -- a genuinely unrecognised table name
+    # covers the same archived shape instead.
+    pytest.param({"some_future_table": {"x": 1}}, "some_future_table",
                  id="unknown_toplevel_table"),
     pytest.param({"processing": {"lung_volumes": {"foo": 1}}}, "processing.lung_volumes",
                  id="unknown_nested_table"),
@@ -179,9 +182,14 @@ def test_a_24_shaped_file_gains_no_keys_on_save(tmp_path):
     assert s2.unknown == {}
 
 
-def test_missing_required_raises():
-    with pytest.raises(SettingsError):
-        Settings.from_dict({"input": {"format": {"matlab_variant": "mac"}}}).validate()
+def test_missing_required_raises_neither_flow_nor_emg():
+    """R7: with no explicit ``analysis.signals`` and no channel assigned at all, the
+    effective signal set derives to empty -- the new, more specific message replacing
+    the old unconditional four-role loop."""
+    d = _minimal()
+    d["input"]["channels"] = {}
+    with pytest.raises(SettingsError, match=r"analysis\.signals must name at least one"):
+        Settings.from_dict(d).validate()
 
 
 def test_volume_required_unless_integrated():

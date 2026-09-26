@@ -13,6 +13,8 @@ from pathlib import Path
 
 import tomli_w
 
+from respmech.core.analysis.signals import derived_signals, effective_signals
+
 # The one authoritative table of per-folder-tagged batch state — defined once in
 # core.settings (as `_CARRIED_KINDS`; CarriedOverState/carried_over_state/
 # clear_carried_over are its other consumers) and imported here under the name this
@@ -61,7 +63,29 @@ def load_toml(path: str | Path) -> Settings:
 
 
 def dumps_toml(settings: Settings) -> str:
-    return tomli_w.dumps(_merge_unknown(_toml_clean(settings.to_dict()), settings.unknown))
+    """Serialise ``settings`` as TOML text.
+
+    Unlike :func:`save_toml`, this ALWAYS writes the resolved, effective signal set
+    into ``[analysis] signals`` (R7) -- explicit or derived, it does not matter: this
+    is the run manifest's job (``core.io.writers._write_manifest`` calls it to build
+    ``analysis-used.toml``), and a run's own provenance should never leave a reader
+    guessing which signals actually governed it. Sorted for a deterministic manifest.
+
+    Every real call path writes this AFTER ``Settings.validate()`` already succeeded
+    (the CLI and the GUI Run screen both gate on it first), which itself now rejects a
+    malformed (non-list) ``analysis.signals`` cleanly -- so ``effective_signals``'s own
+    ``TypeError`` guard for that case is normally unreachable here. Caught anyway
+    (self-review finding) so a direct, unvalidated call to this function degrades the
+    same way :func:`save_toml` already does for the identical malformed input --
+    recording the value as-is rather than crashing a manifest write.
+    """
+    data = _merge_unknown(_toml_clean(settings.to_dict()), settings.unknown)
+    try:
+        resolved_signals = sorted(effective_signals(settings))
+    except TypeError:
+        resolved_signals = settings.analysis.signals
+    data.setdefault("analysis", {})["signals"] = resolved_signals
+    return tomli_w.dumps(data)
 
 
 def _relativize_folder(folder: str, base: str) -> str:
@@ -103,6 +127,20 @@ def save_toml(settings: Settings, path: str | Path) -> None:
     # reproducibility, so it is not routed through here.
     base = os.path.dirname(os.path.abspath(str(path)))
     data = _merge_unknown(_toml_clean(settings.to_dict()), settings.unknown)
+    # R7: omit [analysis] entirely while the explicit set is empty (nothing was ever
+    # declared) or equals what the assigned channels already derive to -- so an
+    # unedited or fully-consistent analysis keeps writing exactly the shape it did
+    # before this ticket, and a hand round-tripped 2.4-era file gains no new table.
+    # Only the `signals` key itself is dropped, never the whole table, if some OTHER
+    # (currently unrecognised) key also lives under [analysis] -- that key still has
+    # to survive the save via the ordinary _merge_unknown path above.
+    analysis = data.get("analysis")
+    if isinstance(analysis, dict):
+        explicit = frozenset(settings.analysis.signals)
+        if not explicit or explicit == derived_signals(settings.input.channels):
+            analysis.pop("signals", None)
+            if not analysis:
+                data.pop("analysis")
     for section in ("input", "output"):
         sec = data.get(section)
         if isinstance(sec, dict) and sec.get("folder"):
