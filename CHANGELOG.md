@@ -281,6 +281,14 @@ QC strip) and by `respmech validate`, from the same shared logic:
      labels, as a shared _lone_ampersands(root) helper other screens' tests can reuse,
      plus a matching ui/CLAUDE.md note -- no runtime app behaviour differs -->
 
+<!-- changelog-skip 3142f25 internal, behaviour-neutral groundwork for the same future
+     modular analysis pipeline: calculateaveragebreaths/calculatemechanics now skip
+     Poes/Pgas/Pdi-derived values when settings.capabilities says the channel is
+     absent, and the mechanics OrderedDict is built from the existing pinned key
+     order instead of a hardcoded literal -- golden 5/5 byte-identical (every guard
+     is True and unchanged on the full-channel path), no analysis can reach a
+     reduced signal set end to end yet (pipeline/results are a later ticket) -->
+
 <!--
 "Unreleased" above is a hand-maintained draft of the next release's entry. It is
 updated ONLY when explicitly asked to (not automatically on every commit), and it
