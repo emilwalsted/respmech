@@ -69,6 +69,81 @@ def synth_settings(out="", *, noise=False, channels=None, **kw):
     return s
 
 
+def _lone_ampersands(root):
+    """Scan ``root`` (typically a ``QMainWindow``) for every caption this app's own
+    convention treats as button-like text — ``QAbstractButton.text()``,
+    ``QGroupBox.title()``, every ``QAction.text()`` reachable from ``root.menuBar()``
+    (when it has one) and from ``root.findChildren(QMenu)``, ``QTabBar.tabText(i)``, and
+    the text of any ``QLabel`` with a ``buddy()`` set. Returns a list of
+    ``(widget-type-name, offending-text)`` pairs for every caption carrying a LONE ``&``
+    that Qt would silently swallow as a mnemonic marker instead of rendering as a
+    literal ampersand — the same defect class as the v2.4.0 "Run & results" ->
+    "Run _results" regression, generalised beyond just push buttons.
+
+    A caption in this app that wants a LITERAL ``&`` always doubles it ("Preview && QC",
+    "Process && write this file"), so a lone ``&`` is either that bug or a deliberate
+    mnemonic — and a deliberate mnemonic is never on a space (it is always immediately
+    followed by an alphanumeric character, e.g. menu-bar titles like "&File" or a
+    recent-file entry's "&3  filename.toml").
+
+    QAction objects can legitimately live in two containers at once (the same action
+    added to both a toolbar-style menu and the File menu, "one enable-state behind two
+    doors" — see ``main_window.py``), so actions are de-duplicated by identity before
+    their text is checked.
+    """
+    from PySide6.QtWidgets import QAbstractButton, QGroupBox, QLabel, QMenu, QTabBar
+
+    def _has_lone_ampersand(text):
+        for i, ch in enumerate(text):
+            if ch != "&":
+                continue
+            if i + 1 < len(text) and text[i + 1] == "&":     # "&&" — a real ampersand
+                continue
+            if i > 0 and text[i - 1] == "&":                  # second half of a "&&" pair
+                continue
+            if i + 1 < len(text) and text[i + 1].isalnum():   # a deliberate mnemonic
+                continue
+            return True
+        return False
+
+    offenders = []
+
+    def _check(kind, text):
+        if _has_lone_ampersand(text):
+            offenders.append((kind, text))
+
+    for b in root.findChildren(QAbstractButton):
+        _check(type(b).__name__, b.text())
+    for g in root.findChildren(QGroupBox):
+        _check(type(g).__name__, g.title())
+    for tb in root.findChildren(QTabBar):
+        for i in range(tb.count()):
+            _check("QTabBar", tb.tabText(i))
+    for lbl in root.findChildren(QLabel):
+        if lbl.buddy() is not None:
+            _check("QLabel", lbl.text())
+
+    seen_action_ids = set()
+
+    def _check_action(act):
+        if id(act) in seen_action_ids:
+            return
+        seen_action_ids.add(id(act))
+        _check("QAction", act.text())
+
+    menu_bar = getattr(root, "menuBar", None)
+    if callable(menu_bar):
+        bar = menu_bar()
+        if bar is not None:
+            for act in bar.actions():
+                _check_action(act)
+    for menu in root.findChildren(QMenu):
+        for act in menu.actions():
+            _check_action(act)
+
+    return offenders
+
+
 def assert_units(mapping):
     """Assert ``quantities.unit_for(column) == unit`` for every ``{column: unit}``
     pair in ``mapping`` — a small shared helper for "every column a feature emits
