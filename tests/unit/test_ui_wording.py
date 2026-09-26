@@ -139,6 +139,28 @@ def test_lone_ampersand_scan_actually_catches_an_injected_regression(qapp):
         "Run & results ▸", "RMS & normalisation", "Notes & figures", "Export & share"}
 
 
+def test_lone_ampersand_scan_handles_odd_ampersand_runs(qapp):
+    """A run of an ODD number of consecutive '&' (3, 5, ...) is not the same as several
+    independent single '&'s: Qt resolves it left to right, pairing "&&" into one literal
+    ampersand and leaving exactly one unpaired '&' to act as a mnemonic marker on
+    whatever follows the run. A naive per-character neighbour check misclassifies this
+    (each '&' in the run sees a '&' neighbour and is waved through as "part of a pair"),
+    silently missing a genuinely broken trailing ampersand — this pins the fix."""
+    from PySide6.QtWidgets import QPushButton, QWidget
+
+    from _helpers import _lone_ampersands
+
+    probe = QWidget()
+    QPushButton("Broken &&&", probe)               # odd run, nothing after it: broken
+    QPushButton("Odd &&&Yes", probe)               # odd run, directly followed by an
+                                                    # alnum char (no space): mnemonic on Y
+    QPushButton("Fully paired &&&&", probe)         # even run: two real ampersands
+
+    offenders = _lone_ampersands(probe)
+    offending_texts = {text for _kind, text in offenders}
+    assert offending_texts == {"Broken &&&"}
+
+
 def test_no_tooltip_or_advanced_dialog_intro_says_the_strip():
     """Ticket D21 (UI-overhaul): three Advanced-dialog intros and a tooltip described a
     row of controls as 'the strip' or 'the strip' plus the checkbox they gate — a word
