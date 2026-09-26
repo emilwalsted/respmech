@@ -1722,18 +1722,24 @@ class SettingsScreen(QWidget):
         set ``Capabilities.from_settings`` derived (explicit ``analysis.signals``, or the
         assigned channels when it is empty, see ``core.analysis.signals.effective_signals``).
         Rebuilt wholesale (never diffed): at most five small labels, so the cost is
-        negligible next to the ColumnStack rebuild this is always called alongside."""
+        negligible next to the ColumnStack rebuild this is always called alongside.
+
+        ``capabilities=None`` (see ``_capabilities_for_view``'s own docstring — a hand-
+        edited, malformed ``analysis.signals``) renders no chips at all, just the
+        'Change…' door: there is nothing safe to derive a chip set from, and this method
+        must never itself be the thing that raises."""
         lay = self._signals_flow
         while lay.count():
             item = lay.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.setParent(None)
-        for name in _SIGNAL_CHIP_ORDER:
-            if name in capabilities.declared:
-                chip = QLabel(_SIGNAL_CHIP_LABELS[name])
-                chip.setProperty("chip", True)
-                lay.addWidget(chip)
+        if capabilities is not None:
+            for name in _SIGNAL_CHIP_ORDER:
+                if name in capabilities.declared:
+                    chip = QLabel(_SIGNAL_CHIP_LABELS[name])
+                    chip.setProperty("chip", True)
+                    lay.addWidget(chip)
         lay.addWidget(self.btn_change_signals)
 
     def _change_signals(self):
@@ -1748,6 +1754,26 @@ class SettingsScreen(QWidget):
         if dlg.exec() == QDialog.Accepted and dlg.signals is not None:
             self.apply_signal_set(dlg.signals)
 
+    def _capabilities_for_view(self, s):
+        """``Capabilities.from_settings(s)``, tolerant of a malformed ``analysis.signals``.
+
+        ``core.analysis.signals.effective_signals`` deliberately raises ``TypeError`` for
+        a bare string (e.g. a hand-edited ``signals = "flow"`` instead of ``["flow"]``) —
+        a guard meant for ``Settings.validate()`` to catch and report as a clean, friendly
+        error. This screen's render path runs on EVERY edit and on open, always BEFORE any
+        validation (``from_state()`` -> ``_sync_widgets()`` -> here), including the
+        command-line/drag-drop open path that constructs ``MainWindow`` directly against
+        an already-parsed ``Settings`` — there is no surrounding try/except there at all,
+        so letting this raise crashed the whole window instead of leaving that job to
+        validate(). ``None`` tells ``_update_signals_row``/``ChannelSummary.show_mapping``
+        to render exactly as if no capabilities were available (no chips, no 'Analyses: …'
+        row, Volume shown unconditionally) — degraded, never crashed; the status bar's
+        ``_validation_status()`` still names the real problem."""
+        try:
+            return Capabilities.from_settings(s)
+        except TypeError:
+            return None
+
     def _refresh_channel_view(self, force=False):
         """Re-render the read-only channel summary. The traces need a readable data file; the
         rows do not, so a mapping with no loadable file still shows which column is what."""
@@ -1756,7 +1782,7 @@ class SettingsScreen(QWidget):
             return
         self._channel_view_sig = sig
         s = self.state.settings
-        capabilities = Capabilities.from_settings(s)
+        capabilities = self._capabilities_for_view(s)
         self._update_signals_row(capabilities)
         matrix = names = None
         files = self._valid_input_files()
@@ -2170,16 +2196,30 @@ class SettingsScreen(QWidget):
         it did not recognise it at all — most often a newer analysis opened in an older
         RespMech. Shown once, here, alongside the upgrade notices (both fire only from the
         open paths that call this — see ``_load``/``main_window.begin_session`` — never
-        after a save), never repeated on every edit."""
+        after a save), never repeated on every edit.
+
+        Named by the FIRST path segment only (``settingsio.toml_io._merge_unknown``'s own
+        dotted-path key, e.g. ``'processing.exclude_breaths.[0].some_field'``, becomes
+        just 'processing'): the full internal path is meaningless to a user, and every
+        unknown value is archived as one whole table/list/field under a real, recognised
+        ancestor field, so its first segment always names something that already appears
+        elsewhere in this screen. Self-review (M-11) found the wording cannot honestly
+        promise unconditional preservation: ``_merge_unknown``'s own docstring documents
+        that a per-element unknown field (that ``[0]``-style path) is dropped if the list
+        entry that carried it is later removed in this session — reachable today via
+        ``apply_signal_set``'s own 'clear breath-keyed state?' prompt. The wording below
+        says so, rather than the flatly wrong 'always kept' an earlier draft used."""
         for note in self.state.settings.notices:
             QMessageBox.information(self, "Analysis updated for this version", note)
         unknown = self.state.settings.unknown
         if unknown:
-            keys = ", ".join(sorted(unknown))
+            names = sorted({k.split(".", 1)[0] for k in unknown})
+            keys = ", ".join(names)
             QMessageBox.information(
                 self, "RespMech",
                 "This analysis carries settings this version does not understand: "
-                f"{keys}. They are kept unchanged when you save.")
+                f"{keys}. They are kept unchanged when you save, unless the setting "
+                "they belong to is removed here first.")
 
     def can_save(self):
         """Whether the current settings may be written to an analysis file."""
