@@ -2,7 +2,7 @@ import pytest
 
 from respmech.core.settings import (
     SCHEMA_VERSION, BreathCountEntry, CarriedOverState, ExcludeEntry, Settings,
-    SettingsError, carried_over_state, clear_carried_over, is_carried_folder,
+    SettingsError, _CARRIED_KINDS, carried_over_state, clear_carried_over, is_carried_folder,
 )
 
 
@@ -522,3 +522,136 @@ def test_clear_carried_over_is_a_no_op_when_nothing_is_carried():
     clear_carried_over(s)
     assert s.processing.exclude_breaths == [entry]
     assert s.processing.exclude_breaths[0] is entry      # same object, never touched
+
+
+def test_carried_over_state_default_constructor_has_no_kind():
+    """The dict-backed CarriedOverState (M-07) must construct with no args, same as
+    before it was generalized — every caller (including this test file's own
+    ``CarriedOverState()`` comparisons above) relies on that."""
+    assert CarriedOverState() == CarriedOverState()
+    assert not CarriedOverState()
+    assert CarriedOverState().kinds_present() == []
+
+
+def test_carried_over_state_ecg_and_normalization_references_follow_the_noise_pattern():
+    """The two references retrofitted by M-07 behave exactly like the existing noise
+    reference: a bool property, named in `kinds_present()`, and independent of one
+    another and of the noise reference."""
+    s = Settings()
+    s.input.folder = "/data/S02"
+    s.processing.emg.ecg_reference_file = "ecg.txt"
+    s.processing.emg.ecg_reference_folder = "/data/S01"                  # mismatch -> carried
+    s.processing.emg.normalization_reference_file = "norm.txt"
+    s.processing.emg.normalization_reference_folder = "/data/S02"        # matches -> not carried
+    st = carried_over_state(s)
+    assert st.ecg_reference is True
+    assert st.normalization_reference is False
+    assert ("ecg_reference", ["ecg.txt"]) in st.kinds_present()
+    assert not any(kind == "normalization_reference" for kind, _ in st.kinds_present())
+    assert bool(st) is True
+
+
+def test_clear_carried_over_resets_ecg_and_normalization_references_independently():
+    s = Settings()
+    s.input.folder = "/data/S02"
+    s.processing.emg.ecg_reference_file = "ecg.txt"
+    s.processing.emg.ecg_reference_folder = "/data/S01"
+    s.processing.emg.normalization_reference_file = "norm.txt"
+    s.processing.emg.normalization_reference_folder = "/data/S02"        # matches -> untouched
+    clear_carried_over(s)
+    assert s.processing.emg.ecg_reference_file is None
+    assert s.processing.emg.ecg_reference_folder is None
+    assert s.processing.emg.normalization_reference_file == "norm.txt"  # never touched
+    assert s.processing.emg.normalization_reference_folder == "/data/S02"
+
+
+# -- ticket M-07: _CARRIED_KINDS/_FOLDER_TAG_PATHS is ONE generalized table --------------
+# Every row gets the identical treatment (rebase at load, relativize at save, carried/
+# clear against the live input folder) — this proves the table-driven machinery itself
+# generalizes, not just the two kinds (exclude_breaths, noise) it originally shipped with.
+# The per-kind "how do I populate this row's data" mapping below is test-only scaffolding,
+# not a second copy of the production table: it drives scenarios FOR `_CARRIED_KINDS`,
+# it never redeclares which paths/kinds exist (those come from the import).
+
+def _setup_exclude_files(s, folder):
+    s.processing.exclude_breaths.append(ExcludeEntry(file="x.txt", breaths=[1], folder=folder))
+    return "x.txt"
+
+
+def _setup_breath_count_files(s, folder):
+    s.processing.breath_counts.append(BreathCountEntry(file="x.txt", count=5, folder=folder))
+    return "x.txt"
+
+
+def _setup_noise_reference(s, folder):
+    n = s.processing.emg.noise
+    n.reference_file, n.reference_intervals, n.reference_folder = "x.txt", [[0.0, 1.0]], folder
+    return "x.txt"
+
+
+def _setup_ecg_reference(s, folder):
+    s.processing.emg.ecg_reference_file = "x.txt"
+    s.processing.emg.ecg_reference_folder = folder
+    return "x.txt"
+
+
+def _setup_normalization_reference(s, folder):
+    s.processing.emg.normalization_reference_file = "x.txt"
+    s.processing.emg.normalization_reference_folder = folder
+    return "x.txt"
+
+
+_ROW_SETUP = {
+    "exclude_files": _setup_exclude_files,
+    "breath_count_files": _setup_breath_count_files,
+    "noise_reference": _setup_noise_reference,
+    "ecg_reference": _setup_ecg_reference,
+    "normalization_reference": _setup_normalization_reference,
+}
+
+
+@pytest.mark.parametrize(
+    "path,kind",
+    [(path, kind) for path, kind, _name_of, _clear_fn in _CARRIED_KINDS],
+    ids=[kind for _path, kind, _name_of, _clear_fn in _CARRIED_KINDS])
+def test_every_folder_tag_path_round_trips(path, kind, tmp_path):
+    import os
+    import tomllib
+    from respmech.core.settings import _walk
+    from respmech.settingsio.toml_io import load_toml, save_toml, _walk_dict
+
+    assert kind in _ROW_SETUP, f"no test scaffolding registered for new kind {kind!r}"
+    setup = _ROW_SETUP[kind]
+
+    # -- rebase at load, relativize at save (portable relative-path analysis) ----------
+    sub = tmp_path / "study"
+    sub.mkdir()
+    p = str(sub / "analysis.toml")
+    s = Settings()
+    s.input.format.sampling_frequency = 2000
+    s.input.folder = "input"
+    setup(s, "input")                       # same folder as input.folder -> relative
+    save_toml(s, p)
+    loaded = load_toml(p)                   # rebases to absolute for the run
+    container, attr = _walk(loaded, path)
+    val = getattr(container, attr)
+    got = val[0].folder if isinstance(val, list) else val
+    want_abs = os.path.normpath(str(sub / "input"))
+    assert got == want_abs
+    save_toml(loaded, p)                    # …and Save must re-relativize
+    with open(p, "rb") as f:
+        raw = tomllib.load(f)
+    parent, raw_attr = _walk_dict(raw, path)
+    raw_val = parent.get(raw_attr)
+    raw_got = raw_val[0]["folder"] if isinstance(raw_val, list) else raw_val
+    assert raw_got == "input"
+
+    # -- carried/clear against the live input folder ------------------------------------
+    s2 = Settings()
+    s2.input.folder = "/data/S02"
+    name = setup(s2, "/data/S01")           # mismatched folder -> carried
+    st = carried_over_state(s2)
+    assert (kind, [name]) in st.kinds_present()
+    assert bool(st) is True
+    clear_carried_over(s2)
+    assert not carried_over_state(s2)

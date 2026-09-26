@@ -205,6 +205,12 @@ QC strip) and by `respmech validate`, from the same shared logic:
   column emitted by the pipeline today follows one of these conventions through the
   Units sheet or the on-screen result table, so nothing currently visible changes —
   this is groundwork for upcoming result columns that will.
+- The ECG and EMG-normalisation references are now folder-tracked, like the noise
+  reference: picking either against one recordings folder and later opening the
+  analysis against a different one now shows the Setup Keep/Clear banner, instead of
+  the reference either applying invisibly or (for the ECG reference specifically)
+  being silently cleared the moment "Duplicate for another recordings folder…" pointed
+  the analysis somewhere new.
 
 <!-- changelog-skip be4ee99 internal, behaviour-neutral groundwork for a future modular
      analysis pipeline: a Qt-free capabilities/signal-set skeleton (its own new module and
