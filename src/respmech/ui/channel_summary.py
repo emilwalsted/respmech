@@ -206,8 +206,20 @@ class ChannelSummary(QWidget):
             # the moment it exists rather than only once a file can be loaded.
             for role in ORDER:
                 if role == "volume" and not show_volume:
-                    continue
-                text = describe(channels, role, integrate_from_flow)
+                    # M-11 self-review: Flow isn't even declared, so Volume loses D02's
+                    # special "always narrate, even when absent/derived" treatment and
+                    # falls back to the ordinary "only show if actually assigned" rule
+                    # every other role already has here — a REAL, non-derived assignment
+                    # (a stale ch.volume left over from switching signal sets, say) is
+                    # still worth showing, exactly as the WITH-matrix branch below never
+                    # hides one either (it draws it as its own graph, untouched by
+                    # show_volume). The two branches must not disagree about this.
+                    value = getattr(channels, "volume", None)
+                    if integrate_from_flow or not value:
+                        continue
+                    text = f"{ROLE_NAMES['volume']}: Column #{value}"
+                else:
+                    text = describe(channels, role, integrate_from_flow)
                 if text is None:
                     continue
                 lab = QLabel(text)
