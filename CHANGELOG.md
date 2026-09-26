@@ -187,6 +187,17 @@ QC strip) and by `respmech validate`, from the same shared logic:
   by a user whose file's real problem was the merged-timestamps case above, but whose
   only symptom was a misleading "start or end" error for one breath in the middle of
   the recording.
+- Settings keys this version does not recognise (a whole unknown table, a whole
+  unknown list of tables, or an unrecognised field on one entry of an otherwise-known
+  list such as `processing.exclude_breaths`) now survive a save instead of being
+  silently dropped. Previously, opening a `settings.toml` written by a newer RespMech
+  and saving it again from this version quietly deleted every table it didn't
+  understand — **an analysis carrying settings this version doesn't recognise must
+  not be saved by RespMech older than 2.5**, or that content is lost for good. Fixed
+  in the same pass: a settings field declared with Python's `X | None` union syntax
+  (rather than `typing.Optional[X]`) that points at another dataclass was built from
+  the raw dict instead of an `X` instance — not yet reachable from any existing
+  setting, but load-bearing groundwork for fields landing in upcoming releases.
 
 <!-- changelog-skip be4ee99 internal, behaviour-neutral groundwork for a future modular
      analysis pipeline: a Qt-free capabilities/signal-set skeleton (its own new module and
