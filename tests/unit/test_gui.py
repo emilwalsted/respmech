@@ -283,12 +283,23 @@ def test_run_outcome_lines_are_not_double_prefixed(qapp, tmp_path):
     win.close()
 
 
-def test_analysis_menu_actions_show_feedback_regardless_of_active_tab(qapp, tmp_path):
+def test_analysis_menu_actions_show_feedback_regardless_of_active_tab(qapp, tmp_path, monkeypatch):
     """The Analysis menu (Save/Save as/New/Open) lives in the header and is reachable from
     any tab, but its confirmation ('Saved …', guided-flow entry, etc.) is emitted by Setup —
     which the per-tab ownership rule would otherwise swallow unless Setup happens to be the
     active tab. Regression for the ticket's self-review finding."""
+    from respmech.ui import signal_set_dialog
     from respmech.ui.main_window import MainWindow
+    from PySide6.QtWidgets import QDialog
+
+    class _FakeSignalDialog:
+        def __init__(self, parent=None):
+            self.signals = ["flow", "poes", "pgas", "pdi"]
+        def exec(self): return QDialog.Accepted
+    # 'New analysis' now opens SignalSetDialog before resetting — stub it so this
+    # test exercises the reset it actually cares about, not a real blocking modal.
+    monkeypatch.setattr(signal_set_dialog, "SignalSetDialog", _FakeSignalDialog)
+
     win = MainWindow(AppState(_settings(str(tmp_path))))
     win.tabs.setCurrentWidget(win.preview_screen)  # looking at Preview & QC (hosts the Run
                                                     # drawer since B03), not Setup

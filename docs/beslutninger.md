@@ -6,6 +6,24 @@ decision <date>" — never an internal ticket reference; this repo is public).
 
 ---
 
+**26-09-2026 — Changing an analysis's declared signal set clears the breath-keyed
+state built for the previous segmentation, after one confirmation (author's
+decision, 26-09-2026).** Removing or adding Flow changes which segmenter produces
+every breath number and kind, so a breath exclusion, breath-count override, or
+(once later tickets add them) a breath type, reference or manual separator made
+under the old segmentation no longer describes anything real under the new one.
+The signal-set picker's one funnel (`apply_signal_set`) asks once, covering all of
+those lists together, and only when flow's membership of the set actually changes
+AND there is something to lose — a freshly reset analysis is never asked, since
+nothing has been built yet to lose. Precedent for the general principle (dropping
+a role clears the derived state that depended on it) is the existing EMG-role
+removal: clearing a now-invalid `ecg_auto_detect` the moment the EMG role leaves
+the channel set, silently, no confirmation, because a stuck-invalid `Settings()`
+with no visible way out was worse than asking. This decision keeps that same
+principle but adds the confirmation specifically for flow, because losing flow
+invalidates every existing breath number, not one boolean flag — a change large
+enough that silently discarding it would be a surprise, not a repair.
+
 **11-09-2026 — Three number-changing findings from the 04-08-2026 mechanism review
 stay unimplemented (author's decision, 04-08-2026).** A review of the analysis
 mechanisms surfaced three ideas that would change computed numbers: scaling the
