@@ -147,7 +147,15 @@ def deep_update(base, overrides):
 # "flow_exclude_emg" below now locks that combination with the EMG pipeline ACTIVE.
 # "flow_exclude_noemg" stays: it is the only scenario exercising the processed-data
 # export, which getprocesseddata() only supports at exactly 5 EMG channels.
-SCENARIOS = {
+#
+# LEGACY_SCENARIOS: expressed as legacy-dict overrides (deep_update onto
+# base_settings()) and migrated via migrate_dict — run_all() below (the frozen v1
+# oracle) can only run THESE, since the oracle has no notion of the newer,
+# TOML-only settings (analysis.signals, breath_types, references, separators,
+# subjects, pressure.peepi, ...). Every scenario here must stay byte-identical
+# against the legacy oracle forever; a new scenario that needs any v2-only
+# settings belongs in V2_SCENARIOS instead.
+LEGACY_SCENARIOS = {
     "flow_wob_average": {},
     "flow_wob_individual": {
         "processing": {"wob": {"calcwobfrom": "individual"}},
@@ -179,6 +187,19 @@ SCENARIOS = {
         "output": {"data": {"saveprocesseddata": True}},
     },
 }
+
+# V2_SCENARIOS: name -> path (relative to this file's directory) of a committed
+# tests/golden/scenarios/<name>.toml settings file, bagt directly from the v2 core
+# (golden_newcore.py --write) rather than run through the legacy oracle. A v2
+# scenario expresses settings the legacy dict/migrate_dict path cannot (typed
+# breaths, references, separators, ...); it is never included in run_all()'s
+# legacy-oracle run. Empty until the first feature ticket that needs one.
+V2_SCENARIOS: dict = {}
+
+# The union both test_golden.py (via golden_newcore.mg.SCENARIOS) and this
+# module's own run_all() see the FULL set through; run_all() below filters back
+# down to LEGACY_SCENARIOS alone, since the frozen oracle cannot run a v2 scenario.
+SCENARIOS = {**LEGACY_SCENARIOS, **V2_SCENARIOS}
 
 
 def _jsonify_df(df):
@@ -231,9 +252,13 @@ def collect_outputs(outdir):
 
 
 def run_all():
+    """Run every scenario through the frozen v1 oracle (legacy/respmech.py) and
+    --write the reference JSON. Only LEGACY_SCENARIOS: the oracle has no concept
+    of a v2-only settings shape, so a V2_SCENARIOS entry is bagt separately by
+    golden_newcore.py --write instead (see tests/golden/README.md)."""
     rm = load_respmech()
     all_results = {}
-    for name, override in SCENARIOS.items():
+    for name, override in LEGACY_SCENARIOS.items():
         outdir = os.path.join(WORK_DIR, name)
         if os.path.exists(outdir):
             shutil.rmtree(outdir)
@@ -253,8 +278,17 @@ def main():
     write = "--write" in sys.argv
     results = run_all()
     if write:
+        # Merge onto whatever is already on disk rather than overwrite it outright:
+        # this file only ever regenerates LEGACY_SCENARIOS (the frozen oracle cannot
+        # run a V2_SCENARIOS entry at all), so a blind overwrite would silently drop
+        # any v2 scenario golden_newcore.py --write had separately baked in.
+        existing = {}
+        if os.path.exists(GOLDEN_JSON):
+            with open(GOLDEN_JSON) as f:
+                existing = json.load(f)
+        existing.update(results)
         with open(GOLDEN_JSON, "w") as f:
-            json.dump(results, f, indent=2, sort_keys=True)
+            json.dump(existing, f, indent=2, sort_keys=True)
         print(f"\nWrote golden reference: {GOLDEN_JSON}")
     else:
         print("\nDry run complete (pass --write to save golden_reference.json).")

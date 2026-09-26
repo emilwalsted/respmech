@@ -216,8 +216,8 @@ class EmgSettings:
     # normalised sheet to the output; it never changes the raw computed RMS. By
     # default the reference is each file's OWN max/mean breath, per column — which
     # makes every file's peak reach 100% by construction and does NOT make amplitudes
-    # comparable across files/subjects (documented on the website, ticket 5.1/K-155/
-    # K-158). Set normalization_reference_file to a filename already in this batch
+    # comparable across files/subjects (documented on the website).
+    # Set normalization_reference_file to a filename already in this batch
     # (relative to input.folder, e.g. a maximal inspiratory/expiratory manoeuvre
     # recorded once per subject) to normalise every file against THAT file's
     # max/mean instead of its own — see core.summary.reference_values_for_batch.
