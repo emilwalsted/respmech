@@ -17,7 +17,7 @@ tolerant (unknown keys are collected, not fatal) and ``validate`` raises
 import os
 import types
 from dataclasses import dataclass, field, fields, is_dataclass
-from typing import Any, Optional, Union, get_args, get_origin, get_type_hints
+from typing import Any, Callable, Optional, Union, get_args, get_origin, get_type_hints
 
 
 class SettingsError(ValueError):
@@ -209,6 +209,11 @@ class EmgSettings:
     # first file the batch's input pattern matches.
     ecg_auto_detect: bool = False
     ecg_reference_file: str | None = None
+    # the recordings folder active when ecg_reference_file was last written — same
+    # provenance tag as NoiseSettings.reference_folder/ExcludeEntry.folder (see
+    # is_carried_folder()/carried_over_state() below, and _CARRIED_KINDS). None means
+    # "unrecorded" and is always treated as unproven, never guessed.
+    ecg_reference_folder: str | None = None
     outlier_rms_sd_limit: float = 0.0
     # EMG amplitude normalisation for the OUTPUT tables (P14): each file's RMS columns
     # are also reported as a % of a reference so amplitudes compare across
@@ -223,6 +228,8 @@ class EmgSettings:
     # max/mean instead of its own — see core.summary.reference_values_for_batch.
     normalization: str = "per_file_max"
     normalization_reference_file: str | None = None
+    # same provenance tag as ecg_reference_folder above, for the SAME reason.
+    normalization_reference_folder: str | None = None
     save_sound: bool = False
     plot_yscale: list[float] = field(default_factory=lambda: [-0.1, 0.1])
     # legacy filename-keyed noise-profile intervals (kept for migration):
@@ -494,18 +501,128 @@ def is_carried_folder(entry_folder: str | None, current_folder: str | None) -> b
     return not (a and b and a == b)
 
 
+def _walk(settings: "Settings", dotted_path: str) -> tuple[Any, str]:
+    """Resolve all but the LAST segment of ``dotted_path`` against the live settings
+    object, returning ``(container, last_segment)`` so a caller can ``getattr``/
+    ``setattr`` generically. E.g. ``"processing.emg.noise.reference_folder"`` ->
+    ``(settings.processing.emg.noise, "reference_folder")``; ``"processing.exclude_breaths"``
+    -> ``(settings.processing, "exclude_breaths")``. Shared by every consumer of
+    :data:`_CARRIED_KINDS` below, and re-exported (unchanged) for
+    ``settingsio.toml_io``'s own rebase/relativize, so the two can never disagree about
+    what a row's path means."""
+    obj: Any = settings
+    segments = dotted_path.split(".")
+    for seg in segments[:-1]:
+        obj = getattr(obj, seg)
+    return obj, segments[-1]
+
+
+def _clear_noise_reference(noise: "NoiseSettings") -> None:
+    noise.reference_file = None
+    noise.reference_intervals = []
+
+
+def _clear_ecg_reference(emg: "EmgSettings") -> None:
+    emg.ecg_reference_file = None
+
+
+def _clear_normalization_reference(emg: "EmgSettings") -> None:
+    emg.normalization_reference_file = None
+
+
+# Each row names ONE piece of per-folder-tagged batch state, generalizing what used to be
+# six hand-spread call sites (CarriedOverState, carried_over_state, clear_carried_over,
+# toml_io._rebase_folders, toml_io.save_toml, plus the Setup banner/rail/overlay reading
+# their result) into one table those call sites all iterate — a future tagged kind
+# (M-19 breath_types, M-21 separators, M-34 references/reference_defaults/subjects) adds
+# ONE row here instead of touching all six again (the exact B06 recurrence this ticket
+# closes off).
+#
+#   path      -- a dotted path (see _walk) that resolves to EITHER a LIST of entries each
+#                carrying their own ``.folder`` (exclude_breaths, breath_counts) OR
+#                DIRECTLY to a scalar ``*_folder`` field (noise/ecg/normalization
+#                references). Which one it is is decided at runtime by the resolved
+#                value's type (a list, vs a str/None) — never declared twice.
+#   kind      -- the CarriedOverState dict key / rail-badge "kind name".
+#   name_of   -- list mode: called with ONE ENTRY, returns its filename if it names
+#                anything worth reporting (e.g. ExcludeEntry needs breaths != []), else
+#                None. Scalar mode: called with the CONTAINER holding the folder field
+#                (e.g. NoiseSettings, or EmgSettings for the two EMG references), so it
+#                can look at a SIBLING field (reference_file, ecg_reference_file, …);
+#                returns that sibling's value, or None/"" if nothing is set.
+#   clear_fn  -- scalar mode only (None for list mode, where clearing means dropping the
+#                whole entry instead): resets the kind's OWN sibling field(s) in place.
+#                The folder field itself (`attr`) is cleared generically by the caller.
+_CARRIED_KINDS: tuple[tuple[str, str, Callable[[Any], Any], Callable[[Any], None] | None], ...] = (
+    ("processing.exclude_breaths", "exclude_files",
+     lambda e: e.file if e.breaths else None, None),
+    ("processing.breath_counts", "breath_count_files",
+     lambda e: e.file, None),
+    ("processing.emg.noise.reference_folder", "noise_reference",
+     # Reproduce the OLD presence check `(reference_file or reference_intervals)` exactly —
+     # NOT `reference_file` alone. `name_of`'s return value is tested for truthiness by
+     # both callers below, so a bare `n.reference_file if (n.reference_file or
+     # n.reference_intervals) else None` would return the (falsy) reference_file itself
+     # when only `reference_intervals` is set, silently losing presence — a real
+     # divergence a self-review pass caught by comparing against the pre-generalization
+     # behaviour directly. The label falls back to a generic word only in that
+     # intervals-only case, which every live write path (preview/_emg_noise.py's two
+     # apply methods) always avoids by setting both fields together.
+     lambda n: (n.reference_file or "reference") if (n.reference_file or n.reference_intervals)
+     else None,
+     _clear_noise_reference),
+    ("processing.emg.ecg_reference_folder", "ecg_reference",
+     lambda emg: emg.ecg_reference_file, _clear_ecg_reference),
+    ("processing.emg.normalization_reference_folder", "normalization_reference",
+     lambda emg: emg.normalization_reference_file, _clear_normalization_reference),
+)
+
+
 @dataclass
 class CarriedOverState:
     """What in ``settings.processing`` still names a DIFFERENT (or unrecorded) recordings
     folder than ``settings.input.folder`` right now. Built by :func:`carried_over_state`;
     consumed by the Setup banner, Preview & QC's overlay/QC line, and the file rail badge —
-    every one of them must agree on the same set, so they all go through this."""
-    exclude_files: list[str] = field(default_factory=list)
-    breath_count_files: list[str] = field(default_factory=list)
-    noise_reference: bool = False
+    every one of them must agree on the same set, so they all go through this.
+
+    Backed by one dict keyed on `_CARRIED_KINDS`' ``kind`` names (in table order), never
+    constructed with positional args outside this module. ``exclude_files``/
+    ``breath_count_files``/``noise_reference`` stay properties with their original shapes
+    (a list of filenames; a bool) so every EXISTING caller is unaffected; new kinds
+    (``ecg_reference``, ``normalization_reference``) follow ``noise_reference``'s bool
+    shape, since like it they name a single batch-wide reference, not a per-file list."""
+    _by_kind: dict[str, list[str]] = field(default_factory=dict)
 
     def __bool__(self) -> bool:
-        return bool(self.exclude_files or self.breath_count_files or self.noise_reference)
+        return any(self._by_kind.values())
+
+    @property
+    def exclude_files(self) -> list[str]:
+        return self._by_kind.get("exclude_files", [])
+
+    @property
+    def breath_count_files(self) -> list[str]:
+        return self._by_kind.get("breath_count_files", [])
+
+    @property
+    def noise_reference(self) -> bool:
+        return bool(self._by_kind.get("noise_reference"))
+
+    @property
+    def ecg_reference(self) -> bool:
+        return bool(self._by_kind.get("ecg_reference"))
+
+    @property
+    def normalization_reference(self) -> bool:
+        return bool(self._by_kind.get("normalization_reference"))
+
+    def kinds_present(self) -> list[tuple[str, list[str]]]:
+        """``(kind, names)`` for every kind that IS carried, in `_CARRIED_KINDS` table
+        order. The one thing a caller that wants to name EVERY carried kind (the Setup
+        banner) needs, without hard-coding each kind's own attribute name — a future row
+        added to the table reaches such a caller by adding its own phrase there, not by
+        re-touching an if/elif chain."""
+        return list(self._by_kind.items())
 
 
 def carried_over_state(settings: "Settings") -> CarriedOverState:
@@ -516,38 +633,36 @@ def carried_over_state(settings: "Settings") -> CarriedOverState:
     current = settings.input.folder
     if not current:
         return CarriedOverState()
-    # an entry with an empty breaths list (every breath re-included — the state
-    # _toggle_breath leaves an ExcludeEntry in before it removes it entirely) or a
-    # breath-count override of nothing names no actual state to warn about.
-    exclude_files = sorted({e.file for e in settings.processing.exclude_breaths
-                            if e.breaths and is_carried_folder(e.folder, current)})
-    breath_count_files = sorted({e.file for e in settings.processing.breath_counts
-                                 if is_carried_folder(e.folder, current)})
-    noise = settings.processing.emg.noise
-    noise_reference = bool(
-        (noise.reference_file or noise.reference_intervals)
-        and is_carried_folder(noise.reference_folder, current))
-    return CarriedOverState(exclude_files, breath_count_files, noise_reference)
+    by_kind: dict[str, list[str]] = {}
+    for path, kind, name_of, _clear_fn in _CARRIED_KINDS:
+        container, attr = _walk(settings, path)
+        val = getattr(container, attr)
+        if isinstance(val, list):
+            names = sorted({n for e in val if (n := name_of(e)) and is_carried_folder(e.folder, current)})
+        else:
+            name = name_of(container)
+            names = [name] if name and is_carried_folder(val, current) else []
+        if names:
+            by_kind[kind] = names
+    return CarriedOverState(by_kind)
 
 
 def clear_carried_over(settings: "Settings") -> None:
-    """The banner's "Clear" action: drop exclude_breaths/breath_counts entries, and the
-    noise reference, whose recorded folder does not match ``settings.input.folder`` right
-    now. Mutates in place. Entries that already match the current folder — the ordinary
-    case, nothing changed — are left completely untouched; this only ever removes state
-    :func:`carried_over_state` would also flag."""
+    """The banner's "Clear" action: drop exclude_breaths/breath_counts entries, and every
+    scalar reference (noise/ECG/normalisation), whose recorded folder does not match
+    ``settings.input.folder`` right now. Mutates in place. Entries/references that already
+    match the current folder — the ordinary case, nothing changed — are left completely
+    untouched; this only ever removes state :func:`carried_over_state` would also flag."""
     current = settings.input.folder
-    settings.processing.exclude_breaths = [
-        e for e in settings.processing.exclude_breaths
-        if not (e.breaths and is_carried_folder(e.folder, current))]
-    settings.processing.breath_counts = [
-        e for e in settings.processing.breath_counts
-        if not is_carried_folder(e.folder, current)]
-    noise = settings.processing.emg.noise
-    if is_carried_folder(noise.reference_folder, current):
-        noise.reference_file = None
-        noise.reference_intervals = []
-        noise.reference_folder = None
+    for path, _kind, name_of, clear_fn in _CARRIED_KINDS:
+        container, attr = _walk(settings, path)
+        val = getattr(container, attr)
+        if isinstance(val, list):
+            setattr(container, attr,
+                     [e for e in val if not (name_of(e) and is_carried_folder(e.folder, current))])
+        elif name_of(container) and is_carried_folder(val, current):
+            clear_fn(container)
+            setattr(container, attr, None)
 
 
 # --- schema upgrades -------------------------------------------------------
