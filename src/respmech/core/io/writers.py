@@ -219,7 +219,7 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
 
     if settings.output.data.save_breath_by_breath:
         _emit("writing breath-by-breath data")
-        ref_values = reference_values_for_batch(result, settings)   # ticket 5.1 (None -> per-file default)
+        ref_values = reference_values_for_batch(result, settings)   # None -> per-file default
         for fname, fr in result.ok_files.items():
             p = os.path.join(datadir, f"{fname}.breathdata.xlsx")
             extra = {}
@@ -264,7 +264,7 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
                                                progress=fig_progress,
                                                cohort_outputs=cohort_outputs)  # P11
     written += fig_written
-    # K-108: without respmech[plots] (or any other figure failure) the run still exits
+    # Without respmech[plots] (or any other figure failure) the run still exits
     # 0 and every workbook is written — the only trace used to be a FIGURES SKIPPED
     # section buried inside run-report.txt. One on-screen warning now accompanies it;
     # the run still completes either way (this is a warning, never a hard failure).
@@ -581,7 +581,7 @@ def _write_run_report(result, settings, outputfolder: str,
              + (settings.output.group_regex or "leading filename token"))
     L.append("")
 
-    # K-113: a misspelled/renamed key is collected (never fatal — Settings.from_dict)
+    # A misspelled/renamed key is collected (never fatal — Settings.from_dict)
     # but, before this, read nowhere: not respmech validate, not this report, not the
     # GUI. The run already used the DEFAULT for whatever the typo meant to set, so this
     # is the one place in the output that can still catch it.
@@ -596,9 +596,9 @@ def _write_run_report(result, settings, outputfolder: str,
     nr = getattr(result, "noise_report", None)
     ecg_auto = getattr(result, "ecg_auto_report", None)
     ecg_files = [(f, fr.ecg) for f, fr in ok.items() if getattr(fr, "ecg", None)]
-    # K-192/K-224: per-file quality notices (ecg_auto_detect mismatch, cardiac-gated
-    # peak refused) — collected on FileResult.notices by core.pipeline, alongside the
-    # SAME text raised via warnings.warn, which reaches a stderr an app user never sees.
+    # Per-file quality notices (ecg_auto_detect mismatch, cardiac-gated peak refused)
+    # — collected on FileResult.notices by core.pipeline, alongside the SAME text
+    # raised via warnings.warn, which reaches a stderr an app user never sees.
     file_notices = [(f, n) for f, fr in ok.items() for n in getattr(fr, "notices", ()) or ()]
     emg_cols = list(settings.input.channels.emg or [])
     if nr or ecg_files or ecg_auto or file_notices:
