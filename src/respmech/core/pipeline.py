@@ -59,8 +59,9 @@ class FileResult:
     # exception class name, so consumers can tell a precondition failure of THIS recording
     # (TrimError, VolumeTrendError) from a real fault without parsing ``error``.
     error_kind: Optional[str] = None
-    # Per-file quality notices (K-192/K-224): the SAME text also raised via warnings.warn
-    # below, which reaches a stderr nobody sees in a packaged app -- this is what lets
+    # Per-file quality notices (ecg_auto_detect mismatch, cardiac-gated peak refused):
+    # the SAME text also raised via warnings.warn below, which reaches a stderr
+    # nobody sees in a packaged app -- this is what lets
     # core.io.writers._write_run_report put the ecg_auto_detect quality check and the
     # cardiac-gated peak's NaN reason where an app user can actually read them.
     notices: list = field(default_factory=list)
@@ -325,6 +326,112 @@ def _process_emg(s, emgcolumnsraw, startix, endix, noise_set=None, ecg_precomput
               "ecg_removed": ecg_trim if s.processing.emg.remove_ecg else None,
               "noise_reduced": emgcols if noise_set is not None else None}
     return emgcols, ecg_diag, stages
+
+
+@dataclass
+class Trimmed:
+    """Everything ``segment_file`` computes for one file besides ``breaths`` itself:
+    the trimmed/conditioned signals, the raw (untrimmed) arrays and the EMG-conditioning
+    diagnostics. ``run_batch``'s main loop needs all of this afterwards (the ECG
+    auto-detect quality check, cardiac-gated peak EMG, the diagnostic ``signals`` dict)
+    without recomputing any of it."""
+    timecol: object
+    flow: object
+    volume: object
+    poes: object
+    pgas: object
+    pdi: object
+    entropycolumns: object
+    emgcolumns: object
+    startix: int
+    endix: int
+    vol_uncorrected: object
+    zerovol: object
+    driftvol: object
+    raw_timecol: object
+    raw_flow: object
+    raw_volume: object
+    raw_poes: object
+    raw_pgas: object
+    raw_pdi: object
+    raw_emgcolumns: object
+    ecg_diag: object = None
+    emg_stages: object = None
+
+
+def segment_file(settings: Settings, s, path, *, cache=None, cancel_check=None,
+                  filename=None, noise_set=None, ecg_precomputed=None, progress=None):
+    """Load, trim, EMG-condition, volume-correct and segment ONE file into breaths.
+
+    This is ``run_batch``'s per-file trim/zero/drift/trend/segment sequence, extracted
+    verbatim (behaviour-neutral: every golden scenario is byte-identical before and
+    after) so a future reference/manoeuvre pre-pass and a ``respmech breaths`` CLI can
+    segment a file through exactly the code the main loop uses, instead of
+    re-implementing trim/zero/drift/trend/segment themselves.
+
+    ``cache`` is the same per-run load+ECG-removal cache ``run_batch`` already threads
+    through (Wave 2.4, see ``_load_and_ecg`` above): a hit is popped (consumed once, same
+    as the main loop did before this extraction), a miss loads fresh. ``noise_set`` and
+    ``ecg_precomputed`` are the batch-level shared EMG-conditioning inputs; both default
+    to ``None`` (no shared noise reduction, no cached ECG removal) for a caller outside
+    the main batch loop, such as a reference-only file that never goes through the noise
+    profile. ``progress``/``cancel_check`` behave exactly as they do in ``run_batch``.
+
+    Returns ``(breaths, trimmed)``. The caller still owns everything this function does
+    NOT do: the ECG auto-detect quality-check warning (it needs ``BatchResult.
+    ecg_auto_report``, batch-level state this function has no reason to know about) and
+    everything after segmentation (``check_breaths``, boundary notices, mechanics)."""
+    if filename is None:
+        filename = os.path.basename(path)
+    key = os.path.abspath(path)
+    _cached = cache.pop(key, None) if cache is not None else None
+    if _cached is not None:
+        (flowraw, volumeraw, poesraw, pgasraw, pdiraw, entropycolumnsraw,
+         emgcolumnsraw), _ecg_full, _ecg_diag_full = _cached
+        if ecg_precomputed is None:
+            ecg_precomputed = (_ecg_full, _ecg_diag_full)
+    else:
+        flowraw, volumeraw, poesraw, pgasraw, pdiraw, entropycolumnsraw, emgcolumnsraw = _load(path, s)
+    timecolraw = np.arange(0, len(flowraw), dtype=int) / s.input.format.samplingfrequency
+
+    _emit(progress, ProgressEvent("stage", file=filename, message="trimming"))
+    (timecol, flow, volume, poes, pgas, pdi, _emgtrim, startix, endix) = compute.trim(
+        timecolraw, flowraw, volumeraw, poesraw, pgasraw, pdiraw,
+        np.array(emgcolumnsraw) if len(emgcolumnsraw) else np.array([]), s)
+
+    # Bug #2 fix: trim entropy columns with the same window as everything else.
+    entropycolumns = entropycolumnsraw[startix:endix] if len(entropycolumnsraw) else entropycolumnsraw
+
+    emgcolumns = []
+    ecg_diag = None
+    emg_stages = None
+    if len(emgcolumnsraw) > 0:
+        _emit(progress, ProgressEvent("stage", file=filename, message="processing EMG"))
+        emgcolumns, ecg_diag, emg_stages = _process_emg(
+            s, emgcolumnsraw, startix, endix, noise_set, ecg_precomputed=ecg_precomputed)
+
+    _emit(progress, ProgressEvent("stage", file=filename, message="volume correction"))
+    vol_uncorrected = volume                                  # trimmed, pre-zero
+    zerovol = compute.zero(volume)
+    driftvol = compute.correctdrift(zerovol, s) if s.processing.mechanics.correctvolumedrift else zerovol
+    volume = compute.correcttrend(driftvol, s) if s.processing.mechanics.correctvolumetrend else driftvol
+
+    _emit(progress, ProgressEvent("stage", file=filename, message="segmenting breaths"))
+    breaths = compute.separateintobreaths(
+        s.processing.mechanics.separateby, filename, timecol, flow, volume,
+        poes, pgas, pdi, entropycolumns, emgcolumns, s)
+
+    trimmed = Trimmed(
+        timecol=timecol, flow=flow, volume=volume, poes=poes, pgas=pgas, pdi=pdi,
+        entropycolumns=entropycolumns, emgcolumns=emgcolumns,
+        startix=startix, endix=endix,
+        vol_uncorrected=vol_uncorrected, zerovol=zerovol, driftvol=driftvol,
+        raw_timecol=timecolraw, raw_flow=flowraw, raw_volume=volumeraw,
+        raw_poes=poesraw, raw_pgas=pgasraw, raw_pdi=pdiraw,
+        raw_emgcolumns=emgcolumnsraw,
+        ecg_diag=ecg_diag, emg_stages=emg_stages,
+    )
+    return breaths, trimmed
 
 
 def _emg_segmented(path, s, cache=None, cancel_check=None):
@@ -598,37 +705,26 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
         file = os.path.abspath(fi)
         filename = os.path.basename(file)
         _emit(progress, ProgressEvent("file_start", file=filename, message="loading"))
-        file_notices: list[str] = []          # K-192/K-224 -- surfaced in FileResult.notices below
+        file_notices: list[str] = []          # surfaced in FileResult.notices below
         try:
-            # Reuse the load + ECG removal if the noise-building phase already did it for this
-            # file (Wave 2.4). pop() → the entry is consumed once and freed, so the cache never
-            # outgrows the noise phase. Miss ⇒ load fresh and let _process_emg do ECG removal.
-            _cached = load_cache.pop(file, None)
-            if _cached is not None:
-                (flowraw, volumeraw, poesraw, pgasraw, pdiraw, entropycolumnsraw,
-                 emgcolumnsraw), _ecg_full, _ecg_diag_full = _cached
-                ecg_precomputed = (_ecg_full, _ecg_diag_full)
-            else:
-                flowraw, volumeraw, poesraw, pgasraw, pdiraw, entropycolumnsraw, emgcolumnsraw = _load(file, s)
-                ecg_precomputed = None
-            timecolraw = np.arange(0, len(flowraw), dtype=int) / s.input.format.samplingfrequency
+            # Trim/EMG-condition/volume-correct/segment this file: the cache pop that
+            # used to happen right here (Wave 2.4) now happens inside segment_file itself, so
+            # a future caller outside this loop (a reference pre-pass, the `respmech breaths`
+            # CLI) gets exactly the same conditioning without re-implementing it.
+            breaths, trimmed = segment_file(
+                settings, s, file, cache=load_cache, cancel_check=cancel_check,
+                filename=filename, noise_set=noise_set, progress=progress)
+            timecol, flow, volume = trimmed.timecol, trimmed.flow, trimmed.volume
+            poes, pgas, pdi = trimmed.poes, trimmed.pgas, trimmed.pdi
+            entropycolumns, emgcolumns = trimmed.entropycolumns, trimmed.emgcolumns
+            startix, endix = trimmed.startix, trimmed.endix
+            vol_uncorrected, zerovol, driftvol = trimmed.vol_uncorrected, trimmed.zerovol, trimmed.driftvol
+            timecolraw, flowraw, volumeraw = trimmed.raw_timecol, trimmed.raw_flow, trimmed.raw_volume
+            poesraw, pgasraw, pdiraw = trimmed.raw_poes, trimmed.raw_pgas, trimmed.raw_pdi
+            emgcolumnsraw = trimmed.raw_emgcolumns
+            ecg_diag, emg_stages = trimmed.ecg_diag, trimmed.emg_stages
 
-            _emit(progress, ProgressEvent("stage", file=filename, message="trimming"))
-            (timecol, flow, volume, poes, pgas, pdi, _emgtrim, startix, endix) = compute.trim(
-                timecolraw, flowraw, volumeraw, poesraw, pgasraw, pdiraw,
-                np.array(emgcolumnsraw) if len(emgcolumnsraw) else np.array([]), s)
-
-            # Bug #2 fix: trim entropy columns with the same window as everything else.
-            entropycolumns = entropycolumnsraw[startix:endix] if len(entropycolumnsraw) else entropycolumnsraw
-
-            emgcolumns = []
-            ecg_diag = None
-            emg_stages = None
             if len(emgcolumnsraw) > 0:
-                _emit(progress, ProgressEvent("stage", file=filename, message="processing EMG"))
-                emgcolumns, ecg_diag, emg_stages = _process_emg(
-                    s, emgcolumnsraw, startix, endix, noise_set, ecg_precomputed=ecg_precomputed)
-
                 # ecg_auto_detect derives the shared detection parameters from ONE reference
                 # file; a heart rate or R-amplitude that differs enough on THIS file can mean
                 # those parameters miss real beats here even though they fit the reference
@@ -662,16 +758,6 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                             warnings.warn(f"{filename}: {_msg}")
                             file_notices.append(_msg)
 
-            _emit(progress, ProgressEvent("stage", file=filename, message="volume correction"))
-            vol_uncorrected = volume                                  # trimmed, pre-zero
-            zerovol = compute.zero(volume)
-            driftvol = compute.correctdrift(zerovol, s) if s.processing.mechanics.correctvolumedrift else zerovol
-            volume = compute.correcttrend(driftvol, s) if s.processing.mechanics.correctvolumetrend else driftvol
-
-            _emit(progress, ProgressEvent("stage", file=filename, message="segmenting breaths"))
-            breaths = compute.separateintobreaths(
-                s.processing.mechanics.separateby, filename, timecol, flow, volume,
-                poes, pgas, pdi, entropycolumns, emgcolumns, s)
             # Stop here rather than compute mechanics for an empty set: everything below
             # is per-breath work, and the results layer can only report the empty table as
             # an opaque internal error.
@@ -721,7 +807,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                         warnings.warn(f"{filename}: cardiac-gated peak EMG reported as NaN — "
                                       f"{gate_reason}")
                 if not gate_ok:
-                    # K-224: recorded for BOTH refusal paths above (no R-peaks at all, and a
+                    # Recorded for BOTH refusal paths above (no R-peaks at all, and a
                     # detection_quality failure) -- the first path never warned at all before,
                     # so the "no R-peaks -- is remove_ecg on?" reason was invisible everywhere.
                     file_notices.append(f"cardiac-gated peak EMG reported as NaN — {gate_reason}")
