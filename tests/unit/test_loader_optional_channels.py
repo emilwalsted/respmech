@@ -1,14 +1,13 @@
-"""An absent channel loads as an empty float64 array, never a Python list or a crash
-(M-03, fase 0 of the modular-analysis program).
+"""An absent channel loads as an empty float64 array, never a Python list or a crash.
 
 Volume was already optional (``np.isnan(column_volume)`` means "absent"); this extends
 the SAME idiom to poes/pgas/pdi (``core/io/loaders.py``, ``core/_legacy_ns.py``'s
-None -> ``math.nan`` mapping) so a later ticket (M-08) can let ``Settings.validate()``
-allow a signal set without one of them, without touching the loader again. Flow keeps
-its own unconditional, always-required resolution: an absent flow still raises today
-(see ``test_unassigned_channels.py``'s ``test_an_unassigned_channel_is_named``, pinned
-unchanged by this ticket's own acceptance criteria), and that path is deliberately not
-touched here — see ``_absent``'s docstring in ``loaders.py`` for why.
+None -> ``math.nan`` mapping) so a future change can let ``Settings.validate()`` allow
+a signal set without one of them, without touching the loader again. Flow keeps its own
+unconditional, always-required resolution: an absent flow still raises today (see
+``test_unassigned_channels.py``'s ``test_an_unassigned_channel_is_named``, pinned
+unchanged here), and that path is deliberately not touched here — see ``_absent``'s
+docstring in ``loaders.py`` for why.
 """
 import numpy as np
 import pandas as pd
