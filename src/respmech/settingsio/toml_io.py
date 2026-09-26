@@ -130,7 +130,31 @@ def _merge_unknown(data: dict, unknown: dict) -> dict:
     already-serialised known field in ``data`` (an unknown value is archived whole,
     never recursed into further) -- except a list index whose entry has since been
     removed from the in-memory settings, which is dropped silently: the element it
-    belonged to no longer exists, so there is nowhere left to put it back."""
+    belonged to no longer exists, so there is nowhere left to put it back.
+
+    KNOWN, ACCEPTED LIMITATIONS (found by self-review, deliberately not fixed here --
+    this ticket's scope is making the existing M-01 archival format round-trip through
+    a save, not redesigning it; each is pinned by a test in test_settings.py so a
+    future change to this function doesn't silently alter the accepted shape):
+
+    * A per-element unknown field is keyed by its list POSITION at load time
+      (``"...[0].kind"``), not by a stable identity. If an EARLIER entry in that same
+      list is removed from the in-memory settings before a save (not merely appended
+      to or left alone), the value reattaches to whatever entry now sits at that index
+      instead of being dropped -- silent misattribution to the wrong entry, which is
+      worse than the "index now out of range" case above. This cannot happen from
+      today's code (nothing yet lets a list carrying unknown per-entry data be edited
+      in the same session), but will need a stable per-entry identity or per-entry
+      unknown storage instead of this flat, position-keyed dict once such editing
+      exists.
+    * A literal ``.`` inside a TOML key name (e.g. a quoted ``"weird.key" = 5``) is
+      indistinguishable from a path separator once archived as a string, so a save
+      re-splits it and rebuilds it as a NESTED table instead of the original flat key.
+      The value survives; only the shape changes. This can never collide with a real
+      dataclass field (Python field names cannot contain ``.``), so it is a narrow
+      concern for a hand-edited or foreign-tool TOML file using dotted key namespacing,
+      not for RespMech's own output.
+    """
     for path, value in unknown.items():
         segments = path.split(".")
         cur = data
