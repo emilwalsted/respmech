@@ -69,6 +69,66 @@ def synth_settings(out="", *, noise=False, channels=None, **kw):
     return s
 
 
+def segment_synth_case(settings, filename="synth_case_A.csv"):
+    """Load, trim, condition and segment ``filename`` exactly as ``core.pipeline.run_batch``
+    does up to (but not including) ``calculateaveragebreaths``/``calculatemechanics`` —
+    for tests that need to call those two directly, bypassing ``run_batch``/``core.results``
+    entirely.
+    Pipeline/results are NOT guarded for a reduced signal set yet (that is a later ticket's
+    scope), so going through ``run_batch`` for a flow-only/poes-only settings object would
+    fail somewhere else even after ``compute.py``'s own guards are correct.
+
+    Returns ``(legacy_ns, breaths, n_trimmed)`` — ``legacy_ns`` is the same
+    ``to_legacy_ns(settings)`` ``run_batch`` itself would build (carries
+    ``.capabilities``), ``breaths`` is the ``separateintobreaths()`` dict, ready for
+    ``compute.check_breaths``/``compute.calculateaveragebreaths``/
+    ``compute.calculatemechanics``, and ``n_trimmed`` is ``len(flow)`` AFTER trimming
+    (``run_batch``'s own ``vefactor = 60 / (len(flow) / fs)`` needs this exact count,
+    which is not simply the sum of every breath's own sample count back up: trimming
+    keeps only whole breaths, so a partial sample or two at either edge of the
+    zero-crossing search can fall outside every breath's own slice)."""
+    import numpy as np
+
+    from respmech.core import compute
+    from respmech.core._legacy_ns import to_legacy_ns
+    from respmech.core.io.loaders import load
+
+    s = to_legacy_ns(settings)
+    path = os.path.join(s.input.inputfolder, filename)
+    flowraw, volumeraw, poesraw, pgasraw, pdiraw, entraw, emgraw = load(path, s)
+    timecolraw = np.arange(0, len(flowraw), dtype=int) / s.input.format.samplingfrequency
+    timecol, flow, volume, poes, pgas, pdi, _emgtrim, startix, endix = compute.trim(
+        timecolraw, flowraw, volumeraw, poesraw, pgasraw, pdiraw,
+        np.array(emgraw) if len(emgraw) else np.array([]), s)
+    entcols = entraw[startix:endix] if len(entraw) else entraw
+    emgcols = emgraw[startix:endix] if len(emgraw) else emgraw
+    zerovol = compute.zero(volume)
+    driftvol = compute.correctdrift(zerovol, s) if s.processing.mechanics.correctvolumedrift else zerovol
+    volume = compute.correcttrend(driftvol, s) if s.processing.mechanics.correctvolumetrend else driftvol
+    breaths = compute.separateintobreaths(
+        s.processing.mechanics.separateby, filename, timecol, flow, volume,
+        poes, pgas, pdi, entcols, emgcols, s)
+    return s, breaths, len(flow)
+
+
+def compute_all_breaths(s, breaths, n_trimmed):
+    """Run ``calculateaveragebreaths`` + ``calculatemechanics`` over every non-ignored
+    breath from :func:`segment_synth_case`, mutating and returning ``breaths`` in place —
+    the same ``vefactor``/``bcnt`` derivation ``core.pipeline.run_batch`` uses.
+    ``n_trimmed`` is the third element :func:`segment_synth_case` returns."""
+    from respmech.core import compute
+
+    compute.check_breaths(breaths, "synth_case_A.csv", s)
+    vefactor = 60 / (n_trimmed / s.input.format.samplingfrequency)
+    bcnt = len(breaths)
+    avgvolumein, avgvolumeex, avgpoesin, avgpoesex = compute.calculateaveragebreaths(breaths, s)
+    for b in breaths.values():
+        if b["ignored"]:
+            continue
+        compute.calculatemechanics(b, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, s)
+    return breaths
+
+
 def _lone_ampersands(root):
     """Scan ``root`` (typically a ``QMainWindow``) for every caption this app's own
     convention treats as button-like text — ``QAbstractButton.text()``,
