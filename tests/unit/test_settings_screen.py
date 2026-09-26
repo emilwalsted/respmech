@@ -1940,6 +1940,26 @@ def _chip_texts(sc):
             if isinstance(sc._signals_flow.itemAt(i).widget(), QLabel)]
 
 
+def test_a_malformed_bare_string_signal_set_degrades_instead_of_crashing(qapp, tmp_path):
+    """Self-review: _refresh_channel_view calls Capabilities.from_settings on every
+    render, and effective_signals() deliberately raises TypeError for a bare-string
+    analysis.signals (a hand-edited 'signals = "flow"' instead of '["flow"]') — a guard
+    meant for Settings.validate() to report cleanly. This screen's render path runs on
+    EVERY edit/open, always BEFORE any validation, including MainWindow's own
+    construction on the command-line/drag-drop open path — which has no surrounding
+    try/except at all. Constructing the whole window over such a settings object must
+    not raise; the row simply shows no chips (nothing safe to derive), never a crash."""
+    from respmech.core.settings import Settings
+    from respmech.ui.main_window import MainWindow
+    s = Settings()
+    s.analysis.signals = "flow"          # malformed: a bare string, not a list
+    win = MainWindow(AppState(s))        # must not raise
+    sc = win.settings_screen
+    assert _chip_texts(sc) == []
+    assert sc.btn_change_signals.text() == "Change…"
+    win.close()
+
+
 def test_signals_row_shows_a_chip_per_declared_signal(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState()); sc = win.settings_screen

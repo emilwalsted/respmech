@@ -338,3 +338,27 @@ def test_volume_trailing_note_also_gated_on_flow_with_a_readable_file(qapp):
     texts = ChannelSummary().show_mapping(ch, matrix=m, names=names,
                                           capabilities=caps_no_flow).texts()
     assert not any("Volume" in t for t in texts)
+
+
+def test_a_genuine_volume_assignment_is_never_hidden_even_without_flow(qapp):
+    """Self-review (M-11): the show_volume gate must only suppress D02's PLACEHOLDER
+    narration ('not assigned'/'derived from flow') — never a real, non-derived column
+    assignment. A stale ch.volume left over from switching to an EMG-only signal set is
+    exactly the case that would otherwise vanish silently from the no-matrix fallback
+    list while the with-matrix branch (a plain graph header, never gated at all) kept
+    showing the same column — an inconsistency a first draft of this gate introduced."""
+    caps = _capabilities(emg=True, declared=frozenset({"emg"}), mode="emg_only")
+    ch = _channels(emg=[2], volume=6)          # a real column, despite flow not declared
+    texts = ChannelSummary().show_mapping(ch, capabilities=caps).texts()
+    assert "Volume: Column #6" in texts
+
+
+def test_a_derived_volume_is_still_hidden_without_flow_despite_a_real_column(qapp):
+    """The exception above is for a genuine, READ column only — 'derive from flow' means
+    the column is ignored by the loader regardless, so with no Flow declared at all there
+    is nothing true left to say about Volume, derived or not."""
+    caps = _capabilities(emg=True, declared=frozenset({"emg"}), mode="emg_only")
+    ch = _channels(emg=[2], volume=6)
+    texts = ChannelSummary().show_mapping(
+        ch, capabilities=caps, integrate_from_flow=True).texts()
+    assert not any("Volume" in t for t in texts)
