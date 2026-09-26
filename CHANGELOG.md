@@ -188,6 +188,10 @@ QC strip) and by `respmech validate`, from the same shared logic:
   only symptom was a misleading "start or end" error for one breath in the middle of
   the recording.
 
+<!-- changelog-skip be4ee99 internal, behaviour-neutral groundwork for a future modular
+     analysis pipeline: a Qt-free capabilities/signal-set skeleton (its own new module and
+     tests only), nothing in compute/pipeline calls into it yet, no user-visible change -->
+
 <!--
 "Unreleased" above is a hand-maintained draft of the next release's entry. It is
 updated ONLY when explicitly asked to (not automatically on every commit), and it
