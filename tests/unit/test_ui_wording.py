@@ -1,8 +1,10 @@
 """Source-level wording guards for the status/dom-bus overhaul (A03).
 
-Qt-free — these scan the ``ui`` package's own source text rather than construct any
-widget, so they run everywhere (no display, no qapp) and catch a regression the moment
-it is typed, regardless of which screen it lands on.
+Mostly Qt-free — these scan the ``ui`` package's own source text rather than construct
+any widget, so they run everywhere (no display, no qapp) and catch a regression the
+moment it is typed, regardless of which screen it lands on. The one exception is the
+lone-ampersand guard below: a caption bug only exists once Qt has actually rendered the
+text, so it constructs a real window (``qapp``) instead of scanning source strings.
 """
 import ast
 import glob
@@ -82,6 +84,81 @@ def _tooltip_and_intro_strings(path):
                     and isinstance(kw.value.value, str):
                 out.append((node.lineno, kw.value.value))
     return out
+
+
+def test_no_caption_anywhere_turns_an_ampersand_into_a_mnemonic(qapp, tmp_path):
+    """A lone ``&`` in Qt text is a mnemonic marker, not an ampersand — and that is true
+    of far more than just push buttons.
+
+    Qt eats the ``&`` and underlines the character after it. When that character is a
+    SPACE the caption silently loses the word: "Run & results ▸" renders as
+    "Run _results ▸", which is what shipped in v2.4.0 and what the documentation
+    screenshots taken from it show. Guard the whole window rather than one widget type:
+    every caption in this app that wants a literal ampersand already doubles it
+    ("Preview && QC", "Process && write this file"), so a lone ``&`` is either this bug
+    or a deliberate mnemonic — and a deliberate mnemonic is never on a space.
+
+    This generalises the original, narrower button-only guard to group-box titles,
+    every menu/menu-bar action, tab captions and buddy labels too — later screens
+    register their own windows/menus in the same ``_lone_ampersands(root)`` scan rather
+    than growing a second, independent copy of it."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.state import AppState
+
+    from _helpers import _lone_ampersands, synth_settings
+
+    win = MainWindow(AppState(synth_settings(tmp_path)))
+    offenders = _lone_ampersands(win)
+    win.close()
+    assert not offenders, (
+        "these captions carry a lone '&' that Qt will swallow — double it to '&&': "
+        f"{offenders}")
+
+
+def test_lone_ampersand_scan_actually_catches_an_injected_regression(qapp):
+    """The guard above passing on a clean window is not proof it would catch a real
+    regression — confirm it flags the literal v2.4.0 caption on a bare probe widget,
+    covering the button/group-box/tab-bar/action paths in one pass."""
+    from PySide6.QtGui import QAction
+    from PySide6.QtWidgets import QGroupBox, QMenuBar, QPushButton, QTabBar, QWidget
+
+    from _helpers import _lone_ampersands
+
+    probe = QWidget()
+    QPushButton("Run & results ▸", probe)
+    QGroupBox("RMS & normalisation", probe)
+    tabs = QTabBar(probe)
+    tabs.addTab("Notes & figures")
+    bar = QMenuBar(probe)
+    menu = bar.addMenu("Reports")
+    menu.addAction(QAction("Export & share", probe))
+
+    offenders = _lone_ampersands(probe)
+    offending_texts = {text for _kind, text in offenders}
+    assert offending_texts == {
+        "Run & results ▸", "RMS & normalisation", "Notes & figures", "Export & share"}
+
+
+def test_lone_ampersand_scan_handles_odd_ampersand_runs(qapp):
+    """A run of an ODD number of consecutive '&' (3, 5, ...) is not the same as several
+    independent single '&'s: Qt resolves it left to right, pairing "&&" into one literal
+    ampersand and leaving exactly one unpaired '&' to act as a mnemonic marker on
+    whatever follows the run. A naive per-character neighbour check misclassifies this
+    (each '&' in the run sees a '&' neighbour and is waved through as "part of a pair"),
+    silently missing a genuinely broken trailing ampersand — this pins the fix."""
+    from PySide6.QtWidgets import QPushButton, QWidget
+
+    from _helpers import _lone_ampersands
+
+    probe = QWidget()
+    QPushButton("Broken &&&", probe)               # odd run, nothing after it: broken
+    QPushButton("Odd &&&Yes", probe)               # odd run, directly followed by an
+                                                    # alnum char (no space): mnemonic on Y
+    QPushButton("Fully paired &&&&", probe)         # even run: two real ampersands
+
+    offenders = _lone_ampersands(probe)
+    offending_texts = {text for _kind, text in offenders}
+    assert offending_texts == {"Broken &&&"}
 
 
 def test_no_tooltip_or_advanced_dialog_intro_says_the_strip():

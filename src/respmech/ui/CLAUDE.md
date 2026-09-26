@@ -4,6 +4,19 @@ Qt/GUI gotchas for the PySide6 app: layout and font-metric budgets, styling, wor
 threads and queued signals, deferred rendering, and pyqtgraph. The project-wide rules
 stay in the repo-root `CLAUDE.md`; test-side hazards are in `tests/CLAUDE.md`.
 
+### A literal `&` in any button, group-box, menu/action, tab or buddy-label caption must be doubled
+
+Qt treats a single `&` as a mnemonic marker: it is swallowed and the following character
+underlined, which silently eats a whole word when that character is a space ("Run &
+results" rendered as "Run _results" in a shipped release). Every caption in this app that
+wants a literal ampersand doubles it ("Preview && QC", "Process && write this file"), and
+`tests/unit/test_ui_wording.py::test_no_caption_anywhere_turns_an_ampersand_into_a_mnemonic`
+enforces it across the whole window — not just push buttons, but `QGroupBox` titles,
+every menu/menu-bar `QAction`, `QTabBar` captions and buddy `QLabel`s too, via the shared
+`_lone_ampersands(root)` helper in `tests/unit/_helpers.py`. A new dialog or window does
+not need its own copy of this guard: construct it once inside the existing test (or add
+it to whichever window the test already builds) so the scan reaches it.
+
 ### A `QDialog` without `Qt.WA_DeleteOnClose` is never destroyed by its own `accept()`/`close()`
 
 Set the attribute explicitly on any one-shot dialog, or use the `prior=` pattern for

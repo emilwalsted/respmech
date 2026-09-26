@@ -918,7 +918,8 @@ def test_results_section_starts_collapsed_and_toggles(qapp, tmp_path):
     win = _win(tmp_path); rn = win.run_screen
     assert not rn.btn_toggle_results.isChecked()
     assert rn._results_section.isHidden()
-    # "&&", not "&" — see test_no_button_caption_turns_an_ampersand_into_a_mnemonic.
+    # "&&", not "&" — see test_ui_wording.py::
+    # test_no_caption_anywhere_turns_an_ampersand_into_a_mnemonic.
     # This assertion pinned the bug: Qt renders a lone "&" before a space by eating the
     # ampersand and underlining the space, so the shipped caption read "Run _results ▸".
     assert rn.btn_toggle_results.text() == "Run && results ▸"
@@ -1398,38 +1399,9 @@ def test_end_to_end_real_write_reports_a_complete_finished_status(qapp, tmp_path
     win.close()
 
 
-def test_no_button_caption_turns_an_ampersand_into_a_mnemonic(qapp):
-    """A lone `&` in Qt button text is a mnemonic marker, not an ampersand.
-
-    Qt eats the `&` and underlines the character after it. When that character is a SPACE
-    the caption silently loses the word: "Run & results ▸" renders as "Run _results ▸",
-    which is what shipped in v2.4.0 and what the documentation screenshots taken from it
-    show. The drawer toggle had it twice — once at construction and once in the open/close
-    handler, so fixing only one would bring it back on the first click.
-
-    Guard the whole window rather than the one button: every caption in this app that wants
-    a literal ampersand already doubles it ("Preview && QC", "Process && write this file"),
-    so a lone `&` is either this bug or a deliberate mnemonic — and a deliberate mnemonic is
-    never on a space."""
-    from PySide6.QtWidgets import QAbstractButton
-    from respmech.ui.main_window import MainWindow
-    from respmech.ui.state import AppState
-
-    win = MainWindow(AppState())
-    offenders = []
-    for b in win.findChildren(QAbstractButton):
-        t = b.text()
-        for i, ch in enumerate(t):
-            if ch != "&":
-                continue
-            if i + 1 < len(t) and t[i + 1] == "&":      # "&&" — a real ampersand, fine
-                continue
-            if i > 0 and t[i - 1] == "&":               # second half of a "&&" pair
-                continue
-            if i + 1 < len(t) and t[i + 1].isalnum():   # a deliberate mnemonic
-                continue
-            offenders.append((type(b).__name__, t))
-    assert not offenders, (
-        "these captions carry a lone '&' that Qt will swallow — double it to '&&': "
-        f"{offenders}")
-    win.close()
+# test_no_button_caption_turns_an_ampersand_into_a_mnemonic moved to
+# test_ui_wording.py::test_no_caption_anywhere_turns_an_ampersand_into_a_mnemonic: it
+# now scans group-box titles, menu/menu-bar actions, tab captions and buddy labels too,
+# via the shared _lone_ampersands(root) helper, not just QAbstractButton — so later
+# screens can register in the same scan instead of each growing its own copy of the
+# guard.
