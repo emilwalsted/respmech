@@ -58,12 +58,48 @@ _CASES = [
     ("volume channel missing, not derived from flow",
      lambda s: setattr(s.input.channels, "volume", None),
      ["volume"]),
-    ("flow channel missing",                          # dead path via blockers() (channel_
-     lambda s: setattr(s.input.channels, "flow", None),  # collision intercepts first), but
-     ["flow"]),                                        # _validation_status() calls validate()
-    ("segmentation method invalid",                     # directly and has no such gate
+    # R7: "flow channel missing" now takes TWO distinct paths depending on whether the
+    # signal set is DERIVED (from assigned channels) or EXPLICIT (analysis.signals) --
+    # each raises a different message, both must translate cleanly. Dead paths via
+    # blockers() (channel_collision intercepts first), but _validation_status() calls
+    # validate() directly and has no such gate.
+    ("flow channel missing, derived signal set falls back to a pressure-only set",
+     lambda s: setattr(s.input.channels, "flow", None),
+     ["flow"]),
+    ("flow channel missing, explicitly declared alongside poes",
+     lambda s: (setattr(s.input.channels, "flow", None),
+               s.analysis.signals.extend(["flow", "poes"])),
+     ["flow"]),
+    ("segmentation method invalid",
      lambda s: setattr(s.processing.segmentation, "method", "pressure"),
-     ["breath", "segment"]),
+     ["breath"]),
+    ("segmentation method requires flow (an EMG-only signal set keeps the flow-based "
+     "default method)",
+     lambda s: (setattr(s.input.channels, "emg", [2, 3]),
+               s.analysis.signals.append("emg")),
+     ["flow"]),
+    ("segmentation method is for an EMG-only signal set while flow is still declared",
+     lambda s: setattr(s.processing.segmentation, "method", "whole_file"),
+     ["emg"]),
+    ("no analysable signal at all",
+     lambda s: (setattr(s.input.channels, "flow", None),
+               setattr(s.input.channels, "poes", None),
+               setattr(s.input.channels, "pgas", None),
+               setattr(s.input.channels, "pdi", None)),
+     ["signal"]),
+    ("unknown signal name in analysis.signals",
+     lambda s: s.analysis.signals.append("bogus"),
+     ["signal"]),
+    ("channel required by an explicit signal set (poes) not yet assigned",
+     lambda s: (setattr(s.input.channels, "poes", None),
+               s.analysis.signals.extend(["flow", "poes"])),
+     ["poes"]),
+    ("emg declared without an emg channel assigned",
+     lambda s: s.analysis.signals.extend(["flow", "emg"]),
+     ["emg"]),
+    ("analysis.signals is not a list (self-review finding, malformed hand-edited file)",
+     lambda s: setattr(s.analysis, "signals", "flow"),
+     ["signal"]),
     ("segmentation buffer not an int",
      lambda s: setattr(s.processing.segmentation, "buffer", 12.5),
      ["breath", "buffer", "segment"]),
