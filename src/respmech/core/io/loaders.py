@@ -20,6 +20,17 @@ class DataValidationError(ValueError):
     """Raised when an input column is missing, non-numeric, NaN, or mismatched."""
 
 
+def _absent(value):
+    """True when a column setting means 'not assigned'. Volume already treated this as
+    absent (``np.isnan(column_volume)``, the model's only channel optional today);
+    poes/pgas/pdi now do the same. Flow's resolution deliberately still goes straight
+    through ``_column`` below unconditionally, unchanged, because ``Settings.validate()``
+    still requires it and ``tests/unit/test_unassigned_channels.py`` pins that an
+    unassigned flow raises — ``_column``'s own guard uses this same test, so an absent
+    flow raises through THAT path instead of the short-circuit its siblings get."""
+    return value is None or (isinstance(value, float) and np.isnan(value))
+
+
 def _column(value, name, ncols, filepath):
     """Resolve a 1-based column setting to a 0-based index, or say exactly what is wrong.
 
@@ -32,7 +43,7 @@ def _column(value, name, ncols, filepath):
     # own optional-channel branches below) that already tested for absence itself; the
     # model uses None, and _legacy_ns.to_legacy_ns maps every optional column (volume,
     # poes, pgas, pdi; flow forward-compatibly, see its own comment there) to NaN.
-    if value is None or (isinstance(value, float) and np.isnan(value)):
+    if _absent(value):
         raise DataValidationError(
             f"{name} is not assigned. Pick a column with 'Assign channels from data…' in Setup.")
     v = int(value)
@@ -44,17 +55,6 @@ def _column(value, name, ncols, filepath):
             f"{name} is set to column {v}, but {os.path.basename(filepath)} has "
             f"only {ncols} column{'s' if ncols != 1 else ''}.")
     return v - 1
-
-
-def _absent(value):
-    """True when a column setting means 'not assigned' — the same test ``_column`` uses,
-    exposed so a caller can skip resolving the column entirely and return an empty
-    channel instead of raising. Volume already did this (``np.isnan(column_volume)``,
-    the model's only channel optional today); poes/pgas/pdi now do the same, and flow's
-    resolution deliberately still goes straight through ``_column`` unconditionally
-    below, unchanged, because ``Settings.validate()`` still requires it (M-08) and
-    ``tests/unit/test_unassigned_channels.py`` pins that an unassigned flow raises."""
-    return value is None or (isinstance(value, float) and np.isnan(value))
 
 
 def _read_table(f, **kw):
@@ -93,7 +93,7 @@ def _alleq(iterable):
 
 def validatedata(flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings):
     # (validation text, array, length-check title) triples. A channel that is legitimately
-    # ABSENT (an empty array — volume today, poes/pgas/pdi from M-08 onward) is dropped
+    # ABSENT (an empty array — volume today, poes/pgas/pdi once reachable) is dropped
     # here, before _checkcolumn and before it can ever enter the length-consistency check
     # below: an absent channel has nothing to validate, and its length of 0 is not a
     # mismatch against the recording's real sample count, it is simply not part of this
@@ -220,10 +220,10 @@ def load(filepath, settings):
     if len(pdi) > 0:
         pdi = pdi.squeeze()
 
-    # flow is always present today (Settings.validate requires it; M-08 introduces
-    # flow-less EMG-only sets), but guarding on len(flow) now means this section already
-    # behaves correctly once that lands, instead of dividing by a zero-length flow's
-    # sampling count or feeding cumulative_trapezoid an empty pair.
+    # flow is always present today (Settings.validate requires it; a future signal-set
+    # model is expected to introduce flow-less analyses), but guarding on len(flow) now
+    # means this section already behaves correctly once that lands, instead of dividing
+    # by a zero-length flow's sampling count or feeding cumulative_trapezoid an empty pair.
     if settings.processing.mechanics.inverseflow and len(flow) > 0:
         flow = -flow
     if settings.processing.mechanics.integratevolumefromflow and len(flow) > 0:
