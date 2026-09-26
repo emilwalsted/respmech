@@ -111,8 +111,9 @@ _LEGACY_MECHANICS = (
     ("bf", _TIMING, "timing"),
     ("ve", _TIMING, "timing"),
     ("vmr", _VMR, "vmr"),
-    # Per compute.py's own comment beside the formula: "tlr_insp kræver poes"
-    # (flow is the block's shared baseline; poes is the one extra it needs).
+    # tlr_insp's formula (compute.py, abs((poes_midvolexp - poes_midvolinsp) /
+    # (flow_midvolexp - flow_midvolinsp))) reads poes and the flow-derived midvol
+    # indices: flow is the block's shared baseline, poes is the one extra it needs.
     ("tlr_insp", _PRESSURES_POES, "pressures_poes"),
 )
 

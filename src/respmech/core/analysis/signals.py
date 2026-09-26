@@ -49,7 +49,16 @@ def effective_signals(settings) -> frozenset:
     behaves as "derive it").
     """
     analysis = getattr(settings, "analysis", None)
-    explicit = frozenset(getattr(analysis, "signals", None) or ())
+    raw = getattr(analysis, "signals", None) or ()
+    # A bare string is iterable too, so `frozenset("flow")` would silently produce
+    # {'f','l','o','w'} instead of {'flow'} for a `signals = "flow"` typo (an easy
+    # one once a real, hand-editable `AnalysisSettings.signals` field exists) --
+    # guard it explicitly rather than let that corrupt the signal set in silence.
+    if isinstance(raw, str):
+        raise TypeError(
+            f"analysis.signals must be a list of signal names, not a bare string: {raw!r}"
+        )
+    explicit = frozenset(raw)
     if explicit:
         return explicit
     return derived_signals(settings.input.channels)
@@ -105,7 +114,14 @@ class Capabilities:
         declared = effective_signals(settings)
         ch = settings.input.channels
         flow = "flow" in declared
-        integrate_from_flow = bool(settings.processing.volume.integrate_from_flow)
+        # Defensive for the same reason as `effective_signals`' own `settings.analysis`
+        # lookup: every real Settings always has processing.volume.integrate_from_flow
+        # (settings.py's VolumeSettings default), but a lightweight SimpleNamespace test
+        # double built for something else entirely (several exist in tests/unit/) need
+        # not carry it, and should read as "off" rather than raise.
+        processing = getattr(settings, "processing", None)
+        volume_settings = getattr(processing, "volume", None)
+        integrate_from_flow = bool(getattr(volume_settings, "integrate_from_flow", False))
         return cls(
             flow=flow,
             volume=flow and (getattr(ch, "volume", None) is not None or integrate_from_flow),
@@ -136,17 +152,23 @@ class Capabilities:
         return frozenset(roles)
 
     def analyses(self) -> tuple[str, ...]:
-        """Human-readable labels for the run-report / commitment sheet."""
+        """Human-readable labels for the run-report / commitment sheet.
+
+        Every pressure-family label requires ``flow`` too, matching
+        ``registry.py``'s own capability requirements for those columns
+        (breath segmentation itself needs flow — a lone ``pgas``/``pdi``
+        channel with no flow computes nothing).
+        """
         labels: list[str] = []
         if self.flow:
             labels.append("Breath timing")
         if self.flow and self.poes:
             labels.append("Work of breathing")
-        if self.pgas:
+        if self.flow and self.pgas:
             labels.append("Gastric pressure")
-        if self.pdi:
+        if self.flow and self.pdi:
             labels.append("Transdiaphragmatic pressure")
-        if self.poes and self.pgas:
+        if self.flow and self.poes and self.pgas:
             labels.append("Ventilatory muscle ratio")
         if self.emg:
             labels.append("EMG")

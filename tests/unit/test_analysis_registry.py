@@ -7,6 +7,25 @@ from respmech.core.analysis.registry import LEGACY_MECHANICS_ORDER, resolve
 from respmech.core.analysis.signals import Capabilities
 
 
+def test_capabilities_from_settings_against_real_settings_is_full_with_entropy():
+    """The literal acceptance criterion: `Capabilities.from_settings(synth_settings())`
+    gives mode 'full' and entropy=True, against a REAL, migrated `Settings` object —
+    not the hand-rolled `SimpleNamespace` doubles `test_signal_sets.py` uses to unit-test
+    the pure derivation logic on its own. Guards against a future `Settings`/`Channels`
+    attribute rename breaking `Capabilities.from_settings` for real settings while those
+    doubles keep passing regardless."""
+    settings = synth_settings()
+    caps = Capabilities.from_settings(settings)
+    assert caps.mode == "full"
+    assert caps.entropy is True
+
+    settings.input.channels.emg = []
+    settings.input.channels.entropy = [10, 11, 12]
+    caps2 = Capabilities.from_settings(settings)
+    assert caps2.emg is False
+    assert caps2.entropy is True
+
+
 @requires_synth()
 def test_full_channel_key_list_equals_legacy_mechanics_order(tmp_path):
     """`LEGACY_MECHANICS_ORDER`'s names must be the exact, ordered key list

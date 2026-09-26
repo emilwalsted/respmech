@@ -69,15 +69,15 @@ def test_gui_startup_does_not_import_the_compute_core():
 def test_core_analysis_modules_import_no_numeric_stack():
     """``core/analysis/signals.py`` and ``registry.py`` are the import-budget the
     module docstrings promise: importable on their own without pulling in numpy,
-    pandas or the compute core. Also a subprocess, for the same reason as above —
-    ``numpy``/``pandas`` are long since imported by the time the rest of the unit
-    suite has run."""
+    pandas, the compute core, or Qt. Also a subprocess, for the same reason as
+    above — these are long since imported by the time the rest of the unit suite
+    has run."""
     env = dict(os.environ)
     env["PYTHONPATH"] = SRC + os.pathsep + env.get("PYTHONPATH", "")
     probe = (
         "import sys\n"
         "import respmech.core.analysis.signals, respmech.core.analysis.registry\n"
-        "forbidden = {'numpy', 'pandas', 'respmech.core.compute'}\n"
+        "forbidden = {'numpy', 'pandas', 'respmech.core.compute', 'PySide6', 'PyQt6'}\n"
         "print('LEAKED:' + ','.join(m for m in forbidden if m in sys.modules))\n"
     )
     proc = subprocess.run(
