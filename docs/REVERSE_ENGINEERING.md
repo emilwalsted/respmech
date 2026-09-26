@@ -388,3 +388,21 @@ Notable traps for the refactor:
 
 A field-by-field semantics table and the old→new migration mapping live in
 [`PLAN.md`](PLAN.md) §_Settings redesign_.
+
+### 7a. `analysis.signals` (v2 addition)
+
+The v2 model (`core/settings.py`) adds one field this legacy shape had no equivalent
+for: `Settings.analysis.signals`, a list naming which of `flow`/`poes`/`pgas`/`pdi`/
+`emg` an analysis actually uses. Left empty (the default — and the shape every
+migrated v1 analysis takes, since v1 always required all four pressure/flow roles),
+the effective set is *derived* instead: whichever of those roles has a channel
+assigned (`core/analysis/signals.py::derived_signals`/`effective_signals`). An
+explicit, non-empty list overrides that derivation outright — a `Settings.validate()`
+requirement gone as of this ticket: Poes/Pgas/Pdi may all be absent, as long as Flow or
+EMG is present (a lone pressure channel with no Flow is still rejected, since breath
+segmentation needs Flow either way). A channel assigned without being named in an
+explicit list is reconciled upward on load (`Settings.from_dict`, never any other write
+path), with a `Settings.notices` entry recording it. Saving an analysis omits the whole
+`[analysis]` table while the explicit set still matches the derived one; the run
+manifest (`analysis-used.toml`, via `dumps_toml`) always records the resolved,
+effective set instead, explicit or not.
