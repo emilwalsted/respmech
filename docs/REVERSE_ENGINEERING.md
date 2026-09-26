@@ -289,6 +289,54 @@ across channels. Vendored pyEntropy implementation.
   breaths outside `mean ± outlierrmssdlimit·SD` of the other breaths have their
   `rms_max`/`rms_mean` replaced by the others' mean.
 
+### 5.11 Optional pressure channels (v2-only)
+`calculateaveragebreaths()` and `calculatemechanics()` read
+`caps = getattr(settings, "capabilities", Capabilities.FULL)` (the same defensive
+idiom §5.1's `boundarynotice_*` settings already use, since a hand-built
+`SimpleNamespace` settings object reaches the segmenterers from several call sites)
+and guard every value that reads Poes, Pgas or Pdi behind `caps.poes`/`caps.pgas`/
+`caps.pdi` — legacy `master` always required all three; v2 does not, once a
+`core.analysis.signals.Capabilities` with one or more of them `False` reaches
+compute (`core/_legacy_ns.py::to_legacy_ns` passes `Capabilities.from_settings(s)`
+through as `capabilities=`, same precedent as `processing.emg.robust_peak`: kept as
+one dataclass, not exploded into the legacy attribute shape). On the full-channel
+path every guard is `True` and executes exactly the statements that ran
+unconditionally before this — golden output is untouched (`tests/golden` 5/5
+byte-identical).
+
+- **`calculateaveragebreaths`**: resamples Poes only `if caps.poes`, returning
+  `(avgpoesin, avgpoesex) = (None, None)` otherwise. Volume averaging is never
+  guarded here (always computed, whatever the signal set) — volume itself becoming
+  optional is a later ticket's scope.
+- **`calculatemechanics`**: `eilv`/`eelv`/`eilvavg`/`eelvavg` keep `[volume, NaN]`
+  when `caps.poes` is `False`, instead of indexing an empty `poes`/`poesavg` array.
+  `retbreath["wob"]` is set only `if caps.poes` (`calculatewob` needs Poes). Every
+  Poes/Pgas/Pdi-derived quantity (the pressure descriptors of §5.5, the PTP triad of
+  §5.6, `vmr` — needs BOTH `caps.poes` and `caps.pgas` — and `tlr_insp`, which needs
+  only `caps.poes`) is computed into a local `values` dict only when its
+  capabilities are present; the flow/volume-only timing group of §5.4 is never
+  guarded (always present once a recording has been segmented into breaths at all).
+  The final `retbreath["mechanics"]` `OrderedDict` is built by walking
+  `core.analysis.registry.LEGACY_MECHANICS_ORDER` (the same literal, pinned key
+  order as before — `tests/unit/test_analysis_registry.py`) and keeping only the
+  names present in `values`, instead of a hardcoded 42-entry literal.
+- **Golden-locked timing-group quirks, documented, not fixed:** `in_flow_midvol ==
+  flow_midvolinsp` and `flow_midvolexp == -ex_flow_midvol` (the legacy names do not
+  describe what they sound like — both survive unchanged on every signal set,
+  including flow-only).
+- **`core/results.py`'s outlier guard** (`'poes_mininsp' in mechs.columns`, §5.10's
+  RMS outlier handling, owned by an earlier ticket) already reads correctly once
+  `poes_mininsp` is genuinely absent from a flow-only breath's mechanics — pinned at
+  the compute level by `tests/unit/test_flow_only.py::test_outlier_guard_unchanged`
+  (results.py/pipeline.py themselves are out of this ticket's scope; a reduced
+  signal set does not yet reach them end to end).
+- **Tests**: `tests/unit/test_flow_only.py` (flow only: no Poes/Pgas/Pdi) and
+  `tests/unit/test_poes_only.py` (flow + Poes, no Pgas/Pdi) call
+  `calculateaveragebreaths`/`calculatemechanics` directly on segments built from
+  `synth_case_A.csv` (`tests/unit/_helpers.py::segment_synth_case`/
+  `compute_all_breaths`), bypassing `core.pipeline.run_batch` — the pipeline/results
+  layers are not yet guarded for a reduced signal set.
+
 ---
 
 ## 6. Latent issues found (to fix deliberately in the refactor)
