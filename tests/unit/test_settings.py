@@ -31,6 +31,154 @@ def test_unknown_keys_are_captured_not_fatal():
     assert s.processing.sampling.resample is True
 
 
+def test_nested_optional_dataclass_round_trips():
+    """A PEP 604 ``T | None`` field on a dataclass must build ``T``, not leave the raw
+    dict, when the incoming value is a table. No production dataclass has an optional
+    nested-dataclass field yet (added by later tickets), so this exercises the generic
+    ``_build``/``_coerce``/``_unwrap_optional`` mechanism ``Settings.from_dict`` itself
+    is built on, with a throwaway dataclass standing in for a future ``Ref``-like field.
+
+    Before the fix: ``get_origin(Ref | None)`` is ``types.UnionType``, not
+    ``typing.Union``, so ``_unwrap_optional`` returned ``Ref | None`` unchanged;
+    ``is_dataclass(Ref | None)`` is False, so ``_coerce`` fell through and returned the
+    raw dict instead of a ``Ref`` instance."""
+    from dataclasses import dataclass as _dc
+
+    from respmech.core.settings import _build
+
+    @_dc
+    class Ref:
+        file: str = ""
+        breath: int = 0
+
+    @_dc
+    class Holder:
+        ref: Ref | None = None
+
+    unknown: dict = {}
+    obj = _build(Holder, {"ref": {"file": "a.txt", "breath": 3}}, unknown, path="")
+    assert isinstance(obj.ref, Ref)
+    assert obj.ref.file == "a.txt"
+    assert obj.ref.breath == 3
+    assert unknown == {}
+
+    # And a bare `ref = None`/absent key still leaves it None, same as before the fix.
+    obj2 = _build(Holder, {}, {}, path="")
+    assert obj2.ref is None
+
+
+@pytest.mark.parametrize("extra,unknown_key", [
+    pytest.param({"analysis": {"signals": ["flow"]}}, "analysis",
+                 id="unknown_toplevel_table"),
+    pytest.param({"processing": {"lung_volumes": {"foo": 1}}}, "processing.lung_volumes",
+                 id="unknown_nested_table"),
+    pytest.param({"processing": {"breath_types": [{"id": 1}]}}, "processing.breath_types",
+                 id="unknown_list_of_tables"),
+    pytest.param(
+        {"processing": {"exclude_breaths": [
+            {"file": "a.txt", "breaths": [1], "kind": "future"}]}},
+        "processing.exclude_breaths.[0].kind",
+        id="unknown_field_on_a_known_list_entry"),
+])
+def test_unknown_keys_survive_a_save(tmp_path, extra, unknown_key):
+    """All three archived shapes (a whole unknown table, top-level or nested; a whole
+    unknown list of tables; a single unrecognised field inside one element of a KNOWN
+    list dataclass) must come back unchanged after save_toml + load_toml, not just stay
+    in memory. The key form is taken from Settings.from_dict's OWN output, never
+    assumed, so a change to how _build paths a nested unknown entry would fail this
+    test rather than silently stop being covered."""
+    from respmech.settingsio.toml_io import load_toml, save_toml
+
+    d = _minimal()
+    for key, val in extra.items():
+        d.setdefault(key, {})
+        if isinstance(d[key], dict) and isinstance(val, dict):
+            d[key].update(val)
+        else:
+            d[key] = val
+    s = Settings.from_dict(d).validate()
+    assert unknown_key in s.unknown, f"test setup did not actually produce {unknown_key!r}"
+
+    path = tmp_path / "a.toml"
+    save_toml(s, path)
+    s2 = load_toml(path)
+    assert unknown_key in s2.unknown
+    assert s2.unknown[unknown_key] == s.unknown[unknown_key]
+
+
+def test_a_known_limitation_removing_an_earlier_list_entry_can_misattach_an_unknown_field(
+        tmp_path):
+    """Self-review finding, deliberately NOT fixed by this ticket (see _merge_unknown's
+    docstring): an unknown per-element field is archived by list POSITION at load time,
+    not by a stable identity. Removing an EARLIER entry from the in-memory list before a
+    save leaves the unknown value attached to whatever entry now sits at that index --
+    here it silently reattaches "kind" from the removed a.txt entry onto b.txt, which
+    never had it, instead of being dropped like a genuinely out-of-range index would be.
+    Nothing in today's code lets a carried-unknown list be edited in the same session,
+    so this cannot fire yet; pinned here so it stays a deliberate, tracked limitation
+    rather than a silent behaviour change the next time this function is touched."""
+    from respmech.settingsio.toml_io import load_toml, save_toml
+
+    d = _minimal()
+    d["processing"] = {"exclude_breaths": [
+        {"file": "a.txt", "breaths": [1], "kind": "future"},
+        {"file": "b.txt", "breaths": [2]},
+    ]}
+    s = Settings.from_dict(d).validate()
+    assert s.unknown["processing.exclude_breaths.[0].kind"] == "future"
+
+    # Simulate an earlier entry being removed before save (e.g. a future un-exclude
+    # action) -- Settings.unknown is a load-time snapshot and does not follow the move.
+    s.processing.exclude_breaths.pop(0)
+    assert [e.file for e in s.processing.exclude_breaths] == ["b.txt"]
+
+    path = tmp_path / "a.toml"
+    save_toml(s, path)
+    s2 = load_toml(path)
+    assert s2.processing.exclude_breaths[0].file == "b.txt"
+    # The documented (accepted, not desired) outcome: "kind" followed the INDEX, not
+    # the entry it was originally recorded against.
+    assert s2.unknown["processing.exclude_breaths.[0].kind"] == "future"
+
+
+def test_a_known_limitation_a_literal_dot_in_an_unknown_key_name_changes_shape_on_save(
+        tmp_path):
+    """Self-review finding, deliberately NOT fixed by this ticket (see _merge_unknown's
+    docstring): TOML allows a quoted key containing a literal '.' (e.g. "weird.key" = 5
+    as ONE flat key). Settings.from_dict archives it correctly as a single unknown entry
+    ("processing.weird.key" -> 5), but a save re-splits that same string on "." and
+    rebuilds it as a NESTED table (processing.weird.key = 5) instead of the original
+    flat key -- the value survives, the shape does not. Can never collide with a real
+    dataclass field (field names cannot contain '.'), so this only affects a
+    hand-edited or foreign-tool TOML file, never RespMech's own output."""
+    from respmech.settingsio.toml_io import load_toml, save_toml
+
+    d = _minimal()
+    d["processing"] = {"weird.key": 5}
+    s = Settings.from_dict(d).validate()
+    assert s.unknown == {"processing.weird.key": 5}
+
+    path = tmp_path / "a.toml"
+    save_toml(s, path)
+    s2 = load_toml(path)
+    # The value is preserved, but re-parented under a nested "weird" table -- the
+    # documented shape-changing limitation, not the original flat key.
+    assert s2.unknown == {"processing.weird": {"key": 5}}
+
+
+def test_a_24_shaped_file_gains_no_keys_on_save(tmp_path):
+    """An ordinary file with no unknown keys must not gain any on a save -- _merge_unknown
+    folding an EMPTY Settings.unknown back in is a no-op, not a source of new tables."""
+    from respmech.settingsio.toml_io import load_toml, save_toml
+
+    s = Settings.from_dict(_minimal()).validate()
+    assert s.unknown == {}
+    path = tmp_path / "a.toml"
+    save_toml(s, path)
+    s2 = load_toml(path)
+    assert s2.unknown == {}
+
+
 def test_missing_required_raises():
     with pytest.raises(SettingsError):
         Settings.from_dict({"input": {"format": {"matlab_variant": "mac"}}}).validate()

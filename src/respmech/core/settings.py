@@ -15,6 +15,7 @@ tolerant (unknown keys are collected, not fatal) and ``validate`` raises
 ``SettingsError`` with a clear message.
 """
 import os
+import types
 from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Any, Optional, Union, get_args, get_origin, get_type_hints
 
@@ -580,8 +581,16 @@ def _upgrade(obj: "Settings", raw: dict) -> list[str]:
 # --- generic dataclass <-> dict helpers ------------------------------------
 
 def _unwrap_optional(t):
-    """Return the non-None type of Optional[T]/Union[T, None], else t."""
-    if get_origin(t) is Union:
+    """Return the non-None type of Optional[T]/Union[T, None], else t.
+
+    A PEP 604 ``T | None`` annotation has origin ``types.UnionType``, not
+    ``typing.Union`` -- ``get_origin(t) is Union`` alone misses it, so a nested
+    ``ref: Ref | None = None`` field never reached the ``is_dataclass(typ)`` branch in
+    ``_coerce`` below and ``_build`` silently returned the raw dict instead of a ``Ref``
+    instance. ``typing.Optional[T]`` still normalises to ``typing.Union[T, None]`` at
+    runtime, so both spellings are covered by the same check.
+    """
+    if get_origin(t) in (Union, types.UnionType):
         args = [a for a in get_args(t) if a is not type(None)]
         if len(args) == 1:
             return args[0]
