@@ -106,6 +106,66 @@ def test_unknown_keys_survive_a_save(tmp_path, extra, unknown_key):
     assert s2.unknown[unknown_key] == s.unknown[unknown_key]
 
 
+def test_a_known_limitation_removing_an_earlier_list_entry_can_misattach_an_unknown_field(
+        tmp_path):
+    """Self-review finding, deliberately NOT fixed by this ticket (see _merge_unknown's
+    docstring): an unknown per-element field is archived by list POSITION at load time,
+    not by a stable identity. Removing an EARLIER entry from the in-memory list before a
+    save leaves the unknown value attached to whatever entry now sits at that index --
+    here it silently reattaches "kind" from the removed a.txt entry onto b.txt, which
+    never had it, instead of being dropped like a genuinely out-of-range index would be.
+    Nothing in today's code lets a carried-unknown list be edited in the same session,
+    so this cannot fire yet; pinned here so it stays a deliberate, tracked limitation
+    rather than a silent behaviour change the next time this function is touched."""
+    from respmech.settingsio.toml_io import load_toml, save_toml
+
+    d = _minimal()
+    d["processing"] = {"exclude_breaths": [
+        {"file": "a.txt", "breaths": [1], "kind": "future"},
+        {"file": "b.txt", "breaths": [2]},
+    ]}
+    s = Settings.from_dict(d).validate()
+    assert s.unknown["processing.exclude_breaths.[0].kind"] == "future"
+
+    # Simulate an earlier entry being removed before save (e.g. a future un-exclude
+    # action) -- Settings.unknown is a load-time snapshot and does not follow the move.
+    s.processing.exclude_breaths.pop(0)
+    assert [e.file for e in s.processing.exclude_breaths] == ["b.txt"]
+
+    path = tmp_path / "a.toml"
+    save_toml(s, path)
+    s2 = load_toml(path)
+    assert s2.processing.exclude_breaths[0].file == "b.txt"
+    # The documented (accepted, not desired) outcome: "kind" followed the INDEX, not
+    # the entry it was originally recorded against.
+    assert s2.unknown["processing.exclude_breaths.[0].kind"] == "future"
+
+
+def test_a_known_limitation_a_literal_dot_in_an_unknown_key_name_changes_shape_on_save(
+        tmp_path):
+    """Self-review finding, deliberately NOT fixed by this ticket (see _merge_unknown's
+    docstring): TOML allows a quoted key containing a literal '.' (e.g. "weird.key" = 5
+    as ONE flat key). Settings.from_dict archives it correctly as a single unknown entry
+    ("processing.weird.key" -> 5), but a save re-splits that same string on "." and
+    rebuilds it as a NESTED table (processing.weird.key = 5) instead of the original
+    flat key -- the value survives, the shape does not. Can never collide with a real
+    dataclass field (field names cannot contain '.'), so this only affects a
+    hand-edited or foreign-tool TOML file, never RespMech's own output."""
+    from respmech.settingsio.toml_io import load_toml, save_toml
+
+    d = _minimal()
+    d["processing"] = {"weird.key": 5}
+    s = Settings.from_dict(d).validate()
+    assert s.unknown == {"processing.weird.key": 5}
+
+    path = tmp_path / "a.toml"
+    save_toml(s, path)
+    s2 = load_toml(path)
+    # The value is preserved, but re-parented under a nested "weird" table -- the
+    # documented shape-changing limitation, not the original flat key.
+    assert s2.unknown == {"processing.weird": {"key": 5}}
+
+
 def test_a_24_shaped_file_gains_no_keys_on_save(tmp_path):
     """An ordinary file with no unknown keys must not gain any on a save -- _merge_unknown
     folding an EMPTY Settings.unknown back in is a no-op, not a source of new tables."""
