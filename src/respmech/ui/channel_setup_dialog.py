@@ -23,7 +23,7 @@ from PySide6.QtCore import QSize
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel,
                                QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
-from respmech.core.analysis.signals import SINGLE_SIGNALS
+from respmech.core.analysis.signals import SINGLE_SIGNALS, Capabilities
 from respmech.ui import wheel as _wheel
 from respmech.ui.column_stack import (REQUIRED_LABELS, ROLES, SINGLE, ColumnStack,
                                       as_2d, infer_roles_from_names,
@@ -225,12 +225,19 @@ class ChannelSetupDialog(QDialog):
             self._roles = [(key, label) for key, label in _ROLES
                            if key == "" or key in self._declared
                            or (key == "volume" and "flow" in self._declared)]
-            # The roles a column MUST carry for this analysis to be complete: the
+            # The roles a column MUST carry for this analysis to be complete:
+            # ``Capabilities.required_roles()`` itself, over a Capabilities built purely
+            # from ``self._declared`` (``volume=False`` always: this dialog decides Volume
+            # separately, via a column OR the "derive from flow" checkbox — see
+            # ``_refresh_info`` — never by requiring a column outright). That leaves the
             # single-column roles (flow/poes/pgas/pdi) actually in the declared set, plus
             # "emg" when EMG is declared.
-            self._required_roles = frozenset(SINGLE_SIGNALS) & self._declared
-            if "emg" in self._declared:
-                self._required_roles = self._required_roles | {"emg"}
+            shape = Capabilities(
+                flow="flow" in self._declared, volume=False,
+                poes="poes" in self._declared, pgas="pgas" in self._declared,
+                pdi="pdi" in self._declared, emg="emg" in self._declared,
+                entropy=False, declared=self._declared, mode="custom")
+            self._required_roles = shape.required_roles()
         else:
             self._roles = list(_ROLES)
             self._required_roles = (frozenset(SINGLE_SIGNALS) if self._declared is None
@@ -684,11 +691,29 @@ class ChannelSetupDialog(QDialog):
         nothing assigned), fall back to "can ANY analysis run at all" — Flow (mechanics) or
         an EMG channel — matching ``Capabilities.analyses()``'s own flow/emg-gated labels
         for that shape."""
-        flow_declared = not self._declared or "flow" in self._declared
-        # M-12: the checkbox only makes sense once Flow is part of the signal set, and once
-        # some column HASN'T already claimed Volume (a real column already satisfies it, so
-        # showing an unticked, moot checkbox beside it would only look like an open question).
-        self._volume_from_flow.setVisible(flow_declared and not self._volume_assigned())
+        if self._declared is None:
+            # Legacy: no signal-set concept in play. This checkbox must stay visible
+            # exactly as it always was (the pre-M-12 code never called ``setVisible`` on
+            # it at all, so hiding it here — even conditionally — would be a real
+            # behaviour change for every caller/test this ticket promises stays
+            # unchanged; self-review finding: an earlier draft applied the new visibility
+            # rule unconditionally and silently hid the checkbox once a Volume column was
+            # assigned, contradicting that promise), and Volume gating is unconditional,
+            # matching the old hardcoded requirement.
+            self._volume_from_flow.setVisible(True)
+            flow_declared = True
+        else:
+            # ``is None`` above vs. plain truthiness here on purpose: an explicitly EMPTY
+            # ``self._declared`` (nothing chosen yet) has NOT declared Flow, so the
+            # checkbox (and the Volume requirement it exists to satisfy) must not apply
+            # to it — this branch's own ``"flow" in self._declared`` already reads False
+            # for an empty set without needing a special case.
+            flow_declared = "flow" in self._declared
+            # M-12: the checkbox only makes sense once Flow is part of the signal set,
+            # and once some column HASN'T already claimed Volume (a real column already
+            # satisfies it, so showing an unticked, moot checkbox beside it would only
+            # look like an open question).
+            self._volume_from_flow.setVisible(flow_declared and not self._volume_assigned())
         volume_ok = (not flow_declared) or self._volume_assigned() \
             or self._volume_from_flow.isChecked()
         if not self._required_roles:

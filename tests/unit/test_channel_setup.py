@@ -555,6 +555,17 @@ def test_nothing_declared_falls_back_to_flow_or_emg(qapp):
     assert dlg._ok_btn.isEnabled()
 
 
+def test_nothing_declared_never_shows_the_derive_volume_checkbox_for_an_emg_only_column(qapp):
+    """Self-review fix: an explicitly EMPTY declared set has NOT declared Flow, so the
+    'derive volume from flow' checkbox (and the Volume requirement it exists to satisfy)
+    must not apply — a `not self._declared` (truthiness) check would wrongly treat this
+    the same as ``declared=None`` and show/gate on it anyway."""
+    dlg = _dialog_declared(frozenset())
+    _set_role(dlg, 1, "emg")                            # only EMG assigned, never Flow
+    assert dlg._volume_from_flow.isVisibleTo(dlg) is False
+    assert dlg._ok_btn.isEnabled()                       # EMG alone is enough (see above)
+
+
 def test_derive_volume_checkbox_hidden_when_flow_not_declared(qapp):
     dlg = _dialog_declared(frozenset({"emg"}))
     assert dlg._volume_from_flow.isVisibleTo(dlg) is False
@@ -586,6 +597,18 @@ def test_volume_checkbox_is_auto_suggested_when_nothing_claims_the_role(qapp):
 def test_volume_checkbox_is_not_suggested_when_a_column_already_carries_it(qapp):
     dlg = _dialog(initial={"flow": 5, "volume": 6, "poes": 7, "pgas": 8, "pdi": 9})
     assert not dlg._volume_from_flow.isChecked()
+
+
+def test_volume_checkbox_stays_visible_with_declared_none_even_once_assigned(qapp):
+    """Self-review fix: ``declared=None`` (every caller before M-12) must behave
+    BYTE-IDENTICALLY to the pre-M-12 dialog, which never called ``setVisible`` on this
+    checkbox at all — an earlier draft of M-12's visibility rule applied unconditionally
+    and silently hid the checkbox once a Volume column was assigned, even for this legacy
+    path, contradicting that promise."""
+    dlg = _dialog()
+    assert dlg._volume_from_flow.isVisibleTo(dlg) is True
+    _set_role(dlg, 5, "volume")
+    assert dlg._volume_from_flow.isVisibleTo(dlg) is True
 
 
 def test_volume_checkbox_seeded_true_is_kept_even_with_a_volume_column(qapp):
