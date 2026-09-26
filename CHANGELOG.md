@@ -209,6 +209,13 @@ QC strip) and by `respmech validate`, from the same shared logic:
      settings API still requires all four columns today, so no analysis can actually
      reach this path yet; only a hand-built settings adapter in a new test exercises it -->
 
+<!-- changelog-skip 85b0f24 internal, behaviour-neutral groundwork for the same future
+     modular analysis pipeline: a per-breath EMG/entropy computation block was extracted
+     into its own function with a not-yet-used phases= flag, and several places that read
+     breath data gained forward-compatible presence guards (a channel or a phase split
+     that can become absent in a future signal set) -- golden 5/5 byte-identical, no
+     analysis can reach any of the new guarded branches yet -->
+
 <!--
 "Unreleased" above is a hand-maintained draft of the next release's entry. It is
 updated ONLY when explicitly asked to (not automatically on every commit), and it
