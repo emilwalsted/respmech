@@ -1044,3 +1044,74 @@ def test_write_planned_honours_the_plans_cohort_outputs_flag(tmp_path):
     written = write_planned(subset_result, s, subset_plan, outputfolder=str(elsewhere))
     assert not any(os.path.basename(p) in ("Average breathdata.xlsx", "Cohort summary.xlsx")
                   for p in written)
+
+
+# ---------------------------------------------------------------------------
+# Presence guards (a channel/column can become absent in a later signal set)
+# ---------------------------------------------------------------------------
+def test_processed_csv_row_count_uses_time_length():
+    """Row count in the processed-data CSV is derived from breath['time'], never
+    breath['flow'] — flow is the channel most likely to become the ABSENT one (an empty
+    float array, the existing absent-channel convention) once a Poes-only/EMG-only signal
+    set exists, while time is present on every breath regardless of which channels it
+    carries. Also covers the companion fix: an absent channel is skipped entirely rather
+    than merged as an empty column (which would collapse the whole result to zero rows
+    via dropna)."""
+    from respmech.core.results import build_processed_data
+    from respmech.core.settings import Settings
+    from respmech.core._legacy_ns import to_legacy_ns
+
+    s = Settings()
+    s.input.format.sampling_frequency = 1000
+    s.output.data.include_ignored_breaths = True
+    ns = to_legacy_ns(s)
+    n = 6
+    breaths = {
+        1: {
+            "number": 1, "ignored": False,
+            "time": np.arange(n, dtype=float),
+            "flow": np.array([]),                       # absent channel
+            "volume": np.arange(n, dtype=float) * 0.2,
+            "poes": np.array([]),
+            "pgas": np.array([]),
+            "pdi": np.array([]),
+            "emgcols": [],
+        },
+    }
+    df = build_processed_data(breaths, ns)
+    assert len(df) == n - 1
+    assert "Flow" not in df.columns
+    assert "Poes" not in df.columns and "Pgas" not in df.columns and "Pdi" not in df.columns
+    assert list(df["Volume"]) == list(np.arange(n - 1, dtype=float) * 0.2)
+
+
+def test_outlier_filter_skips_when_poes_mininsp_absent():
+    """K-204's guard (test_outlier_filter_guard.py) already covers 'no EMG channels
+    configured'; this extends it to 'EMG channels configured but no poes_mininsp column'
+    (a future Poes-less analysis) — the older guard alone would still try to build
+    the rms/poes ratio in processoutliers and KeyError."""
+    from respmech.core.results import build_breath_table
+    from respmech.core.settings import Settings
+    from respmech.core._legacy_ns import to_legacy_ns
+
+    s = Settings()
+    s.input.format.sampling_frequency = 1000
+    s.input.channels.emg = [2, 3]
+    s.processing.emg.outlier_rms_sd_limit = 3.0
+    ns = to_legacy_ns(s)
+
+    def _breath(n):
+        rms = [1.0, 1.0, 1.0, 1.0]                       # 2 channels + max + mean
+        return {
+            "number": n, "ignored": False,
+            "mechanics": {"m": float(n)},                # deliberately no poes_mininsp
+            "wob": {"w": float(n)},
+            "rms": rms, "rms_insp": rms, "rms_exp": rms,
+            "intemg": rms, "intemg_insp": rms, "intemg_exp": rms,
+        }
+
+    breaths = {1: _breath(1), 2: _breath(2), 3: _breath(3)}
+    per_breath, average_row = build_breath_table("x.csv", breaths, ns)
+    assert len(per_breath) == 3
+    assert "rms_col_2" in per_breath.columns
+    assert average_row["file"].iloc[0] == "x.csv"

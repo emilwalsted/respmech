@@ -343,7 +343,7 @@ def _emg_segmented(path, s, cache=None, cancel_check=None):
                                      pT, gT, dT, [], emg_full, s)
     ins = np.zeros(len(fT), bool); ex = np.zeros(len(fT), bool); p = 0
     for b in br.values():
-        ni = len(b["inspiration"]["poes"]); ne = len(b["expiration"]["poes"])
+        ni = len(b["inspiration"]["time"]); ne = len(b["expiration"]["time"])
         ins[p:p + ni] = True; ex[p + ni:p + ni + ne] = True; p += ni + ne
     n = min(len(emg_full), len(ins))
     return emg_full[:n], ins[:n], ex[:n]
