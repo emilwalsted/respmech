@@ -695,6 +695,15 @@ QLabel[status="warn"] {
 QLabel[status="error"] {
     color: $st_error_fg; background-color: $st_error_bg; border-color: $st_error_bd;
 }
+/* M-11: the Setup Signals row's chips (Flow/Poes/Pgas/Pdi/EMG) — a small, permanent pill,
+   never a 'status' colour (nothing here is a caution), so it gets its own property rather
+   than reusing 'banner' (whose box only applies on first polish, see the banner comment
+   above — a chip is always built fresh with the property already set, so that pitfall does
+   not apply, but a dedicated property keeps chip styling independently tunable from banners). */
+QLabel[chip="true"] {
+    background-color: $accent_soft; color: $text;
+    border-radius: 8px; padding: 2px 8px; font-weight: 600;
+}
 
 /* ---- application header bar ------------------------------------------- */
 QFrame#appHeader {
