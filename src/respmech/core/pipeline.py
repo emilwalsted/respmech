@@ -807,7 +807,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                         warnings.warn(f"{filename}: cardiac-gated peak EMG reported as NaN — "
                                       f"{gate_reason}")
                 if not gate_ok:
-                    # K-224: recorded for BOTH refusal paths above (no R-peaks at all, and a
+                    # Recorded for BOTH refusal paths above (no R-peaks at all, and a
                     # detection_quality failure) -- the first path never warned at all before,
                     # so the "no R-peaks -- is remove_ecg on?" reason was invisible everywhere.
                     file_notices.append(f"cardiac-gated peak EMG reported as NaN — {gate_reason}")
