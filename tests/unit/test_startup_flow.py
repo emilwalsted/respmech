@@ -298,13 +298,53 @@ class _FakeChooser:
         return 1
 
 
+class _FakeSignalDialog:
+    """Stand-in for the real (exec-blocking) SignalSetDialog — a plain 'new'
+    mode now opens this picker before the reset, so any test that ends up on that
+    branch needs it stubbed the same way the channel-setup modal already is."""
+
+    def __init__(self, parent=None, *, accept=True, signals=None):
+        self._accept = accept
+        self.signals = signals if signals is not None else ["flow", "poes", "pgas", "pdi"]
+
+    def exec(self):
+        from PySide6.QtWidgets import QDialog
+        return QDialog.Accepted if self._accept else QDialog.Rejected
+
+
+def _stub_signal_dialog(monkeypatch, **kw):
+    from respmech.ui import signal_set_dialog
+    monkeypatch.setattr(signal_set_dialog, "SignalSetDialog",
+                        lambda parent=None: _FakeSignalDialog(parent, **kw))
+
+
 def test_begin_session_new_enters_guided_mode(qapp, monkeypatch):
     from respmech.ui import startup_dialog
     from respmech.ui.main_window import MainWindow
     win = MainWindow(AppState())
     monkeypatch.setattr(startup_dialog, "StartupDialog", lambda parent=None: _FakeChooser("new"))
+    _stub_signal_dialog(monkeypatch)
     win.begin_session()
     assert win.settings_screen._mode == "new"
+    assert sorted(win.settings_screen.state.settings.analysis.signals) == [
+        "flow", "pdi", "pgas", "poes"]
+    win.close()
+
+
+def test_begin_session_new_cancelled_signal_picker_leaves_analysis_untouched(qapp, monkeypatch, tmp_path):
+    """Cancelling the signal-set picker must abort the whole 'New analysis' door,
+    not fall through to a reset with a null signal set — the picker's Cancel button and
+    the acceptance criterion both say the same thing: leave the previous analysis alone."""
+    from respmech.ui import startup_dialog
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    _fill_valid_input(sc); _fill_valid_output(sc, tmp_path); _fill_valid_channels(sc)
+    kept_folder = sc.in_folder.text()
+    monkeypatch.setattr(startup_dialog, "StartupDialog", lambda parent=None: _FakeChooser("new"))
+    _stub_signal_dialog(monkeypatch, accept=False)
+    win.begin_session()
+    assert sc.in_folder.text() == kept_folder      # untouched — the reset never ran
     win.close()
 
 
@@ -462,6 +502,7 @@ def test_cancelled_chooser_falls_through_to_new(qapp, monkeypatch):
             self.reject()                       # the user cancels; mode stays the default "new"
             return 0
     monkeypatch.setattr(startup_dialog, "StartupDialog", _Cancelled)
+    _stub_signal_dialog(monkeypatch)
     win.begin_session()
     assert win.settings_screen._mode == "new" and win.settings_screen.state.settings_path is None
     win.close()
@@ -745,6 +786,68 @@ def test_new_from_last_rig(qapp, isolated_prefs):
     assert "EMG: Columns #2, #3, #4" in rows
     assert sc.samp_freq.value() == 800
     assert not sc._all_ok()                               # still guided (folders blank)
+    win.close()
+
+
+def test_rig_round_trips_its_own_signal_set(qapp, isolated_prefs):
+    """save_rig/apply_rig now carry the analysis's effective signal set too, not
+    just the channel columns — a full (flow+poes+pgas+pdi+emg) analysis's rig should
+    reproduce that same explicit set on the other side, not silently fall back to
+    deriving it from the channels alone (which would happen to agree here, but the
+    field exists so a rig is a faithful copy regardless)."""
+    from respmech.core.settings import Settings
+    s = Settings()
+    s.input.channels.flow = 5; s.input.channels.poes = 7
+    s.input.channels.pgas = 8; s.input.channels.pdi = 9
+    s.input.channels.emg = [2, 3, 4]
+    isolated_prefs.save_rig(s)
+    rig = isolated_prefs.last_rig()
+    assert sorted(rig["signals"]) == ["emg", "flow", "pdi", "pgas", "poes"]
+
+    s2 = Settings()
+    isolated_prefs.apply_rig(s2, rig)
+    assert sorted(s2.analysis.signals) == ["emg", "flow", "pdi", "pgas", "poes"]
+
+
+def test_rig_without_a_stored_signal_set_still_derives_from_channels(qapp, isolated_prefs):
+    """A rig saved before this ticket (or any dict missing the key) must not raise or
+    leave a stale explicit set — analysis.signals stays at its Settings() default
+    (empty) and derives normally from whatever channels apply_rig just assigned."""
+    from respmech.core.settings import Settings
+    s2 = Settings()
+    isolated_prefs.apply_rig(s2, {"flow": 5, "poes": 7})
+    assert s2.analysis.signals == []
+    assert s2.input.channels.flow == 5 and s2.input.channels.poes == 7
+
+
+def test_new_analysis_from_startup_full_reset_via_new_rig_door(qapp, isolated_prefs, tmp_path):
+    """This fix: the startup chooser's 'New from last rig' used to go through the
+    softer enter_new_mode() alone (leaving a PREVIOUSLY open analysis's settings_path/
+    display_name/is_sample and any channel the rig doesn't mention untouched); it now
+    goes through new_analysis_from_startup, a full Settings() swap identical to
+    new_analysis()'s — and skips the signal-set picker entirely, deriving the set from
+    the rig instead (no SignalSetDialog is stubbed here, so this also proves the 'new_rig'
+    branch never tries to open one)."""
+    from respmech.core.settings import Settings
+    from respmech.ui.main_window import MainWindow
+    rig_settings = Settings()
+    rig_settings.input.channels.flow = 5; rig_settings.input.channels.poes = 7
+    isolated_prefs.save_rig(rig_settings)
+
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    _fill_valid_input(sc); _fill_valid_output(sc, tmp_path); _fill_valid_channels(sc)
+    sc.state.display_name = "leftover"
+    sc.state.is_sample = True
+
+    class _RigChooser:
+        mode, path = "new_rig", None
+        def exec(self): return 1
+    win._apply_startup_choice(_RigChooser())
+
+    assert sc.state.display_name is None and sc.state.is_sample is False
+    assert sorted(sc.state.settings.analysis.signals) == ["flow", "poes"]
+    assert sc.state.settings.input.channels.pgas is None   # not in the rig -> cleared by the reset
     win.close()
 
 

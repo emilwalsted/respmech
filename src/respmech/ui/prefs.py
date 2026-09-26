@@ -79,15 +79,25 @@ def set_last_folder(key: str, path: str) -> None:
 
 # --- last rig (P25) ---------------------------------------------------------
 def save_rig(settings) -> None:
-    """Remember the channel mapping + sampling format of an analysis as the 'last rig'."""
+    """Remember the channel mapping + sampling format of an analysis as the 'last rig'.
+
+    Also remembers the analysis's own effective signal set (``signals``), so
+    'New from last rig' can carry it forward explicitly rather than relying on it
+    being re-derived from the channels alone (harmless either way for a valid saved
+    analysis — explicit and derived always agree there — but this keeps the rig a
+    faithful copy of what the previous analysis actually declared). Absent on a rig
+    saved before this field existed; ``apply_rig`` below treats that as "derive it".
+    """
     s = _qsettings()
     if s is None:
         return
     try:
+        from respmech.core.analysis.signals import effective_signals  # noqa: PLC0415
         ch = settings.input.channels
         rig = {"poes": ch.poes, "pgas": ch.pgas, "pdi": ch.pdi, "volume": ch.volume,
                "flow": ch.flow, "emg": list(ch.emg), "entropy": list(ch.entropy),
-               "sampling_frequency": settings.input.format.sampling_frequency}
+               "sampling_frequency": settings.input.format.sampling_frequency,
+               "signals": sorted(effective_signals(settings))}
         s.setValue("last_rig", rig)
     except Exception:                           # pragma: no cover - defensive
         pass
@@ -159,7 +169,11 @@ def restore_splitter_state(key: str, splitter) -> bool:
 
 
 def apply_rig(settings, rig: dict) -> None:
-    """Apply a saved rig onto a Settings object (channel columns + sampling only)."""
+    """Apply a saved rig onto a Settings object (channel columns + sampling, plus the
+    rig's own signal set when it has one). A rig saved before ``signals``
+    existed has no such key, so ``settings.analysis.signals`` is simply left at its
+    ``Settings()`` default (empty) and 'New from last rig' derives the set from the
+    channels this function just assigned instead, same as before this ticket."""
     if not rig:
         return
     ch = settings.input.channels
@@ -172,3 +186,5 @@ def apply_rig(settings, rig: dict) -> None:
         ch.entropy = [int(x) for x in rig["entropy"]]
     if rig.get("sampling_frequency"):
         settings.input.format.sampling_frequency = int(rig["sampling_frequency"])
+    if rig.get("signals"):
+        settings.analysis.signals = list(rig["signals"])

@@ -13,7 +13,7 @@ import os
 
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu,
+from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu,
                                QTabWidget, QToolButton, QVBoxLayout, QWidget)
 
 from respmech import __version__
@@ -184,8 +184,21 @@ class MainWindow(QMainWindow):
             return
         if dlg.mode == "sample" and self.settings_screen.open_sample_analysis():   # P23
             return
-        # P25: "New from last rig" inherits the last channel mapping into the guided flow
-        self.settings_screen.enter_new_mode(use_last_rig=(dlg.mode == "new_rig"))
+        if dlg.mode == "new_rig":
+            # P25: "New from last rig" derives its signal set from the rig's own
+            # channel mapping (prefs.apply_rig) and skips the picker entirely — there is
+            # nothing to choose, the rig already says what it was.
+            self.settings_screen.new_analysis_from_startup(use_last_rig=True)
+            return
+        # Plain "New analysis" now asks which signals to declare BEFORE the reset,
+        # so the fresh Settings() below is never re-opened with the wrong door — see
+        # new_analysis_from_startup's own docstring for why the old enter_new_mode()-only
+        # call here used to let a preset be re-inflated by leftover channels.
+        from respmech.ui.signal_set_dialog import SignalSetDialog  # noqa: PLC0415
+        sig_dlg = SignalSetDialog(self)
+        if sig_dlg.exec() != QDialog.Accepted:
+            return          # cancelled: leave whatever analysis was open untouched
+        self.settings_screen.new_analysis_from_startup(signals=sig_dlg.signals)
 
     def _update_window_title(self):
         """Name the active analysis in the title bar and flag unsaved edits, so it is
@@ -397,7 +410,20 @@ class MainWindow(QMainWindow):
         return self.analysis_btn
 
     def _new_analysis(self):
-        self.settings_screen.new_analysis()
+        """'File > New analysis' / 'Analysis > New analysis': confirm discarding
+        unsaved edits first (``new_analysis()``'s own guard, run here instead so the
+        signal-set picker can sit between the confirm and the actual reset), then let the
+        user choose the signal set BEFORE ``new_analysis_from_startup`` resets Settings()
+        — mirroring the startup chooser's 'New analysis' door exactly, per the ticket's
+        'File > New opens the dialog before enter_new_mode'."""
+        if not self.settings_screen.confirm_discard_changes(
+                "New analysis", question="Save them before starting a new analysis?"):
+            return
+        from respmech.ui.signal_set_dialog import SignalSetDialog  # noqa: PLC0415
+        sig_dlg = SignalSetDialog(self)
+        if sig_dlg.exec() != QDialog.Accepted:
+            return
+        self.settings_screen.new_analysis_from_startup(signals=sig_dlg.signals)
         self._show_settings_status()
 
     def _open_analysis_dialog(self):

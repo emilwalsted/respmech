@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDou
                                QScrollArea, QSpinBox, QVBoxLayout, QWidget)
 from PySide6.QtCore import Signal, QTimer, Qt
 
+from respmech.core.analysis.signals import SINGLE_SIGNALS, effective_signals
 from respmech.core.settings import BreathCountEntry, Settings, SettingsError
 from respmech.ui.dialogs import open_error_dialog, short_error
 from respmech.ui.migration_report_dialog import open_migration_report
@@ -1299,21 +1300,122 @@ class SettingsScreen(QWidget):
         return self.save_analysis(confirm_overwrite=False)   # a refused save aborts the action too
 
     def new_analysis(self):
-        """Analysis > 'New analysis': discard the current settings for a fresh set and
-        re-enter the guided flow. Guarded like every other action that would drop unsaved
-        edits (open, recents, close) — the guard only asks when there are REAL edits, and
-        offers Save rather than a bare discard."""
+        """Discard the current settings for a fresh set and re-enter the guided flow,
+        with no signal-set choice (the plain reset ``new_analysis_from_startup`` below
+        also does, minus the picker). Guarded like every other action that would drop
+        unsaved edits (open, recents, close) — the guard only asks when there are REAL
+        edits, and offers Save rather than a bare discard.
+
+        Production's 'File > New' (``main_window._new_analysis``) no longer calls this
+        directly — it builds a richer flow around ``new_analysis_from_startup`` so the
+        signal-set picker can sit between the confirm and the reset. This stays as the
+        plain, undecorated primitive: a real, independently useful reset-and-confirm
+        unit worth testing (and reusing) on its own, without pulling in a dialog."""
         if not self.confirm_discard_changes(
                 "New analysis", question="Save them before starting a new analysis?"):
             return
+        self.new_analysis_from_startup()
+
+    def new_analysis_from_startup(self, signals: list[str] | None = None,
+                                  use_last_rig: bool = False):
+        """The full-reset primitive behind ``new_analysis()`` above, the startup
+        chooser's 'New analysis'/'New from last rig' doors, and 'File > New analysis'
+        once its own ``SignalSetDialog`` has been accepted: a genuine ``Settings()``
+        swap, not the softer ``enter_new_mode()`` alone — which is all
+        ``_apply_startup_choice`` used to call for the startup doors. That gap
+        mattered: a preset chosen over the PREVIOUS analysis's leftover channels could
+        otherwise be silently re-inflated by them the moment a channel got reassigned,
+        since ``enter_new_mode()`` only blanks the input/output folders and mask, never
+        the channel mapping itself.
+
+        Discarding unsaved edits is the CALLER's job (``confirm_discard_changes``), same
+        as it already is for every other caller of ``enter_new_mode()`` — this method
+        never asks on its own, so it composes cleanly with a dialog the caller may show
+        in between (the signal-set picker) without stacking two confirmation prompts.
+
+        ``signals``: the explicit signal set to apply via ``apply_signal_set`` (the ONE
+        funnel for changing it — see that method), or ``None`` to skip applying one and
+        let it derive from whichever channels end up assigned (used by 'New from last
+        rig', which derives its set from the rig's own channel mapping instead, and
+        never shows the picker — see ``prefs.apply_rig``)."""
         self.state.settings = Settings()
         self.state.settings_path = None
         self.state.display_name = None
         self.state.legacy_source_path = None
         self.state.is_sample = False
         self.from_state()
-        self.enter_new_mode()       # emits inputs/settings_changed then sets guided status
-        self._mark_clean()          # a fresh analysis has no unsaved edits yet
+        if signals is not None:
+            self.apply_signal_set(signals)
+        self.enter_new_mode(use_last_rig=use_last_rig)
+        self._mark_clean()
+
+    def apply_signal_set(self, signals: list[str]):
+        """The ONE funnel (R7) for changing ``analysis.signals`` in an already-running
+        session: every action that changes the declared signal set — the New-analysis
+        picker above, and (once a later release wires it in) Setup's own Signals row
+        'Change…' door too — must go through this, never assign ``analysis.signals``
+        directly. A preset chosen over a NON-blank state must not be silently
+        re-inflated by channels the new set no longer includes; this is what clears
+        them first.
+
+        Clears ``ch.<role> = None`` for every single-role signal (flow/poes/pgas/pdi)
+        LEAVING the new set, and ``ch.emg = []`` when 'emg' leaves it; ``ch.entropy`` is
+        never touched (R8: sample entropy is independent of the signal set).
+
+        When flow's MEMBERSHIP of the set changes (added or removed — a different
+        segmenter produces the breath numbers and kinds either way, so every existing
+        one means something different afterwards) AND there is actually breath-keyed
+        state that would be affected, the user is asked ONCE whether to also clear it.
+        Today that is ``exclude_breaths``/``breath_counts``; ``breath_types``,
+        ``references``, ``reference_defaults`` and ``separators`` do not exist yet (later
+        tickets add them) and are cleared the same way via ``getattr``/``hasattr``, so
+        adding one of those lists needs no change here. Nothing is asked, and nothing is
+        cleared, when there is nothing to lose (a freshly reset analysis has none of
+        this yet) — the same "dropping a role clears the derived state that depended
+        on it" principle already established for removing the EMG role (silently
+        there, since a stuck-invalid ECG auto-detect flag was worse than asking; here
+        the confirmation is added because losing flow is the bigger change — see
+        ``docs/beslutninger.md``)."""
+        # Same guard as core.analysis.signals.effective_signals, and for the same
+        # reason: a bare string is iterable too, so frozenset("flow") would silently
+        # become {'f','l','o','w'} — and since 'flow' is then None-of-the-above, the
+        # clearing loop below would wipe every single-role channel. Only this
+        # method's own SignalSetDialog caller exists today (always a real list), but
+        # the funnel is meant for a later caller too, so the guard belongs here now.
+        if isinstance(signals, str):
+            raise TypeError(
+                f"apply_signal_set expects a list of signal names, not a bare string: "
+                f"{signals!r}")
+        s = self.state.settings
+        ch = s.input.channels
+        had_flow = "flow" in effective_signals(s)
+        new_set = frozenset(signals)
+        wants_flow = "flow" in new_set
+
+        proc = s.processing
+        breath_keyed_attrs = ("exclude_breaths", "breath_counts", "breath_types",
+                              "references", "reference_defaults", "separators")
+        has_breath_keyed_state = any(getattr(proc, a, None) for a in breath_keyed_attrs)
+
+        if had_flow != wants_flow and has_breath_keyed_state:
+            ans = QMessageBox.question(
+                self, "RespMech",
+                "Breath types, references, exclusions and separators were made for a "
+                "different breath segmentation — clear them?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if ans == QMessageBox.Yes:
+                for a in breath_keyed_attrs:
+                    if hasattr(proc, a):
+                        setattr(proc, a, [])
+
+        s.analysis.signals = list(signals)
+        for role in SINGLE_SIGNALS:
+            if role not in new_set:
+                setattr(ch, role, None)
+        if "emg" not in new_set:
+            ch.emg = []
+
+        self.settings_changed.emit()
 
     def _analysis_dialog_start(self):
         """Where an Open-analysis-style file dialog should start (ticket C03 point 4):
