@@ -38,6 +38,22 @@ ARB = "a.u."           # uncalibrated (EMG amplitude in this pipeline)
 # Ordered (predicate, unit) rules — first match wins. Predicates take the lower-cased
 # column name. Order matters: the most specific patterns come first.
 _RULES: list[tuple] = [
+    # --- generic naming conventions (checked FIRST: a suffix/prefix convention
+    # future columns opt into, so it must win over the more specific rules below
+    # that would otherwise misclassify it, e.g. 'rms_col_2_pct' would hit the
+    # EMG 'rms' rule and 't_peak_in_flow' would hit the 'flow' rule). Suffixes
+    # are all checked before any of this block's prefixes, not interleaved: a
+    # name can match both (e.g. a future coefficient-of-variation of a timing
+    # value, 't_peak_cv', or of a PEEPi value, 'peepi_dyn_cv') and the suffix is
+    # always the more specific, intended classification in that case. -----------
+    (lambda c: c.endswith("_pct") or "_pct_" in c, "%"),
+    (lambda c: c.endswith("_frac"), DIMLESS),
+    (lambda c: c.endswith("_cv"), "%"),
+    (lambda c: c.endswith("_db"), "dB"),
+    (lambda c: c.startswith("t_"), SECOND),
+    (lambda c: c.startswith("peepi_lag"), SECOND),
+    (lambda c: c.startswith("peepi"), CMH2O),
+    (lambda c: c.startswith("tt_"), DIMLESS),
     # --- EMG (checked first: names contain 'emg'/'rms', not a pressure) ----------
     (lambda c: c.startswith("integral_emg") or c.startswith("integralemg"), f"{ARB}·s"),
     (lambda c: c.startswith("rms"), ARB),
@@ -72,8 +88,43 @@ _RULES: list[tuple] = [
 _DISPLAY: dict[str, str] = {}
 
 
+def _registry_unit_for(c: str) -> str | None:
+    """Consult ``core/analysis/registry.py``'s ``REGISTRY`` for a column that
+    ``_RULES`` above leaves unclassified, matching by exact name or by
+    ``prefix=``. Returns ``None`` when the registry has no opinion either
+    (every entry today is ``unit=None`` — the legacy mechanics block still gets
+    its units from ``_RULES`` alone, unchanged; see registry.py's own
+    docstring). A registered ``unit=None`` is treated the same as no entry at
+    all (never returned): an exact name always wins over a prefix family
+    regardless of ``REGISTRY`` order, and a spec with no opinion is skipped
+    rather than short-circuiting the search, so a broad, early ``prefix=``
+    family (like today's ``rms_``/``sample_entropy_``) can never hide a later,
+    more specific entry that does declare a real unit.
+
+    Imported lazily, not at module level: ``quantities.py`` is read by both
+    ``core/io/writers.py`` and ``ui/`` (module docstring), and
+    ``test_startup_imports.py`` pins that importing the GUI shell must not drag
+    ``core.analysis.registry`` in at import time (it is "not wired into the GUI
+    yet"). A lazy import here only touches ``sys.modules`` the first time
+    ``unit_for`` actually falls through to it, never on a bare ``import``."""
+    from respmech.core.analysis.registry import REGISTRY
+
+    for spec in REGISTRY:
+        if spec.name is not None and spec.unit is not None and c == spec.name.lower():
+            return spec.unit
+    for spec in REGISTRY:
+        if spec.prefix is not None and spec.unit is not None and c.startswith(spec.prefix.lower()):
+            return spec.unit
+    return None
+
+
 def unit_for(column: str) -> str:
-    """The unit string for a result column, or "" when it is unknown/left blank."""
+    """The unit string for a result column, or "" when it is unknown/left blank.
+
+    ``_RULES`` (generic naming conventions) is consulted first; for a name it
+    leaves unclassified, the registry's declared ``ColumnSpec.unit`` (exact
+    name or ``prefix=``) is used when one is registered and not itself
+    ``None``. Neither source having an opinion also resolves to ""."""
     c = str(column).lower()
     if c in ("file", "breath_no", "breathno"):
         return ""
@@ -83,7 +134,8 @@ def unit_for(column: str) -> str:
                 return unit
         except Exception:                       # pragma: no cover - defensive
             continue
-    return ""
+    reg_unit = _registry_unit_for(c)
+    return reg_unit if reg_unit is not None else ""
 
 
 

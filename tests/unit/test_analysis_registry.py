@@ -1,10 +1,150 @@
 """Registry-lite (``core/analysis/registry.py``): the legacy mechanics key order is
 pinned against the real compute output, and ``resolve()`` is exercised against a
 capability-dependent case (entropy present, EMG absent)."""
-from _helpers import requires_synth, synth_settings
+import json
+import os
+
+from _helpers import ROOT, requires_synth, synth_settings
 
 from respmech.core.analysis.registry import LEGACY_MECHANICS_ORDER, resolve
 from respmech.core.analysis.signals import Capabilities
+
+# A snapshot of quantities.unit_for()'s answer for every real Data-sheet column name
+# that appears anywhere in tests/golden/golden_reference.json (average_breathdata +
+# each file's own breath table, across every scenario), taken before quantities.py's
+# generic _pct/t_/_frac/peepi/tt_/_cv/_db rules and registry fallback were added. A
+# mismatch here means one of those deliberately generic rules accidentally
+# reclassified a column that is already shipping — see
+# test_unit_for_is_unchanged_for_every_current_golden_column.
+_GOLDEN_UNIT_SNAPSHOT = {
+    'bf': 'min⁻¹',
+    'breath_no': '',
+    'ex_flow_midvol': 'L·s⁻¹',
+    'exp_pgas_rise': 'cmH₂O',
+    'file': '',
+    'flow_midvolexp': 'L·s⁻¹',
+    'flow_midvolinsp': 'L·s⁻¹',
+    'in_flow_midvol': 'L·s⁻¹',
+    'insp_pdi_rise': 'cmH₂O',
+    'int_oesinsp': 'cmH₂O·s',
+    'int_pdiinsp': 'cmH₂O·s',
+    'int_pgasexp': 'cmH₂O·s',
+    'integral_emg_col_2': 'a.u.·s',
+    'integral_emg_col_3': 'a.u.·s',
+    'integral_emg_col_4': 'a.u.·s',
+    'integral_emg_exp_col_2': 'a.u.·s',
+    'integral_emg_exp_col_3': 'a.u.·s',
+    'integral_emg_exp_col_4': 'a.u.·s',
+    'integral_emg_insp_col_2': 'a.u.·s',
+    'integral_emg_insp_col_3': 'a.u.·s',
+    'integral_emg_insp_col_4': 'a.u.·s',
+    'integralemg_exp_max': 'a.u.·s',
+    'integralemg_exp_mean': 'a.u.·s',
+    'integralemg_insp_max': 'a.u.·s',
+    'integralemg_insp_mean': 'a.u.·s',
+    'integralemg_max': 'a.u.·s',
+    'integralemg_mean': 'a.u.·s',
+    'max_ex_flow': 'L·s⁻¹',
+    'max_in_flow': 'L·s⁻¹',
+    'pdi_endexp': 'cmH₂O',
+    'pdi_endinsp': 'cmH₂O',
+    'pdi_maxinsp': 'cmH₂O',
+    'pdi_minexp': 'cmH₂O',
+    'pdi_tidal_swing': 'cmH₂O',
+    'pgas_endexp': 'cmH₂O',
+    'pgas_endinsp': 'cmH₂O',
+    'pgas_maxexp': 'cmH₂O',
+    'pgas_minexp': 'cmH₂O',
+    'pgas_tidal_swing': 'cmH₂O',
+    'poes_endexp': 'cmH₂O',
+    'poes_endinsp': 'cmH₂O',
+    'poes_maxexp': 'cmH₂O',
+    'poes_midvolexp': 'cmH₂O',
+    'poes_midvolinsp': 'cmH₂O',
+    'poes_mininsp': 'cmH₂O',
+    'poes_tidal_swing': 'cmH₂O',
+    'ptp_oesinsp': 'cmH₂O·s·min⁻¹',
+    'ptp_pdiinsp': 'cmH₂O·s·min⁻¹',
+    'ptp_pgasexp': 'cmH₂O·s·min⁻¹',
+    'rms_col_2': 'a.u.',
+    'rms_col_3': 'a.u.',
+    'rms_col_4': 'a.u.',
+    'rms_exp_col_2': 'a.u.',
+    'rms_exp_col_3': 'a.u.',
+    'rms_exp_col_4': 'a.u.',
+    'rms_exp_max': 'a.u.',
+    'rms_exp_mean': 'a.u.',
+    'rms_insp_col_2': 'a.u.',
+    'rms_insp_col_3': 'a.u.',
+    'rms_insp_col_4': 'a.u.',
+    'rms_insp_max': 'a.u.',
+    'rms_insp_mean': 'a.u.',
+    'rms_max': 'a.u.',
+    'rms_mean': 'a.u.',
+    'sample_entropy_col_10': '—',
+    'sample_entropy_col_11': '—',
+    'sample_entropy_col_12': '—',
+    'sample_entropy_exp_col_10': '—',
+    'sample_entropy_exp_col_11': '—',
+    'sample_entropy_exp_col_12': '—',
+    'sample_entropy_exp_max': '—',
+    'sample_entropy_exp_mean': '—',
+    'sample_entropy_insp_max': '—',
+    'sample_entropy_insp_col_10': '—',
+    'sample_entropy_insp_col_11': '—',
+    'sample_entropy_insp_col_12': '—',
+    'sample_entropy_insp_mean': '—',
+    'sample_entropy_insp_min': '—',
+    'sample_entropy_exp_min': '—',
+    'sample_entropy_max': '—',
+    'sample_entropy_mean': '—',
+    'sample_entropy_min': '—',
+    'te': 's',
+    'ti': 's',
+    'ti_ttot': '—',
+    'tlr_insp': '',
+    'ttot': 's',
+    've': 'L·min⁻¹',
+    'vmr': '',
+    'vol_endexp': 'L',
+    'vol_endinsp': 'L',
+    'vt': 'L',
+    'wob_ex_total': 'J·min⁻¹',
+    'wob_in_ela': 'J·min⁻¹',
+    'wob_in_res': 'J·min⁻¹',
+    'wob_in_total': 'J·min⁻¹',
+    'wobtotal': 'J·min⁻¹',
+}
+
+
+def test_unit_for_is_unchanged_for_every_current_golden_column():
+    """Snapshot test: every real column name in tests/golden/golden_reference.json
+    (average_breathdata + each file's own per-file breath table, across every scenario)
+    still resolves to exactly the unit it did before quantities.py's new generic rules
+    and registry fallback were added. Also asserts the set of golden columns matches the
+    pinned snapshot's keys, so a future scenario adding a genuinely new column name is
+    caught here rather than silently skipped."""
+    from respmech.core import quantities
+
+    with open(os.path.join(ROOT, "tests", "golden", "golden_reference.json")) as fh:
+        ref = json.load(fh)
+    cols = set()
+    for scenario in ref.values():
+        cols.update(scenario.get("average_breathdata", {}).keys())
+        for per_file in scenario.get("per_file", {}).values():
+            if isinstance(per_file, dict):
+                cols.update(per_file.keys())
+
+    assert cols == set(_GOLDEN_UNIT_SNAPSHOT), (
+        f"golden column set drifted from the pinned snapshot: "
+        f"new={cols - set(_GOLDEN_UNIT_SNAPSHOT)}, gone={set(_GOLDEN_UNIT_SNAPSHOT) - cols}"
+    )
+    mismatches = {
+        c: (quantities.unit_for(c), expected)
+        for c, expected in _GOLDEN_UNIT_SNAPSHOT.items()
+        if quantities.unit_for(c) != expected
+    }
+    assert not mismatches, f"unit_for changed for existing golden columns (got, expected): {mismatches}"
 
 
 def test_capabilities_from_settings_against_real_settings_is_full_with_entropy():
