@@ -1806,3 +1806,125 @@ def test_sync_from_preview_skips_the_rebuild_when_the_signature_is_unchanged(qap
     assert calls == [1]
     win.close()
 
+
+# ---------------------------------------------------------------------------
+# apply_signal_set: the one funnel for changing analysis.signals
+# ---------------------------------------------------------------------------
+def test_apply_signal_set_clears_channels_for_roles_leaving_the_set(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    ch = sc.state.settings.input.channels
+    assert ch.pgas == 8 and ch.pdi == 9 and ch.emg == [2, 3, 4]
+
+    sc.apply_signal_set(["flow", "poes"])
+    assert ch.pgas is None and ch.pdi is None and ch.emg == []
+    assert ch.flow == 5 and ch.poes == 7        # roles that stayed are untouched
+    assert sc.state.settings.analysis.signals == ["flow", "poes"]
+    win.close()
+
+
+def test_apply_signal_set_over_a_reduced_state_cannot_be_reinflated(qapp, tmp_path):
+    """The acceptance criterion this method exists for: a preset applied over a state that
+    already had OTHER channels assigned must not let them silently reappear — apply_signal_set
+    clears first, so re-declaring a wider set later starts from genuinely empty roles, not
+    stale column numbers a previous mapping left behind."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.apply_signal_set(["flow", "poes"])              # drops pgas/pdi/emg
+    ch = sc.state.settings.input.channels
+    assert ch.pgas is None and ch.pdi is None
+    # widening back to 'full' does NOT resurrect the old column numbers on its own —
+    # apply_signal_set only ever clears roles LEAVING the set, it never assigns one
+    sc.apply_signal_set(["flow", "poes", "pgas", "pdi"])
+    assert ch.pgas is None and ch.pdi is None           # still unassigned: a real gap to fill
+    win.close()
+
+
+def test_apply_signal_set_entropy_is_never_touched(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.state.settings.input.channels.entropy = [10, 11, 12]
+    sc.apply_signal_set(["flow"])                       # drops poes/pgas/pdi/emg too
+    assert sc.state.settings.input.channels.entropy == [10, 11, 12]
+    win.close()
+
+
+def test_apply_signal_set_asks_once_and_clears_when_flow_leaves_with_breath_keyed_state(
+        qapp, tmp_path, monkeypatch):
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import ExcludeEntry, BreathCountEntry
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    proc = sc.state.settings.processing
+    proc.exclude_breaths = [ExcludeEntry(file="a.csv", breaths=[1, 2])]
+    proc.breath_counts = [BreathCountEntry(file="a.csv", count=10)]
+
+    calls = []
+    monkeypatch.setattr(ss.QMessageBox, "question",
+                        staticmethod(lambda *a, **k: (calls.append(a), ss.QMessageBox.Yes)[1]))
+    sc.apply_signal_set(["emg"])                        # flow leaves the set
+    assert len(calls) == 1
+    # the exact wording the ticket specifies, not just "a dialog was shown" — a future
+    # refactor that quietly changes/typos it should turn this test red
+    question_text = calls[0][2]
+    assert question_text == (
+        "Breath types, references, exclusions and separators were made for a "
+        "different breath segmentation — clear them?")
+    assert proc.exclude_breaths == [] and proc.breath_counts == []
+    win.close()
+
+
+def test_apply_signal_set_declining_the_prompt_keeps_the_lists(qapp, tmp_path, monkeypatch):
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import ExcludeEntry
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    proc = sc.state.settings.processing
+    proc.exclude_breaths = [ExcludeEntry(file="a.csv", breaths=[1])]
+    monkeypatch.setattr(ss.QMessageBox, "question",
+                        staticmethod(lambda *a, **k: ss.QMessageBox.No))
+    sc.apply_signal_set(["emg"])
+    assert proc.exclude_breaths != []                   # declined -> left alone
+    # the channel-clearing part of apply_signal_set still ran regardless of the answer
+    assert sc.state.settings.input.channels.flow is None
+    win.close()
+
+
+def test_apply_signal_set_no_prompt_without_breath_keyed_state(qapp, tmp_path, monkeypatch):
+    """A brand-new analysis (or any state with nothing breath-keyed yet) must never see
+    the reconciliation prompt — there is nothing for it to lose."""
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    assert sc.state.settings.processing.exclude_breaths == []
+    assert sc.state.settings.processing.breath_counts == []
+
+    def _boom(*a, **k):
+        raise AssertionError("QMessageBox.question must not be called")
+    monkeypatch.setattr(ss.QMessageBox, "question", staticmethod(_boom))
+    sc.apply_signal_set(["emg"])                        # flow leaves, but nothing to clear
+    assert sc.state.settings.input.channels.flow is None
+    win.close()
+
+
+def test_apply_signal_set_no_prompt_when_flow_membership_is_unchanged(qapp, tmp_path, monkeypatch):
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import ExcludeEntry
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.state.settings.processing.exclude_breaths = [ExcludeEntry(file="a.csv", breaths=[1])]
+
+    def _boom(*a, **k):
+        raise AssertionError("QMessageBox.question must not be called")
+    monkeypatch.setattr(ss.QMessageBox, "question", staticmethod(_boom))
+    sc.apply_signal_set(["flow", "poes", "pgas", "pdi", "emg"])   # flow stays in the set
+    assert sc.state.settings.processing.exclude_breaths != []
+    win.close()
+

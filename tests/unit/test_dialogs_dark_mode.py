@@ -28,6 +28,16 @@ def test_startup_dialog_dark(dark_app):
     dlg.close()
 
 
+def test_signal_set_dialog_dark(dark_app):
+    from respmech.ui.signal_set_dialog import SignalSetDialog
+    from PySide6.QtWidgets import QLabel
+    dlg = SignalSetDialog(); dlg.show(); QApplication.processEvents()
+    heading = next(l for l in dlg.findChildren(QLabel) if l.property("role") == "heading")
+    fg = heading.palette().color(heading.foregroundRole())
+    assert fg.lightness() > 150                           # heading text is light on the dark ground
+    dlg.close()
+
+
 def test_channel_setup_dialog_dark(dark_app):
     from respmech.ui.channel_setup_dialog import ChannelSetupDialog
     n = 1200
