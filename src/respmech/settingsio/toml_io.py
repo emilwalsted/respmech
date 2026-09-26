@@ -13,7 +13,12 @@ from pathlib import Path
 
 import tomli_w
 
-from respmech.core.settings import Settings
+# The one authoritative table of per-folder-tagged batch state — defined once in
+# core.settings (as `_CARRIED_KINDS`; CarriedOverState/carried_over_state/
+# clear_carried_over are its other consumers) and imported here under the name this
+# module's own functions were already written against, so the two can never drift the
+# way the six hand-spread call sites this replaces already had (B06/M-07).
+from respmech.core.settings import Settings, _CARRIED_KINDS as _FOLDER_TAG_PATHS, _walk
 
 _INDEX_RE = re.compile(r"^\[(\d+)\]$")
 
@@ -26,22 +31,25 @@ def _rebase_folders(settings: Settings, base: str) -> None:
     run). The EMG noise reference FILE is left as-is — a bare filename is resolved against
     the input folder downstream.
 
-    The carried-folder provenance tags (ExcludeEntry/BreathCountEntry.folder,
-    NoiseSettings.reference_folder — see core.settings.carried_over_state) are rebased the
-    SAME way, for the same reason: they are compared directly against the live, rebased
-    ``settings.input.folder`` (core.settings.is_carried_folder), and a shared/moved study
-    that only rebased input.folder itself would make every entry look falsely carried over
-    the moment it was reopened somewhere else."""
+    The carried-folder provenance tags (every row in ``_FOLDER_TAG_PATHS`` — see
+    core.settings.carried_over_state) are rebased the SAME way, for the same reason: they
+    are compared directly against the live, rebased ``settings.input.folder``
+    (core.settings.is_carried_folder), and a shared/moved study that only rebased
+    input.folder itself would make every entry look falsely carried over the moment it was
+    reopened somewhere else."""
     for obj, attr in ((settings.input, "folder"), (settings.output, "folder")):
         val = getattr(obj, attr)
         if val and not os.path.isabs(val):
             setattr(obj, attr, os.path.normpath(os.path.join(base, val)))
-    for entry in (*settings.processing.exclude_breaths, *settings.processing.breath_counts):
-        if entry.folder and not os.path.isabs(entry.folder):
-            entry.folder = os.path.normpath(os.path.join(base, entry.folder))
-    noise = settings.processing.emg.noise
-    if noise.reference_folder and not os.path.isabs(noise.reference_folder):
-        noise.reference_folder = os.path.normpath(os.path.join(base, noise.reference_folder))
+    for path, _kind, _name_of, _clear_fn in _FOLDER_TAG_PATHS:
+        container, attr = _walk(settings, path)
+        val = getattr(container, attr)
+        if isinstance(val, list):
+            for entry in val:
+                if entry.folder and not os.path.isabs(entry.folder):
+                    entry.folder = os.path.normpath(os.path.join(base, entry.folder))
+        elif val and not os.path.isabs(val):
+            setattr(container, attr, os.path.normpath(os.path.join(base, val)))
 
 
 def load_toml(path: str | Path) -> Settings:
@@ -72,6 +80,20 @@ def _relativize_folder(folder: str, base: str) -> str:
     return folder
 
 
+def _walk_dict(data: dict, dotted_path: str) -> tuple[dict | None, str]:
+    """Dict-shaped counterpart of ``core.settings._walk``, for the ``to_dict()``/TOML
+    shape ``save_toml`` writes: resolve all but the last segment of ``dotted_path``
+    against nested dicts (dataclass field names ARE the TOML/dict key names, so the SAME
+    path strings from ``_FOLDER_TAG_PATHS`` apply unchanged). Returns ``(None, last
+    segment)`` if an intermediate table is absent (dropped by ``_toml_clean`` because it
+    was never set) — the caller then has nothing to relativize."""
+    segments = dotted_path.split(".")
+    cur = data
+    for seg in segments[:-1]:
+        cur = cur.get(seg) if isinstance(cur, dict) else None
+    return (cur if isinstance(cur, dict) else None), segments[-1]
+
+
 def save_toml(settings: Settings, path: str | Path) -> None:
     # Re-relativize input/output folders against the file's own directory — the inverse of
     # load_toml's rebase — so an Open→edit→Save cycle preserves a portable relative-path
@@ -86,15 +108,17 @@ def save_toml(settings: Settings, path: str | Path) -> None:
         if isinstance(sec, dict) and sec.get("folder"):
             sec["folder"] = _relativize_folder(sec["folder"], base)
     # inverse of the carried-folder rebase in _rebase_folders — see its docstring.
-    proc = data.get("processing")
-    if isinstance(proc, dict):
-        for key in ("exclude_breaths", "breath_counts"):
-            for entry in proc.get(key) or ():
+    for path_, _kind, _name_of, _clear_fn in _FOLDER_TAG_PATHS:
+        parent, attr = _walk_dict(data, path_)
+        if parent is None:
+            continue
+        val = parent.get(attr)
+        if isinstance(val, list):
+            for entry in val:
                 if isinstance(entry, dict) and entry.get("folder"):
                     entry["folder"] = _relativize_folder(entry["folder"], base)
-        noise = (proc.get("emg") or {}).get("noise")
-        if isinstance(noise, dict) and noise.get("reference_folder"):
-            noise["reference_folder"] = _relativize_folder(noise["reference_folder"], base)
+        elif val:
+            parent[attr] = _relativize_folder(val, base)
     with open(path, "wb") as f:
         f.write(tomli_w.dumps(data).encode("utf-8"))
 

@@ -36,6 +36,22 @@ from respmech.ui.channel_summary import ChannelSummary
 # channel-setup OK so the single-pattern core batch runner still finds the files)
 _DEFAULT_MASK = "*.csv; *.txt"
 
+# The Setup Behold/Ryd banner's wording, one phrase per `core.settings.CarriedOverState`
+# kind (see its `kinds_present()`) — table-driven so a future kind (M-19/M-21/M-34's own
+# folder-tagged state) reaches the banner by adding an entry here, not by extending an
+# if/elif chain (M-07). ``SettingsScreen`` is referenced lazily inside each lambda, so its
+# position ahead of the class definition is fine — nothing here is called before the
+# class (and the module) has finished loading.
+_CARRIED_PHRASES = {
+    "exclude_files": lambda names: (
+        f"breath exclusions for {SettingsScreen._named_by_filename(names)}"),
+    "breath_count_files": lambda names: (
+        f"breath-count overrides for {SettingsScreen._named_by_filename(names)}"),
+    "noise_reference": lambda names: "the EMG rest reference",
+    "ecg_reference": lambda names: "the ECG reference",
+    "normalization_reference": lambda names: "the EMG normalisation reference",
+}
+
 
 class SettingsScreen(QWidget):
     settings_changed = Signal()     # any field edited -> shared state is current
@@ -385,9 +401,10 @@ class SettingsScreen(QWidget):
         self.qc.setProperty("banner", True)   # the box comes from the QSS, not extra margins
         outer.addWidget(self.qc)
 
-        # Carried-over exclusions/breath-counts/noise-reference banner: shown only when the
-        # input folder just changed AND state named against a DIFFERENT (or unrecorded)
-        # folder is still sitting in the analysis — see core.settings.carried_over_state.
+        # Carried-over exclusions/breath-counts/EMG-reference (noise/ECG/normalisation)
+        # banner: shown only when the input folder just changed AND state named against a
+        # DIFFERENT (or unrecorded) folder is still sitting in the analysis — see
+        # core.settings.carried_over_state.
         # Two explicit choices, no default: "Keep" just dismisses (the state was never
         # touched, so it still applies exactly as it did before — an inherited exclusion is
         # only ever hatched/named differently in Preview, never silently dropped); "Clear"
@@ -411,8 +428,8 @@ class SettingsScreen(QWidget):
         self.btn_carried_clear = QPushButton("Clear")
         self.btn_carried_clear.setProperty("compact", True)
         self.btn_carried_clear.setToolTip(
-            "Remove the exclusions/breath-count overrides/rest reference that belong to "
-            "the previous recordings folder.")
+            "Remove the exclusions/breath-count overrides/EMG references (rest, ECG, "
+            "normalisation) that belong to the previous recordings folder.")
         self.btn_carried_clear.clicked.connect(self._clear_carried_banner)
         cb.addWidget(self.btn_carried_keep)
         cb.addWidget(self.btn_carried_clear)
@@ -849,21 +866,17 @@ class SettingsScreen(QWidget):
         self._update_disclosure()   # last, so this screen's own validation status wins (see above)
 
     def _update_carried_banner(self):
-        """Show/hide the carried-over exclusions/breath-counts/noise-reference notice —
-        see core.settings.carried_over_state, and the banner built in _build()."""
+        """Show/hide the carried-over exclusions/breath-counts/reference notice — see
+        core.settings.carried_over_state, and the banner built in _build(). Wording is
+        built from `_CARRIED_PHRASES`, keyed on the SAME kinds `_CARRIED_KINDS` tracks
+        (M-07), so a new tagged kind never needs a new if/elif branch here."""
         from respmech.core.settings import carried_over_state
         state = carried_over_state(self.state.settings)
         if not state:
             self.carried_banner.setVisible(False)
             return
-        parts = []
-        if state.exclude_files:
-            parts.append(f"breath exclusions for {self._named_by_filename(state.exclude_files)}")
-        if state.breath_count_files:
-            parts.append("breath-count overrides for "
-                         f"{self._named_by_filename(state.breath_count_files)}")
-        if state.noise_reference:
-            parts.append("the EMG rest reference")
+        parts = [_CARRIED_PHRASES[kind](names) for kind, names in state.kinds_present()
+                 if kind in _CARRIED_PHRASES]
         self.carried_label.setText(
             "This analysis still has " + "; ".join(parts) + " set against a DIFFERENT "
             "recordings folder than the one now loaded. Keep them if you want the same "
@@ -2038,13 +2051,14 @@ class SettingsScreen(QWidget):
         with 'No input files found'.
 
         Copies the recording out of the temp input folder into an ``input`` subfolder next
-        to the destination file, and repoints ``input.folder``/``output.folder``, the EMG
-        noise reference folder, and any exclude-breaths/breath-count entry that named the
-        same temp folder — the carried-folder tags this screen elsewhere compares against
-        the live ``input.folder`` (``core.settings.is_carried_folder``) would otherwise
-        still point at the OLD temp folder while ``input.folder`` itself moved, making a
-        breath excluded moments earlier during this same sample session falsely read as
-        "carried over from a different folder" the instant the analysis is reopened.
+        to the destination file, and repoints ``input.folder``/``output.folder`` and every
+        row in ``core.settings._CARRIED_KINDS`` (M-07) that named the same temp folder —
+        the carried-folder tags this screen elsewhere compares against the live
+        ``input.folder`` (``core.settings.is_carried_folder``) would otherwise still point
+        at the OLD temp folder while ``input.folder`` itself moved, making a breath
+        excluded (or an EMG reference picked) moments earlier during this same sample
+        session falsely read as "carried over from a different folder" the instant the
+        analysis is reopened.
         ``AppState.save_toml`` -> ``settingsio.toml_io`` already relativizes any
         input/output folder that ends up living at/under the file's own directory, so
         nothing here needs to compute a relative path itself — it only needs to move the
@@ -2076,12 +2090,16 @@ class SettingsScreen(QWidget):
                 "system may already have cleared it. The analysis will be saved, but "
                 "it has no matching input file yet; point Setup at a real recordings "
                 "folder before running it.")
-        noise = s.processing.emg.noise
-        if noise.reference_folder == old_input:
-            noise.reference_folder = new_input
-        for entry in (*s.processing.exclude_breaths, *s.processing.breath_counts):
-            if entry.folder == old_input:
-                entry.folder = new_input
+        from respmech.core.settings import _CARRIED_KINDS, _walk
+        for path, _kind, _name_of, _clear_fn in _CARRIED_KINDS:
+            container, attr = _walk(s, path)
+            val = getattr(container, attr)
+            if isinstance(val, list):
+                for entry in val:
+                    if entry.folder == old_input:
+                        entry.folder = new_input
+            elif val == old_input:
+                setattr(container, attr, new_input)
         s.input.folder = new_input
         s.output.folder = os.path.join(dest_dir, "output")
 
@@ -2141,15 +2159,18 @@ class SettingsScreen(QWidget):
         The output folder is only ever a SUGGESTION (``ui.duplicate.derive_sibling_output``),
         shown in ``DuplicateFolderDialog`` for confirmation/editing, never applied silently.
 
-        The file-keyed state (exclude_breaths/breath_counts/the EMG noise reference) is
-        deliberately NOT force-cleared here: switching ``input.folder`` makes every entry
-        recorded against the OLD folder "carried-over" by B06's own definition
-        (``core.settings.carried_over_state``), so the Setup Behold/Ryd banner this screen
-        already shows will ask about exactly that state right after — reusing B06's
-        existing ask, not a second copy of it, per this ticket's own instruction to prefer
-        the already-built helper. ``processing.emg.ecg_reference_file`` has no such
-        folder-tracked ask mechanism (see core/settings.py), so it is cleared directly —
-        it can only ever have named a file in the OLD folder."""
+        The file-keyed state (exclude_breaths/breath_counts/the EMG noise/ECG/
+        normalisation references) is deliberately NOT force-cleared here: switching
+        ``input.folder`` makes every entry recorded against the OLD folder "carried-over"
+        by B06's own definition (``core.settings.carried_over_state``), so the Setup
+        Behold/Ryd banner this screen already shows will ask about exactly that state
+        right after — reusing B06's existing ask, not a second copy of it. Before M-07,
+        ``processing.emg.ecg_reference_file`` had no such folder-tracked ask mechanism and
+        was cleared directly here instead; now that it (and normalization_reference_file)
+        carry their own folder tag, force-clearing it would just be a second, redundant
+        way of doing what the banner's "Clear" already does — and would throw away a
+        reference that, unlike an excluded breath, has no per-file re-creation path, so
+        losing it silently on every duplicate would be a regression, not a safety net."""
         if not self.confirm_discard_changes(
                 "Duplicate for another recordings folder",
                 question="Save them before duplicating this analysis?"):
@@ -2177,7 +2198,6 @@ class SettingsScreen(QWidget):
         self.in_folder.setText(new_input)
         self.out_folder.setText(new_output)
         self.to_state()
-        self.state.settings.processing.emg.ecg_reference_file = None
         # Duplicating a sample-derived analysis onto real folders means it is no longer
         # the built-in sample — see AppState.is_sample's own docstring.
         self.state.is_sample = False
