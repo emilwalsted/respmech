@@ -704,3 +704,75 @@ def test_group_readout_truncates_the_straggler_list_separately_from_the_group_li
     assert status == "warn"
     assert "5 files do not match" in text
     assert "+3 more" in text
+
+
+# --------------------------------------------------------------------------- #
+# peek_header_warning's floor (M-12): scales with the DECLARED single-column
+# signal roles instead of a fixed 3
+# --------------------------------------------------------------------------- #
+def test_header_floor_still_flags_a_preamble_with_nothing_declared_yet(tmp_path):
+    """A manifest scan runs BEFORE channel assignment, so ``analysis.signals`` is empty
+    and no channel is assigned -- the historical, signal-set-agnostic floor of 3 applies,
+    unchanged from before this ticket."""
+    from respmech.ui.workers import peek_header_warning
+    (tmp_path / "a.txt").write_text("Interval=\t0.001 s\n1\t2\n")
+    s = _settings(str(tmp_path), "*.txt")
+    assert peek_header_warning(s, str(tmp_path / "a.txt")) is not None
+
+
+def test_header_floor_tightens_for_a_full_declared_signal_set(tmp_path):
+    """A full analysis (flow+poes+pgas+pdi explicitly declared) needs a time column plus
+    all four -- a 4-field first row is too few once flow, poes, pgas AND pdi are all
+    declared, even though it would have passed the old fixed floor of 3."""
+    from respmech.ui.workers import peek_header_warning
+    (tmp_path / "a.txt").write_text("time\tflow\tpoes\tpgas\n1\t2\t3\t4\n")
+    s = _settings(str(tmp_path), "*.txt")
+    s.analysis.signals = ["flow", "poes", "pgas", "pdi"]
+    msg = peek_header_warning(s, str(tmp_path / "a.txt"))
+    assert msg is not None and "4 field" in msg
+
+
+def test_header_floor_loosens_for_a_flow_only_declared_signal_set(tmp_path):
+    """A flow-only analysis only needs a time column plus Flow -- a 2-field first row is
+    enough, even though it would have failed the old fixed floor of 3."""
+    from respmech.ui.workers import peek_header_warning
+    (tmp_path / "a.txt").write_text("time\tflow\n1\t2\n")
+    s = _settings(str(tmp_path), "*.txt")
+    s.analysis.signals = ["flow"]
+    assert peek_header_warning(s, str(tmp_path / "a.txt")) is None
+
+
+def test_header_floor_for_an_emg_only_declared_signal_set_keeps_the_historical_baseline(tmp_path):
+    """EMG-only declares no single-column role at all (there is no fixed number of EMG
+    columns to check a floor against), but the floor never drops BELOW the historical
+    baseline of 3 -- self-review finding: a bare '1 + declared single roles' formula would
+    collapse to 1 for EMG-only, silencing the check almost entirely."""
+    from respmech.ui.workers import peek_header_warning
+    (tmp_path / "a.txt").write_text("time\tEMG1\tEMG2\n1\t2\t3\n")
+    s = _settings(str(tmp_path), "*.txt")
+    s.analysis.signals = ["emg"]
+    assert peek_header_warning(s, str(tmp_path / "a.txt")) is None
+
+
+def test_header_floor_still_flags_a_preamble_on_an_emg_only_declared_signal_set(tmp_path):
+    """The exact motivating case from this function's own docstring (a 2-field LabChart
+    preamble) must still be caught for an EMG-only analysis -- the one shape where a
+    literal '1 + declared single roles' formula would otherwise disable the check."""
+    from respmech.ui.workers import peek_header_warning
+    (tmp_path / "a.txt").write_text("Interval=\t0.001 s\n1\t2\n")
+    s = _settings(str(tmp_path), "*.txt")
+    s.analysis.signals = ["emg"]
+    assert peek_header_warning(s, str(tmp_path / "a.txt")) is not None
+
+
+def test_header_floor_does_not_crash_on_a_malformed_signal_set(tmp_path):
+    """Self-review fix: peek_header_warning must never raise (its own documented
+    contract) -- a hand-edited bare-string analysis.signals used to crash the WHOLE
+    manifest scan (build_manifest's per-file loop has no try/except of its own),
+    instead of just this one probe degrading to the historical floor."""
+    from respmech.ui.workers import peek_header_warning
+    (tmp_path / "a.txt").write_text("Interval=\t0.001 s\n1\t2\n")
+    s = _settings(str(tmp_path), "*.txt")
+    s.analysis.signals = "flow"          # malformed: a bare string, not a list
+    assert peek_header_warning(s, str(tmp_path / "a.txt")) is not None
+    assert build_manifest(str(tmp_path), "*.txt", s).header_warnings != ()

@@ -210,4 +210,62 @@ def test_save_blocker_never_shows_a_raw_dotted_key(qapp):
     assert not _DOTTED_KEY.search(blocker)
     assert "volume" in blocker.lower()
     assert sc.can_save() is False
-    win.close()
+
+
+# --------------------------------------------------------------------------- #
+# ui.validation.channel_collision — M-12: scoped to the DECLARED signal set
+# --------------------------------------------------------------------------- #
+def test_channel_collision_never_names_an_undeclared_pressure(qapp):
+    """The bug this ticket fixes: a "Flow + Poes" analysis (Pdi/Pgas not declared) must
+    never be told Pdi/Pgas are "not assigned" — they were never part of this analysis."""
+    from respmech.ui.validation import channel_collision
+    s = _valid_settings()
+    s.analysis.signals = ["flow", "poes"]
+    s.input.channels.pgas = None
+    s.input.channels.pdi = None
+    assert channel_collision(s) is None
+
+
+def test_channel_collision_names_a_missing_declared_role(qapp):
+    from respmech.ui.validation import channel_collision
+    s = _valid_settings()
+    s.analysis.signals = ["flow", "poes"]
+    s.input.channels.poes = None
+    msg = channel_collision(s)
+    assert msg is not None and "poes" in msg.lower() and "not assigned" in msg.lower()
+
+
+def test_channel_collision_leaves_emg_list_requirement_to_validate(qapp):
+    """EMG's own requirement (a non-empty column LIST) is enforced by
+    ``Settings.validate()``, not by ``channel_collision`` — see its own docstring: only
+    single-column roles can "point at the time axis" or "collide on a column"."""
+    from respmech.ui.validation import channel_collision
+    s = _valid_settings()
+    s.analysis.signals = ["flow", "emg"]
+    s.input.channels.emg = []
+    assert channel_collision(s) is None
+    s.input.channels.flow = None
+    msg = channel_collision(s)
+    assert msg is not None and "flow" in msg.lower()
+
+
+def test_channel_collision_reports_nothing_declared_at_all(qapp):
+    """A brand-new analysis: no explicit signals, no channel assigned at all."""
+    from respmech.core.settings import Settings
+    from respmech.ui.validation import channel_collision
+    s = Settings()
+    s.input.format.sampling_frequency = 1000
+    msg = channel_collision(s)
+    assert msg is not None
+    assert "no signal assigned" in msg.lower()
+    assert "signal set" in msg.lower()
+
+
+def test_channel_collision_does_not_crash_on_a_malformed_signal_set(qapp):
+    """A hand-edited bare-string ``analysis.signals`` must degrade to 'no collision found
+    here', leaving Settings.validate() (already translated for exactly this message) to
+    report it — never crash channel_collision itself."""
+    from respmech.ui.validation import channel_collision
+    s = _valid_settings()
+    s.analysis.signals = "flow"          # malformed: a bare string, not a list
+    assert channel_collision(s) is None

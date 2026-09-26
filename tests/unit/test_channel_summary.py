@@ -362,3 +362,39 @@ def test_a_derived_volume_is_still_hidden_without_flow_despite_a_real_column(qap
     texts = ChannelSummary().show_mapping(
         ch, capabilities=caps, integrate_from_flow=True).texts()
     assert not any("Volume" in t for t in texts)
+
+
+# --------------------------------------------------------------------------- #
+# M-12: channel_summary's rows read the SAME source as the dialog's dropdown
+# filtering (whatever is actually assigned) — no separate "required roles per
+# set" gate of its own to drift out of sync with channel_setup_dialog's
+# ---------------------------------------------------------------------------- #
+def test_a_role_outside_the_declared_set_is_still_shown_if_somehow_assigned(qapp):
+    """ChannelSummary never re-derives "what's required" itself (that lives in
+    ChannelSetupDialog/Capabilities.required_roles(), M-12) — it is a pure readout of
+    ``channels``, so a stray Poes column left over from a signal-set change (M-10's
+    apply_signal_set normally clears this, but a hand-edited TOML can still carry it)
+    is shown exactly like any other assigned role, not hidden because the CURRENT
+    declared set no longer names it."""
+    caps = _capabilities(flow=True, poes=True, declared=frozenset({"flow"}), mode="flow_only")
+    ch = _channels(flow=5, poes=7)             # poes assigned, but not in the declared set
+    texts = ChannelSummary().show_mapping(ch, capabilities=caps).texts()
+    assert any("Poes" in t for t in texts)
+
+
+def test_declared_required_roles_govern_the_dialog_dropdown_not_the_summary(qapp):
+    """The two surfaces are deliberately asymmetric: the DIALOG's dropdown is filtered to
+    the declared set (so a role outside it can never be freshly assigned, M-12), but the
+    SUMMARY has no such gate of its own — it just reflects whatever ``channels`` already
+    holds, which is why the test above can even construct that state directly."""
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+    from _helpers import INPUT
+    import glob
+    import os
+    files = sorted(glob.glob(os.path.join(INPUT, "synth_case_*.csv")))
+    if not files:
+        pytest.skip("synthetic input absent")
+    from respmech.ui.workers import load_raw_matrix
+    dlg = ChannelSetupDialog(files, 1000, loader=lambda p: load_raw_matrix(Settings(), p),
+                             suggest_from_names=False, declared=frozenset({"flow"}))
+    assert "poes" not in [key for key, _label in dlg._roles]

@@ -1542,10 +1542,23 @@ class SettingsScreen(QWidget):
         # the batch's true size, instead of only ever describing the majority subset.
         excluded = ([(f.filename, f.columns) for f in self._manifest.outliers]
                    if self._manifest is not None else [])
+        # M-12: the dialog offers/requires only the roles THIS analysis actually declared
+        # (Capabilities.declared), instead of always forcing flow+poes+pgas+pdi regardless
+        # of the chosen signal set. ``_capabilities_for_view`` (not a raw
+        # ``Capabilities.from_settings`` call): a malformed hand-edited
+        # ``analysis.signals`` must not crash the channel-assignment door itself; ``None``
+        # falls the dialog back to its own old, full-set default (see its docstring).
+        # A truly EMPTY declared set (a brand-new analysis, no channel assigned yet and no
+        # explicit analysis.signals — before any signal set was ever chosen) is treated the
+        # same as ``None``: this is the everyday "Assign channels from data…" entry point
+        # for a fresh analysis, and it must still offer every role, not none at all.
+        caps = self._capabilities_for_view(s)
+        declared = caps.declared if caps is not None and caps.declared else None
         try:
             dlg = ChannelSetupDialog(files, fs, initial, loader=lambda p: load_raw_matrix(s, p),
                                      parent=self, excluded=excluded,
-                                     integrate_from_flow=s.processing.volume.integrate_from_flow)
+                                     integrate_from_flow=s.processing.volume.integrate_from_flow,
+                                     declared=declared)
         except NoReadableFileError as exc:
             # ticket D01: the dialog already diagnosed WHY none of its files could be read
             # (see _no_files_readable_message) — show that diagnosis as the message, not a
