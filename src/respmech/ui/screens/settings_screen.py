@@ -21,6 +21,7 @@ from PySide6.QtCore import Signal, QTimer, Qt
 
 from respmech.core.analysis.signals import Capabilities, SINGLE_SIGNALS, effective_signals
 from respmech.core.settings import BreathCountEntry, Settings, SettingsError
+from respmech.ui import column_stack as _cs
 from respmech.ui.dialogs import open_error_dialog, short_error
 from respmech.ui.migration_report_dialog import open_migration_report
 from respmech.ui.flow_layout import FormLabel, install_flow
@@ -41,8 +42,13 @@ _DEFAULT_MASK = "*.csv; *.txt"
 # core.analysis.signals.SINGLE_SIGNALS plus 'emg' — the same vocabulary
 # apply_signal_set/effective_signals/SignalSetDialog already share, read in the order a
 # 'full' analysis lists its own components (Capabilities.analyses()'s own ordering).
+# Self-review: reuses column_stack's OWN role-label tables rather than a third copy
+# (column_stack.REQUIRED_LABELS already covers flow/poes/pgas/pdi identically; 'emg' comes
+# from its ROLE_NAMES, which is also core.analysis.signals.Capabilities.analyses()'s own
+# vocabulary) — the chip tooltips reuse column_stack.ROLES' short descriptions the same way.
 _SIGNAL_CHIP_ORDER = ("flow", "poes", "pgas", "pdi", "emg")
-_SIGNAL_CHIP_LABELS = {"flow": "Flow", "poes": "Poes", "pgas": "Pgas", "pdi": "Pdi", "emg": "EMG"}
+_SIGNAL_CHIP_LABELS = {**_cs.REQUIRED_LABELS, "emg": _cs.ROLE_NAMES["emg"]}
+_SIGNAL_CHIP_TIPS = dict(_cs.ROLES)
 
 # The Setup Behold/Ryd banner's wording, one phrase per `core.settings.CarriedOverState`
 # kind (see its `kinds_present()`) — table-driven so a future kind (M-19/M-21/M-34's own
@@ -1739,6 +1745,7 @@ class SettingsScreen(QWidget):
                 if name in capabilities.declared:
                     chip = QLabel(_SIGNAL_CHIP_LABELS[name])
                     chip.setProperty("chip", True)
+                    chip.setToolTip(_tip("analysis.signals", _SIGNAL_CHIP_TIPS[name]))
                     lay.addWidget(chip)
         lay.addWidget(self.btn_change_signals)
 
