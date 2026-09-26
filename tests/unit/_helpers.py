@@ -91,17 +91,24 @@ def _lone_ampersands(root):
     doors" — see ``main_window.py``), so actions are de-duplicated by identity before
     their text is checked.
     """
+    import re
+
     from PySide6.QtWidgets import QAbstractButton, QGroupBox, QLabel, QMenu, QTabBar
 
     def _has_lone_ampersand(text):
-        for i, ch in enumerate(text):
-            if ch != "&":
-                continue
-            if i + 1 < len(text) and text[i + 1] == "&":     # "&&" — a real ampersand
-                continue
-            if i > 0 and text[i - 1] == "&":                  # second half of a "&&" pair
-                continue
-            if i + 1 < len(text) and text[i + 1].isalnum():   # a deliberate mnemonic
+        # Scan whole RUNS of consecutive '&', not one character at a time: Qt itself
+        # resolves a run left to right, greedily pairing "&&" into one literal '&' and
+        # leaving at most one unpaired '&' (only when the run's length is odd) to act as
+        # a mnemonic marker on whatever comes right after the run. A naive per-character
+        # check that only looks at immediate neighbours misclassifies an odd run of 3+
+        # ('&&&', '&&&&&', ...): each '&' sees a '&' neighbour on one side or the other
+        # and is waved through as "part of a pair", so a genuinely broken trailing '&'
+        # (e.g. '&&&' at the end of a caption) is silently missed.
+        for m in re.finditer(r"&+", text):
+            if (m.end() - m.start()) % 2 == 0:
+                continue                                      # fully paired, e.g. "&&"
+            next_ch = text[m.end():m.end() + 1]
+            if next_ch.isalnum():                              # a deliberate mnemonic
                 continue
             return True
         return False
