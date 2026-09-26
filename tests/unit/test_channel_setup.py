@@ -485,6 +485,8 @@ def test_dialog_shows_source_column_names(qapp):
 
 
 def test_dialog_ok_is_gated_on_the_required_roles(qapp):
+    """``declared=None`` (every pre-M-12 caller): OK-gating stays exactly the old hardcoded
+    full pressure family — Pdi is still forced, EMG is still not."""
     dlg = _dialog()
     assert not dlg._ok_btn.isEnabled()               # nothing assigned yet
     _set_role(dlg, 4, "flow"); _set_role(dlg, 6, "poes"); _set_role(dlg, 7, "pgas")
@@ -494,6 +496,75 @@ def test_dialog_ok_is_gated_on_the_required_roles(qapp):
     assert dlg._ok_btn.isEnabled()                   # all required present (volume optional)
     _set_role(dlg, 8, "")                            # remove pdi again -> re-locks OK
     assert not dlg._ok_btn.isEnabled()
+
+
+# --------------------------------------------------------------------------- #
+# M-12: OK-gating and the role dropdown follow the DECLARED signal set, not a
+# hardcoded full pressure family
+# --------------------------------------------------------------------------- #
+def _dialog_declared(declared, initial=None, suggest_from_names=False):
+    from respmech.ui.channel_setup_dialog import ChannelSetupDialog
+    return ChannelSetupDialog(_files(), 1000, initial=initial, loader=_loader(),
+                              suggest_from_names=suggest_from_names, declared=declared)
+
+
+def test_declared_set_narrower_than_full_never_forces_pdi(qapp):
+    """The bug this ticket fixes: a "Flow + Poes + Pgas" analysis (Pdi NOT declared) used
+    to be permanently stuck below OK, because the old gate always required all four
+    pressures regardless of what the analysis actually declared."""
+    dlg = _dialog_declared(frozenset({"flow", "poes", "pgas"}))
+    _set_role(dlg, 4, "flow"); _set_role(dlg, 6, "poes"); _set_role(dlg, 7, "pgas")
+    assert dlg._ok_btn.isEnabled()                    # Pdi was never declared -> never required
+    assert "Pdi" not in dlg.info.text()
+
+
+def test_declared_role_dropdown_is_filtered_to_flow_volume_and_emg(qapp):
+    """Acceptance: with the set {flow, emg}, the dropdown offers only (unused)/Flow/
+    Volume/EMG — Poes/Pgas/Pdi are not part of this analysis at all, so offering them
+    would let a column be assigned to a role nothing will ever read."""
+    dlg = _dialog_declared(frozenset({"flow", "emg"}))
+    assert [key for key, _label in dlg._roles] == ["", "flow", "volume", "emg"]
+
+
+def test_declared_emg_only_dropdown_has_no_volume(qapp):
+    """Volume is never itself a declared SIGNAL — it only appears in the dropdown when
+    Flow is declared, never for an EMG-only set."""
+    dlg = _dialog_declared(frozenset({"emg"}))
+    assert [key for key, _label in dlg._roles] == ["", "emg"]
+
+
+def test_declared_set_requires_emg_when_emg_is_declared(qapp):
+    """A "Flow + Also EMG" analysis (declared={flow, emg}) needs BOTH assigned — EMG is
+    not merely offered, it is required once it is part of the declared set."""
+    dlg = _dialog_declared(frozenset({"flow", "emg"}))
+    _set_role(dlg, 4, "flow")
+    assert not dlg._ok_btn.isEnabled()
+    assert "EMG" in dlg.info.text()
+    _set_role(dlg, 1, "emg")
+    assert dlg._ok_btn.isEnabled()
+
+
+def test_nothing_declared_falls_back_to_flow_or_emg(qapp):
+    """A brand-new analysis with an EXPLICITLY empty declared set (no signal set chosen at
+    all): there is no declared-required list to check, so the gate falls back to "can
+    ANY analysis run at all" instead of reading "nothing required" as "already ready"."""
+    dlg = _dialog_declared(frozenset())
+    assert not dlg._ok_btn.isEnabled()
+    assert "No analysis can run" in dlg.info.text()
+    _set_role(dlg, 4, "flow")                          # Flow alone is enough to unblock
+    assert dlg._ok_btn.isEnabled()
+
+
+def test_derive_volume_checkbox_hidden_when_flow_not_declared(qapp):
+    dlg = _dialog_declared(frozenset({"emg"}))
+    assert dlg._volume_from_flow.isVisibleTo(dlg) is False
+
+
+def test_derive_volume_checkbox_hidden_once_a_volume_column_is_assigned(qapp):
+    dlg = _dialog_declared(frozenset({"flow"}))
+    assert dlg._volume_from_flow.isVisibleTo(dlg) is True    # nothing claims Volume yet
+    _set_role(dlg, 5, "volume")
+    assert dlg._volume_from_flow.isVisibleTo(dlg) is False   # a real column already satisfies it
 
 
 # --------------------------------------------------------------------------- #
@@ -1510,7 +1581,7 @@ def test_settings_screen_passes_manifest_outliers_to_the_dialog(qapp, monkeypatc
     seen = {}
 
     def fake_dialog(files, fs, initial, loader=None, parent=None, excluded=None,
-                    integrate_from_flow=False):
+                    integrate_from_flow=False, declared=None):
         seen["excluded"] = excluded
         raise ValueError("stop before actually opening a modal")
 
