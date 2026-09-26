@@ -29,11 +29,13 @@ FORBIDDEN = (
     "respmech.core.io.loaders",
     "pandas",
     "scipy.interpolate",
-    # core/analysis/{signals,registry}.py are not wired into the GUI yet (a later
-    # ticket does that, in ui/validation.py) — pinning their absence here means an
+    # core/analysis/registry.py is not wired into the GUI yet (a later ticket does
+    # that — the compute-guards/CLI tickets) — pinning its absence here means an
     # accidental eager import doesn't creep back in unnoticed before that wiring
-    # deliberately adds them.
-    "respmech.core.analysis.signals",
+    # deliberately adds it. core/analysis/signals.py is DELIBERATELY wired in as of
+    # this ticket (Settings.validate() imports it; see core/settings.py) and stays
+    # numpy/Qt-free per test_core_analysis_modules_import_no_numeric_stack below, so
+    # its presence in sys.modules here is expected, not a regression.
     "respmech.core.analysis.registry",
 )
 

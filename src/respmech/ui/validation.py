@@ -24,6 +24,13 @@ import re
 # same way. Literal messages first (exact match, cheapest and least likely to
 # mis-translate); ``_FRIENDLY_PREFIXES`` for the few whose text carries a dynamic suffix
 # (e.g. the analysis rate in Hz).
+#: single source of truth for the ONE location string every message about a
+#: signal-set-vs-segmentation-method mismatch points at (R7): the eventual Setup ▸
+#: Signals row's "Change…" control (``settings_screen.py``, a later ticket) that lets
+#: an analysis switch between the flow/volume family and the EMG-only family of
+#: methods. Kept as one constant so the two messages below can never drift apart.
+_SIGNAL_SET_CHANGE_LOCATION = "Setup ▸ Signals ▸ Change…"
+
 _FRIENDLY_SETTINGS_ERRORS = {
     "input.channels.volume is required unless processing.volume.integrate_from_flow is true":
         "Volume channel not assigned — assign one, or tick 'No volume channel — derive "
@@ -34,9 +41,18 @@ _FRIENDLY_SETTINGS_ERRORS = {
         "Sampling frequency must be a whole number (Setup ▸ Input)",
     "input.format.matlab_variant must be 'windows' or 'mac'":
         "MATLAB file variant must be Windows or Mac (Setup ▸ Input)",
-    "processing.segmentation.method must be 'flow' or 'volume'":
-        "Breath-splitting signal must be Flow or Volume (Preview & QC ▸ Mechanics ▸ "
-        "Advanced… ▸ Breath detection)",
+    "analysis.signals must name at least one of 'flow' or 'emg'":
+        "No analysable signal: assign a Flow or EMG channel ('Assign channels from "
+        "data…') or pick a signal set (Setup ▸ Signals)",
+    "analysis.signals: 'poes', 'pgas' and 'pdi' require 'flow'":
+        "Pressure signals need Flow for breath segmentation: add Flow or remove the "
+        "pressures (Setup ▸ Signals)",
+    "input.channels.emg must name at least one column when 'emg' is in analysis.signals":
+        "EMG is in the signal set but no EMG channel is assigned",
+    "processing.segmentation.method must be 'flow', 'volume', 'whole_file', 'separators', "
+    "'fixed_windows' or 'emg_burst'":
+        "Breath-splitting method is not valid (Setup ▸ Signals; or Preview & QC ▸ "
+        "Mechanics ▸ Advanced… ▸ Breath detection when Flow is declared)",
     "processing.segmentation.buffer must be an integer":
         "Breath-separation debounce must be a whole number of samples (Preview & QC ▸ "
         "Mechanics ▸ Advanced… ▸ Breath detection)",
@@ -68,13 +84,40 @@ _FRIENDLY_PREFIXES = (
     ("processing.volume.trend_peak_min_distance_s must be at least one sample",
      "Trend anchor — minimum spacing is smaller than one sample at the analysis rate "
      "(Preview & QC ▸ Mechanics ▸ Advanced… ▸ End-expiratory trend)"),
+    # A hand-edited analysis file with `analysis.signals` written as something other
+    # than a list (a bare string missing its brackets, a number, ...) — self-review
+    # finding, R7: validate() rejects it with a SettingsError instead of crashing, but
+    # still names the dotted key in its own message, same as every other case here.
+    ("analysis.signals must be a list of signal names, not",
+     "The signal set in this analysis file is not a valid list (Setup ▸ Signals) — "
+     "open it in a text editor and fix analysis.signals, e.g. signals = [\"flow\"]"),
 )
-#: a single-channel-role "is required" message — reachable directly through
-#: ``Settings.validate()`` (``_validation_status()``/``_save_blocker()`` call it without
-#: ``channel_collision()``'s prior gate, unlike ``blockers()`` below), so this still needs
-#: translating even though ``channel_collision`` already names flow/poes/pgas/pdi more
-#: specifically for the callers that check it first.
-_CHANNEL_REQUIRED_RE = re.compile(r"^input\.channels\.(\w+) is required$")
+#: R7 messages carrying a dynamic value the simple-prefix table above cannot match
+#: unambiguously (two DIFFERENT messages share the same literal prefix up to the quoted
+#: ``processing.segmentation.method`` value, so ``str.startswith`` alone would always
+#: pick whichever entry happens to come first) — matched by full regex instead. Both
+#: segmentation-method rows point at the SAME location string
+#: (``_SIGNAL_SET_CHANGE_LOCATION``), since both are about the method needing to change
+#: because it no longer matches the declared signal set.
+_FRIENDLY_REGEXES = (
+    (re.compile(r"^analysis\.signals contains an unknown signal '[^']*'$"),
+     "The signal set names a signal RespMech does not know (Setup ▸ Signals)"),
+    (re.compile(r"^processing\.segmentation\.method '[^']*' requires 'flow' in "
+                r"analysis\.signals$"),
+     f"Splitting breaths by flow or volume needs a Flow signal ({_SIGNAL_SET_CHANGE_LOCATION})"),
+    (re.compile(r"^processing\.segmentation\.method '[^']*' is for an EMG-only signal set$"),
+     "Whole-file, separator, fixed-window and burst segmentation are for EMG-only "
+     f"analyses ({_SIGNAL_SET_CHANGE_LOCATION})"),
+)
+#: a single-channel-role "is required" message, with an OPTIONAL " by analysis.signals"
+#: suffix (R7): the suffix means the role was named in an EXPLICIT ``analysis.signals``
+#: list (so the fix can also be "remove it from the signal set"); its absence means the
+#: role came from the DERIVED set instead (assign the channel is the only fix). Reachable
+#: directly through ``Settings.validate()`` (``_validation_status()``/``_save_blocker()``
+#: call it without ``channel_collision()``'s prior gate, unlike ``blockers()`` below), so
+#: this still needs translating even though ``channel_collision`` already names
+#: flow/poes/pgas/pdi more specifically for the callers that check it first.
+_CHANNEL_REQUIRED_RE = re.compile(r"^input\.channels\.(\w+) is required( by analysis\.signals)?$")
 _CHANNEL_LABELS = {"flow": "Flow", "poes": "Poes", "pgas": "Pgas", "pdi": "Pdi",
                    "volume": "Volume"}
 #: last-resort fallback for a validate() message this table does not (yet) recognise —
@@ -84,24 +127,44 @@ _CHANNEL_LABELS = {"flow": "Flow", "poes": "Poes", "pgas": "Pgas", "pdi": "Pdi",
 _DOTTED_KEY_RE = re.compile(r"\b[a-z][a-z_]*(?:\.[a-z][a-z_]*){2,}\b")
 
 
-def friendly_settings_error(exc) -> str:
+def friendly_settings_error(exc, settings=None) -> str:
     """A human sentence for an exception raised by ``Settings.validate()`` — naming the UI
     control to fix instead of the raw dotted settings path the core layer writes for a
     TOML file. Falls back to a generic, path-free rendering of an unrecognised message so
     a future core validation added without a matching translation still cannot reintroduce
-    this exact bug (ticket D02, point 5) — it just reads a little less specifically."""
+    this exact bug (ticket D02, point 5) — it just reads a little less specifically.
+
+    ``settings`` (default None) is threaded through from :func:`blockers` for a future
+    translation whose wording depends on the analysis's own :class:`~respmech.core.
+    analysis.signals.Capabilities` (R7's design calls these out as ``callable(settings)
+    -> str`` table rows, alongside a plain string): none of THIS ticket's own messages
+    need it yet — each already spells out every applicable location in its static text —
+    but the mechanism is here so a later ticket (e.g. a channel_collision translation
+    that must name only the ONE screen relevant to the current signal set) can add such
+    a row without another signature change.
+    """
     msg = str(exc).strip()
     if not msg:
         return exc.__class__.__name__
+
+    def _resolve(value):
+        return value(settings) if callable(value) else value
+
     friendly = _FRIENDLY_SETTINGS_ERRORS.get(msg)
-    if friendly:
-        return friendly
+    if friendly is not None:
+        return _resolve(friendly)
     for prefix, text in _FRIENDLY_PREFIXES:
         if msg.startswith(prefix):
-            return text
+            return _resolve(text)
+    for pattern, text in _FRIENDLY_REGEXES:
+        if pattern.match(msg):
+            return _resolve(text)
     m = _CHANNEL_REQUIRED_RE.match(msg)
     if m:
         label = _CHANNEL_LABELS.get(m.group(1), m.group(1).title())
+        if m.group(2):
+            return (f"{label} channel not assigned: click 'Assign channels from data…', "
+                    f"or remove {label} from the signal set (Setup ▸ Signals)")
         return f"{label} channel not assigned — click 'Assign channels from data…'"
     return _DOTTED_KEY_RE.sub("a setting", msg)
 
@@ -186,7 +249,7 @@ def blockers(settings, matches: list | None = None) -> list:
     try:
         settings.validate()
     except Exception as e:                      # noqa: BLE001 — any invalidity blocks a run
-        return [friendly_settings_error(e)]
+        return [friendly_settings_error(e, settings=settings)]
     p = path_problem(settings, matches=matches)
     return [p] if p else []
 
