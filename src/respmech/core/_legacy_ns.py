@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 from types import SimpleNamespace
 
+from respmech.core.analysis.signals import Capabilities
 from respmech.core.settings import Settings
 
 
@@ -27,6 +28,11 @@ def to_legacy_ns(s: Settings) -> SimpleNamespace:
     odg = s.output.diagnostics
 
     return SimpleNamespace(
+        # Passed through as the dataclass, same precedent as processing.emg.robust_peak
+        # below: compute reads it with getattr(settings, "capabilities", Capabilities.FULL)
+        # (the boundarynotice_* idiom), because hand-built SimpleNamespace settings reach
+        # the segmenterers from several call sites and need not carry this attribute at all.
+        capabilities=Capabilities.from_settings(s),
         input=SimpleNamespace(
             inputfolder=s.input.folder,
             files=s.input.files,

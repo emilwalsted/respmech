@@ -25,6 +25,8 @@ from collections import OrderedDict
 from respmech.core import emg as emglib
 from respmech.core import entropy as entlib
 from respmech.core._cancel import check
+from respmech.core.analysis.registry import LEGACY_MECHANICS_ORDER
+from respmech.core.analysis.signals import Capabilities
 from respmech.core.quality import detect_constant_channel
 
 
@@ -788,12 +790,15 @@ def resample(x, settings, kind='linear'):
 
 
 def calculateaveragebreaths(breaths, settings):
+    # boundarynotice-idiom (compute.py's own trim_boundary_notices): a hand-built
+    # SimpleNamespace test double need not carry `capabilities` at all -> treat it as FULL.
+    caps = getattr(settings, "capabilities", Capabilities.FULL)
     resamplingobs = settings.processing.wob.avgresamplingobs
     nobreaths = sum(1 for b in breaths.values() if not b["ignored"])
     volumein = np.empty([resamplingobs, nobreaths])
     volumeex = np.empty([resamplingobs, nobreaths])
-    poesin = np.empty([resamplingobs, nobreaths])
-    poesex = np.empty([resamplingobs, nobreaths])
+    poesin = np.empty([resamplingobs, nobreaths]) if caps.poes else None
+    poesex = np.empty([resamplingobs, nobreaths]) if caps.poes else None
     for breathno in breaths:
         breath = breaths[breathno]
         if not breath["ignored"]:
@@ -801,16 +806,18 @@ def calculateaveragebreaths(breaths, settings):
             try:
                 volumein[:, nobreaths] = resample(breath["inspiration"]["volume"], settings)
                 volumeex[:, nobreaths] = resample(breath["expiration"]["volume"], settings)
-                poesin[:, nobreaths] = resample(breath["inspiration"]["poes"], settings)
-                poesex[:, nobreaths] = resample(breath["expiration"]["poes"], settings)
+                if caps.poes:
+                    poesin[:, nobreaths] = resample(breath["inspiration"]["poes"], settings)
+                    poesex[:, nobreaths] = resample(breath["expiration"]["poes"], settings)
             except Exception as e:
                 raise ValueError(
                     "Could not resample breath #" + str(breath["number"]) +
                     ": it is too short to average. Check Preview & QC ▸ Mechanics ▸ "
                     "Advanced… ▸ Breath detection (peak thresholds / breath-separation "
                     "buffer), or exclude this breath in Preview & QC.") from e
-    return (np.mean(volumein, axis=1), np.mean(volumeex, axis=1),
-            np.mean(poesin, axis=1), np.mean(poesex, axis=1))
+    avgpoesin = np.mean(poesin, axis=1) if caps.poes else None
+    avgpoesex = np.mean(poesex, axis=1) if caps.poes else None
+    return (np.mean(volumein, axis=1), np.mean(volumeex, axis=1), avgpoesin, avgpoesex)
 
 
 # --- entropy ---------------------------------------------------------------
@@ -935,72 +942,105 @@ def compute_segment_emg(retbreath, breath, settings, cancel_check, peaks_s, dete
 
 def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, settings,
                        cancel_check=None, peaks_s=None, detection_ok=True, detection_reason=""):
+    """Optional Poes/Pgas/Pdi (v2-only, docs/REVERSE_ENGINEERING.md §5.11): every value that
+    reads one of those three channels is computed only when ``caps`` (from
+    ``settings.capabilities``, defaulting to :data:`Capabilities.FULL` for a hand-built
+    namespace) says the channel is present — the phase dicts carry an EMPTY array for an
+    absent channel (core/io/loaders.py), so an unguarded ``max()``/index into it would raise.
+    On the full-channel path every ``if caps.x:`` guard below is True and executes exactly
+    the same statements as before this ticket, so golden output is unchanged. The final
+    OrderedDict is assembled by walking ``LEGACY_MECHANICS_ORDER`` (core/analysis/registry.py)
+    and taking each name that made it into ``values``, instead of a hardcoded literal — the
+    key ORDER is still pinned by that same list (tests/unit/test_analysis_registry.py)."""
     check(cancel_check)   # per-breath abort point (no-op when cancel_check is None -> golden-safe)
+    caps = getattr(settings, "capabilities", Capabilities.FULL)
     retbreath = breath
     retbreath["inspiration"]["volumeavg"] = avgvolumein
     retbreath["expiration"]["volumeavg"] = avgvolumeex
     retbreath["volumeavg"] = np.concatenate([avgvolumein, avgvolumeex])
-    retbreath["inspiration"]["poesavg"] = avgpoesin
-    retbreath["expiration"]["poesavg"] = avgpoesex
-    retbreath["poesavg"] = np.concatenate([avgpoesin, avgpoesex])
+    if caps.poes:
+        retbreath["inspiration"]["poesavg"] = avgpoesin
+        retbreath["expiration"]["poesavg"] = avgpoesex
+        retbreath["poesavg"] = np.concatenate([avgpoesin, avgpoesex])
 
-    retbreath["eilv"] = [retbreath["inspiration"]["volume"][-1], retbreath["inspiration"]["poes"][-1]]
-    retbreath["eelv"] = [retbreath["expiration"]["volume"][-1], retbreath["expiration"]["poes"][-1]]
-    retbreath["eilvavg"] = [retbreath["inspiration"]["volumeavg"][-1], retbreath["inspiration"]["poesavg"][-1]]
-    retbreath["eelvavg"] = [retbreath["expiration"]["volumeavg"][-1], retbreath["expiration"]["poesavg"][-1]]
-
+    insp = retbreath["inspiration"]
     exp = retbreath["expiration"]
-    poes_maxexp = max(exp["poes"])
-    poes_endexp = exp["poes"][len(exp["poes"]) - 1]
-    pdi_minexp = min(exp["pdi"])
-    pdi_endexp = exp["pdi"][len(exp["pdi"]) - 1]
-    pgas_endexp = exp["pgas"][len(exp["pgas"]) - 1]
-    pgas_maxexp = max(exp["pgas"])
-    pgas_minexp = min(exp["pgas"])
+
+    retbreath["eilv"] = [insp["volume"][-1], insp["poes"][-1] if caps.poes else np.nan]
+    retbreath["eelv"] = [exp["volume"][-1], exp["poes"][-1] if caps.poes else np.nan]
+    retbreath["eilvavg"] = [insp["volumeavg"][-1], insp["poesavg"][-1] if caps.poes else np.nan]
+    retbreath["eelvavg"] = [exp["volumeavg"][-1], exp["poesavg"][-1] if caps.poes else np.nan]
+
+    values = {}
+
+    if caps.poes:
+        values["poes_maxexp"] = max(exp["poes"])
+        values["poes_endexp"] = exp["poes"][len(exp["poes"]) - 1]
+    if caps.pdi:
+        values["pdi_minexp"] = min(exp["pdi"])
+        values["pdi_endexp"] = exp["pdi"][len(exp["pdi"]) - 1]
+    if caps.pgas:
+        values["pgas_endexp"] = exp["pgas"][len(exp["pgas"]) - 1]
+        values["pgas_maxexp"] = max(exp["pgas"])
+        values["pgas_minexp"] = min(exp["pgas"])
 
     midvolexp = min(exp["volume"]) + ((max(exp["volume"]) - min(exp["volume"])) / 2)
     midvolexpix = np.where(exp["volume"] <= midvolexp)[0][0]
-    poes_midvolexp = exp["poes"][midvolexpix]
-    flow_midvolexp = -exp["flow"][midvolexpix]
+    if caps.poes:
+        values["poes_midvolexp"] = exp["poes"][midvolexpix]
+    values["flow_midvolexp"] = -exp["flow"][midvolexpix]
 
-    insp = retbreath["inspiration"]
-    poes_mininsp = min(insp["poes"])
-    poes_endinsp = insp["poes"][len(insp["poes"]) - 1]
-    pdi_maxinsp = max(insp["pdi"])
-    pdi_endinsp = insp["pdi"][len(insp["pdi"]) - 1]
-    pgas_endinsp = insp["pgas"][len(insp["pgas"]) - 1]
+    if caps.poes:
+        values["poes_mininsp"] = min(insp["poes"])
+        values["poes_endinsp"] = insp["poes"][len(insp["poes"]) - 1]
+    if caps.pdi:
+        values["pdi_maxinsp"] = max(insp["pdi"])
+        values["pdi_endinsp"] = insp["pdi"][len(insp["pdi"]) - 1]
+    if caps.pgas:
+        values["pgas_endinsp"] = insp["pgas"][len(insp["pgas"]) - 1]
 
-    poes_tidal_swing = abs(max(retbreath["poes"]) - min(retbreath["poes"]))
-    pgas_tidal_swing = abs(max(retbreath["pgas"]) - min(retbreath["pgas"]))
-    pdi_tidal_swing = abs(max(retbreath["pdi"]) - min(retbreath["pdi"]))
+    if caps.poes:
+        values["poes_tidal_swing"] = abs(max(retbreath["poes"]) - min(retbreath["poes"]))
+    if caps.pgas:
+        values["pgas_tidal_swing"] = abs(max(retbreath["pgas"]) - min(retbreath["pgas"]))
+    if caps.pdi:
+        values["pdi_tidal_swing"] = abs(max(retbreath["pdi"]) - min(retbreath["pdi"]))
 
     midvolinsp = min(insp["volume"]) + ((max(insp["volume"]) - min(insp["volume"])) / 2)
     midvolinspix = np.where(insp["volume"] >= midvolinsp)[0][0]
-    poes_midvolinsp = insp["poes"][midvolinspix]
-    flow_midvolinsp = -insp["flow"][midvolinspix]
+    if caps.poes:
+        values["poes_midvolinsp"] = insp["poes"][midvolinspix]
+    values["flow_midvolinsp"] = -insp["flow"][midvolinspix]
 
-    vol_endinsp = insp["volume"][len(insp["volume"]) - 1]
-    vol_endexp = exp["volume"][len(exp["volume"]) - 1]
+    values["vol_endinsp"] = insp["volume"][len(insp["volume"]) - 1]
+    values["vol_endexp"] = exp["volume"][len(exp["volume"]) - 1]
 
-    ti = len(insp["flow"]) / settings.input.format.samplingfrequency
-    te = len(exp["flow"]) / settings.input.format.samplingfrequency
-    ttot = len(retbreath["flow"]) / settings.input.format.samplingfrequency
-    ti_ttot = ti / ttot
+    values["ti"] = len(insp["flow"]) / settings.input.format.samplingfrequency
+    values["te"] = len(exp["flow"]) / settings.input.format.samplingfrequency
+    values["ttot"] = len(retbreath["flow"]) / settings.input.format.samplingfrequency
+    values["ti_ttot"] = values["ti"] / values["ttot"]
 
-    vt = max(retbreath["volume"]) - min(retbreath["volume"])
-    ve = vt * bcnt * vefactor
+    values["vt"] = max(retbreath["volume"]) - min(retbreath["volume"])
+    values["ve"] = values["vt"] * bcnt * vefactor
 
-    vmrnumerator = (pgas_endinsp - pgas_endexp)
-    vmrdenominator = (poes_endinsp - poes_endexp)
-    # dtype=float is an extra safeguard, not the primary fix: the loader (core/io/loaders.py)
-    # now casts every channel to float64 on load, so vmrnumerator/vmrdenominator should
-    # already be float here. This keeps the division itself from raising even if some future
-    # caller feeds compute_breath() an int array directly.
-    vmr = np.divide(vmrnumerator, vmrdenominator, out=np.zeros_like(vmrnumerator, dtype=float), where=vmrdenominator != 0)
+    if caps.poes and caps.pgas:
+        vmrnumerator = (values["pgas_endinsp"] - values["pgas_endexp"])
+        vmrdenominator = (values["poes_endinsp"] - values["poes_endexp"])
+        # dtype=float is an extra safeguard, not the primary fix: the loader (core/io/loaders.py)
+        # now casts every channel to float64 on load, so vmrnumerator/vmrdenominator should
+        # already be float here. This keeps the division itself from raising even if some future
+        # caller feeds compute_breath() an int array directly.
+        values["vmr"] = np.divide(vmrnumerator, vmrdenominator,
+                                   out=np.zeros_like(vmrnumerator, dtype=float), where=vmrdenominator != 0)
 
-    tlr_insp = abs((poes_midvolexp - poes_midvolinsp) / (flow_midvolexp - flow_midvolinsp))
-    insp_pdi_rise = pdi_maxinsp - min(insp["pdi"])
-    exp_pgas_rise = pgas_maxexp - min(exp["pgas"])
+    if caps.poes:
+        values["tlr_insp"] = abs(
+            (values["poes_midvolexp"] - values["poes_midvolinsp"])
+            / (values["flow_midvolexp"] - values["flow_midvolinsp"]))
+    if caps.pdi:
+        values["insp_pdi_rise"] = values["pdi_maxinsp"] - min(insp["pdi"])
+    if caps.pgas:
+        values["exp_pgas_rise"] = values["pgas_maxexp"] - min(exp["pgas"])
 
     # PTP is integrated relative to the end-expiratory baseline inside calcptp
     # (mean over a short window at the phase start). The former adjustforintegration
@@ -1009,39 +1049,26 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
     # directly (Poes negated so inspiratory effort is positive).
     fs = settings.input.format.samplingfrequency
     ptp_bw = int(max(1, round(settings.processing.mechanics.ptp_baseline_window_s * fs)))
-    ptp_oesinsp, int_oesinsp = calcptp(-insp["poes"], bcnt, vefactor, fs, ptp_bw)
-    ptp_pdiinsp, int_pdiinsp = calcptp(insp["pdi"], bcnt, vefactor, fs, ptp_bw)
-    ptp_pgasexp, int_pgasexp = calcptp(exp["pgas"], bcnt, vefactor, fs, ptp_bw)
+    if caps.poes:
+        values["ptp_oesinsp"], values["int_oesinsp"] = calcptp(-insp["poes"], bcnt, vefactor, fs, ptp_bw)
+    if caps.pdi:
+        values["ptp_pdiinsp"], values["int_pdiinsp"] = calcptp(insp["pdi"], bcnt, vefactor, fs, ptp_bw)
+    if caps.pgas:
+        values["ptp_pgasexp"], values["int_pgasexp"] = calcptp(exp["pgas"], bcnt, vefactor, fs, ptp_bw)
 
-    max_in_flow = min(insp["flow"]) * -1
-    max_ex_flow = max(exp["flow"])
-    inflowmidvol = insp["flow"][midvolinspix] * -1
-    exflowmidvol = exp["flow"][midvolexpix]
+    values["max_in_flow"] = min(insp["flow"]) * -1
+    values["max_ex_flow"] = max(exp["flow"])
+    values["in_flow_midvol"] = insp["flow"][midvolinspix] * -1
+    values["ex_flow_midvol"] = exp["flow"][midvolexpix]
 
-    retbreath["wob"] = calculatewob(breath, bcnt, vefactor, settings)
+    values["bf"] = bcnt * vefactor
+
+    if caps.poes:
+        retbreath["wob"] = calculatewob(breath, bcnt, vefactor, settings)
 
     compute_segment_emg(retbreath, breath, settings, cancel_check, peaks_s, detection_ok, detection_reason)
 
-    retbreath["mechanics"] = OrderedDict([
-        ('poes_maxexp', poes_maxexp), ('poes_mininsp', poes_mininsp),
-        ('poes_endinsp', poes_endinsp), ('poes_endexp', poes_endexp),
-        ('poes_midvolexp', poes_midvolexp), ('poes_midvolinsp', poes_midvolinsp),
-        ('int_oesinsp', int_oesinsp), ('ptp_oesinsp', ptp_oesinsp),
-        ('poes_tidal_swing', poes_tidal_swing),
-        ('pgas_endinsp', pgas_endinsp), ('pgas_endexp', pgas_endexp),
-        ('pgas_maxexp', pgas_maxexp), ('pgas_minexp', pgas_minexp),
-        ('exp_pgas_rise', exp_pgas_rise), ('int_pgasexp', int_pgasexp),
-        ('ptp_pgasexp', ptp_pgasexp), ('pgas_tidal_swing', pgas_tidal_swing),
-        ('int_pdiinsp', int_pdiinsp), ('ptp_pdiinsp', ptp_pdiinsp),
-        ('pdi_minexp', pdi_minexp), ('pdi_maxinsp', pdi_maxinsp),
-        ('pdi_endinsp', pdi_endinsp), ('pdi_endexp', pdi_endexp),
-        ('insp_pdi_rise', insp_pdi_rise), ('pdi_tidal_swing', pdi_tidal_swing),
-        ('flow_midvolexp', flow_midvolexp), ('flow_midvolinsp', flow_midvolinsp),
-        ('vol_endinsp', vol_endinsp), ('vol_endexp', vol_endexp),
-        ('max_in_flow', max_in_flow), ('max_ex_flow', max_ex_flow),
-        ('in_flow_midvol', inflowmidvol), ('ex_flow_midvol', exflowmidvol),
-        ('ti', ti), ('te', te), ('ttot', ttot), ('ti_ttot', ti_ttot),
-        ('vt', vt), ('bf', bcnt * vefactor), ('ve', ve),
-        ('vmr', vmr), ('tlr_insp', tlr_insp),
-    ])
+    retbreath["mechanics"] = OrderedDict(
+        (spec.name, values[spec.name]) for spec in LEGACY_MECHANICS_ORDER if spec.name in values
+    )
     return retbreath
