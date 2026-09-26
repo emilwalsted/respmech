@@ -19,6 +19,8 @@ import types
 from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Any, Callable, Optional, Union, get_args, get_origin, get_type_hints
 
+from respmech.core.analysis.signals import SINGLE_SIGNALS, effective_signals
+
 
 class SettingsError(ValueError):
     """Raised when settings are missing/invalid, with an actionable message."""
@@ -63,6 +65,19 @@ class InputSettings:
     files: str = "*.*"
     format: InputFormat = field(default_factory=InputFormat)
     channels: Channels = field(default_factory=Channels)
+
+
+@dataclass
+class AnalysisSettings:
+    """The signal set this analysis declares (R7). Empty (the default) means
+    "derive it from whichever channels are assigned" — see
+    ``core.analysis.signals.effective_signals``. Only written to TOML while it
+    diverges from that derived set (``settingsio.toml_io.save_toml``); the run
+    manifest (``dumps_toml``) always writes the resolved, effective set instead,
+    so a saved analysis file and a run's own provenance never disagree about
+    what "signals" means for that file.
+    """
+    signals: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -330,6 +345,7 @@ class OutputSettings:
 @dataclass
 class Settings:
     schema_version: int = SCHEMA_VERSION
+    analysis: AnalysisSettings = field(default_factory=AnalysisSettings)
     input: InputSettings = field(default_factory=InputSettings)
     processing: ProcessingSettings = field(default_factory=ProcessingSettings)
     output: OutputSettings = field(default_factory=OutputSettings)
@@ -347,6 +363,7 @@ class Settings:
         obj = _build(cls, d, unknown, path="")
         obj.unknown = unknown
         obj.notices = _upgrade(obj, d)
+        obj.notices.extend(_reconcile_signals(obj))
         return obj
 
     def to_dict(self) -> dict:
@@ -363,17 +380,68 @@ class Settings:
             raise SettingsError("input.format.matlab_variant must be 'windows' or 'mac'")
 
         ch = self.input.channels
-        for name in ("flow", "poes", "pgas", "pdi"):
-            if getattr(ch, name) is None:
+
+        # R7: an analysis names its signal set either explicitly (analysis.signals) or
+        # implicitly (whichever channels are assigned) -- see core.analysis.signals.
+        # effective_signals()/Capabilities.from_settings is the ONE function every other
+        # consumer of "declared" (channel_collision, plan_outputs, the CLI/run-report --
+        # wired in by later tickets) will read the same way from, so this method's own
+        # notion of the declared set can never drift from theirs.
+        raw_signals = self.analysis.signals
+        if isinstance(raw_signals, str):
+            raise SettingsError(
+                "analysis.signals must be a list of signal names, not a bare string: "
+                f"{raw_signals!r}")
+        if raw_signals is None:
+            raw_signals = []            # only reachable via a dict-based caller (TOML
+        elif not isinstance(raw_signals, list):           # has no null) -- reads as "derive it"
+            raise SettingsError(
+                "analysis.signals must be a list of signal names, not "
+                f"{type(raw_signals).__name__}")
+
+        _known_signals = frozenset(SINGLE_SIGNALS) | {"emg"}
+        for sig in raw_signals:
+            if sig not in _known_signals:
+                raise SettingsError(f"analysis.signals contains an unknown signal '{sig}'")
+
+        declared = effective_signals(self)
+        explicit = frozenset(raw_signals)
+        if not declared:
+            raise SettingsError("analysis.signals must name at least one of 'flow' or 'emg'")
+        if (declared & {"poes", "pgas", "pdi"}) and "flow" not in declared:
+            raise SettingsError("analysis.signals: 'poes', 'pgas' and 'pdi' require 'flow'")
+
+        for name in SINGLE_SIGNALS:
+            if name in declared and getattr(ch, name) is None:
+                if explicit:
+                    raise SettingsError(f"input.channels.{name} is required by analysis.signals")
                 raise SettingsError(f"input.channels.{name} is required")
-        if not self.processing.volume.integrate_from_flow and ch.volume is None:
+        if "emg" in declared and not ch.emg:
+            raise SettingsError(
+                "input.channels.emg must name at least one column when "
+                "'emg' is in analysis.signals")
+
+        if ("flow" in declared and not self.processing.volume.integrate_from_flow
+                and ch.volume is None):
             raise SettingsError(
                 "input.channels.volume is required unless "
                 "processing.volume.integrate_from_flow is true")
 
         seg = self.processing.segmentation
-        if seg.method not in ("flow", "volume"):
-            raise SettingsError("processing.segmentation.method must be 'flow' or 'volume'")
+        _SEGMENTATION_METHODS = (
+            "flow", "volume", "whole_file", "separators", "fixed_windows", "emg_burst")
+        if seg.method not in _SEGMENTATION_METHODS:
+            raise SettingsError(
+                "processing.segmentation.method must be 'flow', 'volume', 'whole_file', "
+                "'separators', 'fixed_windows' or 'emg_burst'")
+        if seg.method in ("flow", "volume") and "flow" not in declared:
+            raise SettingsError(
+                f"processing.segmentation.method '{seg.method}' requires 'flow' in "
+                "analysis.signals")
+        if (seg.method in ("whole_file", "separators", "fixed_windows", "emg_burst")
+                and "flow" in declared):
+            raise SettingsError(
+                f"processing.segmentation.method '{seg.method}' is for an EMG-only signal set")
         if not isinstance(seg.buffer, int):
             raise SettingsError("processing.segmentation.buffer must be an integer")
         if not 0.0 < seg.boundary_notice_min_relative_duration <= 1.0:
@@ -663,6 +731,53 @@ def clear_carried_over(settings: "Settings") -> None:
         elif name_of(container) and is_carried_folder(val, current):
             clear_fn(container)
             setattr(container, attr, None)
+
+
+# --- signal-set reconciliation ----------------------------------------------
+
+def _reconcile_signals(obj: "Settings") -> list[str]:
+    """Reconcile a channel assigned but not named in an EXPLICIT ``analysis.signals``
+    list -- the only situation a hand-edited (or older-tool-written) TOML file can create,
+    since every in-app write path goes through ONE tragte (``settings_screen.
+    apply_signal_set``, a later ticket) that keeps the two in lockstep. Runs only in
+    :meth:`Settings.from_dict`, never in any other write site: a file with no ``[analysis]``
+    table at all (an empty list, "derive it") gets no notice, because there is nothing to
+    reconcile against -- the derived set already equals whatever is assigned, by
+    definition. Replaces ``obj.analysis.signals`` with a NEW list carrying any added
+    roles (never reordering or removing an existing entry) and returns one
+    plain-English note per role added, for ``Settings.notices``.
+    """
+    notices: list[str] = []
+    signals = obj.analysis.signals
+    # Defensive, mirroring core.analysis.signals.effective_signals' own tolerance: a
+    # malformed value (anything but a real list -- a hand-edited `signals = "flow"` or
+    # `signals = 5`, or a dict-based caller passing `signals = None`) is left for
+    # validate()/effective_signals to report properly (a clear TypeError for the
+    # bare-string case; None reads as "derive it"), never crashed on here with a raw
+    # AttributeError/TypeError from .append()/set() before that reporting ever runs.
+    if not isinstance(signals, list) or not signals:
+        return notices
+    # Copy rather than mutate the incoming list in place: `_build`/`_coerce` do not
+    # copy a plain (non-dataclass) list field, so `signals` may still be the exact
+    # object a caller's own dict handed to `from_dict` -- appending to it in place
+    # would silently grow THAT object too if it were ever reused across more than one
+    # `from_dict()` call (nothing in this repo does that today, but nothing should
+    # have to rely on it staying that way either).
+    signals = list(signals)
+    have = set(signals)
+    ch = obj.input.channels
+    assigned = [role for role in SINGLE_SIGNALS if getattr(ch, role) is not None]
+    if ch.emg:
+        assigned.append("emg")
+    for role in assigned:
+        if role not in have:
+            signals.append(role)
+            have.add(role)
+            notices.append(
+                f"input.channels.{role} is assigned but '{role}' was not in "
+                "analysis.signals; it has been added")
+    obj.analysis.signals = signals
+    return notices
 
 
 # --- schema upgrades -------------------------------------------------------

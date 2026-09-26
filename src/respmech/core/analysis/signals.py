@@ -41,12 +41,13 @@ def effective_signals(settings) -> frozenset:
 
     An explicit, non-empty ``settings.analysis.signals`` wins; otherwise the set
     is derived from the assigned channels (:func:`derived_signals`).
-    ``settings.analysis`` does not exist on :class:`respmech.core.settings.Settings`
-    as of this ticket — the ``AnalysisSettings`` dataclass lands with a later
-    ticket — so the lookup below is defensive on purpose: this function already
-    works against today's ``Settings`` and needs no change when that dataclass
-    is added (a save file/settings object with no ``analysis`` table simply
-    behaves as "derive it").
+    ``settings.analysis`` is now the real ``AnalysisSettings`` dataclass on
+    :class:`respmech.core.settings.Settings` (this function predates it — the
+    lookup below stayed defensive on purpose, so adding the dataclass needed no
+    change here). ``getattr`` still guards the lookup rather than a
+    plain attribute access, so a bare ``SimpleNamespace`` test double built for
+    something else entirely (several exist across the suite) still reads as
+    "derive it" instead of raising.
     """
     analysis = getattr(settings, "analysis", None)
     raw = getattr(analysis, "signals", None) or ()
