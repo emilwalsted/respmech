@@ -370,6 +370,8 @@ def _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols, filename, is_b
         ('pdi', pdi),
         ('breathcnt', breathcnt),
         ('ignored', ignored),
+        ('kind', None),
+        ('has_phases', True),
         ('entcols', entcols),
         ('emgcols', emgcols),
         ('filename', filename),
@@ -843,13 +845,19 @@ def calculateentropy(breath, settings, phase=None, cancel_check=None):
 
 # --- per-breath mechanics (the big one) ------------------------------------
 
-def _add_gated_peaks(retbreath, breath, settings, peaks_s, detection_ok, detection_reason):
+def _add_gated_peaks(retbreath, breath, settings, peaks_s, detection_ok, detection_reason, phases=True):
     """Attach the opt-in cardiac-gated peak RMS for whole breath / inspiration / expiration.
 
     Does nothing at all unless processing.emg.robust_peak.enabled, so with the feature off no
     new keys appear and the result DataFrames are untouched. ``peaks_s`` are ABSOLUTE R-peak
     times in seconds; breath["time"] runs on the same absolute clock (compute.trim does not
     rebase it), so mapping to phase-local samples is a plain subtraction.
+
+    ``phases=False`` (a phase-less segment, e.g. an EMG-only whole-file segment with no
+    inspiration/expiration split) skips the computation entirely rather than indexing
+    ``breath["inspiration"]``/``breath["expiration"]``, which do not exist for such a segment:
+    all three keys go NaN-with-reason, uniformly, the same shape as the existing "no usable
+    R-peaks" branch below.
     """
     rp = getattr(settings.processing.emg, "robust_peak", None)
     if rp is None or not rp.enabled:
@@ -857,6 +865,13 @@ def _add_gated_peaks(retbreath, breath, settings, peaks_s, detection_ok, detecti
     fs = settings.input.format.samplingfrequency
     nch = len(settings.input.data.columns_emg)
     keys = ("rms_gated", "rms_gated_insp", "rms_gated_exp")
+
+    if not phases:
+        for key in keys:
+            retbreath[key] = [float("nan")] * (nch + 2)
+        retbreath["rms_gated_qc"] = {"ok": False, "reason": "segment has no phases"}
+        return
+
     peaks = np.asarray(peaks_s, dtype=float) if peaks_s is not None else None
 
     if peaks is None or peaks.size == 0 or not detection_ok:
@@ -880,6 +895,42 @@ def _add_gated_peaks(retbreath, breath, settings, peaks_s, detection_ok, detecti
         if not qc["ok"]:
             qc_all = {"ok": False, "reason": f"{key}: {qc['reason']}"}
     retbreath["rms_gated_qc"] = qc_all
+
+
+def compute_segment_emg(retbreath, breath, settings, cancel_check, peaks_s, detection_ok, detection_reason,
+                        phases=True):
+    """EMG (RMS/integral/gated-peak) and sample-entropy features for one breath or segment.
+
+    A verbatim extraction of what ``calculatemechanics`` used to compute inline, so it can
+    later be called per-segment (a segment that may not have an inspiration/expiration
+    split — ``phases=False``) as well as per-breath (the call site here, always
+    ``phases=True``). Today only ``_add_gated_peaks`` is genuinely phase-less-safe: the
+    RMS/integral-EMG lines just below, and the whole entropy block, still unconditionally
+    index ``breath["inspiration"]``/``["expiration"]`` and would raise a bare ``KeyError``
+    on a real phase-less segment. No phase-less caller exists yet, so this is enforced with
+    a loud, named error below instead of relying on this docstring alone."""
+    if not phases and (len(breath["emgcols"]) > 0 or len(settings.input.data.columns_entropy) > 0):
+        raise NotImplementedError(
+            "compute_segment_emg(phases=False) does not yet support EMG or sample-entropy "
+            "columns: only the cardiac-gated-peak path (_add_gated_peaks) is phase-less-safe "
+            "today. Extend the EMG/entropy blocks below before calling this with phases=False "
+            "on a segment that has EMG or entropy channels configured.")
+
+    if len(breath["emgcols"]) > 0:
+        retbreath["rms"], retbreath["intemg"] = emglib.calculate_rms(breath["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
+        retbreath["rms_insp"], retbreath["intemg_insp"] = emglib.calculate_rms(breath["inspiration"]["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
+        retbreath["rms_exp"], retbreath["intemg_exp"] = emglib.calculate_rms(breath["expiration"]["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
+        _add_gated_peaks(retbreath, breath, settings, peaks_s, detection_ok, detection_reason, phases=phases)
+
+    if len(settings.input.data.columns_entropy) > 0:
+        entropy = calculateentropy(breath, settings, cancel_check=cancel_check)
+        entropy_insp = calculateentropy(breath, settings, "inspiration", cancel_check=cancel_check)
+        entropy_exp = calculateentropy(breath, settings, "expiration", cancel_check=cancel_check)
+        retbreath["entropy"] = np.append(entropy.T, [max(entropy.T), min(entropy.T), np.mean(entropy.T)])
+        retbreath["entropy_insp"] = np.append(entropy_insp.T, [max(entropy_insp.T), min(entropy_insp.T), np.mean(entropy_insp.T)])
+        retbreath["entropy_exp"] = np.append(entropy_exp.T, [max(entropy_exp.T), min(entropy_exp.T), np.mean(entropy_exp.T)])
+    else:
+        retbreath["entropy"] = []
 
 
 def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, settings,
@@ -969,21 +1020,7 @@ def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoes
 
     retbreath["wob"] = calculatewob(breath, bcnt, vefactor, settings)
 
-    if len(breath["emgcols"]) > 0:
-        retbreath["rms"], retbreath["intemg"] = emglib.calculate_rms(breath["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
-        retbreath["rms_insp"], retbreath["intemg_insp"] = emglib.calculate_rms(breath["inspiration"]["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
-        retbreath["rms_exp"], retbreath["intemg_exp"] = emglib.calculate_rms(breath["expiration"]["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
-        _add_gated_peaks(retbreath, breath, settings, peaks_s, detection_ok, detection_reason)
-
-    if len(settings.input.data.columns_entropy) > 0:
-        entropy = calculateentropy(breath, settings, cancel_check=cancel_check)
-        entropy_insp = calculateentropy(breath, settings, "inspiration", cancel_check=cancel_check)
-        entropy_exp = calculateentropy(breath, settings, "expiration", cancel_check=cancel_check)
-        retbreath["entropy"] = np.append(entropy.T, [max(entropy.T), min(entropy.T), np.mean(entropy.T)])
-        retbreath["entropy_insp"] = np.append(entropy_insp.T, [max(entropy_insp.T), min(entropy_insp.T), np.mean(entropy_insp.T)])
-        retbreath["entropy_exp"] = np.append(entropy_exp.T, [max(entropy_exp.T), min(entropy_exp.T), np.mean(entropy_exp.T)])
-    else:
-        retbreath["entropy"] = []
+    compute_segment_emg(retbreath, breath, settings, cancel_check, peaks_s, detection_ok, detection_reason)
 
     retbreath["mechanics"] = OrderedDict([
         ('poes_maxexp', poes_maxexp), ('poes_mininsp', poes_mininsp),
