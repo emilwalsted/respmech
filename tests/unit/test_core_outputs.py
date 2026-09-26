@@ -46,6 +46,46 @@ def test_units_use_the_dot_notation_not_the_slash_form():
     assert "/" not in units.unit_for("ve")
 
 
+def test_units_generic_naming_conventions_pct_t_frac_peepi_tt_cv_db():
+    """Generic prefix/suffix naming-convention rules, for names no existing column
+    happens to use yet, so a future column that opts into one of these conventions
+    gets the right unit without a bespoke registry entry. Each check exercises a
+    boundary against a rule that would otherwise misclassify it: a '_pct' name
+    starting with 'rms' or containing 'flow'; a name that is both a suffix hit
+    (_frac/_cv/_db) AND would also match one of this block's own prefix rules
+    (t_/peepi/tt_), where the suffix must win since it is the more specific,
+    intentional convention (e.g. a coefficient of variation of a timing or PEEPi
+    value)."""
+    from respmech.core import quantities as units
+    assert units.unit_for("rms_col_2_pct") == "%"          # not the EMG 'rms' rule
+    assert units.unit_for("t_peak_in_flow") == "s"          # not the 'flow' rule
+    assert units.unit_for("efl_pct") == "%"
+    assert units.unit_for("peepi_lag") == "s"               # not the general 'peepi' rule
+    assert units.unit_for("peepi_dyn") == "cmH₂O"
+    assert units.unit_for("some_frac") == "—"
+    assert units.unit_for("tt_musc") == "—"
+    assert units.unit_for("vt_cv") == "%"
+    assert units.unit_for("noise_db") == "dB"
+    # Suffix beats this block's own prefix rules, not just the older EMG/flow rules:
+    assert units.unit_for("t_peak_cv") == "%"               # not the 't_' prefix rule
+    assert units.unit_for("t_x_frac") == "—"                # not the 't_' prefix rule
+    assert units.unit_for("peepi_dyn_cv") == "%"             # not the 'peepi' prefix rule
+    assert units.unit_for("peepi_db") == "dB"                # not the 'peepi' prefix rule
+    assert units.unit_for("tt_musc_db") == "dB"              # not the 'tt_' prefix rule
+
+
+def test_units_registry_fallback_is_used_only_when_rules_leave_a_name_blank():
+    """The registry (ColumnSpec.unit) is consulted for a name _RULES doesn't
+    classify, but every entry today is unit=None (registry.py's own pinned test),
+    so this is currently a no-op in practice — legacy columns keep resolving via
+    _RULES exactly as before (vmr/tlr_insp stay blank)."""
+    from respmech.core import quantities as units
+    assert units.unit_for("vmr") == ""
+    assert units.unit_for("tlr_insp") == ""
+    # An entirely unknown name (no _RULES match, no registry entry) is also "".
+    assert units.unit_for("totally_unregistered_column_xyz") == ""
+
+
 def test_display_for_falls_back_to_the_column_identifier():
     """The registry has room for a human-readable name (ticket A04), but the name
     table itself is deliberately not populated yet — see quantities.py's docstring.

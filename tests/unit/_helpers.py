@@ -58,6 +58,18 @@ def synth_settings(out="", *, noise=False, **kw):
     return s
 
 
+def assert_units(mapping):
+    """Assert ``quantities.unit_for(column) == unit`` for every ``{column: unit}``
+    pair in ``mapping`` — a small shared helper for "every column a feature emits
+    resolves to the unit it was designed for" tests. Reports every mismatch at
+    once, (got, expected) per column, rather than stopping at the first."""
+    from respmech.core import quantities
+
+    got = {c: quantities.unit_for(c) for c in mapping}
+    bad = {c: (got[c], u) for c, u in mapping.items() if got[c] != u}
+    assert not bad, f"unit_for mismatch, column: (got, expected) = {bad}"
+
+
 def is_dark_hex(h):
     """True when a #RRGGBB colour reads as a dark surface (perceived luminance)."""
     h = h.lstrip("#")
