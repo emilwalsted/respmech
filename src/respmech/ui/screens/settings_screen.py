@@ -401,9 +401,10 @@ class SettingsScreen(QWidget):
         self.qc.setProperty("banner", True)   # the box comes from the QSS, not extra margins
         outer.addWidget(self.qc)
 
-        # Carried-over exclusions/breath-counts/noise-reference banner: shown only when the
-        # input folder just changed AND state named against a DIFFERENT (or unrecorded)
-        # folder is still sitting in the analysis — see core.settings.carried_over_state.
+        # Carried-over exclusions/breath-counts/EMG-reference (noise/ECG/normalisation)
+        # banner: shown only when the input folder just changed AND state named against a
+        # DIFFERENT (or unrecorded) folder is still sitting in the analysis — see
+        # core.settings.carried_over_state.
         # Two explicit choices, no default: "Keep" just dismisses (the state was never
         # touched, so it still applies exactly as it did before — an inherited exclusion is
         # only ever hatched/named differently in Preview, never silently dropped); "Clear"
@@ -427,8 +428,8 @@ class SettingsScreen(QWidget):
         self.btn_carried_clear = QPushButton("Clear")
         self.btn_carried_clear.setProperty("compact", True)
         self.btn_carried_clear.setToolTip(
-            "Remove the exclusions/breath-count overrides/rest reference that belong to "
-            "the previous recordings folder.")
+            "Remove the exclusions/breath-count overrides/EMG references (rest, ECG, "
+            "normalisation) that belong to the previous recordings folder.")
         self.btn_carried_clear.clicked.connect(self._clear_carried_banner)
         cb.addWidget(self.btn_carried_keep)
         cb.addWidget(self.btn_carried_clear)
