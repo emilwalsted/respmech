@@ -7,6 +7,19 @@ for the installers themselves.
 
 ## Unreleased
 
+**A new analysis now starts with a choice of signal set.** 'New analysis' (from the
+startup chooser, 'Get started…' and File/Analysis > New) opens a picker naming which
+signals the analysis will use before anything else is set up; 'New from last rig'
+carries its previous analysis's signal set forward automatically and skips the
+picker. Today the picker's only reachable door is the complete set (Flow + Poes +
+Pgas + Pdi, today's shape), with or without an 'Also EMG' toggle — the reduced
+presets (Flow only, Flow + Poes, EMG only, Custom…) are shown, so the picker's
+final shape is visible now, but they stay disabled until a later release's compute and
+UI changes actually support running an analysis on a reduced set. Changing the set
+after that point always goes through one funnel that keeps `input.channels`
+consistent with it: a channel whose role leaves the set is cleared, never silently
+left assigned to a role the analysis no longer declares.
+
 **Poes, Pgas and Pdi are no longer mandatory in `Settings.validate()`.** A new,
 optional `[analysis] signals` table names which of Flow/Poes/Pgas/Pdi/EMG an analysis
 actually uses; left out (the default), the signal set is derived from whichever
