@@ -198,6 +198,13 @@ QC strip) and by `respmech validate`, from the same shared logic:
   (rather than `typing.Optional[X]`) that points at another dataclass was built from
   the raw dict instead of an `X` instance — not yet reachable from any existing
   setting, but load-bearing groundwork for fields landing in upcoming releases.
+- `core/quantities.py`'s unit lookup gained generic naming-convention rules — a
+  result column named with a `_pct`/`_frac`/`_cv`/`_db` suffix or a `t_`/`peepi`/`tt_`
+  prefix now resolves to the right unit (%, dimensionless, %, dB, s, cmH₂O)
+  automatically, instead of needing a column-by-column entry. Latent for now: no
+  column emitted by the pipeline today follows one of these conventions through the
+  Units sheet or the on-screen result table, so nothing currently visible changes —
+  this is groundwork for upcoming result columns that will.
 
 <!-- changelog-skip be4ee99 internal, behaviour-neutral groundwork for a future modular
      analysis pipeline: a Qt-free capabilities/signal-set skeleton (its own new module and
