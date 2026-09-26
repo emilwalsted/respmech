@@ -262,6 +262,12 @@ QC strip) and by `respmech validate`, from the same shared logic:
      halves (the latter still empty) and removes a handful of internal ticket-id
      references from source comments/docstrings (public-repo hygiene only) -->
 
+<!-- changelog-skip e3a13d2 test- and docs-only: generalized the existing lone-ampersand
+     mnemonic guard (test_no_button_caption_turns_an_ampersand_into_a_mnemonic) from push
+     buttons alone to group-box titles, menu/menu-bar actions, tab captions and buddy
+     labels, as a shared _lone_ampersands(root) helper other screens' tests can reuse,
+     plus a matching ui/CLAUDE.md note -- no runtime app behaviour differs -->
+
 <!--
 "Unreleased" above is a hand-maintained draft of the next release's entry. It is
 updated ONLY when explicitly asked to (not automatically on every commit), and it
