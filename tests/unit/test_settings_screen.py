@@ -1396,6 +1396,19 @@ def _entry_folder(s, filename):
     return e.folder
 
 
+def test_carried_phrases_covers_every_carried_kind():
+    """M-07 self-review finding: `_update_carried_banner` silently drops any kind whose
+    name isn't a key in `_CARRIED_PHRASES` (`if kind in _CARRIED_PHRASES`), and if it were
+    the ONLY carried kind the banner would show with an empty phrase list. A future row
+    added to `_CARRIED_KINDS` (M-19/M-21/M-34's own tagged state) without a matching
+    `_CARRIED_PHRASES` entry would fail SILENTLY at runtime — pin the parity here so it
+    fails a test instead."""
+    from respmech.core.settings import _CARRIED_KINDS
+    from respmech.ui.screens.settings_screen import _CARRIED_PHRASES
+    kinds = {kind for _path, kind, _name_of, _clear_fn in _CARRIED_KINDS}
+    assert kinds == set(_CARRIED_PHRASES)
+
+
 def test_switching_input_folder_shows_the_carried_over_banner(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     from respmech.core.settings import ExcludeEntry

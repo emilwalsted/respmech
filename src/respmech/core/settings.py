@@ -559,7 +559,17 @@ _CARRIED_KINDS: tuple[tuple[str, str, Callable[[Any], Any], Callable[[Any], None
     ("processing.breath_counts", "breath_count_files",
      lambda e: e.file, None),
     ("processing.emg.noise.reference_folder", "noise_reference",
-     lambda n: n.reference_file if (n.reference_file or n.reference_intervals) else None,
+     # Reproduce the OLD presence check `(reference_file or reference_intervals)` exactly —
+     # NOT `reference_file` alone. `name_of`'s return value is tested for truthiness by
+     # both callers below, so a bare `n.reference_file if (n.reference_file or
+     # n.reference_intervals) else None` would return the (falsy) reference_file itself
+     # when only `reference_intervals` is set, silently losing presence — a real
+     # divergence a self-review pass caught by comparing against the pre-generalization
+     # behaviour directly. The label falls back to a generic word only in that
+     # intervals-only case, which every live write path (preview/_emg_noise.py's two
+     # apply methods) always avoids by setting both fields together.
+     lambda n: (n.reference_file or "reference") if (n.reference_file or n.reference_intervals)
+     else None,
      _clear_noise_reference),
     ("processing.emg.ecg_reference_folder", "ecg_reference",
      lambda emg: emg.ecg_reference_file, _clear_ecg_reference),
