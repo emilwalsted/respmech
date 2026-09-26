@@ -38,8 +38,8 @@ def to_legacy_ns(s: Settings) -> SimpleNamespace:
             data=SimpleNamespace(
                 # legacy code uses np.isnan(column_X) to mean "absent" (loaders.py); flow
                 # keeps raising via _column today regardless of None vs NaN (Settings.validate
-                # still requires it), so this is forward-compat plumbing for M-08, not yet
-                # observable behaviour for flow.
+                # still requires it), so this is forward-compat plumbing for a future change
+                # that relaxes that requirement, not yet observable behaviour for flow.
                 column_poes=ch.poes if ch.poes is not None else math.nan,
                 column_pgas=ch.pgas if ch.pgas is not None else math.nan,
                 column_pdi=ch.pdi if ch.pdi is not None else math.nan,
