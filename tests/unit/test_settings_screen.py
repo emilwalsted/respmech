@@ -1637,14 +1637,16 @@ def test_deepest_existing_ancestor_walks_up_to_a_real_directory(tmp_path):
     assert SettingsScreen._deepest_existing_ancestor("") == os.path.expanduser("~")
 
 
-def test_duplicate_for_another_folder_derives_output_clears_ecg_reference_and_opens_save_as(
+def test_duplicate_for_another_folder_derives_output_preserves_ecg_reference_and_opens_save_as(
         qapp, tmp_path, monkeypatch):
     """C03 point 5, the end-to-end flow: pick a new recordings folder, confirm the
     suggested (sibling-derived) output folder, and land on Save as… pre-filled with the
     SAME analysis filename inside the NEW folder — never overwriting the template. The
     file-keyed exclude_breaths/breath_counts/noise-reference are left to B06's own
-    Behold/Ryd banner (already exercised by the tests above this section); only
-    ecg_reference_file (no such ask mechanism) is asserted cleared directly here."""
+    Behold/Ryd banner (already exercised by the tests above this section). Since M-07,
+    ecg_reference_file carries its own folder tag too, so it now goes through the SAME
+    banner instead of being force-cleared here: it survives the duplicate, and the
+    banner (asserted separately below) names it as carried."""
     from respmech.ui.screens import settings_screen as ss
     from respmech.ui.main_window import MainWindow
     from _helpers import synth_settings
@@ -1690,9 +1692,13 @@ def test_duplicate_for_another_folder_derives_output_clears_ecg_reference_and_op
     assert captured["suggested_output"] == str(study / "S02-output")   # derived, not asked
     assert sc.in_folder.text() == str(new_input)
     assert sc.out_folder.text() == str(study / "S02-output")
-    assert sc.state.settings.processing.emg.ecg_reference_file is None
+    assert sc.state.settings.processing.emg.ecg_reference_file == "synth_case_A.csv"
     assert sc.is_dirty()
     assert save_as_calls == [str(new_input / "analysis.toml")]
+    # the folder switch made the (unrecorded-folder) ECG reference carried-over —
+    # the banner names it instead of the reference being silently dropped.
+    assert not sc.carried_banner.isHidden()
+    assert "ECG reference" in sc.carried_label.text()
     win.close()
 
 
