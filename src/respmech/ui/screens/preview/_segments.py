@@ -357,6 +357,22 @@ class _SegmentsMixin:
                 seen.add(key)
             deduped.append(t)
         proc.breath_types[:] = deduped
+        # A merge can ALSO fold a previously EXCLUDED breath and a previously TYPED
+        # breath onto the same new number — the other half of Settings.validate()'s
+        # invariant ("both typed and excluded"), and one this remap must guard just as
+        # deliberately as the typed-vs-typed collision above (self-review finding: an
+        # earlier version of this method only resolved collisions WITHIN breath_types,
+        # leaving exactly this cross-kind pairing to silently write an invalid Settings
+        # that blocked processing until a user noticed and re-clicked the merged
+        # segment). A typed breath already carries the same "excluded from the tidal
+        # average" effect a plain exclusion does (see BREATH_KINDS's own docstring) plus
+        # a kind a plain exclusion does not, so typed wins: drop the collided number
+        # from the plain exclusion rather than the richer typed entry.
+        if excl_entry is not None and excl_entry.breaths:
+            typed_here = {t.breath for t in proc.breath_types if t.file == file}
+            excl_entry.breaths = sorted(set(excl_entry.breaths) - typed_here)
+            if not excl_entry.breaths:
+                proc.exclude_breaths.remove(excl_entry)
 
         if entry is None:
             seg.separators.append(SeparatorEntry(file=file, times_s=new_times,
@@ -391,6 +407,13 @@ class _SegmentsMixin:
             at = t
         self._set_separators(name, new_times)
         self.settings_edited.emit()
+        # The wide, all-files _sync_rail_exclusions() rather than the per-file
+        # _sync_excluded_badge(name) _set_breath_type uses for its own single-file
+        # mutation: unlike an ordinary exclude/type toggle, _set_separators can change
+        # the EXCLUSION COUNT for this file by renumbering/merging entries (see its own
+        # docstring), and _sync_rail_exclusions is the funnel that already recomputes
+        # every file's badge from the current exclude_breaths correctly; a narrower,
+        # single-file version of that recompute does not exist today.
         self._sync_rail_exclusions()
         # Wide, not just {"segments", "batch"}: _kinds_for_settings_path treats every
         # processing.segmentation.* field (this one included) as needing the full
