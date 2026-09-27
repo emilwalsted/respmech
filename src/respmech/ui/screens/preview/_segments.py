@@ -236,6 +236,12 @@ class _SegmentsMixin:
             (num, t0, t1, kind if kind else ("excluded" if ignored else None))
             for (num, t0, t1, ignored, kind) in data["spans"]
         ]
+        # M-31: a segment has no inspiration/expiration split for manoeuvres.suggest_fvc
+        # to read (has_phases=False, see core.analysis.segments) — never suggested here,
+        # and explicitly cleared so a suggestion from a PREVIOUSLY viewed flow-bearing
+        # file cannot survive a switch to an EMG-only one (this render path never goes
+        # through _render_preview_stage1, which is the only other place this is set).
+        self._suggested_fvc = None
         self._update_separators_button()
         self._render_segments_stack(data["emg"], data["fs"], data.get("emg_flow"), data["name"])
         self._render_raw_stack(data["emg"], data["fs"], data.get("emg_flow"))
