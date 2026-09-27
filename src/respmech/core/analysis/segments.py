@@ -32,6 +32,7 @@ module, not the other way around, so there is no import cycle. Qt-free.
 """
 from __future__ import annotations
 
+import bisect
 from collections import OrderedDict
 
 import numpy as np
@@ -184,3 +185,43 @@ def separators(filename: str, times_s, timecol, emgcolumns, entropycolumns, fs: 
             number, start, end, timecol, emgcolumns, entropycolumns, filename,
             ignored=number in ignored_breaths, kind=kinds.get(number))
     return segments
+
+
+def remap_segment_number(old_bounds_s, new_bounds_s, old_number: int) -> int:
+    """Map a segment NUMBER under an OLD set of segment boundaries to its equivalent
+    number under a NEW set (M-27's manual-separator edit: placing or removing one
+    boundary at a time), by finding where the OLD segment's own START TIME now falls
+    among the NEW boundaries — the containing segment (the largest new boundary at or
+    before that instant) is "the same segment, renumbered". See
+    ``ui.screens.preview._segments._SegmentsMixin._set_separators`` for the caller.
+
+    ``old_bounds_s``/``new_bounds_s``: each the FULL sorted list of segment start
+    times, beginning with ``0.0`` (i.e. ``[0.0] + times_s``, matching how
+    :func:`separators` above builds its own ``bounds`` before slicing) — not just the
+    separator times alone. ``old_number`` is 1-based, like every other segment/breath
+    number in this codebase.
+
+    One rule covers every edit a single placement or removal can make, with no special
+    case for any of them:
+
+    * an insertion strictly AFTER the old segment's own start leaves that start time
+      an exact boundary in the new list too, so it maps to whichever (now higher)
+      number that same instant sits at;
+    * an insertion strictly BEFORE it, splitting an earlier segment, is the same case:
+      the old segment's own start is untouched and still an exact new boundary, one
+      position further along;
+    * removing the boundary AT the old segment's own start (a merge into the
+      preceding segment) means that instant is no longer a boundary at all, so it now
+      falls INSIDE whatever segment covers it — exactly what "the largest new
+      boundary at or before it" finds.
+
+    ``old_number`` past the end of ``old_bounds_s`` (stale data referencing a segment
+    the current separators no longer produce) clamps to the last known boundary rather
+    than raising — the caller has no better instant to compare with, and this is a
+    renumbering aid, not a validator (``Settings.validate()``/``EmgSegmentationError``
+    already own rejecting a genuinely malformed configuration)."""
+    idx = min(max(old_number - 1, 0), len(old_bounds_s) - 1)
+    old_start = old_bounds_s[idx]
+    i = bisect.bisect_right(new_bounds_s, old_start) - 1
+    i = max(0, min(i, len(new_bounds_s) - 1))
+    return i + 1

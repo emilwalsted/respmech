@@ -610,6 +610,10 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         self.btn_process_segments_file.setToolTip(
             "Locked while a run is in progress." if active
             else "Run and write output for the previewed file only.")
+        # M-27: 'Place separators' locks the same way while a run is active — routed
+        # through _update_separators_button so 'whole_file' (already disabled, its own
+        # reason) is never overridden by a run ending.
+        self._update_separators_button()
 
     # -- file list (reactive) ----------------------------------------------
     def refresh_files(self):
@@ -718,6 +722,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         self._update_subtabs()
         self._update_campbell_panel_title()   # M-17 (R7): follows a signal-set change too
         self._update_mech_stack_floor()       # M-17 (R7): follows a channel-count change too
+        self._update_separators_button()      # M-27: follows a segmentation.method change too
         self._sync_rail_exclusions()   # a loaded analysis file can bring its own exclusions
         self._update_actions()
         # Dependency-scoped invalidation: diff the settings against the last-synced snapshot
