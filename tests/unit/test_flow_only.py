@@ -2,9 +2,13 @@
 
 These call ``calculatemechanics``/``calculateaveragebreaths`` directly on segments
 built from the real synthetic recording (``_helpers.segment_synth_case``), bypassing
-``core.pipeline.run_batch``/``core.results`` entirely — pipeline/results are not yet
-guarded for a reduced signal set (a later ticket's scope), so a flow-only
-settings object would fail somewhere else even after these guards are correct."""
+``core.pipeline.run_batch``/``core.results`` — narrower and faster than a full batch
+run, and it isolates a failure to these two functions specifically. ``run_batch``
+itself already succeeds end to end for a flow-only settings object once these guards
+are in place (``core/pipeline.py``/``core/results.py`` are written generically over
+whatever the mechanics table ends up containing, rather than hardcoding pressure
+columns) — see ``test_flow_only_reaches_run_batch_end_to_end`` below, which pins
+exactly that."""
 import numpy as np
 
 from _helpers import compute_all_breaths, requires_synth, segment_synth_case, synth_settings
@@ -64,6 +68,31 @@ def test_mechanics_columns_equal_full_channel_call(tmp_path):
     }
     for breath in fo_breaths.values():
         assert set(breath["mechanics"]) == expected_keys
+
+
+@requires_synth()
+def test_flow_only_reaches_run_batch_end_to_end(tmp_path):
+    """The real public entry point, not the compute-level bypass the other tests in this
+    file use: ``run_batch`` on a flow-only ``Settings`` object completes with no failed
+    files, and the resulting breath table carries exactly the pure-timing columns (no
+    poes/pgas/pdi/vmr/wob) -- ``core/pipeline.py``/``core/results.py`` needed no change of
+    their own for this, since they read whatever columns ``calculatemechanics`` happens to
+    produce rather than hardcoding the pressure family. Before this ticket's guards, this
+    exact call raised inside ``calculateaveragebreaths`` (``ValueError: ... too short to
+    average``, from resampling an empty Poes array) -- this test would have failed on
+    ``origin/emil/vigilant-dijkstra-eui21m`` before this branch."""
+    from respmech.core.pipeline import run_batch
+
+    settings = synth_settings(
+        tmp_path, channels={"poes": None, "pgas": None, "pdi": None, "emg": [], "entropy": []}
+    )
+    result = run_batch(settings, only_files=["synth_case_A.csv"])
+
+    assert result.failed_files == {}
+    assert "synth_case_A.csv" in result.ok_files
+    cols = set(result.ok_files["synth_case_A.csv"].breaths_table.columns)
+    assert "flow_midvolexp" in cols and "ti" in cols
+    assert not (cols & {"poes_mininsp", "pgas_endinsp", "pdi_endinsp", "vmr", "wobtotal"})
 
 
 @requires_synth()

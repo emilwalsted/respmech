@@ -73,10 +73,11 @@ def segment_synth_case(settings, filename="synth_case_A.csv"):
     """Load, trim, condition and segment ``filename`` exactly as ``core.pipeline.run_batch``
     does up to (but not including) ``calculateaveragebreaths``/``calculatemechanics`` —
     for tests that need to call those two directly, bypassing ``run_batch``/``core.results``
-    entirely.
-    Pipeline/results are NOT guarded for a reduced signal set yet (that is a later ticket's
-    scope), so going through ``run_batch`` for a flow-only/poes-only settings object would
-    fail somewhere else even after ``compute.py``'s own guards are correct.
+    entirely — narrower and faster than a full batch run, and it isolates a failure to
+    these two functions specifically. ``run_batch`` itself already succeeds end to end for
+    a flow-only/poes-only settings object once ``compute.py``'s guards are in place
+    (``core/pipeline.py``/``core/results.py`` are written generically over whatever the
+    mechanics table ends up containing, rather than hardcoding pressure columns).
 
     Returns ``(legacy_ns, breaths, n_trimmed)`` — ``legacy_ns`` is the same
     ``to_legacy_ns(settings)`` ``run_batch`` itself would build (carries

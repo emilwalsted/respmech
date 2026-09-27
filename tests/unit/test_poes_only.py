@@ -55,9 +55,11 @@ def test_mechanics_columns_equal_full_channel_call(tmp_path):
 
 @requires_synth()
 def test_pgas_pdi_and_vmr_keys_absent(tmp_path):
-    """The registry-driven skip (`resolve()`'s own capability gate, exercised here at the
-    compute level): every pgas-only and pdi-only column, plus ``vmr``, is absent from a
-    poes-only breath's mechanics, and every poes-only column IS present."""
+    """``calculatemechanics``'s own ``if caps.x:`` guards (not ``registry.resolve()``,
+    which ``compute.py`` does not call — only ``LEGACY_MECHANICS_ORDER`` itself is used,
+    to pick the final key ORDER, not to decide which keys are computed): every pgas-only
+    and pdi-only column, plus ``vmr``, is absent from a poes-only breath's mechanics, and
+    every poes-only column IS present."""
     _, breaths = _run(
         tmp_path, channels={"pgas": None, "pdi": None, "emg": [], "entropy": []}
     )
