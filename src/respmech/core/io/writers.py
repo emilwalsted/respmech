@@ -287,6 +287,8 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
             norm = normalize_emg_table(fr.breaths_table, settings, reference_values=ref_values)   # P14
             if norm is not None and len(norm):
                 extra["EMG normalised"] = norm
+            if getattr(fr, "manoeuvres_table", None) is not None and len(fr.manoeuvres_table):
+                extra["Manoeuvres"] = fr.manoeuvres_table                                          # M-29
             _write_xlsx(fr.breaths_table, p, settings=settings, when=when, extra_sheets=extra)
             written.append(p)
 
