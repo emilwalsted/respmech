@@ -136,6 +136,11 @@ def to_legacy_ns(s: Settings) -> SimpleNamespace:
                 separators=_separators_passthrough(s),
                 ptp_baseline_window_s=s.processing.ptp.baseline_window_s,
             ),
+            # v2-only passthrough (no legacy counterpart), like ptp_baseline_window_s
+            # above — read by core.analysis.manoeuvres.extract via
+            # s.processing.lung_volume.ic. Passed through as the dataclass, same
+            # precedent as processing.emg.robust_peak above.
+            lung_volume=SimpleNamespace(ic=s.processing.lung_volume.ic),
             wob=SimpleNamespace(
                 calcwobfrom=wob.calc_from,
                 avgresamplingobs=wob.avg_resampling_obs,

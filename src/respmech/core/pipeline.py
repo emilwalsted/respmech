@@ -29,9 +29,10 @@ import numpy as np
 
 from respmech.core import compute
 from respmech.core import emg as emglib
+from respmech.core.analysis import manoeuvres as manoeuvreslib
 from respmech.core.analysis.signals import Capabilities
 from respmech.core.io.loaders import load
-from respmech.core.results import build_breath_table, build_processed_data
+from respmech.core.results import build_breath_table, build_manoeuvre_table, build_processed_data
 from respmech.core.settings import Settings, resolve_noise_reference_mode
 from respmech.core._legacy_ns import to_legacy_ns
 
@@ -57,6 +58,12 @@ class FileResult:
     breaths: object = None             # raw computed breaths (for plotting)
     ecg: object = None                 # ECG-removal diagnostics (n_peaks, suppression)
     signals: object = None             # diagnostic signal arrays for the plotting/audio consumer
+    # M-29: {breath_no: core.analysis.manoeuvres.extract(...) result} for every TYPED
+    # breath in this file (rest excluded -- see run_batch), and its Manoeuvres-sheet
+    # DataFrame (None when manoeuvres is empty -- "the sheet exists only when a typed
+    # breath is present", the ticket's own acceptance criterion).
+    manoeuvres: dict = field(default_factory=dict)
+    manoeuvres_table: object = None
     error: Optional[str] = None
     # exception class name, so consumers can tell a precondition failure of THIS recording
     # (TrimError, VolumeTrendError) from a real fault without parsing ``error``.
@@ -950,6 +957,38 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                 done += 1
                 _emit(progress, ProgressEvent("breath", file=filename, breath=done, total_breaths=total))
 
+            # M-29: typed (non-`rest`) breaths never reach calculatemechanics above (M-19
+            # unions every typed kind into `excludebreaths` on a flow-bearing set, so the
+            # loop's own `if breath["ignored"]: continue` skips them) -- extract their
+            # manoeuvre values here instead, straight from the raw breath dict. EMG-only
+            # breaths have no inspiration/expiration split (`has_phases=False`, empty
+            # flow/volume/pressure arrays) for `extract` to read, so this is flow-bearing
+            # only, same guard as the boundary-notice/vefactor block above.
+            # NB a file where EVERY breath is typed (no tidal breaths at all) never
+            # reaches this block: `compute.check_breaths` above (line ~861) already
+            # raises NoBreathsError for it. That is deliberate, not an M-29 gap --
+            # "reference-only files" are explicitly M-30's scope (see this ticket's
+            # own "Uden for omfang").
+            fr_manoeuvres: dict = {}
+            if not emg_only:
+                tidal = [b for b in breaths.values() if not b["ignored"]]
+                for breathno in breaths:
+                    breath = breaths[breathno]
+                    kind = breath.get("kind")
+                    if not kind or kind == "rest":
+                        continue
+                    try:
+                        fr_manoeuvres[breathno] = manoeuvreslib.extract(
+                            breath, kind, tidal, s.capabilities, s)
+                    except Exception as e:
+                        _msg = (f"breath #{breathno} ({kind}) manoeuvre extraction failed: "
+                               f"{type(e).__name__}: {e}")
+                        warnings.warn(f"{filename}: {_msg}")
+                        file_notices.append(_msg)
+                if fr_manoeuvres:
+                    manoeuvreslib.apply_repeatability(fr_manoeuvres, s.processing.lung_volume.ic)
+            manoeuvres_table = build_manoeuvre_table(fr_manoeuvres)
+
             breaths_table, average_row = build_breath_table(filename, breaths, s)
             processed = None
             if s.output.data.saveprocesseddata:
@@ -990,6 +1029,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
             result.files[filename] = FileResult(
                 file=filename, breaths_table=breaths_table, average_row=average_row,
                 processed=processed, breaths=breaths, ecg=ecg_diag, signals=signals,
+                manoeuvres=fr_manoeuvres, manoeuvres_table=manoeuvres_table,
                 notices=file_notices)
             average_rows.append(average_row)
             _emit(progress, ProgressEvent("file_done", file=filename, message=f"{total} breaths"))
