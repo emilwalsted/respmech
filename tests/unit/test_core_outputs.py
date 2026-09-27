@@ -628,6 +628,37 @@ def test_run_report_processing_block_names_none_when_unset(tmp_path):
     assert "Cohort grouping:         leading filename token" in report
 
 
+def test_run_report_processing_block_segmentation_line(tmp_path):
+    """EMG-only segmentation methods (whole_file/separators) report a 'Segmentation:'
+    line, never 'Breath separation: ... buffer N' (buffer is a flow/volume-only
+    concept) — and the Provenance sheet's own row (read via _provenance_rows, which
+    _write_xlsx would otherwise be the only caller of) says the same thing."""
+    from respmech.core.settings import SeparatorEntry
+    from respmech.core.io.writers import _provenance_rows, _write_run_report
+
+    result = SimpleNamespace(ok_files={}, failed_files={})
+    s = synth_settings(tmp_path, channels={
+        "flow": None, "poes": None, "pgas": None, "pdi": None, "volume": None})
+    s.processing.segmentation.method = "whole_file"
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "Segmentation:            whole file" in report
+    assert "Breath separation" not in report
+    assert "buffer" not in report
+    prov = _provenance_rows(s, datetime(2026, 7, 11))
+    row = prov.loc[prov["Key"] == "Segmentation", "Value"].iloc[0]
+    assert row == "whole file"
+
+    s.processing.segmentation.method = "separators"
+    s.processing.segmentation.separators = [
+        SeparatorEntry(file="a.csv", times_s=[1.0, 2.0]),
+        SeparatorEntry(file="b.csv", times_s=[1.0, 2.0]),
+    ]
+    path2 = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report2 = open(path2, encoding="utf-8").read()
+    assert "Segmentation:            separators (2 per file)" in report2
+
+
 def test_partial_run_report_omits_the_cohort_figure_without_poes(tmp_path):
     """Self-review finding: the PARTIAL RUN block's ``cohort_bits`` list only checked
     ``save_pv_individual``, so a flow-only analysis (no Poes -- no Campbell figure ever

@@ -11,7 +11,8 @@ import re
 
 import pytest
 
-from respmech.core.settings import BreathTypeEntry, ExcludeEntry, Settings, SettingsError
+from respmech.core.settings import (
+    BreathTypeEntry, ExcludeEntry, SeparatorEntry, Settings, SettingsError)
 from respmech.ui.validation import blockers, friendly_settings_error
 
 #: what every SettingsError message's technical key looks like — the same pattern
@@ -166,6 +167,21 @@ _CASES = [
                s.processing.breath_types.append(
                     BreathTypeEntry(file="x.txt", breath=2, kind="rest"))),
      ["whole-file", "manual separators"]),
+    # SeparatorEntry's own form checks (a separator time not strictly increasing).
+    ("a separator entry's times_s is not strictly increasing",
+     lambda s: s.processing.segmentation.separators.append(
+         SeparatorEntry(file="x.txt", times_s=[5.0, 3.0])),
+     ["separator"]),
+    ("a separator entry's times_s contains a negative time",
+     lambda s: s.processing.segmentation.separators.append(
+         SeparatorEntry(file="x.txt", times_s=[-1.0, 3.0])),
+     ["separator"]),
+    ("a separator entry is duplicated for the same file",
+     lambda s: (s.processing.segmentation.separators.append(
+                    SeparatorEntry(file="x.txt", times_s=[1.0])),
+               s.processing.segmentation.separators.append(
+                    SeparatorEntry(file="x.txt", times_s=[2.0]))),
+     ["separator", "duplicat"]),
 ]
 
 

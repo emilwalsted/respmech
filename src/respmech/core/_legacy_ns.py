@@ -42,6 +42,15 @@ def _merged_exclude_breaths(s: Settings, flow_bearing: bool) -> list:
     return [[f, sorted(bs)] for f, bs in merged.items()]
 
 
+def _separators_passthrough(s: Settings) -> list:
+    """``[[file, [t0, t1, …]], …]`` from ``processing.segmentation.separators`` --
+    read back by ``compute._separator_times_for`` for the EMG-only ``separators``
+    segmentation method. Unlike ``exclude_breaths``/``breath_types``, there is no
+    OTHER source to merge (a separator entry only ever comes from this one list),
+    so this is a plain shape transform, not a union."""
+    return [[e.file, list(e.times_s)] for e in s.processing.segmentation.separators]
+
+
 def _breath_types_passthrough(s: Settings) -> list:
     """v2-only passthrough (no legacy counterpart, like ``ptp_baseline_window_s``):
     every typed breath, grouped by file, as ``[breath_no, kind, t_onset_s]`` triples --
@@ -124,6 +133,7 @@ def to_legacy_ns(s: Settings) -> SimpleNamespace:
                 excludebreaths=_merged_exclude_breaths(s, capabilities.flow),
                 breathcounts=[[e.file, e.count] for e in s.processing.breath_counts],
                 breathtypes=_breath_types_passthrough(s),
+                separators=_separators_passthrough(s),
                 ptp_baseline_window_s=s.processing.ptp.baseline_window_s,
             ),
             wob=SimpleNamespace(
