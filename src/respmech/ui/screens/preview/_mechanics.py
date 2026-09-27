@@ -514,6 +514,20 @@ class _MechanicsMixin:
         self.btn_process_file.setEnabled(False)
         if hasattr(self, "btn_process_segments_file"):
             self.btn_process_segments_file.setEnabled(False)
+        # Same discipline for 'Place separators' (M-27): unarm and disable it here too,
+        # not just re-sync it later on a SUCCESSFUL 'segments' render
+        # (_render_segments_preview's own _update_separators_button call). Without this,
+        # a file switch whose 'segments' job then fails (a bad separator, a crashed
+        # worker) left the button exactly as the PREVIOUS file's render had set it —
+        # enabled and possibly still CHECKED — while every plot it would hit-test
+        # against had already been torn down by this same method a few lines up; a click
+        # during that window would resolve the NEW file's name (_selected_filename)
+        # against the OLD file's now-stale geometry. Unarming here closes the window
+        # unconditionally, the same way the process button already is.
+        if hasattr(self, "btn_place_separators"):
+            if self.btn_place_separators.isChecked():
+                self.btn_place_separators.setChecked(False)   # also clears _separators_armed
+            self.btn_place_separators.setEnabled(False)
 
     def _qc_overview_not_assessed(self, detail, chip=None):
         """The chip's honest state while the test run itself failed or was skipped —
