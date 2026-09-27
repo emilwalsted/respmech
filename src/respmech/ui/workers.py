@@ -1076,6 +1076,7 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
     from respmech.core._legacy_ns import to_legacy_ns
 
     s = to_legacy_ns(settings)
+    caps = s.capabilities
     flow, volume, poes, pgas, pdi, ent, emg = load(file_path, s)
     fs = s.input.format.samplingfrequency
     tc = np.arange(len(flow)) / fs
@@ -1095,9 +1096,18 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
         # Breath detection needs a trimmable flow signal; when it fails (e.g. wrong flow
         # channel / inverseflow), still return the RAW channels so the preview can show
         # the signal and the user can fix it — instead of a blank 'failed' error card.
-        series = {"flow": np.asarray(flow, float), "volume": np.asarray(volume, float),
-                  "poes": np.asarray(poes, float), "pgas": np.asarray(pgas, float),
-                  "pdi": np.asarray(pdi, float)}
+        # An absent pressure channel (caps.poes/pgas/pdi False) is omitted entirely rather
+        # than kept as an empty array, matching the trimmed path below and R1's "documented
+        # absence, not a hidden NaN/empty" principle — a consumer not yet updated for a
+        # reduced signal set (ui/screens/preview/_mechanics.py, M-17) is unreachable today,
+        # since nothing in the UI can select such a signal set until that ticket lands.
+        series = {"flow": np.asarray(flow, float), "volume": np.asarray(volume, float)}
+        if caps.poes:
+            series["poes"] = np.asarray(poes, float)
+        if caps.pgas:
+            series["pgas"] = np.asarray(pgas, float)
+        if caps.pdi:
+            series["pdi"] = np.asarray(pdi, float)
         return {
             "name": name, "fs": fs, "t": tc, "series": series, "spans": [],
             "label_y": float(np.nanmax(series["flow"])) if series["flow"].size else 0.0,
@@ -1128,7 +1138,13 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
     boundary_notices = compute.trim_boundary_notices(breaths, s)
 
     t = np.arange(len(flowT)) / fs
-    series = {"flow": flowT, "volume": volc, "poes": poesT, "pgas": pgasT, "pdi": pdiT}
+    series = {"flow": flowT, "volume": volc}
+    if caps.poes:
+        series["poes"] = poesT
+    if caps.pgas:
+        series["pgas"] = pgasT
+    if caps.pdi:
+        series["pdi"] = pdiT
     spans, cum = [], 0
     for bno, b in breaths.items():
         length = len(np.atleast_1d(b["time"]))
