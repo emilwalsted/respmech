@@ -371,6 +371,257 @@ def test_handle_type_requested_pops_the_menu_without_a_view(qapp, tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# M-31: the full type menu (IC/FVC/max/sniff-kinds, Suggested-hint, Manoeuvres
+# table and the reference placeholders)
+# --------------------------------------------------------------------------- #
+def test_type_menu_kinds_full_vocabulary_flow_bearing():
+    from respmech.ui.screens.preview._mechanics import _type_menu_kinds
+    assert _type_menu_kinds(False) == (
+        "tidal", "excluded", "ic", "fvc", "ic_fvc", "max_insp", "sniff", "other")
+
+
+def test_type_menu_kinds_full_vocabulary_emg_only_adds_rest():
+    """'Rest' is inserted only for an EMG-only file — a flow-bearing file already
+    has a well-defined per-breath quiet reference (its own expiration)."""
+    from respmech.ui.screens.preview._mechanics import _type_menu_kinds
+    assert _type_menu_kinds(True) == (
+        "tidal", "excluded", "ic", "fvc", "ic_fvc", "max_insp", "sniff", "rest", "other")
+
+
+def test_type_menu_labels_match_the_plan_wording():
+    from respmech.ui.screens.preview._mechanics import _TYPE_MENU_LABELS
+    assert _TYPE_MENU_LABELS["ic"] == "IC manoeuvre"
+    assert _TYPE_MENU_LABELS["fvc"] == "FVC manoeuvre"
+    assert _TYPE_MENU_LABELS["ic_fvc"] == "IC + FVC"
+    assert _TYPE_MENU_LABELS["max_insp"] == "Maximal inspiratory effort"
+    assert _TYPE_MENU_LABELS["sniff"] == "Sniff"
+    assert _TYPE_MENU_LABELS["other"] == "Other…"
+
+
+def test_every_menu_kind_has_a_status_tip(qapp, tmp_path):
+    """Every real kind offered in the menu carries a statusTip (M-31's "help_text-
+    tooltips for menu items"), so a hovering user sees a plain-language explanation
+    in the status bar — the menu equivalent of a settings control's own tooltip."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.screens.preview._mechanics import _type_menu_kinds
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+
+    menu = pv._build_type_menu(a_breath, _type_menu_kinds(True))   # emg_only=True: every kind
+    for action in menu.actions():
+        assert action.statusTip(), f"{action.text()!r} has no statusTip"
+    menu.close()
+    win.close()
+
+
+def test_build_type_menu_full_vocabulary_labels_and_no_lone_ampersand(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from PySide6.QtWidgets import QMenu
+    from _helpers import _lone_ampersands
+    from respmech.ui.screens.preview._mechanics import _type_menu_kinds
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+
+    menu = pv._build_type_menu(a_breath, _type_menu_kinds(False))
+    labels = [a.text() for a in menu.actions()]
+    assert labels == ["Tidal", "Excluded", "IC manoeuvre", "FVC manoeuvre", "IC + FVC",
+                       "Maximal inspiratory effort", "Sniff", "Other…"]
+    assert menu in win.findChildren(QMenu)
+    assert not _lone_ampersands(win)
+    menu.close()
+    win.close()
+
+
+def test_setting_each_new_manoeuvre_kind_lands_as_breath_type_entry(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    name = pv.file_rail.current_filename()
+
+    for kind in ("ic", "fvc", "ic_fvc", "max_insp", "sniff", "other"):
+        result = pv._set_breath_type(a_breath, kind)
+        assert result == kind
+        entry = next(t for t in s.processing.breath_types
+                    if t.file == name and t.breath == a_breath)
+        assert entry.kind == kind
+    win.close()
+
+
+def test_handle_type_requested_omits_rest_for_a_flow_bearing_file(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from PySide6.QtWidgets import QMenu
+    from PySide6.QtCore import QPointF as _QPointF
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+
+    before = set(win.findChildren(QMenu))
+    pv._handle_type_requested(a_breath, _QPointF(0.0, 0.0))
+    menu = next(m for m in win.findChildren(QMenu) if m not in before)
+    assert "Rest" not in [a.text() for a in menu.actions()]
+    menu.close()
+    win.close()
+
+
+def test_handle_type_requested_offers_rest_only_for_an_emg_only_file(qapp, tmp_path):
+    """Same emg_only detection _handle_type_requested itself uses (Capabilities.
+    from_settings_or_none + caps.mode), exercised directly rather than through
+    popup()+findChildren(QMenu): an EMG-only signal set never even shows the
+    Mechanics tab (subtab_plan), so ``self.plots`` — the menu's Qt parent — is not
+    reachable from ``win`` at all in this shape (a pre-existing fact of M-20/M-26's
+    own tab wiring, not something this ticket changes); popping the menu up would
+    therefore never appear in ``win.findChildren(QMenu)`` regardless of its kinds."""
+    import os
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_emg_segments_preview
+    from respmech.core.analysis.signals import Capabilities
+    from respmech.ui.screens.preview._mechanics import _type_menu_kinds
+    s = synth_settings(str(tmp_path), channels={
+        "flow": None, "poes": None, "pgas": None, "pdi": None, "volume": None})
+    s.processing.segmentation.method = "whole_file"
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
+    path = os.path.join(s.input.folder, "synth_case_A.csv")
+    pv._render_segments_preview(stage_emg_segments_preview(s, path))
+    a_breath = next(iter(pv._breath_spans))
+
+    caps = Capabilities.from_settings_or_none(pv.state.settings)
+    emg_only = bool(caps is not None and caps.mode == "emg_only")
+    assert emg_only, "this settings fixture must itself resolve to the EMG-only shape"
+    menu = pv._build_type_menu(a_breath, _type_menu_kinds(emg_only))
+    assert "Rest" in [a.text() for a in menu.actions()]
+    menu.close()
+    win.close()
+
+
+def test_reference_placeholders_are_present_and_disabled(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from PySide6.QtWidgets import QMenu
+    from PySide6.QtCore import QPointF as _QPointF
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+
+    before = set(win.findChildren(QMenu))
+    pv._handle_type_requested(a_breath, _QPointF(0.0, 0.0))
+    menu = next(m for m in win.findChildren(QMenu) if m not in before)
+    by_text = {a.text(): a for a in menu.actions()}
+    for text in ("Use as IC reference for ▸", "Reference manoeuvres…"):
+        assert text in by_text, f"{text!r} missing from the type menu"
+        assert not by_text[text].isEnabled()
+    menu.close()
+    win.close()
+
+
+def test_suggested_fvc_breath_is_none_before_any_test_run(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    assert pv._suggested_fvc_breath() is None
+    win.close()
+
+
+def test_suggested_fvc_hint_appears_only_on_the_suggested_breath_and_is_disabled(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    from PySide6.QtWidgets import QMenu
+    from PySide6.QtCore import QPointF as _QPointF
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    pv._on_batch_result(run_batch(s, only_files=["synth_case_A.csv"]))
+    suggested = pv._suggested_fvc_breath()
+    assert suggested is not None, "the synthetic recording must offer an eligible candidate"
+
+    before = set(win.findChildren(QMenu))
+    pv._handle_type_requested(suggested, _QPointF(0.0, 0.0))
+    menu = next(m for m in win.findChildren(QMenu) if m not in before)
+    hint = next(a for a in menu.actions() if a.text() == "Suggested: FVC")
+    assert not hint.isEnabled()
+    menu.close()
+
+    other = next(b for b in pv._breath_spans if b != suggested)
+    before2 = set(win.findChildren(QMenu))
+    pv._handle_type_requested(other, _QPointF(0.0, 0.0))
+    menu2 = next(m for m in win.findChildren(QMenu) if m not in before2)
+    assert all(a.text() != "Suggested: FVC" for a in menu2.actions())
+    menu2.close()
+    win.close()
+
+
+def test_manoeuvres_table_hidden_with_no_typed_breath(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    pv._on_batch_result(run_batch(s, only_files=["synth_case_A.csv"]))
+    assert pv.manoeuvres_table.isHidden()
+    assert pv._manoeuvres_table_model.rowCount() == 0
+    win.close()
+
+
+def test_manoeuvres_table_shows_after_a_test_run_with_a_typed_breath(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    pv._set_breath_type(a_breath, "ic")
+    pv._on_batch_result(run_batch(s, only_files=["synth_case_A.csv"]))
+    assert not pv.manoeuvres_table.isHidden()
+    assert pv._manoeuvres_table_model.rowCount() == 1
+    assert pv.table.model().rowCount() > 0   # the tidal per-breath table is unaffected
+    win.close()
+
+
+def test_manoeuvres_table_hides_again_after_switching_files(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    pv._set_breath_type(a_breath, "ic")
+    pv._on_batch_result(run_batch(s, only_files=["synth_case_A.csv"]))
+    assert not pv.manoeuvres_table.isHidden()
+
+    pv.file_rail.select_filename("synth_case_B.csv")
+    assert pv.manoeuvres_table.isHidden()
+    assert pv._last_test_breaths is None
+    win.close()
+
+
+def test_reference_only_file_does_not_also_show_the_manoeuvres_subtable(qapp, tmp_path):
+    """M-30's reference-only shape repurposes the MAIN table for its Manoeuvres
+    content — the sub-table this ticket adds must stay hidden there, or the same
+    content would render twice."""
+    import os
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    # type every breath as IC, so the file has zero tidal breaths left (M-30's
+    # reference-only condition)
+    for n in list(pv._breath_spans):
+        pv._set_breath_type(n, "ic")
+    pv._on_batch_result(run_batch(s, only_files=["synth_case_A.csv"]))
+    assert pv.manoeuvres_table.isHidden()
+    win.close()
+
+
+# --------------------------------------------------------------------------- #
 # End-to-end through a REAL pyqtgraph scene (self-review finding: the fake-event
 # tests above prove the item's own logic, but not that pyqtgraph's real dispatch
 # actually reaches it ahead of ViewBox, or that a gap click actually still reaches

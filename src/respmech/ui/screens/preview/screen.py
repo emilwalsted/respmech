@@ -179,6 +179,10 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         # breath overlays in the EMG views (Mechanics keeps its own _breath_* state)
         self._breaths = []               # last mech spans [(num, t0, t1, ignored), ...] (TRIMMED s)
         self._trim_offset_s = 0.0        # startix/fs — maps a trimmed span to absolute EMG time
+        # M-31: the last completed test run's raw breath dicts for THIS file, feeding
+        # the type menu's Suggested-FVC hint (_suggested_fvc_breath) — None before any
+        # test run, or after a file switch (_reset_breath_state clears it).
+        self._last_test_breaths = None
         self._bov = {}                   # view -> {'items':[(plot,item)], 'regions':{num:[reg]}, 'texts':{num:txt}}
         self._emg_raw_subplots = []      # per-channel PlotItems of the raw stack (hit-testing)
         self._raw_label_y = None
