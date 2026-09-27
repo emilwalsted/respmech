@@ -253,3 +253,98 @@ def test_mechanics_stack_renders_without_crashing_on_a_reduced_signal_set(qapp, 
     pv._render_preview(data)   # must not raise KeyError
     assert len(pv._channel_plots) == 2   # flow + volume only -- no gap, no stale row
     win.close()
+
+
+@requires_synth()
+def test_mech_stack_floor_uses_the_actual_channel_count_not_a_fixed_five(qapp, tmp_path):
+    """M-17 (R7): ``_update_mech_stack_floor`` used to floor the channel stack for
+    ``len(_CHANNELS)`` == 5 rows regardless of how many the settings object actually
+    draws (a cosmetic oversize the comment above ``_mech_channel_count`` describes as
+    "a later ticket['s]" own job — this is that ticket). Proven directly, without a
+    ``setFixedSize`` that would swallow the difference: under the SAME constrained
+    viewport height, a Flow-only (2-row) analysis's floor must be smaller than a full
+    (5-row) one's — ``theme.set_stack_floor``'s own cap (``0.55 * viewport_height``) only
+    bites once ``rows * row_height`` exceeds it, so a real difference in ``rows`` is the
+    only way the two floors could differ here."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.state import AppState
+
+    heights = {}
+    for label, channels in (("full", None), ("flow_only", {"poes": None, "pgas": None,
+                                                            "pdi": None, "emg": []})):
+        s = synth_settings(str(tmp_path), channels=channels)
+        win = MainWindow(AppState(s))
+        pv = win.preview_screen
+        # A short, fixed viewport so set_stack_floor's cap actually constrains the floor —
+        # on a tall/unconstrained one both counts hit the SAME viewport-blind
+        # rows*row_height ceiling only when neither exceeds the cap, which would make
+        # this assertion vacuous for an unlucky window size.
+        pv._mech_tab.resize(400, 150)
+        pv._update_mech_stack_floor()
+        heights[label] = pv.plots.minimumHeight()
+        win.close()
+    assert heights["flow_only"] < heights["full"], (
+        f"a 2-row Flow-only analysis floored the same as, or taller than, the 5-row "
+        f"full family: {heights}")
+
+
+@requires_synth()
+def test_campbell_panel_draws_a_flow_volume_loop_without_poes(qapp, tmp_path):
+    """M-17 (R7): the Campbell panel itself (not the written PDF, which is M-16's own
+    scope) draws a tidal flow-volume loop for a Flow-only signal set instead of the
+    Campbell (volume-vs-Poes) diagram, and its header/export button follow the same
+    switch. ``_draw_campbell_or_loop`` is the dispatcher; this pins WHICH of the two
+    drawers it actually calls for each shape, not just that neither crashes."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.state import AppState
+
+    flow_only = synth_settings(
+        str(tmp_path), channels={"poes": None, "pgas": None, "pdi": None, "emg": [],
+                                 "entropy": []})
+    win = MainWindow(AppState(flow_only))
+    pv = win.preview_screen
+    pv._refresh_files()
+    pv.file_rail.select_filename("synth_case_A.csv")
+    calls = []
+    pv._draw_campbell = lambda *a, **k: calls.append("campbell")
+    pv._draw_flow_volume_loop = lambda *a, **k: calls.append("loop")
+    breaths = {1: {"ignored": False, "volume": np.array([0.0, 0.1]),
+                  "flow": np.array([0.0, 0.2])}}
+    pv._draw_campbell_or_loop(breaths)
+    assert calls == ["loop"], "a Poes-less analysis must draw the flow-volume loop, not Campbell"
+    assert pv._campbell_panel._title_label.fullText() == "Flow-volume loop"
+    assert pv.btn_export_fig.text() == "Export flow-volume…"
+
+    # switching the signal set back to the full family (Poes declared) flips both ways
+    full = synth_settings(str(tmp_path))
+    win2 = MainWindow(AppState(full))
+    pv2 = win2.preview_screen
+    calls2 = []
+    pv2._draw_campbell = lambda *a, **k: calls2.append("campbell")
+    pv2._draw_flow_volume_loop = lambda *a, **k: calls2.append("loop")
+    pv2._draw_campbell_or_loop(breaths)
+    assert calls2 == ["campbell"]
+    assert pv2._campbell_panel._title_label.fullText() == "Campbell diagram"
+    assert pv2.btn_export_fig.text() == "Export Campbell…"
+    win.close(); win2.close()
+
+
+@requires_synth()
+def test_flow_volume_loop_renders_a_real_figure_without_crashing(qapp, tmp_path):
+    """The real drawer (not a stub), on real breath data from the synthetic recording —
+    a KeyError/AttributeError guard the stub-based dispatch test above cannot catch,
+    mirroring test_mechanics_stack_renders_without_crashing_on_a_reduced_signal_set."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.state import AppState
+
+    settings = synth_settings(
+        str(tmp_path), channels={"poes": None, "pgas": None, "pdi": None, "emg": [],
+                                 "entropy": []})
+    s, breaths_dict, n_trimmed = segment_synth_case(settings)
+    breaths = compute_all_breaths(s, breaths_dict, n_trimmed)
+    win = MainWindow(AppState(settings))
+    pv = win.preview_screen
+    pv._draw_campbell_or_loop(breaths)          # must not raise
+    assert pv.campbell.figure.axes, "no axes drawn"
+    assert pv.btn_export_fig.isEnabled()
+    win.close()

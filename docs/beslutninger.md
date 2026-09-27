@@ -6,6 +6,21 @@ decision <date>" — never an internal ticket reference; this repo is public).
 
 ---
 
+**27-09-2026 — Relevance-driven visibility (R7) is a permitted refinement of
+inverted gating, not an exception, and Sample entropy is never hidden by the
+signal set (R8) (author's decision, 27-09-2026).** A surface — a sub-tab, an
+Advanced… settings group, a result column, a figure — that CANNOT apply to the
+declared signal set is hidden as a pure function of `analysis.signals`, never
+as a function of how far the user has progressed through the workflow.
+Everything hidden this way comes back the moment the signal set changes
+(Setup ▸ Signals): there is no separate "unlock" step and no progressive
+disclosure. The commitment sheet stays the only gate that can actually block a
+run. Sample entropy is the one deliberate exception to the exception: it stays
+conditioned on whether a column is assigned to it (`bool(channels.entropy)`)
+alone, regardless of the declared signal set, because entropy is an
+opportunistic measurement any recording can carry, not a consequence of which
+pressure/flow signals the analysis otherwise declares.
+
 **26-09-2026 — Changing an analysis's declared signal set clears the breath-keyed
 state built for the previous segmentation, after one confirmation (author's
 decision, 26-09-2026).** Removing or adding Flow changes which segmenter produces

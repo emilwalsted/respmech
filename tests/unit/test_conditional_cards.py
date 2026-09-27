@@ -97,6 +97,29 @@ def test_a_card_holding_the_focused_widget_is_not_yanked_away(qapp, tmp_path):
     assert card.isVisible(), "the card vanished while the user was editing it"
 
 
+def test_the_declared_signal_set_never_hides_the_entropy_card(qapp, tmp_path):
+    """R8, restated as a regression: entropy is bool(ch.entropy) alone, never a function of
+    ``analysis.signals`` — unlike the Work-of-breathing/PTP cards M-17 makes conditional on
+    Poes, the entropy card's predicate is untouched by that ticket and must stay that way.
+    A Flow-only (no Poes/Pgas/Pdi/EMG) and an EMG-only-SHAPED (no flow at all) declared set
+    both still show it, as long as a column is assigned to entropy."""
+    sc = _screen(qapp, tmp_path)
+    card = _entropy_card(sc)
+    assert card.isVisible()
+    sc.state.settings.analysis.signals = ["flow"]
+    sc.state.settings.input.channels.poes = None
+    sc.state.settings.input.channels.pgas = None
+    sc.state.settings.input.channels.pdi = None
+    sc._update_disclosure()
+    qapp.processEvents()
+    assert card.isVisible(), "a Flow-only signal set hid the entropy card"
+    sc.state.settings.analysis.signals = ["emg"]
+    sc.state.settings.input.channels.flow = None
+    sc._update_disclosure()
+    qapp.processEvents()
+    assert card.isVisible(), "an EMG-only-shaped signal set hid the entropy card"
+
+
 # -- the parameters still round-trip ------------------------------------------
 def test_the_moved_parameters_still_load_and_save(qapp, tmp_path):
     sc = _screen(qapp, tmp_path)
