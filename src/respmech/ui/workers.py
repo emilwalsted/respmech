@@ -1015,15 +1015,34 @@ def stage_noise_fidelity(settings: Settings, cancel_check=None) -> dict:
             pass          # the report itself is intact; the caption just stays hidden
         return report
     except (compute.TrimError, DataValidationError, FileNotFoundError, ImportError) as e:
-        # A user-fixable precondition on the reference/input files — most often a misassigned or
-        # inverted flow channel, so the reference has no segmentable breaths for the quiet-
-        # expiration clip. Surface it as a clean, single-line, actionable message (rendered by
-        # _on_noise_result -> _FileRunError) instead of a raw traceback. Genuine bugs
-        # (IndexError / KeyError / numeric) are NOT caught here and still propagate.
+        # A user-fixable precondition on the reference/input files. Surface it as a clean,
+        # single-line, actionable message (rendered by _on_noise_result -> _FileRunError)
+        # instead of a raw traceback. Genuine bugs (IndexError / KeyError / numeric) are NOT
+        # caught here and still propagate.
+        #
+        # effective_signals(settings), not the _or_none form: by this point ``to_legacy_ns``
+        # above has already run ``Capabilities.from_settings`` (RAW) successfully, which calls
+        # the identical ``effective_signals`` -- so a malformed ``analysis.signals`` that would
+        # make this raise has ALREADY crashed this function earlier and unconditionally, before
+        # this except clause could ever be reached. This call is therefore exactly as safe as
+        # ``to_legacy_ns``'s own; degrading it here alone would not make the function tolerant
+        # of malformed settings (a pre-existing, out-of-scope property of this function).
         name = os.path.basename(ref_path) if ref_path else "the rest reference"
+        # The hint that actually applies depends on the signal set. A flow-bearing set's most
+        # common cause is a misassigned or inverted flow channel, so the reference has no
+        # segmentable breaths for the quiet-expiration clip -- 'use expiration' and reference
+        # intervals both mean something there. An EMG-only set has neither a flow channel nor
+        # an expiration phase; its own two buildable sources (M-22) are a rest-typed segment
+        # or an explicit interval, so the hint points at those instead.
+        if "flow" in effective_signals(settings):
+            hint = ("Check the flow channel and inverse-flow assignment, or turn off "
+                    "'use expiration' and set explicit reference intervals.")
+        else:
+            hint = ("Check the reference file's rest-typed segment(s) (Preview & QC's "
+                    "EMG segments tab), or set explicit reference intervals in the noise "
+                    "picker instead.")
         return {"error": (f"Could not build the noise profile from '{name}' or the input files: "
-                          f"{e} Check the flow channel and inverse-flow assignment, or turn off "
-                          f"'use expiration' and set explicit reference intervals.")}
+                          f"{e} {hint}")}
 
 
 class EmgAllChannelsWorker(QObject):

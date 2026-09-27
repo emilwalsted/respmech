@@ -70,21 +70,38 @@ _AUTO_KINDS = ("mech", "batch", "ecg", "emg_all", "emg_detail", "noise")
 _FILE_KINDS = ("mech", "batch", "ecg", "emg_all", "emg_detail")
 
 
-def _kinds_for_settings_path(path):
+def _kinds_for_settings_path(path, caps=None):
     """Which auto kinds a changed Settings field (dotted path, as produced by
     ``dataclasses.asdict``) can affect, so a settings edit recomputes only the impacted
     panels. GOLDEN-SAFE: this only scopes the PREVIEW; the batch/CLI always use the real
     Settings, never this map. Erring WIDE is safe (over-recompute); erring narrow risks a
     stale panel — so any field NOT classified below falls through to ALL kinds. The
     exhaustive per-kind field lists were derived + adversarially verified against each
-    stage_* function; the coarse buckets here stay on the safe (wide) side of them."""
+    stage_* function; the coarse buckets here stay on the safe (wide) side of them.
+
+    ``caps`` (a :class:`respmech.core.analysis.signals.Capabilities`, or ``None``) makes
+    the EMG buckets capability-aware (M-24). ``caps=None`` — every call site that predates
+    this ticket, and the default — reproduces the old, flow-only rule byte-for-byte: 'the
+    mechanics test run strips EMG' is true for a flow-bearing signal set, where the test run
+    computes from flow/pressure and never touches EMG at all. It is FALSE for an EMG-only
+    set (``caps.mode == 'emg_only'``): there ``run_batch``'s own S2 branch (M-21) builds the
+    test run's mechanics FROM the EMG channels via ``core.analysis.segments``, so an
+    EMG-channel-set or ``processing.emg.*`` edit there must also re-dispatch 'batch' — and,
+    forward-looking, the 'segments' preview job M-25 adds (harmless today: ``_schedule_all``
+    only ever dispatches a kind that is a member of ``_AUTO_KINDS``, which 'segments' is not
+    yet)."""
     # output / diagnostics and the optional pre-resample never surface in any preview panel
     if path == "output" or path.startswith("output.") or path.startswith("processing.sampling"):
         return frozenset()
+    emg_only = bool(caps is not None and caps.mode == "emg_only")
     # the EMG channel SET: mechanics shows the raw EMG traces and all EMG/noise panels use
-    # them; the mechanics test run strips EMG, so it is unaffected
+    # them; the mechanics test run strips EMG for a flow-bearing set (unaffected there), but
+    # for an EMG-only set the test run's own mechanics ARE built from these channels.
     if path == "input.channels.emg":
-        return frozenset(("mech", "ecg", "emg_all", "emg_detail", "noise"))
+        kinds = {"mech", "ecg", "emg_all", "emg_detail", "noise"}
+        if emg_only:
+            kinds |= {"batch", "segments"}
+        return frozenset(kinds)
     if path.startswith("processing.emg"):
         if path.startswith("processing.emg.robust_peak"):
             # Writes-only, draws-nothing — like output.* above. The cardiac-gated peak adds
@@ -99,9 +116,14 @@ def _kinds_for_settings_path(path):
                     "processing.emg.plot_yscale"):
             return frozenset(("emg_all", "emg_detail"))   # display/output-ish -> redraw EMG panels
         # EMG conditioning (remove_ecg / detect_channel / ecg_* / rms_window_s / remove_noise) +
-        # noise.* params: the ECG-reduction tab + the EMG/noise panels (the mechanics test run
-        # forces EMG + ECG + noise off, so it is unaffected)
-        return frozenset(("ecg", "emg_all", "emg_detail", "noise"))
+        # noise.* params: the ECG-reduction tab + the EMG/noise panels. For a flow-bearing set
+        # the mechanics test run forces EMG + ECG + noise off, so it is unaffected; for an
+        # EMG-only set this settles the test run's OWN mechanics (M-24), so 'batch'/'segments'
+        # join too.
+        kinds = {"ecg", "emg_all", "emg_detail", "noise"}
+        if emg_only:
+            kinds |= {"batch", "segments"}
+        return frozenset(kinds)
     # mechanics-only compute that feeds the test-run table/Campbell exclusively
     if (path.startswith("processing.wob") or path.startswith("processing.ptp")
             or path.startswith("processing.entropy") or path.startswith("processing.breath_counts")):
@@ -111,6 +133,9 @@ def _kinds_for_settings_path(path):
     # panels (which build NoiseProfile.from_clip on a buffer-dependent clip). So a
     # segmentation edit must recompute all five, or the EMG traces go stale when auto_prop
     # is off (nothing else re-dispatches them). The ECG cache keeps the extra work cheap.
+    # processing.segmentation.separators (M-21's EMG-only manual boundaries) falls through
+    # to this same wide rule, deliberately: it feeds `segment_file`/the noise reference clip's
+    # `rest_segments` branch exactly like `buffer` does.
     if path.startswith("processing.segmentation"):
         return frozenset(_AUTO_KINDS)
     # volume drift/trend + explicit breath exclusion: the mechanics panels (+ noise, a
@@ -120,8 +145,11 @@ def _kinds_for_settings_path(path):
             or path.startswith("processing.exclude_breaths")):
         return frozenset(("mech", "batch", "noise"))
     # channels core / format / volume inverse+integrate (all applied inside load()),
-    # channels.entropy (validated in every load path), input.folder/files, and anything not
-    # matched above -> recompute everything (safe default; never leaves a panel stale)
+    # channels.entropy (validated in every load path), input.folder/files,
+    # processing.breath_types (M-19 typed breaths change the noise reference mask itself —
+    # decision 11 — so they get the WIDE default here rather than the narrower
+    # exclude_breaths rule above), and anything else not matched above -> recompute
+    # everything (safe default; never leaves a panel stale)
     return frozenset(_AUTO_KINDS)
 
 

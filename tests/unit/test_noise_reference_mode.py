@@ -26,7 +26,8 @@ from respmech.core._legacy_ns import to_legacy_ns
 from respmech.core.pipeline import (_emg_segmented, _load_and_ecg,
                                     _reference_noise_clip)
 from respmech.core.settings import (BreathTypeEntry, SeparatorEntry, Settings,
-                                    SettingsError, resolve_noise_reference_mode)
+                                    SettingsError, resolve_noise_reference_mode,
+                                    resolve_noise_reference_mode_or_none)
 
 
 # --------------------------------------------------------------------------------- #
@@ -406,3 +407,33 @@ def test_rest_segments_clip_names_the_file_when_no_rest_segment_survives_at_runt
     legacy = to_legacy_ns(s)
     with pytest.raises(ValueError, match="no 'rest'-typed segment"):
         _reference_noise_clip(s, legacy)
+
+
+# --------------------------------------------------------------------------------- #
+# resolve_noise_reference_mode_or_none (M-24) -- the UI-render-safe pairing, exactly
+# like Capabilities.from_settings_or_none, for the same malformed-analysis.signals hazard.
+# --------------------------------------------------------------------------------- #
+
+def test_or_none_matches_the_raw_resolver_on_every_ordinary_settings_shape():
+    """No behaviour change for anything that doesn't crash the raw function."""
+    assert (resolve_noise_reference_mode_or_none(_flow_settings())
+           == resolve_noise_reference_mode(_flow_settings()))
+    assert (resolve_noise_reference_mode_or_none(_emg_only_settings(rest_breath=1))
+           == resolve_noise_reference_mode(_emg_only_settings(rest_breath=1)))
+    assert (resolve_noise_reference_mode_or_none(_emg_only_settings())
+           == resolve_noise_reference_mode(_emg_only_settings()) == "unresolved")
+
+
+def test_or_none_degrades_to_none_instead_of_raising_on_a_malformed_signals_field():
+    """The actual bug this function was written to fix (found in self-review of M-24):
+    a hand-edited bare-string analysis.signals crashed PreviewScreen's construction path
+    (_refresh_noise_readout/_refresh_noise_reference_band call the raw resolver on every
+    open, before Settings.validate() ever runs). Confirm both that the raw function still
+    raises (so Settings.validate()'s own error reporting is unaffected) and that the _or_none
+    pairing degrades cleanly instead."""
+    s = Settings()
+    s.analysis.signals = "flow"          # malformed: a bare string, not a list
+    s.processing.emg.noise.reference_file = "ref.csv"   # a real UI render would have this set
+    with pytest.raises(TypeError):
+        resolve_noise_reference_mode(s)
+    assert resolve_noise_reference_mode_or_none(s) is None

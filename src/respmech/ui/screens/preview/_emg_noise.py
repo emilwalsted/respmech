@@ -22,7 +22,8 @@ import pyqtgraph as pg
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
-from respmech.core.settings import ExcludeEntry
+from respmech.core.settings import (ExcludeEntry, _reference_file_has_rest_segment,
+                                    resolve_noise_reference_mode_or_none)
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
 from respmech.ui.noise_profile_dialog import NOISE_ACCENT
@@ -691,13 +692,25 @@ class _EmgNoiseMixin:
         # the read-out staying visible.
         if not n.reference_file:
             self.noise_ref_readout.setFullText("Rest reference: not set")
-        elif n.use_expiration or not n.reference_intervals:
+            return
+        # M-24: read the RESOLVED mode (M-22), not the raw use_expiration/reference_intervals
+        # pair directly — an EMG-only set ignores use_expiration entirely (it may still sit
+        # at its True default), so the old bare predicate could describe a reference this
+        # test will never actually build that way.
+        mode = resolve_noise_reference_mode_or_none(self.state.settings)
+        if mode == "expiration":
             self.noise_ref_readout.setFullText(
                 f"Rest reference: {n.reference_file}, every expiration")
-        else:
+        elif mode == "rest_segments":
+            self.noise_ref_readout.setFullText(
+                f"Rest reference: {n.reference_file}, rest-typed segment(s)")
+        elif mode == "intervals":
             spans = ", ".join(f"{a:.2f}–{b:.2f} s" for a, b in n.reference_intervals)
             self.noise_ref_readout.setFullText(
                 f"Rest reference: {n.reference_file}, {spans}")
+        else:                                  # 'interburst' (not implemented) / 'unresolved'
+            self.noise_ref_readout.setFullText(
+                f"Rest reference: {n.reference_file}, unresolved")
 
     def _on_noise_enabled_changed(self, *_):
         if self._loading_noise:
@@ -864,7 +877,12 @@ class _EmgNoiseMixin:
         n = self.state.settings.processing.emg.noise
         shown = self._selected_filename()
         ivals = n.reference_intervals
-        show = bool(shown and not n.use_expiration and ivals and shown == (n.reference_file or ""))
+        # M-24: gate on the RESOLVED mode, not the raw use_expiration flag — for an EMG-only
+        # set that flag is never touched by this screen and stays at its True default, which
+        # used to hide a genuinely-set explicit interval (the flag reads as 'expiration' even
+        # though EMG-only ignores it and the interval IS what the resolver will use).
+        mode = resolve_noise_reference_mode_or_none(self.state.settings)
+        show = bool(shown and mode == "intervals" and ivals and shown == (n.reference_file or ""))
         t0 = t1 = None
         if show:
             try:
@@ -940,6 +958,33 @@ class _EmgNoiseMixin:
         self._request_autorun()          # re-condition against the new reference
         return (t0, t1)
 
+    def _apply_noise_rest_segments(self):
+        """Define the shared noise reference as this file's rest-typed segment(s) (M-22's
+        ``rest_segments`` mode) — the EMG-only alternative to marking a span by hand, offered
+        only when the file already carries a segment typed 'rest' in ``processing.
+        breath_types`` (see ``modes_available`` in ``_open_noise_profile_dialog``).
+        ``reference_mode`` is left at 'auto': the resolver already prefers a rest-typed
+        segment over an explicit interval whenever both exist, so nothing here needs to
+        force it. Clears ``reference_intervals`` for the same reason ``_apply_noise_expiration``
+        clears them: leaving a stale, unrelated span behind would resurface (as 'intervals')
+        the moment the file's rest typing is ever removed, instead of failing loudly as
+        'unresolved' the way an explicitly-chosen reference that stopped existing should."""
+        name = self._selected_filename()
+        if not name:
+            return None
+        n = self.state.settings.processing.emg.noise
+        n.reference_file = name
+        n.reference_intervals = []
+        n.reference_folder = self.state.settings.input.folder
+        self.noise_reference_changed.emit(name, [], False)
+        self._refresh_noise_readout()
+        self._refresh_noise_reference_band()          # no single span -> stays hidden
+        self._set_status(f"Noise profile ← {name}, built from this file's rest-typed "
+                         "segment(s). Enable 'Reduce EMG noise' to apply it.")
+        self._update_actions()
+        self._request_autorun()
+        return True
+
     def _use_region_as_noise(self):
         reg = self._noise_region
         if reg is None or not self._selected_filename():
@@ -969,7 +1014,7 @@ class _EmgNoiseMixin:
         if not data.get("processed"):
             self._set_status("This file has no EMG channels to pick a noise profile from.")
             return
-        from respmech.ui.noise_profile_dialog import EXPIRATION
+        from respmech.ui.noise_profile_dialog import EXPIRATION, REST_SEGMENTS
         n = self.state.settings.processing.emg.noise
         # stage_ecg_reduction falls back to the RAW channels whenever detection/removal
         # raises (see its docstring) and reports NO peaks, regardless of the remove_ecg
@@ -979,19 +1024,40 @@ class _EmgNoiseMixin:
         # reappearing on the error path _ecg.py already guards against — see its own
         # ecg_error handling for the same reasoning).
         ecg_applied = bool(data.get("ecg_applied")) and not data.get("ecg_error")
+        # M-24: which WHOLE modes this picker can offer for THIS signal set/file. 'intervals'
+        # (dragging a span) is always available. 'expiration' only means anything with a flow
+        # channel declared (an EMG-only set has no inspiration/expiration phases at all —
+        # resolve_noise_reference_mode ignores use_expiration entirely once there is no flow).
+        # 'rest_segments' is offered only when the file being opened already carries a
+        # segment typed 'rest' (processing.breath_types) — there is nothing to build a
+        # rest-segments reference FROM otherwise.
+        caps = Capabilities.from_settings_or_none(self.state.settings)
+        has_flow = bool(caps and caps.flow)
+        file_name = self._selected_filename()
+        modes = {"intervals"}
+        if has_flow:
+            modes.add("expiration")
+        elif _reference_file_has_rest_segment(self.state.settings, file_name):
+            modes.add("rest_segments")
+        modes_available = frozenset(modes)
         dlg = NoiseProfileDialog(data["processed"], data["t"], data["fs"], data["cols"],
-                                 parent=self, file_name=self._selected_filename(),
+                                 parent=self, file_name=file_name,
                                  flow=data.get("flow"), reference_file=n.reference_file or "",
                                  peak_times=data.get("peaks"), ecg_applied=ecg_applied,
-                                 win_length=n.win_length, hop_length=n.hop_length)
-        dlg.use_expiration.setChecked(bool(n.use_expiration or not n.reference_intervals))
+                                 win_length=n.win_length, hop_length=n.hop_length,
+                                 modes_available=modes_available)
+        mode = resolve_noise_reference_mode_or_none(self.state.settings)
+        if "expiration" in modes_available:
+            dlg.use_expiration.setChecked(bool(n.use_expiration or not n.reference_intervals))
         # Seed the picker with the reference already saved for this test (D07), so a user
         # who opens the dialog to CHECK what is set — the app's own declared workflow of
         # setting up once and revisiting for many subjects — sees it shaded and can accept
         # as a no-op, instead of an empty picker that only shows something once you drag a
-        # new one over it. Skipped for 'every expiration': that mode has no single span to
-        # shade, and setChecked(True) above already gives it its own unaffected behaviour.
-        if not n.use_expiration and n.reference_intervals:
+        # new one over it. Skipped for 'every expiration'/'rest-typed segments': neither has
+        # a single span to shade, and their own checkbox above/below already reflects them.
+        if "rest_segments" in modes_available and mode == "rest_segments":
+            dlg.use_rest_segments.setChecked(True)
+        elif not n.use_expiration and n.reference_intervals:
             try:
                 t0, t1 = float(n.reference_intervals[0][0]), float(n.reference_intervals[0][1])
             except Exception:                        # noqa: BLE001 — malformed shape -> nothing to seed
@@ -1002,6 +1068,8 @@ class _EmgNoiseMixin:
             sel = dlg.selected_region()
             if sel is EXPIRATION:
                 self._apply_noise_expiration()
+            elif sel is REST_SEGMENTS:
+                self._apply_noise_rest_segments()
             elif sel is not None:
                 self._apply_noise_reference(sel[0], sel[1])
 
