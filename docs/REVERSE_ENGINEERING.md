@@ -327,15 +327,26 @@ byte-identical).
 - **`core/results.py`'s outlier guard** (`'poes_mininsp' in mechs.columns`, §5.10's
   RMS outlier handling, owned by an earlier ticket) already reads correctly once
   `poes_mininsp` is genuinely absent from a flow-only breath's mechanics — pinned at
-  the compute level by `tests/unit/test_flow_only.py::test_outlier_guard_unchanged`
-  (results.py/pipeline.py themselves are out of this ticket's scope; a reduced
-  signal set does not yet reach them end to end).
+  the compute level by `tests/unit/test_flow_only.py::test_outlier_guard_unchanged`.
+  More generally, `core/pipeline.py`/`core/results.py` are written generically over
+  whatever columns the mechanics table ends up containing, rather than hardcoding
+  the pressure-channel columns — so `run_batch()` already succeeds end to end for a
+  flow-only or poes-only `Settings` object with no further change (verified: before
+  this change the same `run_batch()` call raised inside `calculateaveragebreaths`;
+  after it, `result.ok_files` contains the file with exactly the expected reduced
+  column set). `tests/unit/test_flow_only.py::test_flow_only_reaches_run_batch_end_to_end`
+  pins this. What a *later* ticket still adds is explicitness, not reachability: an
+  absent pressure channel still travels through `run_batch`'s `BatchResult.signals`
+  and `ui/workers.py`'s preview `series` dict as an *empty* array rather than `None`
+  (harmless today — every downstream reader either ignores it or already guards on
+  the mechanics table's own columns — but not the explicit "None means absent"
+  contract a later ticket gives it).
 - **Tests**: `tests/unit/test_flow_only.py` (flow only: no Poes/Pgas/Pdi) and
   `tests/unit/test_poes_only.py` (flow + Poes, no Pgas/Pdi) call
   `calculateaveragebreaths`/`calculatemechanics` directly on segments built from
   `synth_case_A.csv` (`tests/unit/_helpers.py::segment_synth_case`/
-  `compute_all_breaths`), bypassing `core.pipeline.run_batch` — the pipeline/results
-  layers are not yet guarded for a reduced signal set.
+  `compute_all_breaths`), bypassing `core.pipeline.run_batch` for a narrower,
+  faster unit of test — not because `run_batch` itself fails (see above).
 
 ---
 
