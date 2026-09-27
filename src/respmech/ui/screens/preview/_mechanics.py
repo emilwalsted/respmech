@@ -1960,7 +1960,23 @@ class _MechanicsMixin:
             # raise so _on_job_done paints a copyable "Test run failed" error card
             raise _FileRunError(err)
         if cur:
-            self.file_rail.mark_result(cur, ok=True, breaths=len(fr.breaths_table))
+            n_breaths = 0 if fr.breaths_table is None else len(fr.breaths_table)
+            self.file_rail.mark_result(cur, ok=True, breaths=n_breaths)
+        if getattr(fr, "role", "tidal") == "reference":
+            # M-30: no tidal breaths at all in this file — nothing for the Campbell
+            # diagram/breath table to draw, but the Manoeuvres table (this file's whole
+            # reason for being typed) has real content, so show that instead of an
+            # empty or error-looking mechanics view.
+            self._fill_table(fr.manoeuvres_table)
+            self._table_panel._title_label.setFullText("Manoeuvres (reference-only file)")
+            self.campbell.figure.clear(); self.campbell.draw()
+            self._forget_campbell()
+            self._update_qc_overview(fr)
+            n_typed = len(fr.manoeuvres or {})
+            self._set_status(
+                f"Reference manoeuvres only — {n_typed} typed breath"
+                f"{'s' if n_typed != 1 else ''}, no tidal table")
+            return
         if emg_only:
             self._fill_segtable(fr.breaths_table)
             self._update_qc_overview(fr, chip=self.segments_qc_overview)
