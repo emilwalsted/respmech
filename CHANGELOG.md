@@ -349,6 +349,11 @@ QC strip) and by `respmech validate`, from the same shared logic:
      defensive (degrade to the safest render, never crash) and never shipped in any
      release -- nothing for a reader of this entry to be told -->
 
+<!-- changelog-skip 400884a same internal fix as 41fbb6b, extended to two more
+     Capabilities.from_settings call sites on the same before-validate() real-startup
+     path (self-review finding): the Setup 'You will get' preview and the Mechanics
+     stack's floor sizing. Same reasoning: purely defensive, never shipped -->
+
 <!--
 "Unreleased" above is a hand-maintained draft of the next release's entry. It is
 updated ONLY when explicitly asked to (not automatically on every commit), and it
