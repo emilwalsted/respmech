@@ -114,6 +114,23 @@ def build_processed_data(breaths, settings):
     following the actual channel count (fixes bug #3, which hardcoded EMG1..EMG5)."""
     emgcols = settings.input.data.columns_emg
     fs = settings.input.format.samplingfrequency
+    # M-19: a "Breathkind" column is only ever ADDED when at least one breath ACTUALLY
+    # WRITTEN to this table is typed -- an unconditional column (even one filled with ""
+    # for every row) would be a new column present on EVERY analysis, including the
+    # thousands that never use breath types, which is exactly the kind of always-present
+    # new column tests/golden/test_golden.py's set-equality check would flag (see
+    # docs/beslutninger.md's "bcnt/vefactor uændret med typede vejrtrækninger" entry for
+    # the sibling reasoning). The check mirrors the per-breath emission predicate below
+    # (self-review finding): on a flow-bearing signal set every typed breath is ALSO
+    # `ignored=True` (the union with exclude_breaths), so with the default
+    # `include_ignored_breaths=False` those breaths are never emitted at all -- computing
+    # `has_typed` over every breath in the file (rather than just the ones this table will
+    # actually contain) added a column that was present but blank on every row, which is
+    # worse than not adding it. Checked ONCE for the whole file, not per breath, so the
+    # column is either present on every emitted row or absent entirely.
+    has_typed = any(
+        breaths[no].get("kind") for no in breaths
+        if settings.output.data.includeignoredbreaths or not breaths[no]["ignored"])
     processeddata = []
     for breathno in breaths:
         breath = breaths[breathno]
@@ -126,6 +143,13 @@ def build_processed_data(breaths, settings):
             df = pd.DataFrame(times, columns=["Time"])
             bnos = np.arange(0, n, dtype=int) * 0 + breathno
             df = pd.merge(df, pd.DataFrame(bnos, columns=["Breathno"]), how="outer", left_index=True, right_index=True)
+            if has_typed:
+                # An untyped breath in a file that has SOME typed breaths reports "" for
+                # this column (not NaN) -- NaN would fall to the final .dropna() below
+                # and silently delete every sample of every untyped breath in the file.
+                kinds = np.full(n, breath.get("kind") or "", dtype=object)
+                df = pd.merge(df, pd.DataFrame(kinds, columns=["Breathkind"]), how="outer",
+                              left_index=True, right_index=True)
             for name, key in (("Flow", "flow"), ("Volume", "volume"), ("Poes", "poes"),
                               ("Pgas", "pgas"), ("Pdi", "pdi")):
                 if len(breath[key]) == 0:

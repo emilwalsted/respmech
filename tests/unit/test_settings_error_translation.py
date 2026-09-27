@@ -11,7 +11,7 @@ import re
 
 import pytest
 
-from respmech.core.settings import Settings, SettingsError
+from respmech.core.settings import BreathTypeEntry, ExcludeEntry, Settings, SettingsError
 from respmech.ui.validation import blockers, friendly_settings_error
 
 #: what every SettingsError message's technical key looks like — the same pattern
@@ -131,6 +131,41 @@ _CASES = [
      lambda s: (setattr(s.processing.volume, "correct_trend", True),
                setattr(s.processing.volume, "trend_peak_min_distance_s", 0.0001)),
      ["trend"]),
+    # M-19: BreathTypeEntry's own form/conflict checks.
+    ("breath type entry is not even a table (malformed hand-edited TOML)",
+     lambda s: s.processing.breath_types.append(1),
+     ["breath type", "right-click"]),
+    ("breath type entry has an unknown kind",
+     lambda s: s.processing.breath_types.append(
+         BreathTypeEntry(file="x.txt", breath=1, kind="bogus")),
+     ["breath type", "right-click"]),
+    ("breath type entry's breath number is not a positive integer",
+     lambda s: s.processing.breath_types.append(
+         BreathTypeEntry(file="x.txt", breath=0, kind="ic")),
+     ["breath type", "right-click"]),
+    ("same breath typed twice",
+     lambda s: (s.processing.breath_types.append(
+                    BreathTypeEntry(file="x.txt", breath=3, kind="ic")),
+               s.processing.breath_types.append(
+                    BreathTypeEntry(file="x.txt", breath=3, kind="fvc"))),
+     ["conflicting"]),
+    ("a breath both typed and excluded",
+     lambda s: (s.processing.exclude_breaths.append(ExcludeEntry(file="x.txt", breaths=[5])),
+               s.processing.breath_types.append(
+                    BreathTypeEntry(file="x.txt", breath=5, kind="ic"))),
+     ["conflicting"]),
+    ("a typed breath above 1 under whole_file segmentation",
+     lambda s: (setattr(s.input.channels, "flow", None),
+               setattr(s.input.channels, "poes", None),
+               setattr(s.input.channels, "pgas", None),
+               setattr(s.input.channels, "pdi", None),
+               setattr(s.input.channels, "volume", None),
+               setattr(s.input.channels, "emg", [2]),
+               s.analysis.signals.append("emg"),
+               setattr(s.processing.segmentation, "method", "whole_file"),
+               s.processing.breath_types.append(
+                    BreathTypeEntry(file="x.txt", breath=2, kind="rest"))),
+     ["whole-file", "manual separators"]),
 ]
 
 

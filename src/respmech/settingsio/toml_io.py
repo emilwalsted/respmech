@@ -182,7 +182,7 @@ def _merge_unknown(data: dict, unknown: dict) -> dict:
 
     * a whole unknown top-level or nested TABLE (``"processing.lung_volumes"`` ->
       a dict) -- inserted as a table at that path;
-    * a whole unknown LIST OF TABLES (``"processing.breath_types"`` -> a list) --
+    * a whole unknown LIST OF TABLES (``"processing.references"`` -> a list) --
       inserted as a list at that path;
     * a single unrecognised FIELD inside one element of an otherwise-known list
       dataclass (``"processing.exclude_breaths.[0].some_future_field"``) -- inserted
