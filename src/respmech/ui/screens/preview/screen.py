@@ -50,6 +50,7 @@ import pyqtgraph as pg
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
+from respmech.core.analysis.signals import Capabilities
 from respmech.core.settings import ExcludeEntry
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.file_rail import FileRail
@@ -697,8 +698,13 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             kinds = set(_AUTO_KINDS)
         else:
             kinds = set()
+            # M-24: capability-aware so an EMG-only edit re-dispatches 'batch' too (its own
+            # test-run mechanics come from EMG there — see _kinds_for_settings_path's
+            # docstring); from_settings_or_none degrades to caps=None (today's flow-only
+            # rule) rather than crash a settings edit over a malformed analysis.signals.
+            caps = Capabilities.from_settings_or_none(cur)
             for p in _changed_settings_paths(self._last_synced_settings, cur):
-                kinds |= _kinds_for_settings_path(p)
+                kinds |= _kinds_for_settings_path(p, caps)
         self._last_synced_settings = copy.deepcopy(cur)
         if not kinds:
             return                   # nothing preview-relevant changed -> leave panels as they are

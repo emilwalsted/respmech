@@ -87,6 +87,85 @@ def test_ref_clip_key_tracks_an_exclude_entrys_folder_in_the_expiration_branch(t
     assert pc.ref_clip_key(s, ref) != k0
 
 
+def _emg_only_settings(tmp_path):
+    return synth_settings(str(tmp_path), channels={
+        "flow": None, "poes": None, "pgas": None, "pdi": None, "volume": None})
+
+
+def test_ref_clip_key_expiration_branch_tracks_segmentation_method(tmp_path):
+    """M-24: the expiration branch now carries segmentation.method too (a no-op TODAY —
+    _emg_segmented hardcodes 'flow' until M-23 — but keying on it now means a cache entry
+    built before that fix can never be served stale once the mask-building actually starts
+    reading it)."""
+    s = _s(tmp_path)
+    s.processing.emg.noise.use_expiration = True
+    ref = os.path.join(INPUT, "synth_case_A.csv")
+    k0 = pc.ref_clip_key(s, ref)
+    assert k0 is not None
+    s.processing.segmentation.method = "volume"
+    assert pc.ref_clip_key(s, ref) != k0
+
+
+def test_ref_clip_key_rest_segments_branch_tracks_separators_and_a_rest_kind(tmp_path):
+    """M-24's own acceptance criterion: two settings differing only in a rest-kind or one
+    separator time give different ref_clip_keys in the rest_segments state."""
+    from respmech.core.settings import BreathTypeEntry, SeparatorEntry
+    s = _emg_only_settings(tmp_path)
+    ref = os.path.join(INPUT, "synth_case_A.csv")
+    s.processing.emg.noise.reference_file = "synth_case_A.csv"
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=1, kind="rest"))
+    k0 = pc.ref_clip_key(s, ref)
+    assert k0 is not None
+
+    s.processing.segmentation.separators.append(
+        SeparatorEntry(file="synth_case_A.csv", times_s=[1.0]))
+    k1 = pc.ref_clip_key(s, ref)
+    assert k1 != k0                                    # a separator appeared -> miss
+
+    s.processing.segmentation.separators[0].times_s = [2.0]
+    k2 = pc.ref_clip_key(s, ref)
+    assert k2 != k1                                    # the SAME separator moved -> miss
+
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=2, kind="rest"))
+    k3 = pc.ref_clip_key(s, ref)
+    assert k3 not in (k0, k1, k2)                       # a second rest-typed segment -> miss
+
+
+def test_ref_clip_key_keys_on_the_resolved_mode_not_the_unused_flag(tmp_path):
+    """For an EMG-only set, use_expiration is never touched (stays at its True default) and
+    is meaningless to the resolver — keying on the RESOLVED mode instead means switching
+    from a rest-typed reference to an explicit interval is a real branch change (a miss),
+    even though the raw flag never moved."""
+    from respmech.core.settings import BreathTypeEntry
+    s = _emg_only_settings(tmp_path)
+    ref = os.path.join(INPUT, "synth_case_A.csv")
+    s.processing.emg.noise.reference_file = "synth_case_A.csv"
+    assert s.processing.emg.noise.use_expiration is True
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=1, kind="rest"))
+    k_rest = pc.ref_clip_key(s, ref)
+    s.processing.breath_types.clear()
+    s.processing.emg.noise.reference_intervals = [[1.0, 2.0]]
+    assert s.processing.emg.noise.use_expiration is True   # untouched by either branch
+    k_intervals = pc.ref_clip_key(s, ref)
+    assert k_rest != k_intervals
+
+
+def test_separators_for_and_kinds_for_are_file_scoped(tmp_path):
+    from respmech.core.settings import BreathTypeEntry, SeparatorEntry
+    s = _emg_only_settings(tmp_path)
+    s.processing.segmentation.separators.append(
+        SeparatorEntry(file="synth_case_A.csv", times_s=[1.0, 2.0]))
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=1, kind="rest"))
+    assert pc._separators_for(s, "synth_case_A.csv") == (1.0, 2.0)
+    assert pc._separators_for(s, "synth_case_B.csv") == ()
+    assert pc._kinds_for(s, "synth_case_A.csv") == ((1, "rest"),)
+    assert pc._kinds_for(s, "synth_case_B.csv") == ()
+
+
 def test_noise_report_key_tracks_all_files_and_stft(tmp_path):
     s = _s(tmp_path)
     ref = os.path.join(INPUT, "synth_case_A.csv")
