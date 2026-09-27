@@ -24,6 +24,13 @@ _GOLDEN_UNIT_SNAPSHOT = {
     'file': '',
     'flow_midvolexp': 'L·s⁻¹',
     'flow_midvolinsp': 'L·s⁻¹',
+    # M-35: cross-file IC references (core.analysis.references.attach), added to
+    # golden_reference.json's typed_ic_fvc_same_file scenario when its own typed
+    # breath resolves as its own reference (the own-typed fallback, no new settings
+    # entry needed). ic_ref_n/ic_ref_source resolve via the registry (unit=""), not
+    # _RULES; vol_ic_ref via the pre-existing vol_ prefix rule.
+    'ic_ref_n': '',
+    'ic_ref_source': '',
     'in_flow_midvol': 'L·s⁻¹',
     'insp_pdi_rise': 'cmH₂O',
     'int_oesinsp': 'cmH₂O·s',
@@ -81,6 +88,19 @@ _GOLDEN_UNIT_SNAPSHOT = {
     'rms_insp_mean': 'a.u.',
     'rms_max': 'a.u.',
     'rms_mean': 'a.u.',
+    # EMG-only whole_file diagnostics (core.analysis.segments): where the peak EMG
+    # activity fell in the recording and how it compares to the top-3 highest values
+    # in the whole-file envelope (registry.py's _SEGMENT_EMG). Pre-existing golden
+    # columns this snapshot had not caught up to yet.
+    'rms_file_max_col_2': 'a.u.',
+    'rms_file_max_col_3': 'a.u.',
+    'rms_file_max_col_4': 'a.u.',
+    'rms_file_top3_col_2': 'a.u.',
+    'rms_file_top3_col_3': 'a.u.',
+    'rms_file_top3_col_4': 'a.u.',
+    't_rms_file_max_col_2': 's',
+    't_rms_file_max_col_3': 's',
+    't_rms_file_max_col_4': 's',
     'sample_entropy_col_10': '—',
     'sample_entropy_col_11': '—',
     'sample_entropy_col_12': '—',
@@ -99,6 +119,12 @@ _GOLDEN_UNIT_SNAPSHOT = {
     'sample_entropy_max': '—',
     'sample_entropy_mean': '—',
     'sample_entropy_min': '—',
+    # EMG-only segmentation's own timing group (core.analysis.segments), replacing
+    # the flow-derived insp/exp timing group a phase-less segment has none of.
+    # Another pre-existing golden column set this snapshot had not caught up to yet.
+    'seg_start_s': 's',
+    'seg_end_s': 's',
+    'seg_duration_s': 's',
     'te': 's',
     'ti': 's',
     'ti_ttot': '—',
@@ -108,6 +134,7 @@ _GOLDEN_UNIT_SNAPSHOT = {
     'vmr': '',
     'vol_endexp': 'L',
     'vol_endinsp': 'L',
+    'vol_ic_ref': 'L',
     'vt': 'L',
     'wob_ex_total': 'J·min⁻¹',
     'wob_in_ela': 'J·min⁻¹',

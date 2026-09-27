@@ -30,6 +30,7 @@ import numpy as np
 from respmech.core import compute
 from respmech.core import emg as emglib
 from respmech.core.analysis import manoeuvres as manoeuvreslib
+from respmech.core.analysis import references as referenceslib
 from respmech.core.analysis.signals import Capabilities
 from respmech.core.io.loaders import load
 from respmech.core.results import build_breath_table, build_manoeuvre_table, build_processed_data
@@ -79,6 +80,13 @@ class FileResult:
     # core.io.writers._write_run_report put the ecg_auto_detect quality check and the
     # cardiac-gated peak's NaN reason where an app user can actually read them.
     notices: list = field(default_factory=list)
+    # Cross-file references actually resolved FOR this file (core.analysis.references.
+    # attach, the batch's post-loop pass): {slot: {'source', 'breaths', 'n', 'value'}},
+    # one entry per reference slot that resolved -- 'ic' only for now (fvc/baseline_ic/
+    # max_insp have no consuming column yet, see references.attach's own docstring). A
+    # slot with no resolution at all (nothing named it, or the family itself is absent
+    # from this analysis) is simply not a key here -- there is nothing to report.
+    references_used: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -87,6 +95,27 @@ class BatchResult:
     average_table: object = None                # concatenated average rows
     noise_report: object = None                 # shared-profile prop + per-channel fidelity/ΔSNR
     ecg_auto_report: object = None              # auto-detected ECG settings + diagnostics (or None)
+    # Manoeuvre extractions for reference SOURCE files that are not themselves part of
+    # this run's own file list (the batch's forepass, run BEFORE the main loop --
+    # core.analysis.references.external_reference_sources/attach):
+    # {source_filename: {breath_no: core.analysis.manoeuvres.extract(...) result}}.
+    # A source that failed entirely (could not load/segment) has NO entry here at all
+    # -- see reference_errors below -- so `references.get(name)` alone can never be
+    # mistaken for "this source resolved with zero typed breaths" (an empty dict IS a
+    # valid, if unusual, outcome: a matched source with no typed breaths in it).
+    references: dict = field(default_factory=dict)
+    # Every forepass failure, keyed (source_filename, breath_no_or_None): a whole
+    # source file that failed to load/segment is keyed with breath_no=None; one typed
+    # breath's own extraction failing (the rest of that source still usable) is keyed
+    # with its breath number, mirroring the main loop's own per-breath manoeuvre-
+    # extraction try/except. Values are "ExceptionType: message" strings, the same
+    # shape FileResult.error already uses.
+    reference_errors: dict = field(default_factory=dict)
+    # Batch-wide summary of cross-file reference resolution, built once by
+    # core.analysis.references.attach() -- see that function's own docstring for the
+    # shape. Empty ({}) until attach() runs (a fresh BatchResult, or a run that never
+    # reaches the post-loop pass, e.g. cancelled early).
+    analysis_plan: dict = field(default_factory=dict)
 
     @property
     def ok_files(self):
@@ -719,6 +748,64 @@ def match_input_files(folder: str, pattern: str) -> list:
     return sorted(out)
 
 
+def _load_external_references(settings: Settings, s, files: list, *, cache: dict,
+                               cancel_check: Optional[Callable[[], bool]] = None,
+                               progress: Optional[ProgressCallback] = None):
+    """The batch's forepass (runs BEFORE the main per-file loop): load, segment and
+    extract manoeuvre values from every reference-source file
+    (``core.analysis.references.external_reference_sources``) that is named by
+    ``processing.references``/``reference_defaults`` but is NOT already part of
+    ``files`` -- the batch's own list of files the main loop is about to process.
+
+    Reuses exactly the same primitives the main loop's own manoeuvre extraction does
+    (``segment_file``, ``manoeuvres.extract``, ``manoeuvres.apply_repeatability``) so a
+    source loaded here and one loaded as an ordinary in-batch reference-only file
+    (M-30) produce byte-identical results for the same breath. A source is dropped
+    from consideration ENTIRELY if it cannot be loaded/segmented at all (its whole-file
+    failure is recorded, never raised -- the batch keeps going); one breath's own
+    extraction failing does not drop the rest of that same source's typed breaths.
+
+    ``cancel_check``, checked before each source: stops loading further sources
+    (``break``, keeping whatever was already loaded) rather than raising or returning
+    early itself -- the caller checks again right after this returns and does the
+    actual early return, exactly like it already does between two ordinary files in
+    the main loop, so a cancel flagged mid-forepass has the same visible effect as one
+    flagged mid-batch instead of being silently swallowed.
+
+    Returns ``(references, errors)`` -- see ``BatchResult.references``/
+    ``reference_errors`` for the exact shapes. Never raises."""
+    sources = referenceslib.external_reference_sources(settings, files)
+    references: dict = {}
+    errors: dict = {}
+    for src in sources:
+        if cancel_check is not None and cancel_check():
+            break
+        path = os.path.join(s.input.inputfolder, src)
+        _emit(progress, ProgressEvent(
+            "stage", file=src, message="loading external reference source"))
+        try:
+            breaths, _trimmed = segment_file(
+                settings, s, path, cache=cache, cancel_check=cancel_check, filename=src)
+        except Exception as e:
+            errors[(src, None)] = f"{type(e).__name__}: {e}"
+            continue
+        tidal_breaths = [b for b in breaths.values() if not b["ignored"]]
+        rows: dict = {}
+        for breathno, breath in breaths.items():
+            kind = breath.get("kind")
+            if not kind or kind == "rest":
+                continue
+            try:
+                rows[breathno] = manoeuvreslib.extract(
+                    breath, kind, tidal_breaths, s.capabilities, s)
+            except Exception as e:
+                errors[(src, breathno)] = f"{type(e).__name__}: {e}"
+        if rows:
+            manoeuvreslib.apply_repeatability(rows, s.processing.lung_volume.ic)
+        references[src] = rows
+    return references, errors
+
+
 def is_subset_run(settings: Settings, only_files: Optional[list]) -> bool:
     """True when ``only_files`` restricts a run to fewer than everything ``settings.input``
     would otherwise match — never true for ``None``, and never true when ``only_files``
@@ -806,6 +893,26 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
         _emit(progress, ProgressEvent("stage", message="building shared noise profile"))
         noise_set, result.noise_report = _build_noise_set(settings, s, allfiles, progress,
                                                           stft=stft_override, cache=load_cache)
+
+    # Cross-file reference forepass: load every reference SOURCE file this run's own
+    # `files` does not already contain (a dedicated IC/FVC recording, say, or a source
+    # this particular (only_files-restricted) run excludes) and extract its typed
+    # breaths' manoeuvre values, BEFORE the main loop -- so a subset run gives the same
+    # reference rows a full run would (this ticket's own acceptance test). A source
+    # already in `files` needs no separate load here: the main loop extracts its
+    # manoeuvres itself, in `result.files[...].manoeuvres`, exactly like an in-batch
+    # reference-only file (M-30) already does.
+    result.references, result.reference_errors = _load_external_references(
+        settings, s, files, cache=load_cache, cancel_check=cancel_check, progress=progress)
+    # The forepass's own loop only BREAKS on a cancellation flagged mid-load (never
+    # raises/returns itself -- see its own docstring); check again here, exactly like
+    # the main loop's per-file check just below, so a cancel flagged during the
+    # forepass has the SAME effect (an immediate, silent "cancelled" return) a cancel
+    # flagged between two ordinary files already has, instead of a run that ignores it
+    # and quietly falls through into the main loop (self-review finding).
+    if cancel_check is not None and cancel_check():
+        _emit(progress, ProgressEvent("finished", message="cancelled"))
+        return result
 
     for fi in files:
         if cancel_check is not None and cancel_check():
@@ -1092,6 +1199,21 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
             result.files[filename] = FileResult(file=filename, error=f"{type(e).__name__}: {e}",
                                                 error_kind=type(e).__name__)
             _emit(progress, ProgressEvent("file_error", file=filename, message=str(e)))
+
+    # Cross-file reference efterpass: resolve every OK tidal file's IC reference and
+    # attach vol_ic_ref/ic_ref_n/ic_ref_source (references.attach's own docstring has
+    # the full contract) BEFORE average_table is concatenated, so the new columns are
+    # already on each average_row when pd.concat's default outer join runs below.
+    # `require_references` can DEMOTE a file (fr.error/fr.error_kind set on the same
+    # FileResult already in result.files) -- average_rows is therefore rebuilt from
+    # result.ok_files AFTER attach() runs, never reused from the plain list the main
+    # loop above appended to, so a demoted file's row is excluded from the cohort the
+    # same way an ordinary main-loop failure already is. When nothing was demoted
+    # (the common case: require_references off, or every file resolved) this is the
+    # exact same set of average_row objects, in the same order, as the list above.
+    referenceslib.attach(result, settings, allfiles)
+    average_rows = [fr.average_row for fr in result.ok_files.values()
+                    if fr.average_row is not None]
 
     if average_rows:
         import pandas as pd

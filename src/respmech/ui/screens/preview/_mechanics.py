@@ -181,7 +181,13 @@ def _buffer_debounce_hint(buffer_samples, resample, resample_to_frequency, nativ
 # 'batch' test run reaches this via FileResult.error_kind exactly like the other three;
 # the 'segments' preview job never raises it at all (stage_emg_segments_preview catches
 # it itself, see _segments.py's _render_segments_preview's own 'Not processed' status line).
-_SOFT_FILE_ERRORS = ("TrimError", "VolumeTrendError", "NoBreathsError", "EmgSegmentationError")
+# ReferenceLinkError: a file's cross-file IC reference could not be resolved and
+# processing.lung_volume.require_references is set -- see
+# core.analysis.references.ReferenceLinkError's own docstring for when this actually
+# escapes a file (off by default: an unresolved reference is normally just a caution
+# plus NaN, never a file error).
+_SOFT_FILE_ERRORS = ("TrimError", "VolumeTrendError", "NoBreathsError", "EmgSegmentationError",
+                     "ReferenceLinkError")
 
 # The Mechanics-advanced fields that change the volume the trend detector sees. The live
 # trough count is only valid while these still match the rendered preview it was taken
