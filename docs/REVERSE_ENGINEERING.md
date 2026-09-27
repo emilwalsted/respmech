@@ -651,3 +651,72 @@ path), with a `Settings.notices` entry recording it. Saving an analysis omits th
 `[analysis]` table while the explicit set still matches the derived one; the run
 manifest (`analysis-used.toml`, via `dumps_toml`) always records the resolved,
 effective set instead, explicit or not.
+
+### 7b. Reference manoeuvres and subject lung volumes
+
+Three new tables let one file's inspiratory-capacity/forced-vital-capacity/maximal-
+effort/baseline reference values come from breaths typed in a DIFFERENT file (or from
+the same file), and let per-participant spirometry (TLC/VC/RV/FEV1/MVV) apply across
+every file that participant recorded:
+
+```
+[[processing.references]]         # per-file: overrides everything else for THIS file
+file = "P03_peak.txt"
+ic = { file = "P03_IC.txt", breaths = [2, 3, 4] }   # BreathRef: one or more breaths
+fvc = { file = "P03_MFVL.txt", breaths = [1] }
+baseline_ic = { file = "P03_rest.txt", breaths = [7] }
+max_insp = { file = "P03_IC.txt", breaths = [4] }
+folder = "recordings"              # carried-over-state provenance tag, as elsewhere
+
+[[processing.reference_defaults]]  # per-group fallback (core.summary.group_key)
+group = "P03"
+ic = { file = "P03_IC.txt", breaths = [2, 3, 4] }
+folder = "recordings"
+
+[[input.subjects]]                 # keyed the same way as reference_defaults' group
+key = "P03"
+tlc_l = 6.12
+vc_l = 4.30
+rv_l = 1.90
+fev1_l = 3.10                      # spirometry value, preferred over a derived one
+mvv_lpm = 124.0
+folder = "recordings"
+
+[processing.lung_volume]
+require_references = false         # true: an unresolved reference source becomes a
+                                    # HARD path_problem() blocker instead of a soft
+                                    # check_links() caution
+baseline_pattern = "(?i)baseline|rest"   # not yet read by any code path
+[processing.lung_volume.ic]
+eelv_tracking = "none"             # "none" | "within_file" -- a later ticket's own
+                                    # arithmetic; only declared and validated here
+```
+
+`ic`/`fvc`/`baseline_ic`/`max_insp` are all `BreathRef | None` — a nested optional
+dataclass, which needs the earlier PEP 604 fix to `_unwrap_optional` (§2) to round-trip
+through TOML at all.
+
+**Resolution order** (`core.analysis.references.resolve_reference`), applied
+independently per slot: an explicit `processing.references` entry for the file beats a
+matching `processing.reference_defaults` group entry, which beats the file's OWN typed
+breaths of a matching kind (`ic`/`ic_fvc` for the `ic` slot, `fvc`/`ic_fvc` for `fvc`,
+`max_insp`/`sniff` for `max_insp`), which beats nothing (`None`). `baseline_ic` has no
+own-typed fallback — a baseline is by nature a different recording, never inferred from
+the manoeuvre breath itself.
+
+**`check_links`** (same module) is the read-only, no-exception counterpart:
+one caution per reference source not among the batch's own matched files
+(`core.pipeline.match_input_files`, NOT a manifest's majority-column-count subset —
+`ui.manifest.Manifest.included_files`), per linked breath not typed the matching kind,
+per linked breath that is excluded, and per `reference_defaults`/`input.subjects` group
+key matching no analysed file. One policy throughout: an unresolved link is always a
+caution, plus NaN and a run-report notice once a later pipeline pass attaches it —
+never a hard error, unless `processing.lung_volume.require_references` is set, in
+which case `ui.validation.path_problem` turns a missing SOURCE FILE into a blocker
+(the other three caution kinds stay soft cautions even then — only an unresolvable
+source file is escalated).
+
+Neither table is read by `core.compute`/`core._legacy_ns` — resolving the actual
+values (loading the referenced file, running `core.analysis.manoeuvres.extract` on it,
+attaching the result to the referencing file's own columns) is a later pipeline pass's
+scope, well downstream of the ordinary per-breath mechanics loop this never touches.
