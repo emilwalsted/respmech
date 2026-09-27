@@ -64,6 +64,8 @@ _CARRIED_PHRASES = {
     "noise_reference": lambda names: "the EMG rest reference",
     "ecg_reference": lambda names: "the ECG reference",
     "normalization_reference": lambda names: "the EMG normalisation reference",
+    "breath_type_files": lambda names: (
+        f"breath types for {SettingsScreen._named_by_filename(names)}"),
 }
 
 
