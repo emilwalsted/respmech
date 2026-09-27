@@ -102,6 +102,19 @@ def test_a_separator_outside_the_recording_is_a_soft_segment_error_not_a_raise(t
     assert data["emg"].shape[0] > 0
 
 
+def test_an_excluded_segment_is_flagged_ignored_in_its_own_span(tmp_path):
+    """Every span carries its OWN ignored flag (processing.exclude_breaths, keyed by
+    segment number exactly like a breath) -- not folded into a status count alone."""
+    from respmech.core.settings import ExcludeEntry
+
+    s = _emg_only_settings(tmp_path, method="separators", separator_times=[1.0, 2.0])
+    s.processing.exclude_breaths.append(ExcludeEntry(file=FILENAME, breaths=[2]))
+    data = stage_emg_segments_preview(s, _path(s))
+    assert data["segment_error"] is None
+    ignored_by_num = {num: ignored for (num, _t0, _t1, ignored, _kind) in data["spans"]}
+    assert ignored_by_num == {1: False, 2: True, 3: False}
+
+
 # -- job dispatch + render, through a real PreviewScreen -------------------------------
 # (the ticket's "test_startup_imports uændret" criterion is exercised by re-running the
 # app's own tests/unit/test_startup_imports.py, not duplicated here -- it asserts nothing
@@ -142,6 +155,7 @@ def test_selecting_an_emg_only_file_starts_a_segments_job_and_ends_with_breaths(
     assert _pump_until(lambda: not pv._jobs and not pv._draining)
     assert pv._breaths                                    # ends non-empty (ticket's own wording)
     assert pv._breaths[0][:2] == (1, 0.0)
+    assert pv.panel_error("raw") is None                # a real result, not a crash card
     win.close()
 
 
@@ -190,6 +204,27 @@ def test_a_bad_separator_shows_not_processed_in_the_status_line_not_an_error_car
     win.close()
 
 
+def test_an_excluded_segment_shows_in_the_status_line_count(tmp_path):
+    """The other half of the status-line wording (nseg/nign) -- covered above at the
+    worker level (each span's own ignored flag); this exercises the render layer's own
+    'excluded' count text, the branch none of the other render-layer tests touch."""
+    from respmech.core.settings import ExcludeEntry
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.state import AppState
+
+    s = _emg_only_settings(tmp_path, method="separators", separator_times=[1.0, 2.0])
+    s.processing.exclude_breaths.append(ExcludeEntry(file=FILENAME, breaths=[2]))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files()
+    pv.file_rail.select_filename(FILENAME)
+    data = stage_emg_segments_preview(pv.state.settings, _path(s))
+    pv._render_emg_segments_preview(data)
+    assert "3 segments" in pv.status.text()
+    assert "1 excluded" in pv.status.text()
+    win.close()
+
+
 def test_the_batch_test_run_computes_from_emg_for_an_emg_only_set_not_a_crash_card(
         qapp, tmp_path):
     """Found in self-review, not a literal acceptance criterion: 'batch' (the auto-run
@@ -235,4 +270,36 @@ def test_the_batch_test_run_computes_from_emg_for_an_emg_only_set_not_a_crash_ca
     assert _pump_until(lambda: not pv._jobs and not pv._draining)
     assert pv.panel_error("table") is None
     assert pv.panel_error("campbell") is None
+    win.close()
+
+
+def test_a_stale_job_of_one_kind_does_not_stop_the_other_kind_s_live_spinner_on_raw(
+        qapp, tmp_path):
+    """Found in independent self-review, not a literal acceptance criterion: 'raw' is
+    now the FIRST panel shared by two different _AUTO_KINDS entries (_PANELS['mech'] and
+    _PANELS['segments'] both list it). _on_job_done's superseded-job branch used to stop
+    every panel a stale job owned unconditionally, once no NEWER job of the SAME kind
+    had taken over -- correct when a panel is owned by one kind only, but a stale 'mech'
+    completion finishing late (its thread only cooperatively cancelled, so it can still
+    be running after a settings edit made 'segments' the live kind for 'raw' instead)
+    would hide 'segments'' own genuinely-busy spinner mid-computation. Fixed by also
+    checking whether some OTHER currently-active job still lists that panel."""
+    from PySide6.QtCore import QThread
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.screens.preview_screen import _Job
+    from respmech.ui.state import AppState
+
+    s = _emg_only_settings(tmp_path, method="whole_file")
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    # 'segments' is the CURRENT, live owner of 'raw' -- still busy.
+    live = _Job("segments", pv._tokens["segments"], QThread(), object())
+    pv._jobs["segments"] = live
+    pv._overlays["raw"].start("Segmenting…")
+    # a STALE 'mech' job (superseded before this scenario -- not in pv._jobs, token
+    # doesn't match) finishes late and must not stop 'raw' out from under 'segments'.
+    pv._tokens["mech"] += 1
+    stale = _Job("mech", pv._tokens["mech"] - 1, QThread(), object())
+    pv._on_job_done(stale, None)
+    assert pv._overlays["raw"].busy is True
     win.close()

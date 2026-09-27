@@ -1173,10 +1173,18 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # only clear the spinner if no newer owner took over the panels — but
         # never wipe an error card the current owner already painted (a stale
         # draining job finishing late must not erase the live job's error).
+        # A panel can now be shared across KINDS too ('raw' is in both
+        # _PANELS['mech'] and _PANELS['segments'], the two never dispatch for the
+        # same file at once, but a stale/superseded job of one kind can still be
+        # draining after a settings edit re-dispatches the other) — a stale stop()
+        # must not hide a DIFFERENT kind's genuinely live spinner on that same
+        # panel, so skip any panel another currently-active job also lists.
         if job.token != self._tokens[job.kind]:
             if job.kind not in self._jobs:
                 for p in _PANELS[job.kind]:
-                    if not self._overlays[p].error:
+                    owned_elsewhere = any(p in _PANELS[other.kind]
+                                          for other in self._jobs.values())
+                    if not self._overlays[p].error and not owned_elsewhere:
                         self._overlays[p].stop()
             self._update_actions(status=False)
             return
