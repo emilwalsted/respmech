@@ -32,7 +32,7 @@ from respmech.core import emg as emglib
 from respmech.core.analysis.signals import Capabilities
 from respmech.core.io.loaders import load
 from respmech.core.results import build_breath_table, build_processed_data
-from respmech.core.settings import Settings
+from respmech.core.settings import Settings, resolve_noise_reference_mode
 from respmech.core._legacy_ns import to_legacy_ns
 
 
@@ -469,11 +469,24 @@ def segment_file(settings: Settings, s, path, *, cache=None, cancel_check=None,
     return breaths, trimmed
 
 
-def _emg_segmented(path, s, cache=None, cancel_check=None):
+def _emg_segmented(path, s, cache=None, cancel_check=None, *, exclude_typed_from_expiration=False):
     """Load a file, ECG-remove + trim its EMG, and segment breaths (by flow).
     Returns (emg_ecg_trimmed, insp_mask, exp_mask). Used to build the noise
     reference (expiration) and to gather active/quiet EMG for prop selection.
-    ``cache`` (Wave 2.4) memoises the load + ECG removal across the run."""
+    ``cache`` (Wave 2.4) memoises the load + ECG removal across the run.
+
+    ``exclude_typed_from_expiration`` (M-22, decision 11): when true, a breath typed
+    via ``processing.breath_types`` (any kind -- an IC/FVC/sniff/max_insp/other
+    manoeuvre, never tidal breathing) contributes NOTHING to the returned expiration
+    mask, because a manoeuvre's expiration is not diaphragm-quiet the way an ordinary
+    tidal breath's is. A no-op when the file carries no typed breaths at all (the
+    overwhelming common case, and every existing golden/synthetic scenario), so the
+    default ``False`` is only a documentation nicety, not a behavioural difference --
+    ``_reference_noise_clip``'s own expiration branch is the one caller that needs
+    ``True``: it is building the reference the noise profile is trusted for, not
+    merely sampling activity across the batch (``_build_noise_set``'s ``auto_prop``
+    gather, the OTHER caller, intentionally keeps the pre-existing, unfiltered
+    behaviour -- see that function's own docstring)."""
     (flow, vol, poes, pgas, pdi, ent, emg), emgcols_ecg, _diag = _load_and_ecg(
         path, s, cache=cache, cancel_check=cancel_check)
     tc = np.arange(len(flow)) / s.input.format.samplingfrequency
@@ -481,14 +494,41 @@ def _emg_segmented(path, s, cache=None, cancel_check=None):
         tc, flow, vol, poes, pgas, pdi, np.array(emg) if len(emg) else np.array([]), s)
     emg_full = emgcols_ecg[si:ei]                 # ECG-removed (cached) then trimmed, as before
     volc = compute.correctdrift(compute.zero(vT), s) if s.processing.mechanics.correctvolumedrift else compute.zero(vT)
-    br = compute.separateintobreaths("flow", os.path.basename(path), tcT, fT, volc,
+    filename = os.path.basename(path)
+    br = compute.separateintobreaths("flow", filename, tcT, fT, volc,
                                      pT, gT, dT, [], emg_full, s)
+    kinds = compute.breathkinds(filename, s) if exclude_typed_from_expiration else {}
     ins = np.zeros(len(fT), bool); ex = np.zeros(len(fT), bool); p = 0
-    for b in br.values():
+    for breathno, b in br.items():
         ni = len(b["inspiration"]["time"]); ne = len(b["expiration"]["time"])
-        ins[p:p + ni] = True; ex[p + ni:p + ni + ne] = True; p += ni + ne
+        ins[p:p + ni] = True
+        if kinds.get(breathno) is None:
+            ex[p + ni:p + ni + ne] = True
+        p += ni + ne
     n = min(len(emg_full), len(ins))
     return emg_full[:n], ins[:n], ex[:n]
+
+
+def _rest_segments_clip(settings, s, path, *, cache=None, cancel_check=None):
+    """The EMG-only counterpart of the 'expiration' branch below: concatenate the
+    reference file's own segments typed ``'rest'`` (M-22). Reuses ``segment_file``
+    (M-06/M-21) so the clip is built from the SAME whole_file/separators segmentation
+    -- and the same kind lookup -- the analysis itself will use; boundaries never
+    drift between what a preview shows and what the reference clip is actually built
+    from. ``noise_set=None`` (segment_file's default): there is no profile to apply
+    yet, this call exists to BUILD one, mirroring ``_emg_segmented``'s own
+    ECG-removed-but-not-noise-reduced clip for the flow-bearing branch."""
+    breaths, _trimmed = segment_file(settings, s, path, cache=cache, cancel_check=cancel_check)
+    parts = [np.asarray(b["emgcols"]) for b in breaths.values() if b.get("kind") == "rest"]
+    if not parts:
+        # Settings.validate() already rejects an 'unresolved' mode before a batch starts,
+        # but resolve_noise_reference_mode only checks the SETTINGS shape (does a
+        # BreathTypeEntry name this file with kind 'rest'?) -- it cannot know the file
+        # actually still has that many segments once loaded (a shorter re-recording, an
+        # edited separators list). Named the same way every other "could not build the
+        # reference" failure in this function is, one line down.
+        raise ValueError(f"no 'rest'-typed segment found in {os.path.basename(path)}")
+    return np.concatenate(parts, axis=0)
 
 
 def _reference_noise_clip(settings, s, cache=None, cancel_check=None):
@@ -504,23 +544,41 @@ def _reference_noise_clip(settings, s, cache=None, cancel_check=None):
     ``ui/workers.py``'s ``stage_noise_fidelity`` and ``ui/screens/run_screen.py``'s
     fix-hint lookup key their handling off ``DataValidationError``/``TrimError``/
     ``FileNotFoundError`` specifically, and a bare ``ValueError`` here would silently
-    fall through both (self-review finding, 10-08-2026)."""
+    fall through both (self-review finding, 10-08-2026).
+
+    M-22: which of the four buildable sources (``resolve_noise_reference_mode``'s
+    ``'expiration'``/``'intervals'``/``'rest_segments'`` -- ``'interburst'`` has no
+    implementation yet, and ``'unresolved'`` never reaches here, both rejected by
+    ``Settings.validate()`` first) is now decided by that ONE resolver, not by
+    re-deriving the same predicate here. For a flow-bearing analysis this reproduces
+    the exact rule this codebase has always used (``use_expiration or not
+    reference_intervals``) byte-for-byte -- see the resolver's own docstring."""
     ns_cfg = settings.processing.emg.noise
     ref = ns_cfg.reference_file
     if not ref:
         raise ValueError("processing.emg.noise.reference_file is required when noise reduction is enabled")
     path = os.path.join(s.input.inputfolder, ref)
     fs = s.input.format.samplingfrequency
+    mode = resolve_noise_reference_mode(settings)
     try:
-        # Prefer expiration-based reference (many STFT frames -> stable estimate). Explicit
-        # intervals are used only when use_expiration is False (a deliberate override).
-        if ns_cfg.use_expiration or not ns_cfg.reference_intervals:
-            emg_full, ins, ex = _emg_segmented(path, s, cache=cache, cancel_check=cancel_check)
+        if mode == "expiration":
+            emg_full, ins, ex = _emg_segmented(path, s, cache=cache, cancel_check=cancel_check,
+                                               exclude_typed_from_expiration=True)
             clip = emg_full[ex]   # diaphragm-quiet expiration of the rest reference
-        else:
+        elif mode == "intervals":
             _load_result, emg_ecg, _diag = _load_and_ecg(path, s, cache=cache, cancel_check=cancel_check)
             parts = [emg_ecg[int(t0 * fs):int(t1 * fs)] for t0, t1 in ns_cfg.reference_intervals]
             clip = np.concatenate(parts, axis=0)
+        elif mode == "rest_segments":
+            clip = _rest_segments_clip(settings, s, path, cache=cache, cancel_check=cancel_check)
+        else:
+            # 'interburst' and 'unresolved' are both rejected by Settings.validate()
+            # while noise reduction is enabled -- reachable here only via a settings
+            # object that skipped validate() (a hand-built test double, a future caller
+            # that forgot to validate first). Fail loudly rather than guess.
+            raise ValueError(
+                f"processing.emg.noise.reference_mode={mode!r} cannot be built into a "
+                "reference clip yet")
     except Exception as e:
         msg = f"Could not read the noise reference file '{ref}': {e}"
         try:
@@ -548,7 +606,11 @@ def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=
         n_grad_freq=cfg.n_grad_freq, n_grad_time=cfg.n_grad_time, cancel_check=cancel_check)
 
     if cfg.auto_prop:
-        # Gather active/quiet EMG across the test (capped) to choose prop ONCE.
+        # Gather active/quiet EMG across the test (capped) to choose prop ONCE. Built on
+        # inspiration/expiration PHASES (_emg_segmented, flow-only) -- an EMG-only signal
+        # set has no phases to gather by, and Settings.validate() (M-22) already refuses
+        # auto_prop=True for one before a batch can reach here, so this loop never needs
+        # to handle that case; it stays exactly as it was pre-M-22.
         act, qui, cap, unreadable, last_exc = [], [], 40000, [], None
         for fi in files:
             try:

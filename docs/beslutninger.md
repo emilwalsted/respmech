@@ -6,6 +6,24 @@ decision <date>" — never an internal ticket reference; this repo is public).
 
 ---
 
+**27-09-2026 — `use_expiration`/`reference_intervals` remain the two saved noise-
+reference fields for a flow-bearing analysis; `reference_mode` only names the EMG-only
+alternatives (author's decision, 27-09-2026).** An EMG-only signal set has no
+inspiration/expiration phases for `use_expiration` to mean anything about, so it needed
+its own reference-resolution rule rather than reusing or repurposing that flag. Rather
+than overload `use_expiration`/`reference_intervals` with a third, EMG-only meaning, a
+new `reference_mode` field (default `'auto'`) was added purely to NAME the two EMG-only
+sources (`'rest_segments'`, a segment typed `'rest'` in the reference file; `'interburst'`,
+not yet implemented) — `'auto'` with a flow channel declared reproduces the existing
+`use_expiration`/`reference_intervals` rule exactly, unchanged. `resolve_noise_reference_
+mode(settings)` is the one function every consumer (the pipeline, the run report, the
+Provenance sheet) reads this from, so the resolution logic cannot drift between them. A
+typed breath (any kind) is also now excluded from the flow-bearing reference file's own
+expiration mask when that mode is `'expiration'` — a manoeuvre's expiration is not the
+diaphragm-quiet period the profile is trusted for — with no effect on any analysis that
+has no typed breaths at all (every existing scenario). See `docs/NOISE_ECG_OPTIMIZATION.
+md` §6 for the full resolution chain.
+
 **27-09-2026 — A typed breath counts toward `bcnt`/`vefactor` exactly like a manually
 excluded one: neither is scaled down when a breath is retyped as a manoeuvre (author's
 decision, 27-09-2026).** `bcnt` (the breath count used to scale breathing frequency and

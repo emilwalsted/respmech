@@ -28,6 +28,7 @@ import pandas as pd
 
 from respmech import __version__
 from respmech.core import quantities as _units
+from respmech.core.settings import resolve_noise_reference_mode
 from respmech.core.summary import build_cohort_summary, normalize_emg_table, reference_values_for_batch
 
 _CREATED = f"Created with RespMech v{__version__} (github.com/emilwalsted/respmech)"
@@ -127,6 +128,33 @@ def _segmentation_provenance_value(settings) -> str:
     return seg.method                          # fixed_windows/emg_burst: a later ticket's scope
 
 
+#: human text for each mode resolve_noise_reference_mode() can return -- shared
+#: between the Provenance sheet row and the run-report's PROCESSING line (same guard
+#: against the two disagreeing as _segmentation_provenance_value above). 'unresolved'
+#: is included only for safety: Settings.validate() already refuses it while noise
+#: reduction is enabled, so it should never actually reach a written report.
+_NOISE_REFERENCE_TEXT = {
+    "expiration": "expiration (reference file's own quiet period)",
+    "intervals": "explicit reference intervals",
+    "rest_segments": "rest-typed segments",
+    "interburst": "inter-burst",
+    "unresolved": "unresolved",
+}
+
+
+def _noise_reference_provenance_value(settings) -> str:
+    # .get(..., mode), not a bare lookup: resolve_noise_reference_mode() passes an
+    # explicit, non-'auto' reference_mode through UNVALIDATED (by design -- see its own
+    # docstring), so a settings object that reached here without Settings.validate()
+    # having run first (a test double, a future caller) could carry a value this table
+    # has no entry for. A raw, unrecognised string in the report beats a bare KeyError
+    # crashing report generation over a cosmetic label -- the sibling
+    # _segmentation_provenance_value takes the same "never crash on an unmapped value"
+    # stance for exactly this reason.
+    mode = resolve_noise_reference_mode(settings)
+    return _NOISE_REFERENCE_TEXT.get(mode, mode)
+
+
 def _provenance_rows(settings, when, incomplete_note: str | None = None):
     ts = (when or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
     ip = settings.input
@@ -144,6 +172,10 @@ def _provenance_rows(settings, when, incomplete_note: str | None = None):
             ("Work of breathing", _wob_mode_text(settings)),
             ("Drift correction", settings.processing.volume.correct_drift),
             ("EMG normalisation", settings.processing.emg.normalization)]
+    if settings.processing.emg.noise.enabled:
+        # M-22: only meaningful once noise reduction is actually on -- an unresolved/
+        # unused reference_mode on a disabled profile would just be noise in the sheet.
+        rows.append(("Noise reference", _noise_reference_provenance_value(settings)))
     if ip.channels.entropy:
         # D11 (UI-overhaul): same m/r a reader would need for a methods section, in the same
         # words as the Setup screen's own read-out (settings_screen.py's ent_caption) — only
@@ -592,6 +624,8 @@ def _write_run_report(result, settings, outputfolder: str,
         L.append(f"  Segmentation:            {_segmentation_provenance_value(settings)}")
     L.append(f"  ECG removal:             {_yn(emg.remove_ecg)}")
     L.append(f"  EMG noise removal:       {_yn(emg.noise.enabled)}")
+    if emg.noise.enabled:
+        L.append(f"  Noise reference:         {_noise_reference_provenance_value(settings)}")
     L.append(f"  EMG normalisation:       {emg.normalization}")
     # K-215: the per-file settings that rescale bf/VE (breath_counts) or change which
     # breaths are averaged (exclude_breaths) most directly, plus the three other
