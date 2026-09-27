@@ -243,6 +243,28 @@ def test_typing_a_breath_removes_any_existing_exclusion_and_stores_onset(qapp, t
     win.close()
 
 
+def test_typing_a_breath_updates_the_rails_typed_badge(qapp, tmp_path):
+    """M-32: _set_breath_type calls the wide _sync_rail_breath_state (replacing the old,
+    narrower _sync_excluded_badge) — this is the funnel's own regression test for that
+    wiring, would fail if a future edit routed the write back through a narrower,
+    exclusion-only sync that never touches typed_counts."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    name = pv.file_rail.current_filename()
+
+    assert pv.file_rail.entry(name).typed_counts == {}
+    assert pv._set_breath_type(a_breath, "rest") == "rest"
+    assert pv.file_rail.entry(name).typed_counts == {"rest": 1}
+
+    # tidal clears it back out again
+    assert pv._set_breath_type(a_breath, "tidal") == "tidal"
+    assert pv.file_rail.entry(name).typed_counts == {}
+    win.close()
+
+
 def test_excluding_a_typed_breath_removes_the_type_entry(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     s = synth_settings(str(tmp_path))
