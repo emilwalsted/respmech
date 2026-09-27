@@ -1,0 +1,96 @@
+# V2_SCENARIOS golden fixture: 'typed_ic_fvc_same_file'. A single flow-bearing
+# recording (tests/golden/input/synth_manoeuvre_A.csv, its own dedicated RNG stream --
+# never synth_case_*.csv/synth_emgonly_*.csv) with two breaths typed as manoeuvres via
+# processing.breath_types: breath #4 as an inspiratory-capacity (IC) manoeuvre, breath
+# #7 as a forced-vital-capacity (FVC) manoeuvre -- both typed IN THE SAME FILE, unlike
+# a future cross-file reference (a later feature, out of this scenario's scope).
+# core.analysis.manoeuvres.extract() turns each into a Manoeuvres-sheet row. The ONE
+# number this scenario's own dedicated test checks against a literal analytical
+# constant (not merely "matches the committed reference JSON") is vol_ic == 3.0 L --
+# see generate_data.py's make_manoeuvre_file()/_manoeuvre_breath() docstring for
+# exactly why the generator's trapezoid/plateau design (rather than a smooth curve's
+# true, generally un-sampled extremum) is what makes that exact match, and
+# ic_eelv_pre's exact 0.0, survive the CSV round-trip and the trim/zero/drift-correct
+# chain.
+#
+# v2-only (processing.breath_types has no legacy-dict shape at all), baked directly
+# from the v2 core (golden_newcore.py --write) -- see make_golden.py's
+# V2_SCENARIOS/LEGACY_SCENARIOS split and tests/golden/README.md. Do not hand-edit
+# golden_reference.json's "typed_ic_fvc_same_file" entry; regenerate it with
+# golden_newcore.py --write (merging onto the existing file, per the README) after a
+# deliberate change here.
+#
+# Later work in the same programme (a cross-file reference feature, operating-lung-
+# volume derivation, and FVC/MFVL numerics) ADD keys to this SAME scenario and
+# regenerate it with their own justification in their own commit -- an added key
+# alone is not a regression in THIS scenario's committed reference.
+schema_version = 2
+
+[analysis]
+# The full derived signal set for this scenario's assigned channels below (flow +
+# poes + pgas + pdi + emg) -- explicit, like every other committed scenario TOML,
+# rather than left to derive silently: a later ticket that drops a channel here
+# should have to notice its signal set changed, not have it happen unremarked.
+signals = ["flow", "poes", "pgas", "pdi", "emg"]
+
+[input]
+folder = "../input"
+files  = "synth_manoeuvre_*.csv"
+
+[input.format]
+sampling_frequency = 1000
+decimal            = "."
+
+[input.channels]
+flow    = 5
+volume  = 6
+poes    = 7
+pgas    = 8
+pdi     = 9
+emg     = [2, 3, 4]
+entropy = [10, 11, 12]
+
+[processing.segmentation]
+method = "flow"
+buffer = 200
+
+[processing.segmentation.peak]
+height     = 0.1
+distance_s = 0.1
+width_s    = 0.2
+
+[processing.volume]
+integrate_from_flow = false
+correct_drift       = true
+correct_trend       = false
+
+[processing.wob]
+calc_from          = "average"
+avg_resampling_obs = 300
+
+[processing.entropy]
+# Pinned to the same fixed configuration every other golden scenario uses (see
+# flow_only.toml's own comment) -- not the live GUI default.
+epochs    = 2
+tolerance = 0.1
+
+# generate_data.py's MANOEUVRE_IC_BREATH_NO/MANOEUVRE_FVC_BREATH_NO (4 and 7) name the
+# SAME two breath numbers -- keep both in sync if the generator's own breath sequence
+# ever changes.
+[[processing.breath_types]]
+file   = "synth_manoeuvre_A.csv"
+breath = 4
+kind   = "ic"
+
+[[processing.breath_types]]
+file   = "synth_manoeuvre_A.csv"
+breath = 7
+kind   = "fvc"
+
+[output]
+folder = "output"
+
+[output.data]
+save_average          = true
+save_breath_by_breath = true
+save_processed        = false

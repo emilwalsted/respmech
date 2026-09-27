@@ -88,7 +88,15 @@ def run_scenario(name):
         # (none of which set either) produce an IDENTICAL dict to before this ticket.
         manoeuvres = getattr(fr, "manoeuvres", None)
         if manoeuvres:
-            out.setdefault("manoeuvres", {})[f"{fname}"] = manoeuvres
+            # manoeuvres is {breath_no: extract()-dict}, keyed by an int. JSON has
+            # no integer object keys -- json.dump/json.load round-trips this dict's keys
+            # through str() -- so stringify here too, rather than only after a write/
+            # read cycle: a scenario baked fresh in memory (this function's own return
+            # value, e.g. inside test_golden.py's `current` fixture) must compare equal
+            # to the SAME scenario loaded back from golden_reference.json, and a bare
+            # `{4: ..., 7: ...}` vs `{"4": ..., "7": ...}` key-type mismatch fails that
+            # comparison even though every value is identical.
+            out.setdefault("manoeuvres", {})[f"{fname}"] = {str(no): row for no, row in manoeuvres.items()}
         per_file_scalars = getattr(fr, "per_file_scalars", None)
         if per_file_scalars:
             out.setdefault("per_file_scalars", {})[f"{fname}"] = per_file_scalars
