@@ -252,6 +252,26 @@ def test_emg_subtab_visibility_tracks_channels(qapp, tmp_path):
     win2.close()
 
 
+def test_malformed_signals_degrades_preview_subtabs_and_campbell_title(qapp, tmp_path):
+    """CI-blocking regression: PreviewScreen's own render path (_update_subtabs,
+    _update_campbell_panel_title, both called from _build()) called
+    Capabilities.from_settings unprotected, on MainWindow's own construction (the
+    command-line/drag-drop open path, which has no surrounding try/except at all) —
+    crashing the window BEFORE settings_screen.py's own guard (_capabilities_for_view,
+    added earlier) was ever reached. Both now use from_settings_or_none and degrade to
+    the safest shape: no EMG-driven sub-tabs, poes-less Campbell/flow-volume title."""
+    from respmech.core.settings import Settings
+    from respmech.ui.main_window import MainWindow
+    s = Settings()
+    s.analysis.signals = "flow"          # malformed: a bare string, not a list
+    win = MainWindow(AppState(s))         # must not raise
+    pv = win.preview_screen
+    titles = [pv.subtabs.tabText(i) for i in range(pv.subtabs.count())]
+    assert titles == ["Mechanics"]
+    assert pv.btn_export_fig.text() == "Export flow-volume…"
+    win.close()
+
+
 def test_subtab_plan_per_preset(qapp, tmp_path):
     """subtab_plan(caps) itself, independent of any rebuild — the ordered (widget, title)
     pairs a Capabilities shape maps to, for the two presets M-17 activates plus the default
@@ -281,6 +301,13 @@ def test_subtab_plan_per_preset(qapp, tmp_path):
     assert poes_caps.mode == "poes_only"
     plan = pv.subtab_plan(poes_caps)
     assert [t for _w, t in plan] == ["Mechanics"]      # Poes alone still carries no EMG
+
+    # caps=None (Capabilities.from_settings_or_none's "nothing safe to derive" signal for a
+    # malformed analysis.signals) degrades the same way as no EMG channels at all, rather
+    # than raising on the `caps.emg` attribute access a bare None would otherwise crash on.
+    plan = pv.subtab_plan(None)
+    assert [t for _w, t in plan] == ["Mechanics"]
+    assert [w for w, _t in plan] == [pv._mech_tab]
     win.close()
 
 

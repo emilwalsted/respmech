@@ -137,6 +137,27 @@ class Capabilities:
             mode=_mode_for(declared),
         )
 
+    @classmethod
+    def from_settings_or_none(cls, settings) -> "Capabilities | None":
+        """``from_settings``, tolerant of a malformed ``analysis.signals``.
+
+        ``effective_signals`` deliberately raises ``TypeError`` for a hand-edited bare
+        string (``signals = "flow"`` instead of ``["flow"]``) so ``Settings.validate()``
+        can report it as a clean, friendly error. Several UI render paths call
+        ``from_settings`` on every edit/open, always BEFORE any validation — including
+        ``MainWindow``'s own construction on the command-line/drag-drop open path, which
+        has no surrounding try/except at all — so letting it raise there crashes the
+        whole window instead of leaving the report to ``validate()``. Callers use
+        ``None`` to mean "nothing safe to derive a shape from" and degrade their render
+        accordingly (no chips, no sub-tabs beyond the always-present one, a poes-less
+        title) rather than crash. See ``SettingsScreen._capabilities_for_view`` and
+        ``PreviewScreen``'s render path for the two families of caller this covers.
+        """
+        try:
+            return cls.from_settings(settings)
+        except TypeError:
+            return None
+
     def required_roles(self) -> frozenset:
         """Channel roles a valid analysis with this shape must have assigned.
 
