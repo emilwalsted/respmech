@@ -342,6 +342,13 @@ QC strip) and by `respmech validate`, from the same shared logic:
      compute). Still not written up as a real changelog entry here for the same reason as
      3142f25/ce1fe70 above -->
 
+<!-- changelog-skip 41fbb6b internal fix: MainWindow's construction crashed on a
+     malformed, hand-edited analysis.signals (a bare string instead of a list) because
+     PreviewScreen's own build path called Capabilities.from_settings unprotected;
+     Settings.validate() already reports this case cleanly, so the fix is purely
+     defensive (degrade to the safest render, never crash) and never shipped in any
+     release -- nothing for a reader of this entry to be told -->
+
 <!--
 "Unreleased" above is a hand-maintained draft of the next release's entry. It is
 updated ONLY when explicitly asked to (not automatically on every commit), and it
