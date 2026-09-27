@@ -1135,6 +1135,7 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
             "trim_error": str(e),
             "trend_error": None,
             "vol_drift": None,
+            "suggested_fvc": None,   # no breaths at all on this path
         }
 
     voldrift = (compute.correctdrift(compute.zero(volT), s)
@@ -1155,6 +1156,12 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
     # K-035: the boundary breath trim KEEPS is never verified as complete — surface it
     # here too, so the warning is visible while tuning, before a batch is ever run.
     boundary_notices = compute.trim_boundary_notices(breaths, s)
+    # M-31: the type menu's disabled 'Suggested: FVC' hint reads this directly, so the
+    # suggestion is computed once here (a pure function of the SAME raw breath dicts the
+    # menu itself is about to be popped up for) rather than re-derived in the UI from
+    # spans that never carry the expiration data suggest_fvc needs.
+    from respmech.core.analysis.manoeuvres import suggest_fvc
+    suggested_fvc = suggest_fvc(breaths)
 
     t = np.arange(len(flowT)) / fs
     series = {"flow": flowT, "volume": volc}
@@ -1186,6 +1193,7 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
         # drift-corrected volume: what the trend detector actually sees, so the advanced
         # dialog can count anchors for THIS file live while the thresholds are edited.
         "vol_drift": np.asarray(voldrift, float),
+        "suggested_fvc": suggested_fvc,
     }
 
 

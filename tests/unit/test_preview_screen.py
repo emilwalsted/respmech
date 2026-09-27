@@ -1509,3 +1509,173 @@ def test_batch_snapshot_drops_ecg_auto_detect_with_the_rest_of_emg(qapp, monkeyp
     assert snap.processing.emg.ecg_auto_detect is False
     snap.validate()                                   # the actual regression: this raised
     win.close()
+
+
+# --------------------------------------------------------------------------- #
+# M-31: the Manoeuvres table under the per-breath table, same panel
+# --------------------------------------------------------------------------- #
+def _shown(qapp, win, pv):
+    """QWidget.isVisible() ANDs a widget's own shown state with its whole ancestor
+    chain's — a never-.show()'d MainWindow reports isVisible() == False for every
+    child regardless of setVisible(True)/(False), which would make every assertion
+    below trivially pass no matter what _fill_manoeuvres_table actually did (see
+    the existing precedent a few tests up, around 'win.show(); win.activateWindow()').
+    Shows the window on the Preview & QC tab and pumps the event loop so isVisible()
+    reflects the widget's OWN explicit state."""
+    win.resize(1000, 700)
+    win.show()
+    win.tabs.setCurrentWidget(pv)
+    for _ in range(5):
+        qapp.processEvents()
+
+
+def test_manoeuvres_section_is_hidden_until_a_run_types_a_breath(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _shown(qapp, win, pv)
+    assert pv._manoeuvres_section.isVisible() is False    # never shown before any run
+
+    result = run_batch(s, only_files=["synth_case_A.csv"])
+    pv._on_batch_result(result)
+    assert pv._manoeuvres_section.isVisible() is False    # an ordinary all-tidal file
+    win.close()
+
+
+def test_manoeuvres_section_shows_below_the_per_breath_table_for_a_mixed_file(qapp, tmp_path):
+    """synth_case_A.csv has 8 breaths; type ONE of them 'ic' and leave the rest tidal —
+    this is the M-31 shape the ticket exists for (mixed in one file), distinct from
+    M-30's reference-only (every breath typed, no tidal table at all)."""
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    s = synth_settings(str(tmp_path))
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=1, kind="ic"))
+    s.validate()
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _shown(qapp, win, pv)
+
+    result = run_batch(s, only_files=["synth_case_A.csv"])
+    fr = result.ok_files["synth_case_A.csv"]
+    assert fr.role == "tidal"                             # still has tidal breaths
+    assert fr.breaths_table is not None and len(fr.breaths_table) > 0
+    assert fr.manoeuvres_table is not None and len(fr.manoeuvres_table) == 1
+
+    pv._on_batch_result(result)
+    assert pv._manoeuvres_section.isVisible() is True
+    assert pv._manoeuvres_model._df is not None
+    assert pv.manoeuvres_table.model().rowCount() == 1
+    # the PRIMARY table is unaffected — it still shows the ordinary breath-by-breath data
+    assert pv.table.model().rowCount() == len(fr.breaths_table)
+    win.close()
+
+
+def test_manoeuvres_section_is_hidden_for_a_reference_only_file(qapp, tmp_path):
+    """M-30's reference-only file already shows its manoeuvres AS the primary table
+    (retitled 'Manoeuvres (reference-only file)') — the separate stacked section must
+    stay hidden, or the same rows would appear twice."""
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    s = synth_settings(str(tmp_path))
+    for n in range(1, 7):
+        s.processing.breath_types.append(
+            BreathTypeEntry(file="synth_case_B.csv", breath=n, kind="ic"))
+    s.validate()
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _shown(qapp, win, pv)
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_B.csv")
+
+    result = run_batch(s, only_files=["synth_case_B.csv"])
+    pv._on_batch_result(result)
+    assert pv._manoeuvres_section.isVisible() is False
+    assert "Manoeuvres" in pv._table_panel._title_label.fullText()
+    win.close()
+
+
+def test_manoeuvres_section_hides_again_on_a_soft_file_error(qapp, tmp_path):
+    """A precondition-failure ('not processed') result must clear + hide the Manoeuvres
+    section exactly like it already clears the primary table and the Campbell diagram —
+    not leave a stale typed-breath table showing over an error card."""
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch, BatchResult, FileResult
+    s = synth_settings(str(tmp_path))
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=1, kind="ic"))
+    s.validate()
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _shown(qapp, win, pv)
+
+    result = run_batch(s, only_files=["synth_case_A.csv"])
+    pv._on_batch_result(result)
+    assert pv._manoeuvres_section.isVisible() is True     # precondition: shown once
+
+    soft = BatchResult(files={"synth_case_A.csv": FileResult(
+        file="synth_case_A.csv", error="TrimError: no usable flow signal",
+        error_kind="TrimError")})
+    pv._on_batch_result(soft)
+    assert pv._manoeuvres_section.isVisible() is False
+    assert pv._manoeuvres_model._df is None
+    win.close()
+
+
+def test_manoeuvres_section_is_cleared_on_a_file_switch(qapp, tmp_path):
+    """Self-review finding: _clear_file_panels/_clear_all_panels blanked the primary
+    table and Campbell on a file switch but not the Manoeuvres section — the "table"
+    BusyOverlay is parented to self.table alone, not the whole panel, so the PREVIOUS
+    file's typed-breath rows would otherwise stay visible, uncovered, under the new
+    file's spinner/error card."""
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    s = synth_settings(str(tmp_path))
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=1, kind="ic"))
+    s.validate()
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _shown(qapp, win, pv)
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
+
+    result = run_batch(s, only_files=["synth_case_A.csv"])
+    pv._on_batch_result(result)
+    assert pv._manoeuvres_section.isVisible() is True      # precondition: shown once
+
+    pv.file_rail.select_filename("synth_case_B.csv")       # -> _begin_file_switch -> _clear_file_panels
+    assert pv._manoeuvres_section.isVisible() is False
+    assert pv._manoeuvres_model._df is None
+    win.close()
+
+
+def test_manoeuvres_section_is_cleared_on_a_rendering_bug_in_the_batch_render(
+        qapp, tmp_path, monkeypatch):
+    """Self-review finding: the 'table' BusyOverlay/error card (_on_job_done's generic
+    Exception handler) is parented to self.table alone, not the whole panel — without
+    this fix a rendering bug would leave a PREVIOUS successful run's Manoeuvres rows
+    showing right under the 'display error' card, exactly like the file-switch gap
+    above but for the display-error path instead of the file-switch path."""
+    from PySide6.QtCore import QThread
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.screens.preview_screen import _Job
+    from respmech.core.pipeline import run_batch
+    s = synth_settings(str(tmp_path))
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=1, kind="ic"))
+    s.validate()
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _shown(qapp, win, pv)
+    result = run_batch(s, only_files=["synth_case_A.csv"])
+    pv._on_batch_result(result)
+    assert pv._manoeuvres_section.isVisible() is True       # precondition: shown once
+
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(pv, "_fill_table", _boom)
+    job = _Job("batch", pv._tokens["batch"], QThread(), object())
+    pv._jobs["batch"] = job
+    pv._on_job_done(job, result)
+    assert pv._manoeuvres_section.isVisible() is False
+    win.close()
