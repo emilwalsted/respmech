@@ -291,9 +291,9 @@ def test_breath_brush_hatches_a_carried_exclusion_not_an_ordinary_one(qapp):
     from respmech.ui.main_window import MainWindow
     s = synth_settings("")
     win = MainWindow(AppState(s)); pv = win.preview_screen
-    assert pv._breath_brush(False, carried=True).style() == pv._breath_brush(False, carried=False).style()
-    solid = pv._breath_brush(True, carried=False)
-    hatched = pv._breath_brush(True, carried=True)
+    assert pv._breath_brush(None, carried=True).style() == pv._breath_brush(None, carried=False).style()
+    solid = pv._breath_brush("excluded", carried=False)
+    hatched = pv._breath_brush("excluded", carried=True)
     assert solid.style() == Qt.SolidPattern
     assert hatched.style() != Qt.SolidPattern
     assert solid.style() != hatched.style()
@@ -1101,11 +1101,11 @@ def test_toggle_breath_recolours_the_shared_span_item_through_the_new_drawing_pa
     breath_no = next(iter(pv._breath_spans))
     item_idx = next(idx for (it, idx) in pv._breath_regions[breath_no] if it is item)
     incl_rgb = item._spans[item_idx][2].color().getRgb()
-    assert incl_rgb == pv._breath_brush(False).color().getRgb()
+    assert incl_rgb == pv._breath_brush(None).color().getRgb()
 
     pv._toggle_breath(breath_no)                    # exclude it
     excl_rgb = item._spans[item_idx][2].color().getRgb()
-    assert excl_rgb == pv._breath_brush(True).color().getRgb()
+    assert excl_rgb == pv._breath_brush("excluded").color().getRgb()
     assert excl_rgb != incl_rgb
 
     pv._toggle_breath(breath_no)                    # re-include it
