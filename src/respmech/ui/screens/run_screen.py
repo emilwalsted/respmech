@@ -66,6 +66,11 @@ _FIX_HINTS = {
                             "(processing.segmentation.separators) against the recording's "
                             "own length, and that they strictly increase — Preview & QC ▸ "
                             "EMG – segments, or the settings file directly.",
+    "ReferenceLinkError": "This file's IC reference could not be resolved (the source "
+                          "file, its typed breaths, or its own breath typing) and "
+                          "processing.lung_volume.require_references is set — fix the "
+                          "reference, or untick 'Require references' to fall back to "
+                          "the softer NaN-plus-notice behaviour instead.",
 }
 
 

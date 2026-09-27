@@ -28,6 +28,7 @@ import pandas as pd
 
 from respmech import __version__
 from respmech.core import quantities as _units
+from respmech.core.analysis import references as referenceslib
 from respmech.core.settings import resolve_noise_reference_mode
 from respmech.core.summary import build_cohort_summary, normalize_emg_table, resolve_emg_reference
 
@@ -155,7 +156,19 @@ def _noise_reference_provenance_value(settings) -> str:
     return _NOISE_REFERENCE_TEXT.get(mode, mode)
 
 
-def _provenance_rows(settings, when, incomplete_note: str | None = None):
+def _ic_reference_provenance_value(used: dict) -> str:
+    """The text for a per-file 'IC reference' Provenance row, from one entry of
+    ``FileResult.references_used`` (``core.analysis.references.attach``'s own shape:
+    ``{'source', 'breaths', 'n', 'value'}``). FVC/max-effort references join this same
+    row family once they have their own consuming column (M-42/M-47) -- the row is
+    named 'IC reference' rather than 'Reference' now so a later 'FVC reference'/'Max
+    reference' row is never mistaken for the same thing."""
+    breaths = ", ".join(str(b) for b in used["breaths"])
+    return f"{used['source']} #{breaths} → {used['n']} accepted, {used['value']:.3g} L"
+
+
+def _provenance_rows(settings, when, incomplete_note: str | None = None,
+                     reference_note: str | None = None):
     ts = (when or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
     ip = settings.input
     rows = [("RespMech version", __version__),
@@ -182,6 +195,12 @@ def _provenance_rows(settings, when, incomplete_note: str | None = None):
         # added when entropy is actually computed (an empty channel list means it is not).
         ent = settings.processing.entropy
         rows.append(("Sample entropy", f"m = {ent.epochs - 1}, r = {ent.tolerance:g} × SD"))
+    if reference_note:
+        # M-35: only present for a file whose IC reference actually resolved -- an
+        # unresolved one is reported as a Quality notice instead (run-report.txt's
+        # DIAGNOSTICS block / FileResult.notices), not here, since there is no
+        # resolved value to show in a Key/Value row.
+        rows.append(("IC reference", reference_note))
     # K-227: a cohort-level workbook (Average breathdata.xlsx, Cohort summary.xlsx) built
     # while some files failed carries nothing else to say so — inserted first so it is
     # the first thing a reader of the Provenance sheet sees, not buried after the routine
@@ -216,7 +235,7 @@ def _autofit(writer):
 
 
 def _write_xlsx(df: pd.DataFrame, path: str, settings=None, when=None, extra_sheets=None,
-                incomplete_note: str | None = None):
+                incomplete_note: str | None = None, reference_note: str | None = None):
     """Write a Data sheet plus Units, any extra sheets, Provenance and Version.
 
     Only the Data sheet content is load-bearing (the golden suite pins the DataFrame,
@@ -227,7 +246,8 @@ def _write_xlsx(df: pd.DataFrame, path: str, settings=None, when=None, extra_she
         for name, edf in (extra_sheets or {}).items():
             edf.to_excel(writer, sheet_name=name, index=False)
         if settings is not None:
-            _provenance_rows(settings, when, incomplete_note=incomplete_note).to_excel(
+            _provenance_rows(settings, when, incomplete_note=incomplete_note,
+                             reference_note=reference_note).to_excel(
                 writer, sheet_name="Provenance", index=False)
         _version_df().to_excel(writer, sheet_name="Version", index=False)
         _autofit(writer)
@@ -307,8 +327,10 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
                     extra["EMG normalised"] = norm
                 if getattr(fr, "manoeuvres_table", None) is not None and len(fr.manoeuvres_table):
                     extra["Manoeuvres"] = fr.manoeuvres_table                                          # M-29
+            ic_used = (getattr(fr, "references_used", None) or {}).get("ic")
+            reference_note = _ic_reference_provenance_value(ic_used) if ic_used else None
             _write_xlsx(data_df, p, settings=settings, when=when, extra_sheets=extra,
-                       incomplete_note=note)
+                       incomplete_note=note, reference_note=reference_note)
             written.append(p)
 
     if settings.output.data.save_processed:
@@ -725,6 +747,29 @@ def _write_run_report(result, settings, outputfolder: str,
         L.append("  Breath types:            " + "; ".join(parts))
     else:
         L.append("  Breath types:            none")
+    # M-35: what this analysis's cross-file reference SETTINGS configure (per-file and
+    # per-group IC/FVC/baseline/max-effort links) -- same "what is configured" register
+    # as Breath-count overrides/Excluded breaths/Breath types above; what actually
+    # RESOLVED for each file is a per-run outcome, reported in the REFERENCE
+    # MANOEUVRES block below instead, the same split DIAGNOSTICS already draws between
+    # this study-wide PROCESSING block and its own per-run numbers.
+    ref_entries = settings.processing.references
+    ref_defaults = settings.processing.reference_defaults
+    if ref_entries or ref_defaults:
+        parts = []
+        for r in ref_entries:
+            links = [f"{slot}={getattr(r, slot).file}" for slot in referenceslib.REFERENCE_SLOTS
+                    if getattr(r, slot) is not None]
+            if links:
+                parts.append(f"{r.file}: " + ", ".join(links))
+        for g in ref_defaults:
+            links = [f"{slot}={getattr(g, slot).file}" for slot in referenceslib.REFERENCE_SLOTS
+                    if getattr(g, slot) is not None]
+            if links:
+                parts.append(f"group {g.group}: " + ", ".join(links))
+        L.append("  Reference manoeuvres:    " + ("; ".join(parts) if parts else "none"))
+    else:
+        L.append("  Reference manoeuvres:    none")
     L.append(f"  PTP baseline window:     {settings.processing.ptp.baseline_window_s:g} s")
     L.append(f"  Work of breathing:       from {_wob_mode_text(settings)}")
     L.append(f"  Cohort grouping:         "
@@ -777,6 +822,42 @@ def _write_run_report(result, settings, outputfolder: str,
             L.append("  Quality notices:")
             for f, n in file_notices:
                 L.append(f"    {f}: {n}")
+        L.append("")
+
+    # M-35: per-RUN reference-resolution outcomes (never study-wide settings -- those
+    # are the PROCESSING block's own 'Reference manoeuvres:' line above). Conditional
+    # on there being anything at all to say: the IC family absent from this analysis
+    # (the overwhelming common case today -- no processing.references/reference_
+    # defaults/typed IC breaths anywhere) and no external source loaded/failed leaves
+    # this block out entirely, same convention as DIAGNOSTICS above.
+    plan = getattr(result, "analysis_plan", None) or {}
+    ic_plan = plan.get("ic") or {}
+    ext_sources = getattr(result, "references", None) or {}
+    ref_errors = getattr(result, "reference_errors", None) or {}
+    if ic_plan.get("family") or ext_sources or ref_errors:
+        L.append("REFERENCE MANOEUVRES")
+        if ext_sources:
+            L.append("  External sources loaded (not part of this run's own file list):")
+            for src, rows in sorted(ext_sources.items()):
+                L.append(f"    {src}: {len(rows)} typed breath{'es' if len(rows) != 1 else ''}")
+        if ic_plan.get("resolved"):
+            L.append("  IC reference resolved:")
+            for f, used in sorted(ic_plan["resolved"].items()):
+                breaths = ", ".join(str(b) for b in used["breaths"])
+                L.append(f"    {f}: {used['source']} #{breaths} → "
+                         f"{used['n']} accepted, {used['value']:.3g} L")
+        if ic_plan.get("unresolved"):
+            L.append("  IC reference NOT resolved (this analysis names an IC "
+                     "reference elsewhere):")
+            for f in sorted(ic_plan["unresolved"]):
+                L.append(f"    {f}")
+        if ref_errors:
+            L.append("  Reference source errors:")
+            for (src, breath), msg in sorted(
+                    ref_errors.items(),
+                    key=lambda kv: (kv[0][0], -1 if kv[0][1] is None else kv[0][1])):
+                where = src if breath is None else f"{src} #{breath}"
+                L.append(f"    {where}: {msg}")
         L.append("")
 
     report_name = "run-report.txt"
