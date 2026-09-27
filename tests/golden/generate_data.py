@@ -223,31 +223,48 @@ def _manoeuvre_breath(*, insp_ramp_n, insp_ramp_flow, insp_plateau_n, insp_plate
     phase boundary — ``inend = i - 1`` is the index of the true last inspiratory sample,
     but ``_phase_dicts`` slices ``volume[instart:inend]``, a Python half-open range that
     EXCLUDES index ``inend`` itself; the mirror-image drop happens at ``exend`` on the
-    expiration side. A smooth curve's true extremum therefore never survives into the
-    breath dict verbatim — only a PLATEAU of >= 2 identical samples at the critical
-    value does. ``insp_plateau_n``/``exp_plateau_n`` (each >= 2 here) are exactly that:
-    a short (tens-of-ms) hold at ``vol_peak`` (a plausible momentary breath-hold at TLC
-    for a real inspiratory-capacity manoeuvre) and at ``vol_base`` (the return to a
-    stable end-expiratory level before the next breath), each at a flow MAGNITUDE small
-    enough (1e-3 L/s, well under ``IcSettings.plateau_flow_lps``'s 0.1 default) to
-    register as a genuine plateau, but with the SIGN needed to keep the sign-walk inside
-    the correct phase (negative throughout inspiration, positive throughout expiration)
-    — the walk is driven by a plain ``flow[i] < 0``/``flow[i] > 0`` test, so this never
-    depends on its forward-window mean.
+    expiration side. Only a phase's LAST sample is ever dropped this way — its FIRST
+    sample (``volume[instart]``/``volume[exstart]``) always survives untouched, since a
+    half-open slice always includes its own start. This asymmetry is why the two
+    plateaus below are not equally load-bearing:
+
+    * ``vol_peak`` (the manoeuvre's peak volume, what ``vol_ic`` reads via
+      ``max(breath['volume'])``) sits at the insp/exp SEAM: it survives bit-exact via
+      the EXPIRATION phase's own leading sample (``np.linspace(vol_peak, vol_base,
+      exp_ramp_n)[0] == vol_peak``, a leading sample that is never dropped) regardless
+      of whether ``insp_plateau_n`` is 0 or not. ``insp_plateau_n`` (a short hold at
+      ``vol_peak``, when present) is therefore a physiological-realism touch — a
+      plausible momentary breath-hold at TLC, and it gives ``manoeuvres.py`` a genuine,
+      non-zero ``ic_plateau_s`` to report — not what makes ``vol_ic`` exact.
+    * ``vol_base`` (the level ``ic_eelv_pre`` reads back OUT of a PRECEDING tidal
+      breath, via that breath's own ``_arr(b['volume'])[-1]`` — its own LAST retained
+      sample) genuinely NEEDS ``exp_plateau_n`` >= 2: without it, the one sample that
+      gets dropped from that breath's own expiration IS its ramp's exact-``vol_base``
+      endpoint, leaving the ramp's second-to-last point (off by one ``linspace``
+      increment, e.g. ~0.5 mL for a tidal breath) as the value ``ic_eelv_pre`` would
+      average over. A plateau of >= 2 identical ``vol_base`` samples survives the drop
+      with at least one copy intact.
+
+    Both plateaus use a flow MAGNITUDE small enough (1e-3 L/s, well under
+    ``IcSettings.plateau_flow_lps``'s 0.1 default) to register as a genuine plateau,
+    but with the SIGN needed to keep the sign-walk inside the correct phase (negative
+    throughout inspiration, positive throughout expiration) — the walk is driven by a
+    plain ``flow[i] < 0``/``flow[i] > 0`` test, so this never depends on its
+    forward-window mean.
 
     This is what lets the golden scenario assert ``vol_ic`` against a bare Python float
-    (``3.0``) to ``abs_tol=1e-9``: the value is not merely "close to" the analytical
-    target, it IS that same double — taken from a >= 1-sample-wide surviving plateau
-    that the CSV round-trip (``%.10g``, ample precision for a round decimal literal like
-    ``3.0``/``0.0``) and the trim/zero/drift-correct chain (a no-op here:
-    ``compute.zero`` subtracts the first trimmed sample, this file's own breath #1
-    onset, which is 0.0; ``compute.correctdrift``'s slope is
+    (``3.0``) and ``ic_eelv_pre`` against ``0.0`` to ``abs_tol=1e-9``: neither value is
+    merely "close to" its analytical target, each IS that same double — surviving via
+    the mechanisms above — and the CSV round-trip (``%.10g``, ample precision for a
+    round decimal literal like ``3.0``/``0.0``) and the trim/zero/drift-correct chain (a
+    no-op here: ``compute.zero`` subtracts the first trimmed sample, this file's own
+    breath #1 onset, which is 0.0; ``compute.correctdrift``'s slope is
     ``(volume[-1] - volume[0]) / n``, exactly 0 because both ends of the WHOLE
-    recording sit on a ``vol_base`` plateau) never perturb.
+    recording sit on a ``vol_base`` plateau) never perturb either.
 
-    ``insp_plateau_n``/``exp_plateau_n`` may be 0 (an ordinary tidal breath, or the
-    FVC breath's inspiration — the actual FVC numerics are a later feature's scope,
-    not this generator's — needs no exact peak).
+    ``insp_plateau_n``/``exp_plateau_n`` may be 0 (an ordinary tidal breath's own peak
+    is never read exactly, and the FVC breath's inspiration — the actual FVC numerics
+    are a later feature's scope, not this generator's — needs no exact peak either).
     """
     insp_n = insp_ramp_n + insp_plateau_n
     exp_n = exp_ramp_n + exp_plateau_n
