@@ -292,6 +292,18 @@ QC strip) and by `respmech validate`, from the same shared logic:
      changelog entry here because the wider modular-analysis feature this belongs to
      is still mid-flight on an integration branch, several tickets from done -->
 
+<!-- changelog-skip ce1fe70 groundwork for the same future modular analysis pipeline:
+     a reduced signal set (flow only, or flow+Poes without Pgas/Pdi) now reaches
+     core/pipeline.py, core/results.py, ui/workers.py's preview staging and
+     core/io/loaders.py end to end -- pipeline/results needed no change of their own
+     (already generic over whatever columns a breath's mechanics dict contains), so
+     this mostly makes an existing "None means absent" contract explicit (a raw
+     diagnostic array is None, not empty, when its channel is absent; a preview
+     series dict omits the key entirely) and fixes a real KeyError this exposed in
+     Preview & QC's Mechanics channel stack for an already-reachable reduced
+     mapping. Golden 5/5 byte-identical; still not written up as a real changelog
+     entry here for the same reason as 3142f25 above -->
+
 <!--
 "Unreleased" above is a hand-maintained draft of the next release's entry. It is
 updated ONLY when explicitly asked to (not automatically on every commit), and it
