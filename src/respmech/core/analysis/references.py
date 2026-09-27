@@ -266,7 +266,7 @@ def external_reference_sources(settings: Settings, files: list[str]) -> list[str
     return sorted(sources - names)
 
 
-def _lookup_manoeuvre(result, filename: str, breath_no: int) -> dict | None:
+def lookup_manoeuvre(result, filename: str, breath_no: int) -> dict | None:
     """The ``core.analysis.manoeuvres.extract()`` result dict for ``(filename,
     breath_no)``, from wherever the batch actually put it -- an in-batch
     ``FileResult.manoeuvres`` (the ordinary main loop, or M-30's reference-only-file
@@ -274,7 +274,13 @@ def _lookup_manoeuvre(result, filename: str, breath_no: int) -> dict | None:
     ``BatchResult.references``. ``None`` when neither has it: the source file itself
     failed (forepass or main-loop error), the breath was never typed at all, or the
     breath number simply does not exist in that file -- all three look identical from
-    here, and all three are the same "could not be resolved" outcome to a caller."""
+    here, and all three are the same "could not be resolved" outcome to a caller.
+
+    Public (M-36): ``core.analysis.lungvol`` reuses this exact lookup for its own
+    ``ic_eelv_pre``/``baseline_ic``/``fvc`` aggregation, and by the time it needs to
+    it already imports :func:`resolve_reference` from this module too -- duplicating
+    this one alongside that import would only risk the two module's lookup logic
+    drifting apart with no test to catch it."""
     fr = result.files.get(filename)
     if fr is not None and fr.error is None:
         row = (fr.manoeuvres or {}).get(breath_no)
@@ -289,7 +295,7 @@ def _lookup_manoeuvre(result, filename: str, breath_no: int) -> dict | None:
 def _aggregate_ic(result, ref: BreathRef, ic_cfg) -> tuple[float | None, int, list[str]]:
     """``(vol_ic_ref, ic_ref_n, notices)`` for one resolved IC :class:`BreathRef` --
     the ``ic_cfg.aggregate`` ('mean'/'median') of ``vol_ic`` over ``ref.breaths`` that
-    both RESOLVE (:func:`_lookup_manoeuvre` finds them) and are not flagged with one of
+    both RESOLVE (:func:`lookup_manoeuvre` finds them) and are not flagged with one of
     ``ic_cfg.reject_flags`` (``LOW_EFFORT`` by default -- the SAME disqualifying rule
     ``manoeuvres.apply_repeatability``'s own leave-one-out group already uses, so a
     rejected attempt never contributes to a reference value any more than it
@@ -308,7 +314,7 @@ def _aggregate_ic(result, ref: BreathRef, ic_cfg) -> tuple[float | None, int, li
     vols: list[float] = []
     notices: list[str] = []
     for b in dict.fromkeys(ref.breaths):
-        row = _lookup_manoeuvre(result, ref.file, b)
+        row = lookup_manoeuvre(result, ref.file, b)
         if row is None:
             notices.append(
                 f"IC reference breath {b} of {ref.file!r} could not be resolved "
