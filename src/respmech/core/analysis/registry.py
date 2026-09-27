@@ -191,9 +191,23 @@ _MANOEUVRES = (
     ColumnSpec(name="rms_max_ref", requires=frozenset({"flow", "emg"}), module="manoeuvres", unit="a.u."),
 )
 
+# Cross-file IC references (core.analysis.references.attach, wired into
+# core.pipeline.run_batch's post-loop pass): `vol_ic_ref` already resolves via
+# `core.quantities._RULES`' generic `vol_` prefix (-> L) before this registry is ever
+# consulted, listed here anyway for documentation completeness, same precedent as
+# _MANOEUVRES above. `ic_ref_n`/`ic_ref_source` are neither a volume nor any other
+# _RULES-matched shape (a bare count and a filename), so their `unit=""` here IS the
+# resolving path -- exactly the same "registry explicitly blank" role
+# `ic_eelv_pre_n` already plays in _MANOEUVRES, not merely documentation.
+_REFERENCE_MANOEUVRES = (
+    ColumnSpec(name="vol_ic_ref", requires=_TIMING, module="references", unit="L"),
+    ColumnSpec(name="ic_ref_n", requires=_TIMING, module="references", unit=""),
+    ColumnSpec(name="ic_ref_source", requires=_TIMING, module="references", unit=""),
+)
+
 #: Every column/family this skeleton knows about. Later tickets append to this,
 #: never remove from or reorder ``LEGACY_MECHANICS_ORDER`` within it.
-REGISTRY = LEGACY_MECHANICS_ORDER + (_ENTROPY, _EMG) + _SEGMENT_EMG + _MANOEUVRES
+REGISTRY = LEGACY_MECHANICS_ORDER + (_ENTROPY, _EMG) + _SEGMENT_EMG + _MANOEUVRES + _REFERENCE_MANOEUVRES
 
 # The Capabilities boolean fields resolve() is willing to read. Kept as an
 # explicit tuple (rather than e.g. dataclasses.fields(caps)) so a caller could

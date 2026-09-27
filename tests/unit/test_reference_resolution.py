@@ -1,11 +1,19 @@
-"""``core.analysis.references``: resolution order and ``check_links`` cautions.
+"""``core.analysis.references``: resolution order, ``check_links`` cautions, and (M-35)
+the forepass/afterpass that wires cross-file references into ``core.pipeline.run_batch``.
 
-Pure, Qt-free — no file I/O, no ``core.compute``. See that module's own docstring for
-the exact resolution order and caution kinds this pins.
+``resolve_reference``/``check_links``/``external_reference_sources`` and the ``attach()``
+tests built on hand-constructed ``FileResult``/``BatchResult`` objects are pure, Qt-free
+and do no file I/O of their own (``core.pipeline`` is imported only for its plain
+dataclasses — no ``segment_file``/``run_batch`` call in that section touches a real
+recording). The forepass/subset-equivalence acceptance tests at the end of this file DO
+run the real pipeline over the committed synthetic recordings (``requires_synth()``-
+gated, same convention as ``test_core_outputs.py``) — see that section's own header.
 """
 import pytest
 
-from respmech.core.analysis.references import REFERENCE_SLOTS, check_links, resolve_reference
+from respmech.core.analysis.references import (
+    REFERENCE_SLOTS, ReferenceLinkError, attach, check_links, external_reference_sources,
+    resolve_reference)
 from respmech.core.settings import (
     BreathRef, BreathTypeEntry, ExcludeEntry, GroupReferenceEntry, ReferenceEntry, Settings,
     SubjectEntry)
@@ -314,3 +322,302 @@ def test_references_and_subjects_never_reach_to_legacy_ns():
         assert name not in ns_fields, (
             f"to_legacy_ns must never carry {name!r} -- referenced breaths are never "
             "sent into core.compute")
+
+
+# --------------------------------------------------------------------------- #
+# M-35: external_reference_sources (pure, no file I/O)
+# --------------------------------------------------------------------------- #
+
+def test_external_reference_sources_excludes_files_already_in_the_batch():
+    s = _settings()
+    s.processing.references.append(ReferenceEntry(
+        file="B.csv", ic=BreathRef(file="A_ic.csv", breaths=[4])))
+    s.processing.reference_defaults.append(GroupReferenceEntry(
+        group="P03", fvc=BreathRef(file="P03_fvc.csv", breaths=[1])))
+    assert external_reference_sources(s, ["B.csv", "A_ic.csv"]) == ["P03_fvc.csv"]
+
+
+def test_external_reference_sources_is_sorted_and_deduplicated():
+    s = _settings()
+    s.processing.references.append(ReferenceEntry(
+        file="B.csv", ic=BreathRef(file="shared.csv", breaths=[4]),
+        fvc=BreathRef(file="shared.csv", breaths=[7])))
+    assert external_reference_sources(s, ["B.csv"]) == ["shared.csv"]
+
+
+def test_external_reference_sources_empty_when_nothing_configured():
+    s = _settings()
+    assert external_reference_sources(s, ["A.csv", "B.csv"]) == []
+
+
+# --------------------------------------------------------------------------- #
+# M-35: attach() -- pure, hand-built FileResult/BatchResult, no file I/O
+# --------------------------------------------------------------------------- #
+
+def _manoeuvre_row(vol_ic, quality=None):
+    return {"kind": "ic", "vol_ic": vol_ic, "quality": list(quality or [])}
+
+
+def _fake_table(n_rows, columns=("vt",)):
+    import pandas as pd
+    return pd.DataFrame([{c: 0.0 for c in columns} for _ in range(n_rows)])
+
+
+def _file_result(*, role="tidal", manoeuvres=None, breaths_n=3, error=None):
+    from respmech.core.pipeline import FileResult
+    tidal_ok = role == "tidal" and error is None
+    return FileResult(
+        file="x", role=role, manoeuvres=manoeuvres or {}, error=error,
+        breaths_table=_fake_table(breaths_n) if tidal_ok else None,
+        average_row=_fake_table(1) if tidal_ok else None)
+
+
+def _batch_result(files_dict, references=None, reference_errors=None):
+    from respmech.core.pipeline import BatchResult
+    br = BatchResult()
+    br.files = files_dict
+    br.references = references or {}
+    br.reference_errors = reference_errors or {}
+    return br
+
+
+def test_attach_is_a_no_op_when_no_ic_reference_exists_anywhere():
+    s = _settings()
+    a = _file_result()
+    result = _batch_result({"A.csv": a})
+    attach(result, s, ["A.csv"])
+    assert "vol_ic_ref" not in a.breaths_table.columns
+    assert result.analysis_plan == {"ic": {"family": False, "resolved": {}, "unresolved": []}}
+
+
+def test_attach_resolves_own_typed_ic_and_computes_mean_aggregate():
+    s = _settings()
+    s.processing.breath_types.append(BreathTypeEntry(file="A.csv", breath=4, kind="ic"))
+    s.processing.breath_types.append(BreathTypeEntry(file="A.csv", breath=9, kind="ic"))
+    a = _file_result(manoeuvres={4: _manoeuvre_row(3.0), 9: _manoeuvre_row(5.0)})
+    result = _batch_result({"A.csv": a})
+    attach(result, s, ["A.csv"])
+    assert list(a.breaths_table["vol_ic_ref"]) == [4.0, 4.0, 4.0]        # mean(3.0, 5.0)
+    assert list(a.breaths_table["ic_ref_n"]) == [2.0, 2.0, 2.0]
+    assert list(a.breaths_table["ic_ref_source"]) == ["A.csv"] * 3
+    assert a.average_row["vol_ic_ref"].iloc[0] == pytest.approx(4.0)
+    assert a.average_row["ic_ref_n"].iloc[0] == pytest.approx(2.0)
+    assert a.average_row["ic_ref_source"].iloc[0] == "A.csv"
+    assert a.references_used["ic"] == {
+        "source": "A.csv", "breaths": [4, 9], "n": 2, "value": 4.0}
+    assert result.analysis_plan["ic"]["resolved"]["A.csv"]["value"] == pytest.approx(4.0)
+    # Columns are appended, never inserted before an existing one:
+    assert list(a.breaths_table.columns)[:1] == ["vt"]
+
+
+def test_attach_excludes_reject_flagged_breaths_from_the_aggregate():
+    s = _settings()
+    s.processing.breath_types.append(BreathTypeEntry(file="A.csv", breath=4, kind="ic"))
+    s.processing.breath_types.append(BreathTypeEntry(file="A.csv", breath=9, kind="ic"))
+    a = _file_result(manoeuvres={
+        4: _manoeuvre_row(3.0, quality=["LOW_EFFORT"]),
+        9: _manoeuvre_row(5.0)})
+    result = _batch_result({"A.csv": a})
+    attach(result, s, ["A.csv"])
+    assert a.average_row["vol_ic_ref"].iloc[0] == pytest.approx(5.0)   # LOW_EFFORT excluded
+    assert a.average_row["ic_ref_n"].iloc[0] == pytest.approx(1.0)
+
+
+def test_attach_uses_median_aggregate_when_configured():
+    s = _settings()
+    s.processing.lung_volume.ic.aggregate = "median"
+    for b in (4, 9, 14):
+        s.processing.breath_types.append(BreathTypeEntry(file="A.csv", breath=b, kind="ic"))
+    a = _file_result(manoeuvres={
+        4: _manoeuvre_row(1.0), 9: _manoeuvre_row(2.0), 14: _manoeuvre_row(100.0)})
+    result = _batch_result({"A.csv": a})
+    attach(result, s, ["A.csv"])
+    assert a.average_row["vol_ic_ref"].iloc[0] == pytest.approx(2.0)   # median, not mean
+
+
+def test_attach_nans_and_notices_a_file_with_no_reference_when_family_present():
+    s = _settings()
+    s.processing.breath_types.append(BreathTypeEntry(file="A.csv", breath=4, kind="ic"))
+    a = _file_result(manoeuvres={4: _manoeuvre_row(3.0)})
+    b = _file_result(manoeuvres={})
+    result = _batch_result({"A.csv": a, "B.csv": b})
+    attach(result, s, ["A.csv", "B.csv"])
+    assert a.average_row["vol_ic_ref"].iloc[0] == pytest.approx(3.0)
+    assert b.average_row["vol_ic_ref"].isna().iloc[0]
+    assert b.average_row["ic_ref_n"].isna().iloc[0]
+    assert b.notices and "no IC reference resolves" in b.notices[-1]
+    assert b.error is None                          # soft: the file itself stays OK
+    assert "B.csv" in result.analysis_plan["ic"]["unresolved"]
+
+
+def test_attach_skips_a_reference_only_file():
+    s = _settings()
+    s.processing.breath_types.append(BreathTypeEntry(file="A.csv", breath=4, kind="ic"))
+    a = _file_result(manoeuvres={4: _manoeuvre_row(3.0)})
+    ref_only = _file_result(role="reference", manoeuvres={1: _manoeuvre_row(9.0)})
+    result = _batch_result({"A.csv": a, "R.csv": ref_only})
+    attach(result, s, ["A.csv", "R.csv"])
+    assert "R.csv" not in result.analysis_plan["ic"]["resolved"]
+    assert "R.csv" not in result.analysis_plan["ic"]["unresolved"]
+
+
+def test_attach_reads_an_external_forepass_source_via_result_references():
+    s = _settings()
+    s.processing.references.append(ReferenceEntry(
+        file="A.csv", ic=BreathRef(file="EXT.csv", breaths=[4])))
+    a = _file_result(manoeuvres={})
+    result = _batch_result({"A.csv": a}, references={"EXT.csv": {4: _manoeuvre_row(7.5)}})
+    attach(result, s, ["A.csv"])
+    assert a.average_row["vol_ic_ref"].iloc[0] == pytest.approx(7.5)
+    assert a.references_used["ic"]["source"] == "EXT.csv"
+
+
+def test_attach_nans_and_notices_when_the_external_source_failed_entirely():
+    s = _settings()
+    s.processing.references.append(ReferenceEntry(
+        file="A.csv", ic=BreathRef(file="EXT.csv", breaths=[4])))
+    a = _file_result(manoeuvres={})
+    result = _batch_result(
+        {"A.csv": a}, references={}, reference_errors={("EXT.csv", None): "FileNotFoundError: x"})
+    attach(result, s, ["A.csv"])
+    assert a.average_row["vol_ic_ref"].isna().iloc[0]
+    assert a.notices
+    assert a.error is None                           # soft by default
+
+
+def test_attach_ignores_manoeuvres_on_a_source_file_that_itself_failed():
+    s = _settings()
+    s.processing.references.append(ReferenceEntry(
+        file="B.csv", ic=BreathRef(file="A.csv", breaths=[4])))
+    a = _file_result(manoeuvres={4: _manoeuvre_row(3.0)}, error="TrimError: boom")
+    a.error_kind = "TrimError"
+    b = _file_result(manoeuvres={})
+    result = _batch_result({"A.csv": a, "B.csv": b})
+    attach(result, s, ["A.csv", "B.csv"])
+    assert b.average_row["vol_ic_ref"].isna().iloc[0]
+
+
+def test_attach_demotes_a_file_to_failed_when_require_references_is_set():
+    s = _settings()
+    s.processing.breath_types.append(BreathTypeEntry(file="A.csv", breath=4, kind="ic"))
+    s.processing.lung_volume.require_references = True
+    a = _file_result(manoeuvres={4: _manoeuvre_row(3.0)})
+    b = _file_result(manoeuvres={})
+    result = _batch_result({"A.csv": a, "B.csv": b})
+    attach(result, s, ["A.csv", "B.csv"])
+    assert b.error is not None
+    assert b.error_kind == "ReferenceLinkError"
+    assert a.error is None
+    assert "A.csv" in result.ok_files
+    assert "B.csv" not in result.ok_files
+
+
+def test_reference_link_error_is_importable_and_a_value_error():
+    assert issubclass(ReferenceLinkError, ValueError)
+
+
+# --------------------------------------------------------------------------- #
+# M-35: forepass + subset/full-run equivalence -- real pipeline over the
+# committed synthetic recordings (requires_synth(), same convention as
+# test_core_outputs.py). Individually @requires_synth()-decorated rather than a
+# file-wide pytestmark, since every test above this section needs no synthetic
+# input at all and must keep running without it.
+# --------------------------------------------------------------------------- #
+from _helpers import requires_synth, synth_settings                        # noqa: E402
+
+
+@requires_synth()
+def test_forepass_loads_an_out_of_batch_reference_source_and_attach_uses_it(tmp_path):
+    """synth_case_B.csv's IC reference names synth_manoeuvre_A.csv -- a DIFFERENT file
+    synth_case_*.csv's own glob never matches -- so the forepass must load and segment
+    it separately, and attach() must find its manoeuvre there. vol_ic == 3.0 is the
+    same literal analytical constant the typed_ic_fvc_same_file golden scenario itself
+    pins for this exact breath (see that scenario's own dedicated test)."""
+    from respmech.core.pipeline import run_batch
+
+    s = synth_settings(str(tmp_path))
+    # The reference LINK alone does not type the breath -- typing and linking are
+    # separate settings tables (core.settings.BreathTypeEntry vs. ReferenceEntry); the
+    # source file's own breath 4 must be typed 'ic' for manoeuvres.extract() to
+    # produce a vol_ic value for it at all, exactly as it would for an in-batch file.
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_manoeuvre_A.csv", breath=4, kind="ic"))
+    s.processing.references.append(ReferenceEntry(
+        file="synth_case_B.csv", ic=BreathRef(file="synth_manoeuvre_A.csv", breaths=[4])))
+    s.validate()
+
+    result = run_batch(s)
+
+    assert "synth_manoeuvre_A.csv" in result.references
+    assert 4 in result.references["synth_manoeuvre_A.csv"]
+    b = result.files["synth_case_B.csv"]
+    assert b.average_row["vol_ic_ref"].iloc[0] == pytest.approx(3.0)
+    assert b.average_row["ic_ref_n"].iloc[0] == pytest.approx(1.0)
+    assert b.references_used["ic"]["source"] == "synth_manoeuvre_A.csv"
+
+
+@requires_synth()
+def test_subset_run_reference_row_equals_full_run_row(tmp_path):
+    """Acceptance criterion: a subset run whose IC source lies OUTSIDE the subset (but
+    IS one of the batch's own matched files) gives the SAME reference row as a full
+    run -- the forepass picks the source up regardless of only_files."""
+    from respmech.core.pipeline import run_batch
+
+    s = synth_settings(str(tmp_path))
+    s.processing.breath_types.append(BreathTypeEntry(file="synth_case_A.csv", breath=4, kind="ic"))
+    s.processing.references.append(ReferenceEntry(
+        file="synth_case_B.csv", ic=BreathRef(file="synth_case_A.csv", breaths=[4])))
+    s.validate()
+
+    full = run_batch(s)
+    subset = run_batch(s, only_files=["synth_case_B.csv"])
+
+    b_full, b_subset = full.files["synth_case_B.csv"].average_row, subset.files["synth_case_B.csv"].average_row
+    assert b_subset["vol_ic_ref"].iloc[0] == pytest.approx(b_full["vol_ic_ref"].iloc[0])
+    assert b_subset["ic_ref_n"].iloc[0] == b_full["ic_ref_n"].iloc[0]
+    assert b_subset["ic_ref_source"].iloc[0] == b_full["ic_ref_source"].iloc[0]
+    # The forepass really did the work in the subset run (A is not in `files` there):
+    assert "synth_case_A.csv" in subset.references
+
+
+@requires_synth()
+def test_subset_write_has_the_same_columns_as_the_full_run(tmp_path):
+    """Acceptance criterion: the written column SET is identical between a subset and a
+    full run -- the IC family is decided from settings across allfiles, never from
+    what this particular run happened to resolve."""
+    from respmech.core.pipeline import run_batch
+
+    s = synth_settings(str(tmp_path))
+    s.processing.breath_types.append(BreathTypeEntry(file="synth_case_A.csv", breath=4, kind="ic"))
+    s.processing.references.append(ReferenceEntry(
+        file="synth_case_B.csv", ic=BreathRef(file="synth_case_A.csv", breaths=[4])))
+    s.validate()
+
+    full = run_batch(s)
+    subset = run_batch(s, only_files=["synth_case_B.csv"])
+
+    full_cols = set(full.files["synth_case_B.csv"].average_row.columns)
+    subset_cols = set(subset.files["synth_case_B.csv"].average_row.columns)
+    assert full_cols == subset_cols
+    assert {"vol_ic_ref", "ic_ref_n", "ic_ref_source"} <= full_cols
+
+
+@requires_synth()
+def test_a_failing_external_reference_source_is_soft_and_the_batch_continues(tmp_path):
+    """A reference source that does not exist on disk at all registers a forepass
+    error and NaNs its dependent's columns -- the batch itself must still complete
+    (the whole point of the soft-by-default policy)."""
+    from respmech.core.pipeline import run_batch
+
+    s = synth_settings(str(tmp_path))
+    s.processing.references.append(ReferenceEntry(
+        file="synth_case_A.csv", ic=BreathRef(file="does_not_exist.csv", breaths=[1])))
+    s.validate()
+
+    result = run_batch(s)
+
+    assert ("does_not_exist.csv", None) in result.reference_errors
+    a = result.files["synth_case_A.csv"]
+    assert a.error is None                            # soft: the file itself still succeeds
+    assert a.average_row["vol_ic_ref"].isna().iloc[0]
+    assert a.notices
