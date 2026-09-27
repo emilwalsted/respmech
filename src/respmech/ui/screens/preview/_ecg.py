@@ -297,7 +297,7 @@ class _EcgMixin:
             # no EMG channel assigned. It is reachable live, not just from a file — clearing
             # the EMG role in Setup's "Assign channels from data…" leaves the flag set, and
             # the two controls that could clear it are on this tab, which
-            # _update_emg_tab_visibility removes precisely when there are no EMG channels.
+            # _update_subtabs removes precisely when there are no EMG channels.
             # The app did name the way out (Setup's status bar reads "Auto-detect ECG needs
             # an EMG channel assigned"), but telling the user to go and re-do something the
             # app can resolve itself is not the same as resolving it: auto-detect is a

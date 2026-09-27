@@ -252,7 +252,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
 
         self.subtabs = QTabWidget()
         # Each page is wrapped in a scroll area, and it is the WRAPPER that goes into the tab
-        # widget — so _update_emg_tab_visibility's indexOf/insertTab/removeTab keep working on
+        # widget — so _update_subtabs's indexOf/insertTab/removeTab keep working on
         # the same objects. ``.widget()`` on any of these gives the page content back.
         self._mech_page = self._build_mech_tab()
         self._ecg_page = self._build_ecg_tab()     # inserted between Mechanics + noise when EMG cols exist
@@ -373,7 +373,10 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._refresh_ecg_channels()
         self._load_noise_params()            # this already refreshes the band (D07) — no
         self._load_ecg_params()               # file is selected yet here, so it stays hidden;
-        self._update_emg_tab_visibility()     # the OLD unconditional _ensure_noise_region()
+        self._update_subtabs()     # the OLD unconditional _ensure_noise_region()
+        # M-17 (R7): name the Campbell/flow-volume panel and its export button for the
+        # signal set this analysis actually opened with, not the construction-time default.
+        self._update_campbell_panel_title()
         # call that used to sit here bypassed that and always showed reference_intervals[0]
         # regardless of which file refresh_files() (below) was about to select — found in
         # review: a fresh construction could paint the wrong file's span for one frame.
@@ -679,7 +682,9 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             QTimer.singleShot(0, self._announce_ecg_auto_repair)
         if self._noise_repaired:
             QTimer.singleShot(0, self._announce_noise_repair)
-        self._update_emg_tab_visibility()
+        self._update_subtabs()
+        self._update_campbell_panel_title()   # M-17 (R7): follows a signal-set change too
+        self._update_mech_stack_floor()       # M-17 (R7): follows a channel-count change too
         self._sync_rail_exclusions()   # a loaded analysis file can bring its own exclusions
         self._update_actions()
         # Dependency-scoped invalidation: diff the settings against the last-synced snapshot
@@ -961,7 +966,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         ok, why = self._settings_ok()
         if not ok:
             # Blank the traces, not just the spinners. Unlike the EMG sub-tabs — which
-            # _update_emg_tab_visibility removes outright — the Mechanics tab is always
+            # _update_subtabs removes outright — the Mechanics tab is always
             # present, and sync_from_settings does not clear panels. So clearing the channel
             # mapping after a preview left the previous mapping's plots on screen, looking
             # like a current result for settings that can no longer produce one.
