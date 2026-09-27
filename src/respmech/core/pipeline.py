@@ -114,6 +114,22 @@ def _resample_channels(data, fs_in, fs_out):
             rs(ent) if len(ent) else ent, rs(emg) if len(emg) else emg)
 
 
+def _first_present_length(*arrays) -> int:
+    """The sample count of the first non-empty array among ``arrays`` — used to build a
+    raw time axis without assuming any one particular channel (conventionally flow) is
+    present. Every channel in a valid recording shares one sample count, so whichever
+    non-empty one is checked first gives the same answer; the generality exists for the
+    day flow itself can be absent (M-21's EMG-only segmentation, which needs a raw time
+    axis before any flow-based trim/segment step runs), not because it changes anything
+    for today's E2 scope: flow is always present there, so it is always the first
+    non-empty argument, and this always resolves to the same answer as before."""
+    for arr in arrays:
+        n = len(arr)
+        if n > 0:
+            return n
+    return 0
+
+
 def _load(path, s):
     """Load a file, then (only when a pre-analysis resample is active) resample every
     channel from the file's true rate to the analysis rate. ``load`` integrates volume
@@ -392,7 +408,8 @@ def segment_file(settings: Settings, s, path, *, cache=None, cancel_check=None,
             ecg_precomputed = (_ecg_full, _ecg_diag_full)
     else:
         flowraw, volumeraw, poesraw, pgasraw, pdiraw, entropycolumnsraw, emgcolumnsraw = _load(path, s)
-    timecolraw = np.arange(0, len(flowraw), dtype=int) / s.input.format.samplingfrequency
+    n_raw = _first_present_length(flowraw, volumeraw, poesraw, pgasraw, pdiraw, emgcolumnsraw)
+    timecolraw = np.arange(0, n_raw, dtype=int) / s.input.format.samplingfrequency
 
     _emit(progress, ProgressEvent("stage", file=filename, message="trimming"))
     (timecol, flow, volume, poes, pgas, pdi, _emgtrim, startix, endix) = compute.trim(
@@ -848,8 +865,15 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                     "drift_on": bool(s.processing.mechanics.correctvolumedrift),
                     "trend_on": bool(s.processing.mechanics.correctvolumetrend),
                     "raw_time": np.asarray(timecolraw, float), "raw_flow": np.asarray(flowraw, float),
-                    "raw_volume": np.asarray(volumeraw, float), "raw_poes": np.asarray(poesraw, float),
-                    "raw_pgas": np.asarray(pgasraw, float), "raw_pdi": np.asarray(pdiraw, float),
+                    "raw_volume": np.asarray(volumeraw, float),
+                    # An absent pressure channel (caps.poes/pgas/pdi False) is None here, not an
+                    # empty array — R1's "documented absence, not a hidden empty/NaN" principle.
+                    # A future plots/plan consumer (M-16, out of scope here) needs its own guard
+                    # for None; every existing (full-channel) consumer sees an array unchanged,
+                    # since caps.poes/pgas/pdi are always True on that path.
+                    "raw_poes": np.asarray(poesraw, float) if s.capabilities.poes else None,
+                    "raw_pgas": np.asarray(pgasraw, float) if s.capabilities.pgas else None,
+                    "raw_pdi": np.asarray(pdiraw, float) if s.capabilities.pdi else None,
                     "emg_stages": emg_stages, "emg_peaks": emg_peaks,
                     "emg_cols": list(s.input.data.columns_emg),
                 }
