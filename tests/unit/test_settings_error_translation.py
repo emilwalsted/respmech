@@ -11,7 +11,8 @@ import re
 
 import pytest
 
-from respmech.core.settings import BreathTypeEntry, ExcludeEntry, Settings, SettingsError
+from respmech.core.settings import (
+    BreathTypeEntry, ExcludeEntry, SeparatorEntry, Settings, SettingsError)
 from respmech.ui.validation import blockers, friendly_settings_error
 
 #: what every SettingsError message's technical key looks like — the same pattern
@@ -119,6 +120,18 @@ _CASES = [
      lambda s: (setattr(s.processing.emg, "remove_ecg", True),
                setattr(s.processing.emg, "ecg_auto_detect", True)),
      ["ecg", "emg"]),
+    ("emg-only noise reduction is not yet supported",
+     lambda s: (setattr(s.input.channels, "flow", None),
+               setattr(s.input.channels, "poes", None),
+               setattr(s.input.channels, "pgas", None),
+               setattr(s.input.channels, "pdi", None),
+               setattr(s.input.channels, "volume", None),
+               setattr(s.input.channels, "emg", [2]),
+               s.analysis.signals.append("emg"),
+               setattr(s.processing.segmentation, "method", "whole_file"),
+               setattr(s.processing.emg, "remove_ecg", True),
+               setattr(s.processing.emg.noise, "enabled", True)),
+     ["emg-only"]),
     ("trend prominence out of range",
      lambda s: (setattr(s.processing.volume, "correct_trend", True),
                setattr(s.processing.volume, "trend_peak_min_prominence_frac", 1.5)),
@@ -166,6 +179,28 @@ _CASES = [
                s.processing.breath_types.append(
                     BreathTypeEntry(file="x.txt", breath=2, kind="rest"))),
      ["whole-file", "manual separators"]),
+    # SeparatorEntry's own form checks (a separator time not strictly increasing).
+    ("a separator entry's times_s is not strictly increasing",
+     lambda s: s.processing.segmentation.separators.append(
+         SeparatorEntry(file="x.txt", times_s=[5.0, 3.0])),
+     ["separator"]),
+    ("a separator entry's times_s contains a negative time",
+     lambda s: s.processing.segmentation.separators.append(
+         SeparatorEntry(file="x.txt", times_s=[-1.0, 3.0])),
+     ["separator"]),
+    ("a separator entry's times_s contains NaN",
+     lambda s: s.processing.segmentation.separators.append(
+         SeparatorEntry(file="x.txt", times_s=[1.0, float("nan")])),
+     ["separator"]),
+    ("a separator entry is not even a table",
+     lambda s: s.processing.segmentation.separators.append(1),
+     ["separator"]),
+    ("a separator entry is duplicated for the same file",
+     lambda s: (s.processing.segmentation.separators.append(
+                    SeparatorEntry(file="x.txt", times_s=[1.0])),
+               s.processing.segmentation.separators.append(
+                    SeparatorEntry(file="x.txt", times_s=[2.0]))),
+     ["separator", "duplicat"]),
 ]
 
 

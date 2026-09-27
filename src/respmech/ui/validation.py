@@ -128,6 +128,17 @@ _BREATH_TYPE_CONFLICT_RE = re.compile(
 _BREATH_TYPE_WHOLE_FILE_RE = re.compile(
     r"^processing\.breath_types: breath (\d+) > 1 is impossible under whole_file "
     r"segmentation$")
+#: SeparatorEntry's own three "malformed"/"conflict" messages — the two form checks
+#: share one translation (both point at the same fix: Preview & QC's segments tab,
+#: not yet built when this ticket lands — same forward-reference precedent as
+#: ``_SIGNAL_SET_CHANGE_LOCATION`` above); the duplicate-file conflict gets its own,
+#: since it names no field to correct, just an entry to remove.
+_SEPARATOR_ENTRY_FORM_RE = re.compile(
+    r"^processing\.segmentation\.separators\[\d+\](?: must be a table with file and "
+    r"times_s|\.times_s must be (?:a list of numbers|non-negative and strictly "
+    r"increasing))$")
+_SEPARATOR_ENTRY_DUPLICATE_RE = re.compile(
+    r"^processing\.segmentation\.separators: .+ has more than one entry$")
 #: a single-channel-role "is required" message, with an OPTIONAL " by analysis.signals"
 #: suffix (R7): the suffix means the role was named in an EXPLICIT ``analysis.signals``
 #: list (so the fix can also be "remove it from the signal set"); its absence means the
@@ -194,6 +205,11 @@ def friendly_settings_error(exc, settings=None) -> str:
     if _BREATH_TYPE_WHOLE_FILE_RE.match(msg):
         return ("Whole-file mode has one segment: retype the file or choose Manual "
                 "separators (Setup ▸ Signals)")
+    if _SEPARATOR_ENTRY_FORM_RE.match(msg):
+        return ("Separator times must increase along the recording (Preview & QC ▸ "
+                "EMG – segments)")
+    if _SEPARATOR_ENTRY_DUPLICATE_RE.match(msg):
+        return "A separator entry is duplicated — keep one"
     return _DOTTED_KEY_RE.sub("a setting", msg)
 
 

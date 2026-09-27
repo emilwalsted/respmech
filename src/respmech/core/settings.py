@@ -14,6 +14,7 @@ The dataclasses mirror the TOML schema (``schema_version = 1``). ``from_dict`` i
 tolerant (unknown keys are collected, not fatal) and ``validate`` raises
 ``SettingsError`` with a clear message.
 """
+import math
 import os
 import types
 from dataclasses import dataclass, field, fields, is_dataclass
@@ -95,10 +96,34 @@ class PeakSettings:
 
 
 @dataclass
+class SeparatorEntry:
+    """One file's manual segment boundaries for the ``separators`` EMG-only
+    segmentation method: N times split the recording into N+1 segments, numbered
+    from 1 (0 separators is the same as ``whole_file``, just reached via this
+    explicit method instead). ``times_s`` are absolute seconds into the recording,
+    measured from its own start (the same clock ``breath['time']`` already uses
+    elsewhere), and must be strictly increasing and non-negative — enforced by
+    ``Settings.validate()``, not here, so a malformed entry is reported the same
+    way every other settings error is (a ``SettingsError``, never a raw exception).
+
+    ``folder`` is the same carried-over-state provenance tag as ``ExcludeEntry.
+    folder``/``BreathTypeEntry.folder`` -- see ``_CARRIED_KINDS`` below, which is
+    what actually wires rebase/relativize/carried/clear for this field.
+    """
+    file: str
+    times_s: list[float] = field(default_factory=list)
+    folder: str | None = None
+
+
+@dataclass
 class SegmentationSettings:
-    method: str = "flow"                 # "flow" | "volume"
+    method: str = "flow"                 # "flow" | "volume" | "whole_file" | "separators"
     buffer: int = 800
     peak: PeakSettings = field(default_factory=PeakSettings)
+    # Manual segment boundaries for the "separators" EMG-only method (one entry per
+    # file; a file with no entry here under "separators" is treated as whole_file --
+    # 0 separators is a legal, explicit way to say "one segment").
+    separators: list[SeparatorEntry] = field(default_factory=list)
     # K-035 boundary-truncation quality notice (compute.trim_boundary_notices): how much
     # shorter than the file's own median a boundary breath's phase must be before it is
     # flagged as likely truncated by trim(). 0.8 was measured, not guessed (see that
@@ -487,6 +512,43 @@ class Settings:
                 "processing.segmentation.boundary_notice_min_other_breaths must be a "
                 "positive integer")
 
+        # SeparatorEntry (EMG-only "separators" segmentation): form first (every time
+        # non-negative and strictly increasing along the recording), THEN the one
+        # cross-entry conflict (two entries for the same file) -- same two-pass shape
+        # as the breath_types checks below, for the same reason: a malformed entry is
+        # reported on its own terms rather than tripping a conflict check that assumes
+        # well-formed data.
+        for i, se in enumerate(seg.separators):
+            if not isinstance(se, SeparatorEntry):
+                raise SettingsError(
+                    f"processing.segmentation.separators[{i}] must be a table with "
+                    "file and times_s")
+            times = se.times_s
+            # math.isfinite rejects NaN/Inf too -- both ARE instances of float (so the
+            # type check alone lets them through) but neither compares meaningfully
+            # against 0 or a neighbour (NaN compares False to everything; Inf reads as
+            # "increasing" relative to any finite predecessor), so without this a
+            # malformed TOML `times_s = [1.0, nan, 3.0]` (TOML has nan/inf literals)
+            # silently passed validate() and only surfaced later as a bare, untranslated
+            # ValueError/OverflowError from int(round(t * fs)) in core.analysis.segments.
+            if not isinstance(times, list) or any(
+                    isinstance(t, bool) or not isinstance(t, (int, float))
+                    or not math.isfinite(t) for t in times):
+                raise SettingsError(
+                    f"processing.segmentation.separators[{i}].times_s must be a list "
+                    "of numbers")
+            if any(t < 0 for t in times) or any(b <= a for a, b in zip(times, times[1:])):
+                raise SettingsError(
+                    f"processing.segmentation.separators[{i}].times_s must be "
+                    "non-negative and strictly increasing")
+        seen_separator_files: set[str] = set()
+        for se in seg.separators:
+            if se.file in seen_separator_files:
+                raise SettingsError(
+                    f"processing.segmentation.separators: {se.file} has more than one "
+                    "entry")
+            seen_separator_files.add(se.file)
+
         if self.processing.wob.calc_from not in ("average", "individual"):
             raise SettingsError("processing.wob.calc_from must be 'average' or 'individual'")
         if not isinstance(self.processing.wob.avg_resampling_obs, int):
@@ -539,6 +601,19 @@ class Settings:
                 "processing.emg.noise.enabled requires processing.emg.remove_ecg "
                 "to be enabled (noise reduction would otherwise treat the heartbeat "
                 "as steady background noise)")
+
+        # EMG-only noise reduction needs its own reference-resolution rule (a rest-typed
+        # segment, or an interburst clip) -- not yet built. Without this guard,
+        # core.pipeline._build_noise_set/_emg_segmented hardcode flow-based breath
+        # segmentation regardless of processing.segmentation.method, so an EMG-only
+        # analysis with noise reduction on reaches an unguarded `TrimError` deep in the
+        # noise-profile-building pre-pass and kills the WHOLE BATCH before a single file
+        # is processed -- not the clean, per-file, named error every other EMG-only
+        # misconfiguration in this method already gets.
+        if emg.noise.enabled and "flow" not in declared and "emg" in declared:
+            raise SettingsError(
+                "processing.emg.noise.enabled is not yet supported for an EMG-only "
+                "signal set (no flow channel) -- turn it off, or add a flow channel")
 
         v = self.processing.volume
         if v.correct_trend:
@@ -736,6 +811,12 @@ _CARRIED_KINDS: tuple[tuple[str, str, Callable[[Any], Any], Callable[[Any], None
     # required field, never optional the way ExcludeEntry.breaths can be empty), so
     # unlike exclude_files' `if e.breaths` guard, every entry here is worth reporting.
     ("processing.breath_types", "breath_type_files",
+     lambda e: e.file, None),
+    # A separator entry always names a file worth reporting once it exists at all --
+    # even zero times_s is a deliberate, explicit "one segment" choice via this
+    # method (unlike exclude_files' `if e.breaths` guard for an entry that could
+    # otherwise be a no-op left behind by the UI).
+    ("processing.segmentation.separators", "separator_files",
      lambda e: e.file, None),
 )
 

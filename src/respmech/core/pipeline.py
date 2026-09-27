@@ -21,6 +21,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import warnings
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -28,6 +29,7 @@ import numpy as np
 
 from respmech.core import compute
 from respmech.core import emg as emglib
+from respmech.core.analysis.signals import Capabilities
 from respmech.core.io.loaders import load
 from respmech.core.results import build_breath_table, build_processed_data
 from respmech.core.settings import Settings
@@ -411,13 +413,26 @@ def segment_file(settings: Settings, s, path, *, cache=None, cancel_check=None,
     n_raw = _first_present_length(flowraw, volumeraw, poesraw, pgasraw, pdiraw, emgcolumnsraw)
     timecolraw = np.arange(0, n_raw, dtype=int) / s.input.format.samplingfrequency
 
-    _emit(progress, ProgressEvent("stage", file=filename, message="trimming"))
-    (timecol, flow, volume, poes, pgas, pdi, _emgtrim, startix, endix) = compute.trim(
-        timecolraw, flowraw, volumeraw, poesraw, pgasraw, pdiraw,
-        np.array(emgcolumnsraw) if len(emgcolumnsraw) else np.array([]), s)
+    # EMG-only: there is no flow channel to find zero-crossing breath boundaries
+    # on, so there is nothing to `trim()` to -- the whole raw recording IS the analysis
+    # window, and there is no volume to zero/drift-correct/trend-correct either (an
+    # EMG-only signal set never has one). `separateintobreaths`'s own whole_file/
+    # separators methods do the actual splitting below, exactly like the flow/volume
+    # methods do on the trimmed window on the other branch.
+    emg_only = getattr(s, "capabilities", Capabilities.FULL).mode == "emg_only"
+    if emg_only:
+        timecol, flow, volume = timecolraw, flowraw, volumeraw
+        poes, pgas, pdi = poesraw, pgasraw, pdiraw
+        startix, endix = 0, n_raw
+        entropycolumns = entropycolumnsraw
+    else:
+        _emit(progress, ProgressEvent("stage", file=filename, message="trimming"))
+        (timecol, flow, volume, poes, pgas, pdi, _emgtrim, startix, endix) = compute.trim(
+            timecolraw, flowraw, volumeraw, poesraw, pgasraw, pdiraw,
+            np.array(emgcolumnsraw) if len(emgcolumnsraw) else np.array([]), s)
 
-    # Bug #2 fix: trim entropy columns with the same window as everything else.
-    entropycolumns = entropycolumnsraw[startix:endix] if len(entropycolumnsraw) else entropycolumnsraw
+        # Bug #2 fix: trim entropy columns with the same window as everything else.
+        entropycolumns = entropycolumnsraw[startix:endix] if len(entropycolumnsraw) else entropycolumnsraw
 
     emgcolumns = []
     ecg_diag = None
@@ -427,11 +442,14 @@ def segment_file(settings: Settings, s, path, *, cache=None, cancel_check=None,
         emgcolumns, ecg_diag, emg_stages = _process_emg(
             s, emgcolumnsraw, startix, endix, noise_set, ecg_precomputed=ecg_precomputed)
 
-    _emit(progress, ProgressEvent("stage", file=filename, message="volume correction"))
-    vol_uncorrected = volume                                  # trimmed, pre-zero
-    zerovol = compute.zero(volume)
-    driftvol = compute.correctdrift(zerovol, s) if s.processing.mechanics.correctvolumedrift else zerovol
-    volume = compute.correcttrend(driftvol, s) if s.processing.mechanics.correctvolumetrend else driftvol
+    if emg_only:
+        vol_uncorrected = zerovol = driftvol = volume
+    else:
+        _emit(progress, ProgressEvent("stage", file=filename, message="volume correction"))
+        vol_uncorrected = volume                                  # trimmed, pre-zero
+        zerovol = compute.zero(volume)
+        driftvol = compute.correctdrift(zerovol, s) if s.processing.mechanics.correctvolumedrift else zerovol
+        volume = compute.correcttrend(driftvol, s) if s.processing.mechanics.correctvolumetrend else driftvol
 
     _emit(progress, ProgressEvent("stage", file=filename, message="segmenting breaths"))
     breaths = compute.separateintobreaths(
@@ -780,27 +798,35 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
             # an opaque internal error.
             compute.check_breaths(breaths, filename, s)
 
-            # K-035: the boundary breath trim KEEPS is never verified as complete — warn
-            # when it is much shorter than this file's own typical breath, instead of
-            # analysing it silently as whole. Live (ProgressEvent) as well as recorded
-            # (file_notices -> run-report.txt), same as the other per-file quality
-            # notices below. The live event's own message is what the CLI/Run log
-            # actually print (unlike file_start/file_error, "warning" events have no
-            # separate filename slot in either consumer) -- prefix it here, or the
-            # printed line silently loses which file it is about.
-            for _msg in compute.trim_boundary_notices(breaths, s):
-                warnings.warn(f"{filename}: {_msg}")
-                file_notices.append(_msg)
-                _emit(progress, ProgressEvent("warning", file=filename, message=f"{filename}: {_msg}"))
+            # EMG-only: none of trim_boundary_notices (a flow-trim-truncation
+            # check -- there was no trim), vefactor (60 / len(flow)/fs would ZeroDivisionError
+            # on an empty flow array) or calculateaveragebreaths (indexes
+            # breath["inspiration"]/["expiration"], which a phase-less segment does not
+            # have) apply to a signal set with no flow channel at all.
+            emg_only = getattr(s, "capabilities", Capabilities.FULL).mode == "emg_only"
 
-            vefactor = 60 / (len(flow) / s.input.format.samplingfrequency)
-            bcnt = len(breaths)
-            for bc in s.processing.mechanics.breathcounts:
-                if bc[0] == filename:
-                    bcnt = bc[1]
-                    break
+            if not emg_only:
+                # K-035: the boundary breath trim KEEPS is never verified as complete — warn
+                # when it is much shorter than this file's own typical breath, instead of
+                # analysing it silently as whole. Live (ProgressEvent) as well as recorded
+                # (file_notices -> run-report.txt), same as the other per-file quality
+                # notices below. The live event's own message is what the CLI/Run log
+                # actually print (unlike file_start/file_error, "warning" events have no
+                # separate filename slot in either consumer) -- prefix it here, or the
+                # printed line silently loses which file it is about.
+                for _msg in compute.trim_boundary_notices(breaths, s):
+                    warnings.warn(f"{filename}: {_msg}")
+                    file_notices.append(_msg)
+                    _emit(progress, ProgressEvent("warning", file=filename, message=f"{filename}: {_msg}"))
 
-            avgvolumein, avgvolumeex, avgpoesin, avgpoesex = compute.calculateaveragebreaths(breaths, s)
+                vefactor = 60 / (len(flow) / s.input.format.samplingfrequency)
+                bcnt = len(breaths)
+                for bc in s.processing.mechanics.breathcounts:
+                    if bc[0] == filename:
+                        bcnt = bc[1]
+                        break
+
+                avgvolumein, avgvolumeex, avgpoesin, avgpoesex = compute.calculateaveragebreaths(breaths, s)
 
             # Opt-in cardiac-gated peak EMG needs the R-peaks the ECG-removal stage already
             # found, plus one per-file judgement of whether that peak set is complete enough
@@ -835,9 +861,30 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                 breath = breaths[breathno]
                 if breath["ignored"]:
                     continue
-                compute.calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, s,
-                                           cancel_check=cancel_check, peaks_s=gate_peaks,
-                                           detection_ok=gate_ok, detection_reason=gate_reason)
+                if emg_only:
+                    # No inspiration/expiration split to compute mechanics from --
+                    # compute_segment_emg (RMS/integral-EMG/gated-peak/entropy, whole
+                    # segment only) is the entire per-segment computation, and the
+                    # segment's own span replaces the flow-derived timing group.
+                    compute.compute_segment_emg(breath, breath, s, cancel_check, gate_peaks,
+                                                gate_ok, gate_reason, phases=breath["has_phases"])
+                    fs = s.input.format.samplingfrequency
+                    time = np.atleast_1d(breath["time"])
+                    seg_start_s = float(time[0]) if time.size else 0.0
+                    # len(time)/fs (not time[-1] - time[0]) matches how every other
+                    # duration in this codebase is derived (e.g. calculatemechanics's
+                    # ti/te/ttot = len(...)/samplingfrequency) -- a sample COUNT, not
+                    # the gap between the first and last sample's own timestamps.
+                    seg_duration_s = time.size / fs
+                    breath["mechanics"] = OrderedDict([
+                        ("seg_start_s", seg_start_s),
+                        ("seg_end_s", seg_start_s + seg_duration_s),
+                        ("seg_duration_s", seg_duration_s),
+                    ])
+                else:
+                    compute.calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, s,
+                                               cancel_check=cancel_check, peaks_s=gate_peaks,
+                                               detection_ok=gate_ok, detection_reason=gate_reason)
                 done += 1
                 _emit(progress, ProgressEvent("breath", file=filename, breath=done, total_breaths=total))
 
