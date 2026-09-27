@@ -652,7 +652,7 @@ path), with a `Settings.notices` entry recording it. Saving an analysis omits th
 manifest (`analysis-used.toml`, via `dumps_toml`) always records the resolved,
 effective set instead, explicit or not.
 
-### 7b. Reference manoeuvres and subject lung volumes (M-34)
+### 7b. Reference manoeuvres and subject lung volumes
 
 Three new tables let one file's inspiratory-capacity/forced-vital-capacity/maximal-
 effort/baseline reference values come from breaths typed in a DIFFERENT file (or from
@@ -686,14 +686,14 @@ folder = "recordings"
 require_references = false         # true: an unresolved reference source becomes a
                                     # HARD path_problem() blocker instead of a soft
                                     # check_links() caution
-baseline_pattern = "(?i)baseline|rest"   # not yet read by any code path (M-35/M-36)
+baseline_pattern = "(?i)baseline|rest"   # not yet read by any code path
 [processing.lung_volume.ic]
-eelv_tracking = "none"             # "none" | "within_file" -- M-36's own arithmetic;
-                                    # this ticket only declares and validates the field
+eelv_tracking = "none"             # "none" | "within_file" -- a later ticket's own
+                                    # arithmetic; only declared and validated here
 ```
 
 `ic`/`fvc`/`baseline_ic`/`max_insp` are all `BreathRef | None` — a nested optional
-dataclass, which needs the PEP 604 fix to `_unwrap_optional` (§2's M-02) to round-trip
+dataclass, which needs the earlier PEP 604 fix to `_unwrap_optional` (§2) to round-trip
 through TOML at all.
 
 **Resolution order** (`core.analysis.references.resolve_reference`), applied
@@ -709,13 +709,14 @@ one caution per reference source not among the batch's own matched files
 (`core.pipeline.match_input_files`, NOT a manifest's majority-column-count subset —
 `ui.manifest.Manifest.included_files`), per linked breath not typed the matching kind,
 per linked breath that is excluded, and per `reference_defaults`/`input.subjects` group
-key matching no analysed file. One policy throughout this ticket's design: an unresolved
-link is always a caution, plus NaN and a run-report notice once M-35 attaches it — never
-a hard error, unless `processing.lung_volume.require_references` is set, in which case
-`ui.validation.path_problem` (a later ticket) turns a missing SOURCE FILE into a blocker.
+key matching no analysed file. One policy throughout: an unresolved link is always a
+caution, plus NaN and a run-report notice once a later pipeline pass attaches it —
+never a hard error, unless `processing.lung_volume.require_references` is set, in
+which case `ui.validation.path_problem` turns a missing SOURCE FILE into a blocker
+(the other three caution kinds stay soft cautions even then — only an unresolvable
+source file is escalated).
 
 Neither table is read by `core.compute`/`core._legacy_ns` — resolving the actual
 values (loading the referenced file, running `core.analysis.manoeuvres.extract` on it,
-attaching the result to the referencing file's own columns) is M-35's pipeline-pass
-scope, well downstream of the ordinary per-breath mechanics loop this ticket never
-touches.
+attaching the result to the referencing file's own columns) is a later pipeline pass's
+scope, well downstream of the ordinary per-breath mechanics loop this never touches.

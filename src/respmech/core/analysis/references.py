@@ -1,4 +1,4 @@
-"""Reference-manoeuvre resolution across files (M-34).
+"""Reference-manoeuvre resolution across files.
 
 An analysed file's inspiratory-capacity/forced-vital-capacity/baseline/maximal-effort
 reference values do not have to come from the file itself -- a participant's IC might
@@ -13,7 +13,7 @@ about ``Settings`` and the plain filename list a caller hands it, exactly like
 ``core.settings.resolve_noise_reference_mode`` reasons about settings shape alone.
 Resolving the ACTUAL breath values (loading the referenced file, running
 ``core.analysis.manoeuvres.extract`` on it, attaching the result to the referencING
-file's per-breath columns) is M-35's pipeline-pass scope, not this module's.
+file's per-breath columns) is a later pipeline pass's scope, not this module's.
 
 Referenced breaths are never sent into ``core.compute`` -- see ``ReferenceEntry``'s own
 docstring in ``core.settings``.
@@ -110,6 +110,9 @@ def _check_one_ref(cautions: list[str], label: str, slot: str, ref: BreathRef | 
         cautions.append(
             f"{label}: {slot} source {ref.file!r} is not among the analysed files")
         return
+    if not ref.breaths:
+        cautions.append(f"{label}: {slot} names no breaths in {ref.file!r}")
+        return
     own_kinds = _OWN_TYPED_KINDS.get(slot, frozenset())
     for b in ref.breaths:
         if _is_excluded(settings, ref.file, b):
@@ -125,7 +128,7 @@ def check_links(settings: Settings, filenames: list[str]) -> list[str]:
     """Every reason a reference/subject link in ``settings`` might not work once the
     batch's real file list is known -- one plain-English caution per unresolved link,
     never an exception (a caution is advisory; ``Settings.validate()`` is the only thing
-    that ever blocks a run, and only for ``lung_volumes.require_references`` — see
+    that ever blocks a run, and only for ``lung_volume.require_references`` — see
     ``LungVolumeSettings``'s own docstring).
 
     ``filenames`` is whatever the caller's OWN file list is (``core.pipeline.
@@ -137,7 +140,7 @@ def check_links(settings: Settings, filenames: list[str]) -> list[str]:
     a column-count vote would exclude from the "main" batch display while ``run_batch``
     still processes it.
 
-    Four caution kinds, matching M-34's own scope:
+    Four caution kinds:
 
     * a reference source (``ic``/``fvc``/``baseline_ic``/``max_insp`` on either a
       ``ReferenceEntry`` or a ``GroupReferenceEntry``) not among ``filenames``;
@@ -156,7 +159,7 @@ def check_links(settings: Settings, filenames: list[str]) -> list[str]:
         for slot in REFERENCE_SLOTS:
             _check_one_ref(cautions, label, slot, getattr(r, slot), names, settings)
 
-    seen_groups = {group_key(f, settings) for f in filenames}
+    seen_groups = {group_key(n, settings) for n in names}
 
     for g in settings.processing.reference_defaults:
         if g.group not in seen_groups:
@@ -173,3 +176,31 @@ def check_links(settings: Settings, filenames: list[str]) -> list[str]:
                 f"input.subjects: key {subj.key!r} matches no analysed file")
 
     return cautions
+
+
+def missing_reference_sources(settings: Settings, filenames: list[str]) -> list[str]:
+    """Reference-source filenames (named in ``processing.references``/
+    ``reference_defaults``) that are NOT among ``filenames`` -- sorted, deduplicated.
+    Basenames are compared exactly like :func:`check_links`.
+
+    This is the ONE piece of :func:`check_links`'s advisory caution that
+    ``ui.validation.path_problem`` also needs as a HARD blocker, but only when
+    ``processing.lung_volume.require_references`` is set (see that field's own
+    docstring in ``core.settings``): a caution and a blocker must never independently
+    decide whether a source is "missing", so both read this same function rather than
+    ``path_problem`` re-deriving its own notion of "missing" from ``check_links``'s
+    free-text caution strings.
+    """
+    names = {os.path.basename(f) for f in filenames}
+    missing: set[str] = set()
+    for r in settings.processing.references:
+        for slot in REFERENCE_SLOTS:
+            ref = getattr(r, slot)
+            if ref is not None and ref.file not in names:
+                missing.add(ref.file)
+    for g in settings.processing.reference_defaults:
+        for slot in REFERENCE_SLOTS:
+            ref = getattr(g, slot)
+            if ref is not None and ref.file not in names:
+                missing.add(ref.file)
+    return sorted(missing)
