@@ -178,6 +178,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         self.result_checks = []          # list of (col:int, QCheckBox)
         # breath overlays in the EMG views (Mechanics keeps its own _breath_* state)
         self._breaths = []               # last mech spans [(num, t0, t1, ignored), ...] (TRIMMED s)
+        self._suggested_fvc = None       # M-31: manoeuvres.suggest_fvc's breath number, or None
         self._trim_offset_s = 0.0        # startix/fs — maps a trimmed span to absolute EMG time
         self._bov = {}                   # view -> {'items':[(plot,item)], 'regions':{num:[reg]}, 'texts':{num:txt}}
         self._emg_raw_subplots = []      # per-channel PlotItems of the raw stack (hit-testing)
@@ -907,6 +908,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         compute is being scheduled)."""
         self.plots.clear(); self._channel_plots = []
         self._table_model.set_dataframe(None)
+        self._fill_manoeuvres_table(None, None)   # M-31: never leave the PREVIOUS file's rows up
         self.campbell.figure.clear(); self.campbell.draw()
         self._forget_campbell()      # the export must not resurrect a cleared diagram
         # M-27: segments_plots.clear() above already destroys every SeparatorLinesItem
@@ -958,6 +960,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         _reset_breath_state additionally drops breath overlays + staged EMG."""
         self.plots.clear(); self._channel_plots = []
         self._table_model.set_dataframe(None)
+        self._fill_manoeuvres_table(None, None)   # M-31: never leave the PREVIOUS file's rows up
         self.campbell.figure.clear(); self.campbell.draw()
         self._forget_campbell()      # the export must not resurrect a cleared diagram
         # M-27: segments_plots.clear() above already destroys every SeparatorLinesItem
@@ -1269,6 +1272,10 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
                 if cur:
                     self.file_rail.mark_result(cur, ok=False, error=detail)
                 self._qc_overview_not_assessed(detail, chip=seg_chip)
+                # M-31: the "table" overlay above is parented to self.table alone, not
+                # the whole panel — a PREVIOUS successful run's Manoeuvres section would
+                # otherwise stay visible, uncovered, right below this error card.
+                self._fill_manoeuvres_table(None, None)
             self._update_actions(status=False)
             return
         try:
@@ -1278,6 +1285,8 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
             self._set_status(f"{label} failed — {short_error(detail)}")
             for p in job.panels:
                 self._overlays[p].show_error(f"{label} failed — {short_error(detail)}", detail)
+            if job.kind == "batch":
+                self._fill_manoeuvres_table(None, None)   # M-31: see the note above
             self._update_actions(status=False)
             return
         except Exception:                              # noqa: BLE001 — a rendering bug
@@ -1291,6 +1300,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
                 # error, which _FileRunError above already covers) — the chip must not
                 # keep showing a stale prior verdict over a display-error card
                 self._qc_overview_not_assessed(detail, chip=seg_chip)
+                self._fill_manoeuvres_table(None, None)   # M-31: see the note above
             self._update_actions(status=False)
             return
         # 'mech' is deliberately excluded: _render_preview_async only just returned from
