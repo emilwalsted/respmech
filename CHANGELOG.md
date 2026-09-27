@@ -44,25 +44,30 @@ to use it today, via a new `[[processing.breath_types]]` table.
      click guard, the t_onset_s clock, distinct breath-kind colours, and hardened
      tests) — no separate user-visible behaviour beyond what f380c02's skip note
      already covers. -->
-
-**Mark a breath as an inspiratory capacity (IC) manoeuvre and get its volume and Poes
-without hand extraction.** A breath typed `ic` (or `ic_fvc`) now reports its own
-inspiratory-capacity volume, timing and pressure swings — plus quality flags for a low
-effort, an unstable pre-manoeuvre baseline, no held plateau, an unrepeatable measurement
-against a repeat attempt in the same file, or a manoeuvre right at the edge of the
-recording — in a new "Manoeuvres" sheet alongside that file's breath-by-breath workbook.
-A `max_insp`/`sniff`-typed breath reports its own peak effort (Poes/Pdi/EMG) as a
-reference value for a later release's normalisation. Still settings-model-only, like the
-typing itself above — there is no menu in the app yet to pick these kinds (only
-Tidal/Excluded/Rest so far), so a hand-edited `settings.toml` is the only way to use it
-today.
+**Right-click a breath to mark it as a manoeuvre — an inspiratory capacity (IC) or
+forced vital capacity (FVC) effort, a maximal inspiratory/sniff effort, or a plain
+"other" manoeuvre — directly in Preview & QC ▸ Mechanics.** The same context menu that
+already offered Tidal/Excluded/Rest now offers the full vocabulary: IC manoeuvre, FVC
+manoeuvre, IC + FVC, Maximal inspiratory effort, Sniff, Rest (EMG-only recordings
+only — a flow-bearing file already has a well-defined quiet reference in every breath's
+own expiration) and Other. A greyed-out "Suggested: FVC" hint marks the breath with the
+longest expiration in the file, the most likely forced-vital-capacity candidate, without
+picking it for you. A typed IC/IC+FVC breath's volume, timing and pressure swings (plus
+quality flags for a low effort, an unstable pre-manoeuvre baseline, no held plateau, an
+unrepeatable measurement, or a manoeuvre right at the edge of the recording) now show up
+immediately in a new "Manoeuvres" table under the per-breath results, and the same data
+is written to the workbook's "Manoeuvres" sheet. A `max_insp`/`sniff`-typed breath's own
+peak effort (Poes/Pdi/EMG) is recorded as a reference value for a later release's
+normalisation. Using a typed breath as another file's IC reference, and the file rail's
+own badges for typed/linked/reference-only files, are still separate, not-yet-landed
+pieces.
 
 **A file with only manoeuvres — no ordinary tidal breathing at all — can be included in
 a batch.** A dedicated recording where every breath is typed (a separate IC or FVC
 file, say) used to fail the whole file with "no breaths detected"; it now runs, writes
 its own workbook (the Manoeuvres table stands in for the usual breath-by-breath data,
 with a note explaining why), and reports its manoeuvre count in Dry run and the run
-report instead of an error. Still settings-model-only, like the typing itself above.
+report instead of an error.
 
 **Explore with sample data follows the signal set.** The startup chooser's own
 'Explore with sample data' door still always opens the complete demo recording, but

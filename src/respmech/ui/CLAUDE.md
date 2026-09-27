@@ -416,3 +416,18 @@ garbage-collect a widget just because it lost focus or hid — so a long interac
 session accumulates one dead `QMenu` QObject per right-click, forever. The same
 `WA_DeleteOnClose` gotcha this file already documents for a one-shot `QDialog` applies
 identically here.
+
+**`_build_type_menu` always parents its menu to `self.plots` (the Mechanics tab's own
+stack widget), even when the click that triggered it came from the segments tab
+instead** (M-26 wires the SAME `_handle_type_requested` slot to both stacks' shared
+overlay machinery — see the section above). For an EMG-only signal set, `self.plots`
+is constructed but never inserted into `self.subtabs` at all (`subtab_plan` omits the
+Mechanics tab entirely for that shape), so its parent chain terminates at an unparented
+`FitScrollArea` — `win.findChildren(QMenu)` therefore never finds a menu popped up from
+the segments tab, even though `.popup()` still shows a perfectly functional top-level
+window regardless (a QMenu does not need a shown ancestor to render). Found while
+writing M-31's EMG-only menu test (which works around it by calling `_build_type_menu`
+directly instead of going through `.popup()`+`findChildren`). Pre-existing since M-20,
+not something M-31 changes: a real fix would need `_handle_type_requested` to parent
+the menu to whichever stack's `BreathSpansItem` actually emitted the signal (available
+via `self.sender()`), not unconditionally to `self.plots`.
