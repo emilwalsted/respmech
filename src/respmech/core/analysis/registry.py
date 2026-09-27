@@ -205,9 +205,43 @@ _REFERENCE_MANOEUVRES = (
     ColumnSpec(name="ic_ref_source", requires=_TIMING, module="references", unit=""),
 )
 
+# Operating lung volumes (M-36, core.analysis.lungvol, wired into core.pipeline.
+# run_batch right after references.attach): `d_eelv`, `delta_ic`, `delta_eelv`, `tlc`,
+# `vc`, `ic_op` are the six new columns `core.quantities._RULES`' generic `vol_`/`vt`
+# convention does NOT already classify (none starts with `vol_` and none is `vt`) --
+# their `unit="L"` here IS the resolving path, not documentation. Every other new
+# column this ticket adds (`vol_eelv`, `vol_eilv`, `vol_eelv_abs`, `vol_eilv_abs`,
+# `vol_irv` via the `vol_` prefix; `vt_pct_ic`, `delta_ic_pct`, `eelv_pct_vc`,
+# `eilv_pct_vc`, `irv_pct_vc`, `eelv_pct_tlc`, `eilv_pct_tlc`, `irv_pct_tlc` via the
+# generic `_pct`/`_pct_` rule) is already resolved by `_RULES` before this registry is
+# ever consulted -- listed here anyway for documentation completeness, same precedent
+# as `_MANOEUVRES`/`_REFERENCE_MANOEUVRES` above.
+_LUNG_VOLUMES = (
+    ColumnSpec(name="d_eelv", requires=_TIMING, module="lungvol", unit="L"),
+    ColumnSpec(name="ic_op", requires=_TIMING, module="lungvol", unit="L"),
+    ColumnSpec(name="delta_ic", requires=_TIMING, module="lungvol", unit="L"),
+    ColumnSpec(name="delta_eelv", requires=_TIMING, module="lungvol", unit="L"),
+    ColumnSpec(name="tlc", requires=_TIMING, module="lungvol", unit="L"),
+    ColumnSpec(name="vc", requires=_TIMING, module="lungvol", unit="L"),
+    ColumnSpec(name="vol_irv", requires=_TIMING, module="lungvol", unit="L"),
+    ColumnSpec(name="vol_eelv", requires=_TIMING, module="lungvol", unit="L"),
+    ColumnSpec(name="vol_eilv", requires=_TIMING, module="lungvol", unit="L"),
+    ColumnSpec(name="vol_eelv_abs", requires=_TIMING, module="lungvol", unit="L"),
+    ColumnSpec(name="vol_eilv_abs", requires=_TIMING, module="lungvol", unit="L"),
+    ColumnSpec(name="vt_pct_ic", requires=_TIMING, module="lungvol", unit="%"),
+    ColumnSpec(name="delta_ic_pct", requires=_TIMING, module="lungvol", unit="%"),
+    ColumnSpec(name="eelv_pct_vc", requires=_TIMING, module="lungvol", unit="%"),
+    ColumnSpec(name="eilv_pct_vc", requires=_TIMING, module="lungvol", unit="%"),
+    ColumnSpec(name="irv_pct_vc", requires=_TIMING, module="lungvol", unit="%"),
+    ColumnSpec(name="eelv_pct_tlc", requires=_TIMING, module="lungvol", unit="%"),
+    ColumnSpec(name="eilv_pct_tlc", requires=_TIMING, module="lungvol", unit="%"),
+    ColumnSpec(name="irv_pct_tlc", requires=_TIMING, module="lungvol", unit="%"),
+)
+
 #: Every column/family this skeleton knows about. Later tickets append to this,
 #: never remove from or reorder ``LEGACY_MECHANICS_ORDER`` within it.
-REGISTRY = LEGACY_MECHANICS_ORDER + (_ENTROPY, _EMG) + _SEGMENT_EMG + _MANOEUVRES + _REFERENCE_MANOEUVRES
+REGISTRY = (LEGACY_MECHANICS_ORDER + (_ENTROPY, _EMG) + _SEGMENT_EMG + _MANOEUVRES
+           + _REFERENCE_MANOEUVRES + _LUNG_VOLUMES)
 
 # The Capabilities boolean fields resolve() is willing to read. Kept as an
 # explicit tuple (rather than e.g. dataclasses.fields(caps)) so a caller could
