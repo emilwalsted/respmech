@@ -181,6 +181,15 @@ class NoiseSettings:
     # folder is still active after the folder changes, instead of silently reusing it.
     reference_folder: str | None = None
     use_expiration: bool = True
+    # Which noise reference SOURCE to build the profile from. 'auto' (the default) keeps
+    # `use_expiration`/`reference_intervals` as the two saved choices a flow-bearing
+    # analysis has always had -- this field adds nothing new for that case, it only NAMES
+    # the two EMG-only alternatives an analysis with no flow channel can reach: 'rest_segments'
+    # (a segment typed 'rest' in the reference file -- see BREATH_KINDS) and 'interburst' (not
+    # yet implemented -- see resolve_noise_reference_mode()). 'rest_segments'/'interburst' are
+    # reachable only explicitly and only for an EMG-only signal set; Settings.validate() rejects
+    # either one while a flow channel is declared, since 'auto' already covers that case fully.
+    reference_mode: str = "auto"
     # fixed STFT parameters (decoupled from the noise-clip length — the legacy bug).
     n_fft: int = 256
     hop_length: int = 64
@@ -325,8 +334,16 @@ class BreathCountEntry:
 #: the closed set of manoeuvre labels a single breath can be typed as (M-19). ``ic``/
 #: ``fvc``/``ic_fvc`` are inspiratory-capacity/forced-vital-capacity manoeuvres (M-29
 #: extracts their values); ``max_insp``/``sniff`` are maximal-effort references (M-47's
-#: normalisation); ``rest`` marks a quiet segment usable as an EMG noise reference
-#: (M-22); ``other`` is any manoeuvre breath none of the above name. A typed breath is
+#: normalisation); ``rest`` marks a quiet SEGMENT usable as an EMG-only noise reference
+#: (M-22's ``resolve_noise_reference_mode``/``rest_segments`` -- only reachable for a
+#: signal set with no flow channel at all, since a flow-bearing set already has a
+#: well-defined quiet period in every breath's own expiration). On a flow-bearing file,
+#: typing a BREATH ``rest`` does not make it INTO the reference either: like every other
+#: kind, it is instead excluded from the automatic expiration-based reference clip
+#: (decision 11) -- there is no mechanism today that lets a flow-bearing analysis pick
+#: an explicit breath as its reference by typing it; ``processing.emg.noise.
+#: reference_intervals`` is the only explicit override that signal set has.
+#: ``other`` is any manoeuvre breath none of the above name. A typed breath is
 #: excluded from the tidal average the same way a manually excluded one is -- see
 #: ``core._legacy_ns.to_legacy_ns``'s union of ``exclude_breaths``/``breath_types``.
 BREATH_KINDS = ("ic", "fvc", "ic_fvc", "max_insp", "sniff", "rest", "other")
@@ -602,18 +619,51 @@ class Settings:
                 "to be enabled (noise reduction would otherwise treat the heartbeat "
                 "as steady background noise)")
 
-        # EMG-only noise reduction needs its own reference-resolution rule (a rest-typed
-        # segment, or an interburst clip) -- not yet built. Without this guard,
-        # core.pipeline._build_noise_set/_emg_segmented hardcode flow-based breath
-        # segmentation regardless of processing.segmentation.method, so an EMG-only
-        # analysis with noise reduction on reaches an unguarded `TrimError` deep in the
-        # noise-profile-building pre-pass and kills the WHOLE BATCH before a single file
-        # is processed -- not the clean, per-file, named error every other EMG-only
-        # misconfiguration in this method already gets.
-        if emg.noise.enabled and "flow" not in declared and "emg" in declared:
+        # reference_mode's own shape: a closed enum, and 'rest_segments'/'interburst' are
+        # reachable only explicitly and only for an EMG-only signal set -- 'auto' already
+        # covers a flow-bearing analysis fully (resolve_noise_reference_mode's own docstring).
+        if emg.noise.reference_mode not in ("auto", "rest_segments", "interburst"):
             raise SettingsError(
-                "processing.emg.noise.enabled is not yet supported for an EMG-only "
-                "signal set (no flow channel) -- turn it off, or add a flow channel")
+                "processing.emg.noise.reference_mode must be 'auto', 'rest_segments' "
+                "or 'interburst'")
+        if emg.noise.reference_mode != "auto" and "flow" in declared:
+            raise SettingsError(
+                f"processing.emg.noise.reference_mode={emg.noise.reference_mode!r} is "
+                "only valid for an EMG-only signal set")
+
+        # EMG-only noise reduction now HAS a reference-resolution rule
+        # (resolve_noise_reference_mode, M-22) -- replacing the old blanket "not yet
+        # supported" guard below with two narrower ones for what still is not built:
+        #  1. no usable reference at all ('unresolved') -- the same "fail before a
+        #     single file is processed" guarantee the old guard gave, just narrower
+        #     now that a real usable case (a rest-typed reference segment, or explicit
+        #     reference_intervals) exists;
+        #  2. 'interburst' (no clip-building implementation yet -- a later ticket);
+        #  3. 'auto_prop' (choose prop_decrease from active/quiet EMG pooled across the
+        #     whole test) has no EMG-only implementation either -- it is built on
+        #     inspiration/expiration PHASES (core.pipeline._emg_segmented, flow-only),
+        #     and a genuine EMG-only active/quiet split (rest-typed segments against
+        #     the rest, or bursts) is later tickets' scope. Left unguarded here, an
+        #     EMG-only analysis with noise reduction on (auto_prop defaults to True)
+        #     would reach _build_noise_set's flow-only gather loop and crash the WHOLE
+        #     BATCH with an unguarded TrimError -- exactly the failure mode the old
+        #     blanket guard existed to prevent, now reachable again for a case this
+        #     ticket newly permits unless it is closed here too.
+        if emg.noise.enabled:
+            mode = resolve_noise_reference_mode(self)
+            if mode == "unresolved":
+                raise SettingsError(
+                    "processing.emg.noise: no usable rest reference for an EMG-only "
+                    "signal set")
+            if mode == "interburst":
+                raise SettingsError(
+                    "processing.emg.noise.reference_mode='interburst' is not yet "
+                    "implemented")
+            if "flow" not in declared and "emg" in declared and emg.noise.auto_prop:
+                raise SettingsError(
+                    "processing.emg.noise.auto_prop is not yet supported for an "
+                    "EMG-only signal set -- set processing.emg.noise.prop_decrease "
+                    "manually and turn auto_prop off")
 
         v = self.processing.volume
         if v.correct_trend:
@@ -695,6 +745,70 @@ class Settings:
                         "under whole_file segmentation")
 
         return self
+
+
+def _reference_file_has_rest_segment(settings: "Settings", reference_file: str | None) -> bool:
+    """True if ``reference_file`` carries at least one segment typed ``'rest'`` in
+    ``processing.breath_types`` -- a pure settings-level lookup (the same flat,
+    per-file/per-breath-number entries a flow-bearing analysis's typed breaths already
+    use, see :class:`BreathTypeEntry`). For an EMG-only signal set "breath number" IS
+    the segment number ``whole_file``/``separators`` assign, so this needs no knowledge
+    of the file's actual samples or segmentation to answer -- unlike building the clip
+    itself (:func:`respmech.core.pipeline._reference_noise_clip`'s ``rest_segments``
+    branch), which does have to load and segment the file."""
+    if not reference_file:
+        return False
+    return any(bt.file == reference_file and bt.kind == "rest"
+              for bt in settings.processing.breath_types)
+
+
+def resolve_noise_reference_mode(settings: "Settings") -> str:
+    """Which source :func:`respmech.core.pipeline._reference_noise_clip` builds the
+    shared EMG noise-reduction profile from, for THIS settings object right now.
+
+    Returns one of ``'expiration'`` | ``'intervals'`` | ``'rest_segments'`` |
+    ``'interburst'`` | ``'unresolved'``. Pure and Qt-free: reasons only about the
+    ``NoiseSettings``/``breath_types``/declared-signal-set shape, never touches a file
+    on disk (that is pipeline's job, once a mode is resolved).
+
+    ``processing.emg.noise.reference_mode`` is ``'auto'`` by default, which is where
+    almost every analysis stays:
+
+    * With a flow channel declared, ``auto`` reproduces EXACTLY the rule this codebase
+      has always used (``use_expiration or not reference_intervals`` -- see
+      ``_reference_noise_clip``'s docstring/history): ``'expiration'`` when true,
+      ``'intervals'`` otherwise. ``use_expiration`` is simply ignored (never read,
+      never rejected) once no flow channel is declared -- an EMG-only analysis has no
+      inspiration/expiration phases for it to mean anything about.
+    * Without a flow channel (an EMG-only signal set), ``auto`` looks instead at
+      whether the reference file has a segment typed ``'rest'``
+      (:func:`_reference_file_has_rest_segment`): ``'rest_segments'`` if so,
+      ``'intervals'`` if explicit ``reference_intervals`` are set instead, otherwise
+      ``'unresolved'`` -- the state ``Settings.validate()`` rejects with a clear
+      message when noise reduction is enabled, rather than letting an un-buildable
+      profile reach the pipeline.
+
+    An explicit, non-``'auto'`` ``reference_mode`` (``'rest_segments'``/
+    ``'interburst'``) is returned as-is, unresolved further -- these are only ever
+    meaningful for an EMG-only set, and ``Settings.validate()`` is what actually
+    enforces that (rejecting either one while a flow channel is declared) and rejects
+    ``'interburst'`` outright while noise reduction is enabled (no clip-building
+    implementation exists for it yet -- a later ticket's scope). This function itself
+    never raises: it classifies whatever settings it is handed, the same way
+    ``core.analysis.signals._mode_for`` classifies a signal set without validating it.
+    """
+    noise = settings.processing.emg.noise
+    mode = noise.reference_mode
+    if mode != "auto":
+        return mode
+    has_flow = "flow" in effective_signals(settings)
+    if has_flow:
+        return "expiration" if (noise.use_expiration or not noise.reference_intervals) else "intervals"
+    if _reference_file_has_rest_segment(settings, noise.reference_file):
+        return "rest_segments"
+    if noise.reference_intervals:
+        return "intervals"
+    return "unresolved"
 
 
 # --- carried-over per-folder state ------------------------------------------

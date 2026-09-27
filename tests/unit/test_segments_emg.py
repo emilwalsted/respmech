@@ -321,14 +321,12 @@ def test_run_batch_reports_a_separator_out_of_range_as_a_soft_per_file_error(tmp
     assert fr.error_kind == "EmgSegmentationError"
 
 
-def test_run_batch_refuses_emg_only_noise_reduction_cleanly(tmp_path):
-    """EMG-only noise reduction has no reference-resolution rule yet (a later ticket's
-    scope): core.pipeline._build_noise_set/_emg_segmented hardcode flow-based breath
-    segmentation regardless of processing.segmentation.method, so without
-    Settings.validate()'s guard this would reach an unguarded TrimError deep in the
-    noise-profile pre-pass and kill the WHOLE BATCH before any file is processed --
-    run_batch's own settings.validate() call must refuse it up front instead, with a
-    named, clean SettingsError."""
+def test_run_batch_refuses_unresolved_emg_only_noise_reduction_cleanly(tmp_path):
+    """EMG-only noise reduction now has a real reference-resolution rule
+    (resolve_noise_reference_mode) -- but a settings object with no rest-typed
+    reference segment and no explicit reference_intervals is still 'unresolved', and
+    Settings.validate() must still refuse it up front with a named, clean
+    SettingsError, rather than let it reach the pipeline's unguarded machinery."""
     from respmech.core.pipeline import run_batch
     from respmech.core.settings import SettingsError
 
@@ -337,5 +335,28 @@ def test_run_batch_refuses_emg_only_noise_reduction_cleanly(tmp_path):
     s.processing.emg.remove_ecg = True
     s.processing.emg.noise.enabled = True
     s.input.files = "synth_case_A.csv"
-    with pytest.raises(SettingsError, match="not yet supported for an EMG-only signal set"):
+    with pytest.raises(SettingsError, match="no usable rest reference"):
+        run_batch(s)
+
+
+def test_run_batch_refuses_emg_only_auto_prop_cleanly(tmp_path):
+    """A resolved reference (a rest-typed segment) is not enough on its own: auto_prop
+    (choose the noise-reduction strength from active/quiet EMG pooled across the whole
+    test) is built on inspiration/expiration PHASES and has no EMG-only
+    implementation -- left unguarded, this would reach _build_noise_set's flow-only
+    gather loop and crash the whole batch the same way the unresolved case above
+    would. auto_prop defaults to True, so this is refused unless turned off."""
+    from respmech.core.pipeline import run_batch
+    from respmech.core.settings import BreathTypeEntry, SettingsError
+
+    s = _emg_only_synth_settings(tmp_path)
+    s.processing.segmentation.method = "whole_file"
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=1, kind="rest"))
+    s.processing.emg.remove_ecg = True
+    s.processing.emg.noise.enabled = True
+    s.processing.emg.noise.reference_file = "synth_case_A.csv"
+    assert s.processing.emg.noise.auto_prop is True
+    s.input.files = "synth_case_A.csv"
+    with pytest.raises(SettingsError, match="auto_prop"):
         run_batch(s)
