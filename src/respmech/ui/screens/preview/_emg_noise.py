@@ -801,6 +801,14 @@ class _EmgNoiseMixin:
         # check is best-effort (getattr, not ev.button() directly): a fake event used
         # by test_legend_click_does_not_toggle_breath has no .button() at all, and the
         # ORIGINAL guard here never required one either.
+        # M-27: while 'Place separators' is armed, EVERY click this shared funnel sees
+        # (segments tab, raw/detail/result EMG stacks alike — they all draw the SAME
+        # channels for an EMG-only set) places or removes a separator instead of
+        # toggling a breath, checked FIRST — before the legend/noise-band checks below,
+        # which exist for the ordinary toggle and have nothing to say about this mode.
+        if getattr(self, "_separators_armed", False):
+            self._place_or_remove_separator(ev, plot_items, offset)
+            return
         if not self._breath_spans:
             return
         try:

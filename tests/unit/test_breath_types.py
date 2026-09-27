@@ -314,3 +314,24 @@ def test_build_processed_data_breathkind_is_blank_not_nan_for_an_untyped_breath_
     assert by_breath[2] == "ic"
     # a blank string must never have been routed through dropna() as NaN
     assert not result["Breathkind"].isna().any()
+
+
+# -- M-27: BreathTypeEntry renumbering when manual separators are edited --------------
+# (the Qt screen-level "_set_separators actually rewrites the entry" behaviour is
+# covered end to end in test_separators.py; this is the pure, Qt-free half — the same
+# remap_segment_number rule applied by hand to a BreathTypeEntry, matching how
+# _SegmentsMixin._set_separators itself uses it.)
+
+def test_a_typed_breath_is_renumbered_by_remap_segment_number_like_any_other_segment():
+    from respmech.core.analysis.segments import remap_segment_number
+
+    s = _base_settings()
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="x.txt", breath=3, kind="rest", t_onset_s=2.0))
+    old_bounds = [0.0, 1.0, 2.0, 3.5]           # 3 separators (segments 1..4)
+    new_bounds = [0.0, 1.0, 1.5, 2.0, 3.5]      # a new separator inserted at 1.5
+
+    entry = s.processing.breath_types[0]
+    entry.breath = remap_segment_number(old_bounds, new_bounds, entry.breath)
+    assert entry.breath == 4                    # follows the insertion, like ExcludeEntry
+    s.validate()                                # still a well-formed entry afterwards
