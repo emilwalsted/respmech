@@ -1,16 +1,16 @@
-# V2_SCENARIOS golden fixture: 'typed_ic_fvc_same_file' (M-33). A single flow-bearing
+# V2_SCENARIOS golden fixture: 'typed_ic_fvc_same_file'. A single flow-bearing
 # recording (tests/golden/input/synth_manoeuvre_A.csv, its own dedicated RNG stream --
 # never synth_case_*.csv/synth_emgonly_*.csv) with two breaths typed as manoeuvres via
 # processing.breath_types: breath #4 as an inspiratory-capacity (IC) manoeuvre, breath
 # #7 as a forced-vital-capacity (FVC) manoeuvre -- both typed IN THE SAME FILE, unlike
-# a future cross-file reference (M-40, out of this ticket's scope). core.analysis.
-# manoeuvres.extract() (M-29) turns each into a Manoeuvres-sheet row. The ONE number
-# this scenario's own dedicated test checks against a literal analytical constant
-# (not merely "matches the committed reference JSON") is vol_ic == 3.0 L -- see
-# generate_data.py's make_manoeuvre_file()/_manoeuvre_breath() docstring for exactly
-# why a >= 2-sample PLATEAU at the manoeuvre's peak volume (rather than a smooth
-# curve's true, generally un-sampled extremum) is what makes that exact match survive
-# the CSV round-trip and the trim/zero/drift-correct chain.
+# a future cross-file reference (a later feature, out of this scenario's scope).
+# core.analysis.manoeuvres.extract() turns each into a Manoeuvres-sheet row. The ONE
+# number this scenario's own dedicated test checks against a literal analytical
+# constant (not merely "matches the committed reference JSON") is vol_ic == 3.0 L --
+# see generate_data.py's make_manoeuvre_file()/_manoeuvre_breath() docstring for
+# exactly why a >= 2-sample PLATEAU at the manoeuvre's peak volume (rather than a
+# smooth curve's true, generally un-sampled extremum) is what makes that exact match
+# survive the CSV round-trip and the trim/zero/drift-correct chain.
 #
 # v2-only (processing.breath_types has no legacy-dict shape at all), baked directly
 # from the v2 core (golden_newcore.py --write) -- see make_golden.py's
@@ -19,11 +19,18 @@
 # golden_newcore.py --write (merging onto the existing file, per the README) after a
 # deliberate change here.
 #
-# Later tickets in the same programme (M-35 cross-file references, M-36 operating
-# lung volumes, M-42 FVC/MFVL numerics) ADD keys to this SAME scenario and regenerate
-# it with their own justification in their own commit -- an added key alone is not a
-# regression in THIS scenario's committed reference.
+# Later work in the same programme (a cross-file reference feature, operating-lung-
+# volume derivation, and FVC/MFVL numerics) ADD keys to this SAME scenario and
+# regenerate it with their own justification in their own commit -- an added key
+# alone is not a regression in THIS scenario's committed reference.
 schema_version = 2
+
+[analysis]
+# The full derived signal set for this scenario's assigned channels below (flow +
+# poes + pgas + pdi + emg) -- explicit, like every other committed scenario TOML,
+# rather than left to derive silently: a later ticket that drops a channel here
+# should have to notice its signal set changed, not have it happen unremarked.
+signals = ["flow", "poes", "pgas", "pdi", "emg"]
 
 [input]
 folder = "../input"
