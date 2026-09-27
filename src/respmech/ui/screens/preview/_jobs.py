@@ -32,8 +32,8 @@ from respmech.ui.flow_layout import (FlowLayout, cluster as _cluster,
                                      elide as _elide, install_flow as _install_flow)
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
-                                  stage_ecg_reduction, stage_mechanics_preview,
-                                  stage_noise_fidelity)
+                                  stage_ecg_reduction, stage_emg_segments_preview,
+                                  stage_mechanics_preview, stage_noise_fidelity)
 
 try:
     from respmech.ui import theme as _theme
@@ -52,22 +52,30 @@ _TAB_NOISE = "› EMG – noise reduction"
 
 _PANELS = {"mech": ["channels", "raw"], "batch": ["table", "campbell"],
            "ecg": ["ecg_capture", "ecg_stack"],
-           "emg_all": ["result"], "emg_detail": ["detail", "detail_psd"], "noise": ["fidelity"]}
+           "emg_all": ["result"], "emg_detail": ["detail", "detail_psd"], "noise": ["fidelity"],
+           # No dedicated 'EMG - segments' tab/overlay exists yet (a later ticket's scope)
+           # -- the renderer draws provisionally in the existing raw EMG stack, so this job
+           # owns the SAME 'raw' overlay 'mech' does. The two never actually race for it:
+           # 'mech' only ever dispatches for a flow-bearing set and 'segments' only for an
+           # EMG-only one (see _schedule), so exactly one of them is ever in flight.
+           "segments": ["raw"]}
 _SPIN_TEXT = {"mech": "Loading channels…", "batch": "Running test…",
               "ecg": "Removing ECG…",
               "emg_all": "Conditioning channels…", "emg_detail": "Staging detail…",
-              "noise": "Measuring fidelity…"}
+              "noise": "Measuring fidelity…", "segments": "Segmenting…"}
 # human labels for status lines + panel error cards
 _KIND_LABEL = {"mech": "Channel preview", "batch": "Test run", "ecg": "ECG reduction",
                "emg_all": "EMG result", "emg_detail": "EMG detail",
-               "noise": "Noise fidelity"}
+               "noise": "Noise fidelity", "segments": "EMG segments"}
 # the kinds that run automatically (on file select / settings change / Refresh). The
 # test run ('batch') is now automatic too, but MECHANICS-ONLY (no ECG/EMG work).
-_AUTO_KINDS = ("mech", "batch", "ecg", "emg_all", "emg_detail", "noise")
+# 'segments' is the EMG-only counterpart of 'mech' -- see _schedule, which gates
+# each to its own signal-set shape (caps.flow / caps.mode == 'emg_only').
+_AUTO_KINDS = ("mech", "batch", "ecg", "emg_all", "emg_detail", "noise", "segments")
 # the kinds whose result depends on the SELECTED file. 'noise' is deliberately absent: the
 # fidelity/noise profile is test-wide (built from the reference file + the whole input set),
 # so switching the previewed file must NOT blank or rebuild it. See _begin_file_switch.
-_FILE_KINDS = ("mech", "batch", "ecg", "emg_all", "emg_detail")
+_FILE_KINDS = ("mech", "batch", "ecg", "emg_all", "emg_detail", "segments")
 
 
 def _kinds_for_settings_path(path, caps=None):
@@ -86,10 +94,10 @@ def _kinds_for_settings_path(path, caps=None):
     computes from flow/pressure and never touches EMG at all. It is FALSE for an EMG-only
     set (``caps.mode == 'emg_only'``): there ``run_batch``'s own S2 branch (M-21) builds the
     test run's mechanics FROM the EMG channels via ``core.analysis.segments``, so an
-    EMG-channel-set or ``processing.emg.*`` edit there must also re-dispatch 'batch' — and,
-    forward-looking, the 'segments' preview job M-25 adds (harmless today: ``_schedule_all``
-    only ever dispatches a kind that is a member of ``_AUTO_KINDS``, which 'segments' is not
-    yet)."""
+    EMG-channel-set or ``processing.emg.*`` edit there must also re-dispatch 'batch' — and
+    the 'segments' preview job too (its own EMG-only counterpart of 'mech'; ``_schedule``
+    gates it to ``caps.mode == 'emg_only'``, so an edit under a flow-bearing set never
+    actually dispatches it, even though it is a member of ``_AUTO_KINDS``)."""
     # output / diagnostics and the optional pre-resample never surface in any preview panel
     if path == "output" or path.startswith("output.") or path.startswith("processing.sampling"):
         return frozenset()
