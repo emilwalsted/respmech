@@ -129,6 +129,52 @@ def test_the_run_action_bar_wraps_rather_than_summing_its_buttons(qapp, tmp_path
     win.close()
 
 
+def test_the_segments_action_band_fits_on_windows_metrics(qapp, tmp_path, windows_metrics):
+    """M-26's own new action band (the segments tab's twin of the Mechanics one) must not
+    demand the sum of its QC chip + button on the widest metrics we ship to — same ratio
+    guard as the Run action bar above, at the metrics that actually break these.
+
+    Runs a real (synchronous, no thread) batch first so the QC chip carries realistic
+    text, the same way the Mechanics band's own squeezable label (``mech_window_label``)
+    is never empty by the time anyone would size it in practice — an ElidingLabel
+    constructed empty proves nothing about its ability to give way under real content."""
+    import copy
+    import os
+
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.state import AppState
+    from respmech.ui.workers import BatchWorker
+
+    from _helpers import INPUT
+
+    s = synth_settings(str(tmp_path), data_out=_DATA_OUT, channels={
+        "flow": None, "poes": None, "pgas": None, "pdi": None, "volume": None})
+    s.processing.segmentation.method = "whole_file"
+    win = MainWindow(AppState(s))
+    win.resize(1200, 800)
+    win.show()
+    for _ in range(6):
+        qapp.processEvents()
+    pv = win.preview_screen
+    pv.file_rail.select_filename("synth_case_A.csv")
+    snap = copy.deepcopy(pv.state.settings)
+    worker = BatchWorker(snap, write=False, only_files=["synth_case_A.csv"])
+    captured = {}
+    worker.finished.connect(lambda r: captured.update(result=r))
+    worker.run()
+    pv._on_batch_result(captured["result"])
+    for _ in range(6):
+        qapp.processEvents()
+
+    band = pv._segments_action_band
+    natural, floor = band.sizeHint().width(), band.minimumSizeHint().width()
+    assert natural > 100, f"the segments action band reports a {natural} px natural width"
+    assert floor < natural * _WRAPPED, (
+        f"the segments action band demands {floor} px of its {natural} px natural width on "
+        f"Windows metrics — it cannot squeeze, so its whole width is forced on the window")
+    win.close()
+
+
 def test_the_emg_strips_wrap_rather_than_summing_their_chips(qapp, tmp_path):
     """The specific regression: the EMG subtab pages must not demand the sum of their chips.
 
