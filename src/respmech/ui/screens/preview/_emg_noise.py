@@ -48,7 +48,7 @@ except Exception:  # pragma: no cover
 from respmech.core.analysis.signals import Capabilities
 
 from ._figure_fit import _CompactFigureFitter, _fit_compact_figure, refit_compact_figure
-from ._jobs import _FileRunError, _TAB_ECG, _TAB_MECH, _TAB_NOISE
+from ._jobs import _FileRunError, _TAB_ECG, _TAB_MECH, _TAB_NOISE, _TAB_SEGMENTS
 from ._plot_helpers import _FitAxis, _check_icon_url, _pen, _plot_pal, _rms_envelope, _tick_colour
 
 
@@ -553,20 +553,28 @@ class _EmgNoiseMixin:
         """Ordered ``(widget, title)`` pairs for the sub-tab bar, given a
         :class:`~respmech.core.analysis.signals.Capabilities` shape (M-17, R7).
 
-        Mechanics is first in every plan this ticket makes reachable from the UI
-        (Flow only, Flow + Poes, the full family) — an EMG-only signal set would
-        replace it with a dedicated "EMG – segments" tab instead (M-26), which is
-        not built yet and is not reachable here: ``SignalSetDialog``'s EMG-only
-        preset stays disabled until M-28 activates it. Until then this function
-        has nothing to return for that shape, so it is not special-cased. EMG
-        channels being assigned is the sole trigger for the ECG-reduction/noise-
-        reduction tabs — independent of the flow/pressure family, since a "Flow
-        only"/"Flow + Poes" preset can carry EMG too (the "Also EMG" checkbox) —
-        matching the has-EMG-channels check this replaces. ``caps=None`` (a
-        malformed ``analysis.signals`` — see ``Capabilities.from_settings_or_none``)
-        has nothing safe to derive an EMG shape from, so it renders as Mechanics
-        alone, same as a shape with no EMG channels."""
-        plan = [(self._mech_tab, _TAB_MECH)]
+        The FIRST tab is the shape's own preview: Mechanics for every
+        flow-bearing shape (Flow only, Flow + Poes, the full family), or the
+        dedicated "EMG – segments" tab (M-26) for an EMG-only signal set — the
+        two are each other's counterpart, mirroring ``_schedule``'s 'mech'/
+        'segments' job gate exactly (``caps.flow`` vs. ``caps.mode ==
+        'emg_only'``), so this plan and that dispatch can never disagree about
+        which shape gets which preview. ``SignalSetDialog``'s EMG-only preset
+        stays disabled in the UI until M-28 activates it; this function is
+        already correct for it (exercised today via hand-built ``Settings``
+        in tests, same as M-25's worker/job-dispatch tests). EMG channels
+        being assigned is the sole trigger for the ECG-reduction/noise-
+        reduction tabs — independent of the flow/pressure family, since a
+        "Flow only"/"Flow + Poes" preset can carry EMG too (the "Also EMG"
+        checkbox), and an EMG-only set always carries it by definition
+        (``caps.emg`` is true whenever ``caps.mode == 'emg_only'``).
+        ``caps=None`` (a malformed ``analysis.signals`` — see
+        ``Capabilities.from_settings_or_none``) has nothing safe to derive a
+        shape from, so it renders as Mechanics alone, same as a flow-bearing
+        shape with no EMG channels."""
+        emg_only = bool(caps is not None and caps.mode == "emg_only")
+        first = (self._segments_tab, _TAB_SEGMENTS) if emg_only else (self._mech_tab, _TAB_MECH)
+        plan = [first]
         if caps is not None and caps.emg:
             plan.append((self._ecg_tab, _TAB_ECG))
             plan.append((self._emg_tab, _TAB_NOISE))
@@ -583,20 +591,46 @@ class _EmgNoiseMixin:
         the widgets never being recreated, only inserted/removed. Uses
         ``from_settings_or_none`` (not the raising ``from_settings``) because
         this runs on every settings sync AND on ``PreviewScreen`` construction,
-        which sits directly on ``MainWindow.__init__``'s no-try/except path."""
+        which sits directly on ``MainWindow.__init__``'s no-try/except path.
+
+        M-26: the FIRST tab is now itself part of the plan (Mechanics XOR the
+        segments tab), not a fixed, always-present tab — rebuilt generically
+        from ``subtab_plan`` instead of hardcoding index 0 to Mechanics, so a
+        signal-set change that flips flow-bearing <-> EMG-only swaps it too.
+
+        Self-review finding: removing the OLD first-slot tab while it is still
+        the CURRENT one lets Qt auto-select whatever tab happens to shift into
+        that slot (the ECG-reduction tab, if EMG channels are assigned on
+        either side of the flip) — not "whatever will replace it". A user
+        parked on Mechanics/segments at the moment a loaded analysis flips
+        shape (File ▸ Open of a different signal set, drag-and-drop — both
+        reachable today, independent of the M-28 UI gate on the EMG-only
+        preset) would be silently dropped onto ECG-reduction with no
+        indication anything moved. Fixed by remembering whether the user was
+        on THAT slot before the rebuild and, if so, explicitly restoring
+        current-ness to its replacement afterwards — inserting a tab at an
+        index at or before the current one only shifts the current INDEX in
+        Qt, it never changes which WIDGET is current, so this cannot be fixed
+        by insertion order alone."""
         caps = Capabilities.from_settings_or_none(self.state.settings)
         plan = self.subtab_plan(caps)
-        wanted = {widget for widget, _title in plan}
-        if self._ecg_tab in wanted:
-            if self.subtabs.indexOf(self._ecg_tab) < 0:
-                self.subtabs.insertTab(1, self._ecg_tab, _TAB_ECG)     # right after Mechanics(0)
-            if self.subtabs.indexOf(self._emg_tab) < 0:
-                self.subtabs.insertTab(2, self._emg_tab, _TAB_NOISE)   # after the ECG tab(1)
-        else:
-            for tab in (self._emg_tab, self._ecg_tab):
-                idx = self.subtabs.indexOf(tab)
-                if idx >= 0:
-                    self.subtabs.removeTab(idx)
+        wanted = [widget for widget, _title in plan]
+        was_on_first_slot = self.subtabs.currentWidget() in (self._mech_tab, self._segments_tab)
+        # drop anything no longer wanted, highest index first so earlier removals
+        # never shift the index of one still to come
+        for idx in reversed(range(self.subtabs.count())):
+            if self.subtabs.widget(idx) not in wanted:
+                self.subtabs.removeTab(idx)
+        # insert/reorder the wanted ones into their plan position
+        for pos, (widget, title) in enumerate(plan):
+            idx = self.subtabs.indexOf(widget)
+            if idx < 0:
+                self.subtabs.insertTab(pos, widget, title)
+            elif idx != pos:
+                self.subtabs.removeTab(idx)          # does not destroy the widget (B02 precedent)
+                self.subtabs.insertTab(pos, widget, title)
+        if was_on_first_slot:
+            self.subtabs.setCurrentWidget(plan[0][0])
 
     def _refresh_emg_channels(self):
         cols = list(self.state.settings.input.channels.emg)

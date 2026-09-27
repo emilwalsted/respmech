@@ -105,6 +105,45 @@ def test_previewscreen_closeevent_releases_plot_menus_without_a_mainwindow(qapp,
     pv.close()                              # idempotent: a second close must not raise
 
 
+def test_previewscreen_closeevent_releases_the_segments_stack_s_plot_menus(qapp, tmp_path):
+    """M-26's own new stack (``segments_plots``) needs the same coverage as the
+    Mechanics stack above — a DIFFERENT ``GraphicsLayoutWidget``, added to
+    ``PreviewScreen.shutdown()``'s own container tuple alongside the pre-existing ones."""
+    from respmech.ui.workers import stage_emg_segments_preview
+
+    before = _menu_census()
+
+    s = synth_settings(str(tmp_path), channels={
+        "flow": None, "poes": None, "pgas": None, "pdi": None, "volume": None})
+    s.processing.segmentation.method = "whole_file"
+    pv = PreviewScreen(AppState(s))
+    pv._refresh_files()
+    pv.file_rail.select_filename("synth_case_A.csv")
+    pv._render_segments_preview(
+        stage_emg_segments_preview(s, os.path.join(INPUT, "synth_case_A.csv")))
+
+    plot_items = list(pv.segments_plots.ci.items.keys())
+    assert plot_items and all(p.ctrlMenu is not None for p in plot_items), (
+        "the render must have built real PlotItems with menus, or this test proves nothing"
+    )
+    assert _menu_census() > before, (
+        "the render should have added new top-level QMenus, or the close-side assertion "
+        "below would pass vacuously"
+    )
+
+    pv.close()
+    _settle()
+
+    assert _menu_census() <= before, (
+        "PreviewScreen.closeEvent must release every menu the segments stack's own render "
+        "built too, exactly as it already does for the Mechanics stack"
+    )
+    assert all(p.ctrlMenu is None for p in plot_items), (
+        "closeEvent must call shutdown(), which now also closes segments_plots"
+    )
+    pv.close()                              # idempotent: a second close must not raise
+
+
 def _pump_until_write_done(qapp, rn, timeout=60.0):
     """``test_run_screen.py``'s own ``_pump_until_thread_done``, adapted to
     ``_write_thread`` instead of ``_thread``. Spins a REAL Qt event loop rather than
