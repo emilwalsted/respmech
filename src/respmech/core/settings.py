@@ -297,6 +297,38 @@ class BreathCountEntry:
     folder: str | None = None
 
 
+#: the closed set of manoeuvre labels a single breath can be typed as (M-19). ``ic``/
+#: ``fvc``/``ic_fvc`` are inspiratory-capacity/forced-vital-capacity manoeuvres (M-29
+#: extracts their values); ``max_insp``/``sniff`` are maximal-effort references (M-47's
+#: normalisation); ``rest`` marks a quiet segment usable as an EMG noise reference
+#: (M-22); ``other`` is any manoeuvre breath none of the above name. A typed breath is
+#: excluded from the tidal average the same way a manually excluded one is -- see
+#: ``core._legacy_ns.to_legacy_ns``'s union of ``exclude_breaths``/``breath_types``.
+BREATH_KINDS = ("ic", "fvc", "ic_fvc", "max_insp", "sniff", "rest", "other")
+
+
+@dataclass
+class BreathTypeEntry:
+    """One breath in one file, typed as a named manoeuvre rather than tidal breathing.
+
+    Flat, per-breath entries (never a ``breath_no -> kind`` dict: TOML table keys are
+    strings, so a dict keyed on an int would not survive ``from_dict(to_dict())`` --
+    see the "TOML-tabelnøgler er strenge" finding this mirrors ``ExcludeEntry`` for).
+    ``t_onset_s`` is a purely advisory time anchor (written when a breath is typed in
+    the UI, a later ticket) -- breath numbers are re-segmentation-relative, so nothing
+    here re-resolves it; it exists only so a future notice can flag a mismatch.
+    ``folder`` is the same carried-over-state provenance tag as ``ExcludeEntry.folder``
+    -- see ``_CARRIED_KINDS`` below, which is what actually wires rebase/relativize/
+    carried/clear for this field; adding the row there was the whole point of M-07.
+    """
+    file: str
+    breath: int
+    kind: str
+    label: str = ""
+    t_onset_s: float | None = None
+    folder: str | None = None
+
+
 @dataclass
 class ProcessingSettings:
     sampling: SamplingSettings = field(default_factory=SamplingSettings)
@@ -308,6 +340,7 @@ class ProcessingSettings:
     ptp: PtpSettings = field(default_factory=PtpSettings)
     exclude_breaths: list[ExcludeEntry] = field(default_factory=list)
     breath_counts: list[BreathCountEntry] = field(default_factory=list)
+    breath_types: list[BreathTypeEntry] = field(default_factory=list)
 
 
 @dataclass
@@ -530,6 +563,62 @@ class Settings:
                 raise SettingsError(
                     "processing.volume.trend_peak_min_distance_s must be at least one "
                     f"sample at the analysis rate ({fs_eff} Hz)")
+
+        # M-19: a typed breath is a per-breath override, so it needs the same kind of
+        # form/conflict checks exclude_breaths/breath_counts never got (nothing else in
+        # this method touches either of those today). Form first (kind/breath shape),
+        # THEN cross-entry conflicts, so a malformed entry is reported on its own terms
+        # rather than tripping a conflict check that assumes well-formed data.
+        for i, bt in enumerate(self.processing.breath_types):
+            # `_coerce` only builds a BreathTypeEntry from a dict-shaped TOML table
+            # element; a malformed one (e.g. a hand-edited `breath_types = [1, 2]`, a
+            # bare list of numbers instead of tables) passes the raw value through
+            # unchanged, and this is the FIRST code to actually read `.kind`/`.breath`
+            # off it -- self-review finding: without this guard that raises a raw
+            # AttributeError from validate(), not a SettingsError, which every caller of
+            # validate() assumes is the only exception it can raise. A hand-edited TOML
+            # is the only way to write this table at all today (no UI yet), so this is a
+            # front-line failure mode, not a hypothetical one.
+            if not isinstance(bt, BreathTypeEntry):
+                raise SettingsError(
+                    f"processing.breath_types[{i}] must be a table with file, breath "
+                    "and kind")
+            if bt.kind not in BREATH_KINDS:
+                raise SettingsError(
+                    f"processing.breath_types[{i}].kind must be one of "
+                    + ", ".join(repr(k) for k in BREATH_KINDS))
+            if isinstance(bt.breath, bool) or not isinstance(bt.breath, int) or bt.breath < 1:
+                raise SettingsError(
+                    f"processing.breath_types[{i}].breath must be a positive integer")
+
+        seen_typed: set[tuple[str, int]] = set()
+        for bt in self.processing.breath_types:
+            key = (bt.file, bt.breath)
+            if key in seen_typed:
+                raise SettingsError(
+                    f"processing.breath_types: breath {bt.breath} of {bt.file} is typed "
+                    "more than once")
+            seen_typed.add(key)
+
+        excluded_by_file: dict[str, set[int]] = {}
+        for e in self.processing.exclude_breaths:
+            excluded_by_file.setdefault(e.file, set()).update(e.breaths)
+        for bt in self.processing.breath_types:
+            if bt.breath in excluded_by_file.get(bt.file, ()):
+                raise SettingsError(
+                    f"processing.breath_types: breath {bt.breath} of {bt.file} is both "
+                    "typed and excluded")
+
+        # whole_file segmentation (M-21, EMG-only) produces exactly one segment, always
+        # numbered 1 -- a typed breath number above that can never correspond to
+        # anything, regardless of which file it names.
+        if seg.method == "whole_file":
+            for bt in self.processing.breath_types:
+                if bt.breath > 1:
+                    raise SettingsError(
+                        f"processing.breath_types: breath {bt.breath} > 1 is impossible "
+                        "under whole_file segmentation")
+
         return self
 
 
@@ -643,6 +732,11 @@ _CARRIED_KINDS: tuple[tuple[str, str, Callable[[Any], Any], Callable[[Any], None
      lambda emg: emg.ecg_reference_file, _clear_ecg_reference),
     ("processing.emg.normalization_reference_folder", "normalization_reference",
      lambda emg: emg.normalization_reference_file, _clear_normalization_reference),
+    # M-19: a typed breath always names a kind once the entry exists at all (kind is a
+    # required field, never optional the way ExcludeEntry.breaths can be empty), so
+    # unlike exclude_files' `if e.breaths` guard, every entry here is worth reporting.
+    ("processing.breath_types", "breath_type_files",
+     lambda e: e.file, None),
 )
 
 
@@ -683,6 +777,10 @@ class CarriedOverState:
     @property
     def normalization_reference(self) -> bool:
         return bool(self._by_kind.get("normalization_reference"))
+
+    @property
+    def breath_type_files(self) -> list[str]:
+        return self._by_kind.get("breath_type_files", [])
 
     def kinds_present(self) -> list[tuple[str, list[str]]]:
         """``(kind, names)`` for every kind that IS carried, in `_CARRIED_KINDS` table

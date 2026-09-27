@@ -111,6 +111,23 @@ _FRIENDLY_REGEXES = (
      "Whole-file, separator, fixed-window and burst segmentation are for EMG-only "
      f"analyses ({_SIGNAL_SET_CHANGE_LOCATION})"),
 )
+#: M-19: three "malformed entry" messages (kind not in the closed enum, breath not a
+#: positive integer, or the whole entry not even a table -- a hand-edited settings.toml
+#: self-review finding) share one translation -- all point at the same fix,
+#: right-clicking a breath in Preview & QC, regardless of which specific field was wrong.
+_BREATH_TYPE_ENTRY_RE = re.compile(
+    r"^processing\.breath_types\[\d+\](?:\.(?:kind must be one of |"
+    r"breath must be a positive integer)| must be a table)")
+#: the two per-file CONFLICT messages ("typed more than once" / "both typed and
+#: excluded") carry the breath number and filename as their only dynamic parts, so
+#: (unlike the static-text rows above) the friendly sentence re-inserts them via the
+#: captured groups rather than naming a fixed location.
+_BREATH_TYPE_CONFLICT_RE = re.compile(
+    r"^processing\.breath_types: breath (\d+) of (.+) is "
+    r"(?:typed more than once|both typed and excluded)$")
+_BREATH_TYPE_WHOLE_FILE_RE = re.compile(
+    r"^processing\.breath_types: breath (\d+) > 1 is impossible under whole_file "
+    r"segmentation$")
 #: a single-channel-role "is required" message, with an OPTIONAL " by analysis.signals"
 #: suffix (R7): the suffix means the role was named in an EXPLICIT ``analysis.signals``
 #: list (so the fix can also be "remove it from the signal set"); its absence means the
@@ -168,6 +185,15 @@ def friendly_settings_error(exc, settings=None) -> str:
             return (f"{label} channel not assigned: click 'Assign channels from data…', "
                     f"or remove {label} from the signal set (Setup ▸ Signals)")
         return f"{label} channel not assigned — click 'Assign channels from data…'"
+    if _BREATH_TYPE_ENTRY_RE.match(msg):
+        return "A breath type entry is not valid (Preview & QC, right-click a breath)"
+    m = _BREATH_TYPE_CONFLICT_RE.match(msg)
+    if m:
+        return (f"Breath {m.group(1)} of {m.group(2)} has conflicting entries: pick one "
+                "(Preview & QC)")
+    if _BREATH_TYPE_WHOLE_FILE_RE.match(msg):
+        return ("Whole-file mode has one segment: retype the file or choose Manual "
+                "separators (Setup ▸ Signals)")
     return _DOTTED_KEY_RE.sub("a setting", msg)
 
 

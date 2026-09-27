@@ -280,6 +280,16 @@ def ignorebreaths(curfile, settings):
     return d[curfile] if curfile in d else []
 
 
+def breathkinds(curfile, settings):
+    """Mirrors :func:`ignorebreaths`' file-keyed lookup, for the kind (not just the
+    exclusion) a typed breath carries (M-19). Returns ``{breath_no: kind}`` for
+    ``curfile`` -- read alongside ``ignorebreaths``' result in both segmenterers so a
+    typed breath's dict also gets ``kind`` set, not just ``ignored=True``."""
+    d = dict(getattr(settings.processing.mechanics, "breathtypes", []))
+    entries = d[curfile] if curfile in d else []
+    return {no: kind for no, kind, _t_onset_s in entries}
+
+
 class DegenerateBreathError(ValueError):
     """Raised when a detected breath's inspiration and expiration phases cannot be
     joined into one breath (a precondition failure, not a bug): typically an
@@ -328,7 +338,7 @@ def _breath_onset_time(insp, exp):
     return None
 
 
-def _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols, filename, is_boundary):
+def _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols, filename, is_boundary, kind=None):
     # The try is scoped to only the six joins below (not the whole dict literal), so a
     # ValueError from an unrelated future addition here is never mislabeled as a
     # degenerate breath (self-review finding, D25).
@@ -372,7 +382,7 @@ def _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols, filename, is_b
         ('pdi', pdi),
         ('breathcnt', breathcnt),
         ('ignored', ignored),
-        ('kind', None),
+        ('kind', kind),
         ('has_phases', True),
         ('entcols', entcols),
         ('emgcols', emgcols),
@@ -436,6 +446,7 @@ def separateintobreathsbyflow(filename, timecol, flow, volume, poes, pgas, pdi, 
     j = len(flow)
     bufferwidth = settings.processing.mechanics.breathseparationbuffer
     ib = ignorebreaths(filename, settings)
+    bk = breathkinds(filename, settings)
     i = 0
     breathno = 0
     breathcnt = 0
@@ -473,7 +484,8 @@ def separateintobreathsbyflow(filename, timecol, flow, volume, poes, pgas, pdi, 
         else:
             breathno += 1
             ignored = False
-        breaths[breathcnt] = _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols, filename, is_boundary)
+        breaths[breathcnt] = _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols, filename,
+                                           is_boundary, kind=bk.get(breathcnt))
     return breaths
 
 
@@ -488,6 +500,7 @@ def separateintobreathsbyvolume(filename, timecol, flow, volume, poes, pgas, pdi
     from scipy import signal
     breaths = OrderedDict()
     ib = ignorebreaths(filename, settings)
+    bk = breathkinds(filename, settings)
     breathno = 0
     breathcnt = 0
     invol = volume
@@ -533,7 +546,8 @@ def separateintobreathsbyvolume(filename, timecol, flow, volume, poes, pgas, pdi
         else:
             breathno += 1
             ignored = False
-        breaths[breathcnt] = _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols, filename, is_boundary)
+        breaths[breathcnt] = _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols, filename,
+                                           is_boundary, kind=bk.get(breathcnt))
     return breaths
 
 
