@@ -13,7 +13,7 @@ within a tight tolerance.
 
 ## What is covered
 
-`make_golden.py` runs a matrix of settings scenarios over two synthetic recordings
+`make_golden.py` runs a matrix of settings scenarios over synthetic recordings
 (`input/synth_case_A.csv`, `input/synth_case_B.csv`, produced by
 `generate_data.py`):
 
@@ -28,17 +28,18 @@ within a tight tolerance.
 | `poes_only`           | v2     | flow | average    | off | `analysis.signals = ["flow", "poes"]` — work of breathing, no Pgas/Pdi |
 | `emg_only_whole_file`  | v2     | n/a (EMG-only) | n/a | on | `analysis.signals = ["emg"]`, `processing.segmentation.method = "whole_file"` — each entire file is one segment, over a DEDICATED `input/synth_emgonly_*.csv` pair (own RNG stream, never `synth_case_*.csv`) |
 | `emg_only_separators`  | v2     | n/a (EMG-only) | n/a | on | same EMG-only input pair, `processing.segmentation.method = "separators"` — one manual boundary list PER FILE, giving a DIFFERENT segment count per file (4 and 3) |
+| `typed_ic_fvc_same_file` | v2  | flow | average    | on  | `processing.breath_types` marks breath #4 as an inspiratory-capacity manoeuvre and breath #7 as a forced-vital-capacity manoeuvre, IN THE SAME FILE — over a DEDICATED `input/synth_manoeuvre_A.csv` (own RNG stream, trapezoid breath shapes, never `synth_case_*.csv`). `test_typed_ic_fvc_same_file_vol_ic_matches_analytical_value` (`test_golden.py`) checks the extracted `vol_ic` against the literal analytical constant `3.0` (not just the committed reference), to `abs_tol=1e-9` — see `generate_data.py`'s `make_manoeuvre_file()`/`_manoeuvre_breath()` docstring for why the generator's plateau design makes that exact, not merely close. **v2-scenarios are extended by later work in the same programme**: a cross-file reference feature, operating-lung-volume derivation, and FVC/MFVL numerics will each ADD keys to this SAME scenario and regenerate it with their own justification — an added key alone is not a regression here. |
 
 `Oracle` names which generator is authoritative for that scenario's committed
 numbers: `legacy` = the frozen v1 oracle (`make_golden.py --write`, cross-checked
 by `golden_newcore.py`); `v2` = bagt directly from the v2 core
 (`golden_newcore.py --write`), for a scenario whose settings the legacy dict/
 `migrate_dict` path has no shape at all. `flow_only`/`poes_only`/`emg_only_whole_file`/
-`emg_only_separators` are all `v2` rows — each a committed
+`emg_only_separators`/`typed_ic_fvc_same_file` are all `v2` rows — each a committed
 `tests/golden/scenarios/<name>.toml`, since `analysis.signals` (and, for the two
-EMG-only rows, `processing.segmentation.method`/`separators`) has no legacy-dict shape
-to express it in; `V2_SCENARIOS` in `make_golden.py` is the table a feature ticket adds
-a `v2` row to.
+EMG-only rows, `processing.segmentation.method`/`separators`; for `typed_ic_fvc_same_file`,
+`processing.breath_types`) has no legacy-dict shape to express it in; `V2_SCENARIOS` in
+`make_golden.py` is the table a feature ticket adds a `v2` row to.
 
 **Regenerating `golden_reference.json` after adding a `v2` scenario merges, it never
 overwrites.** `golden_newcore.py --write` recomputes the ENTIRE `SCENARIOS` union
@@ -60,14 +61,17 @@ when every value is unchanged (these two new scenarios added ~34 KB combined and
 `git diff` still showed thousands of changed lines).
 
 **Golden job runtime:** measured locally (sandbox, `pytest tests/golden -q`,
-11 non-skipped + 5 skipped production tests) at ~11 s after adding
-`emg_only_whole_file`/`emg_only_separators` (up from ~8 s for the 9 non-skipped tests
-before them) — still the same order of magnitude, since each new scenario is one more
-`run_batch` over a small synthetic input pair, same as every other scenario here.
-`ci.yml`'s `golden` job (`timeout-minutes: 15`) was not itself re-measured on the real
-runner by this ticket (no Actions access from this environment) — confirm the actual CI
-duration on the merge commit that adds these two scenarios and raise `timeout-minutes`
-in the same commit only if it is ever observed to exceed ~10 minutes.
+13 non-skipped + 5 skipped production tests) at ~7.5 s after adding
+`typed_ic_fvc_same_file` plus its own dedicated
+`test_typed_ic_fvc_same_file_vol_ic_matches_analytical_value` test — still the same
+order of magnitude as the ~11 s measured for the 11 non-skipped tests before it
+(`emg_only_whole_file`/`emg_only_separators`), since the new scenario is one more
+`run_batch` over a small synthetic input file, same as every other scenario here; the
+apparent drop is sandbox timing noise, not a real speed-up. `ci.yml`'s `golden` job
+(`timeout-minutes: 15`) was not itself re-measured on the real runner by this ticket
+(no Actions access from this environment) — confirm the actual CI duration on the
+merge commit that adds this scenario, and raise `timeout-minutes` in the same commit
+only if it is ever observed to exceed ~10 minutes.
 
 For each scenario the reference stores: the merged **average** breath data, the
 **per-file** breath-by-breath tables, and a compact **processed-data** summary
