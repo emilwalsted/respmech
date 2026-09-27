@@ -44,8 +44,10 @@ try:
 except Exception:  # pragma: no cover
     _theme = None
 
+from respmech.core.analysis.signals import Capabilities
+
 from ._figure_fit import _CompactFigureFitter, _fit_compact_figure, refit_compact_figure
-from ._jobs import _FileRunError, _TAB_ECG, _TAB_NOISE
+from ._jobs import _FileRunError, _TAB_ECG, _TAB_MECH, _TAB_NOISE
 from ._plot_helpers import _FitAxis, _check_icon_url, _pen, _plot_pal, _rms_envelope, _tick_colour
 
 
@@ -545,12 +547,40 @@ class _EmgNoiseMixin:
         # (test run) table, so 'batch' is in the set now that the modal edits it.
         self._request_autorun({"ecg", "emg_all", "emg_detail", "noise", "batch"})
 
-    # -- EMG tab visibility / channels -------------------------------------
-    def _update_emg_tab_visibility(self):
-        """Show the two EMG sub-tabs only when EMG channels exist, in the fixed pipeline order
-        Mechanics(0) › EMG–ECG reduction(1) › EMG–noise reduction(2)."""
-        has_emg = bool(self.state.settings.input.channels.emg)
-        if has_emg:
+    # -- sub-tab visibility / channels -------------------------------------
+    def subtab_plan(self, caps):
+        """Ordered ``(widget, title)`` pairs for the sub-tab bar, given a
+        :class:`~respmech.core.analysis.signals.Capabilities` shape (M-17, R7).
+
+        Mechanics is first in every plan this ticket makes reachable from the UI
+        (Flow only, Flow + Poes, the full family) — an EMG-only signal set would
+        replace it with a dedicated "EMG – segments" tab instead (M-26), which is
+        not built yet and is not reachable here: ``SignalSetDialog``'s EMG-only
+        preset stays disabled until M-28 activates it. Until then this function
+        has nothing to return for that shape, so it is not special-cased. EMG
+        channels being assigned is the sole trigger for the ECG-reduction/noise-
+        reduction tabs — independent of the flow/pressure family, since a "Flow
+        only"/"Flow + Poes" preset can carry EMG too (the "Also EMG" checkbox) —
+        matching the has-EMG-channels check this replaces."""
+        plan = [(self._mech_tab, _TAB_MECH)]
+        if caps.emg:
+            plan.append((self._ecg_tab, _TAB_ECG))
+            plan.append((self._emg_tab, _TAB_NOISE))
+        return plan
+
+    def _update_subtabs(self):
+        """Build the sub-tab bar from :meth:`subtab_plan`, preserving each tab
+        widget's identity across a rebuild (renamed from
+        ``_update_emg_tab_visibility``, M-17): the has-EMG-channels boolean it
+        used to read directly now comes from ``Capabilities.from_settings``,
+        the one function every other relevance decision in the program also
+        consults, though today it can only ever agree with the old boolean —
+        see :meth:`subtab_plan`. ``emg_channel``/cleanup-contract tests rely on
+        the widgets never being recreated, only inserted/removed."""
+        caps = Capabilities.from_settings(self.state.settings)
+        plan = self.subtab_plan(caps)
+        wanted = {widget for widget, _title in plan}
+        if self._ecg_tab in wanted:
             if self.subtabs.indexOf(self._ecg_tab) < 0:
                 self.subtabs.insertTab(1, self._ecg_tab, _TAB_ECG)     # right after Mechanics(0)
             if self.subtabs.indexOf(self._emg_tab) < 0:
