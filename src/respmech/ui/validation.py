@@ -78,6 +78,20 @@ _FRIENDLY_SETTINGS_ERRORS = {
     "each recording)":
         "Trend anchor — absolute threshold cannot be negative (Preview & QC ▸ Mechanics "
         "▸ Advanced… ▸ End-expiratory trend)",
+    "processing.emg.noise.reference_mode must be 'auto', 'rest_segments' or 'interburst'":
+        "Noise reference source is not valid (Preview & QC ▸ EMG – noise reduction)",
+    "processing.emg.noise: no usable rest reference for an EMG-only signal set":
+        "No usable rest reference for noise reduction: type a segment as 'rest' in the "
+        "reference file, or give explicit reference intervals (Preview & QC ▸ EMG – "
+        "noise reduction)",
+    "processing.emg.noise.reference_mode='interburst' is not yet implemented":
+        "Inter-burst noise reference is not available yet — use a rest-typed segment "
+        "or explicit reference intervals instead (Preview & QC ▸ EMG – noise reduction)",
+    "processing.emg.noise.auto_prop is not yet supported for an EMG-only signal set -- "
+    "set processing.emg.noise.prop_decrease manually and turn auto_prop off":
+        "Automatic noise-reduction strength is not available for an EMG-only signal "
+        "set yet — set the noise-reduction strength manually (Preview & QC ▸ EMG – "
+        "noise reduction)",
 }
 #: messages whose text carries a dynamic suffix (e.g. "... at the analysis rate (500 Hz)")
 #: — matched by prefix, so the friendly text stands alone rather than gluing raw TOML
@@ -110,6 +124,11 @@ _FRIENDLY_REGEXES = (
     (re.compile(r"^processing\.segmentation\.method '[^']*' is for an EMG-only signal set$"),
      "Whole-file, separator, fixed-window and burst segmentation are for EMG-only "
      f"analyses ({_SIGNAL_SET_CHANGE_LOCATION})"),
+    # M-22: reference_mode's explicit, EMG-only-only alternatives, chosen while a flow
+    # channel is still declared — same location as the noise-reduction messages above.
+    (re.compile(r"^processing\.emg\.noise\.reference_mode='[^']*' is only valid for an "
+                r"EMG-only signal set$"),
+     f"Noise reference source needs an EMG-only signal set ({_SIGNAL_SET_CHANGE_LOCATION})"),
 )
 #: M-19: three "malformed entry" messages (kind not in the closed enum, breath not a
 #: positive integer, or the whole entry not even a table -- a hand-edited settings.toml

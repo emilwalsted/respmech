@@ -693,6 +693,54 @@ def test_run_report_processing_block_segmentation_line(tmp_path):
     assert "Segmentation:            separators (2 per file)" in report2
 
 
+def test_run_report_processing_block_noise_reference_line(tmp_path):
+    """M-22: a new 'Noise reference:' line names which of the resolved sources
+    (expiration/intervals/rest-typed segments) the shared profile was actually built
+    from -- shown only once noise reduction is on, and the SAME text on the
+    Provenance sheet's own row (_provenance_rows), so the two can never disagree."""
+    from respmech.core.io.writers import _provenance_rows, _write_run_report
+
+    result = SimpleNamespace(ok_files={}, failed_files={})
+    s = synth_settings(tmp_path, noise=True)          # use_expiration=False + intervals
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "EMG noise removal:       yes" in report
+    assert "Noise reference:         explicit reference intervals" in report
+    prov = _provenance_rows(s, datetime(2026, 7, 11))
+    row = prov.loc[prov["Key"] == "Noise reference", "Value"].iloc[0]
+    assert row == "explicit reference intervals"
+
+    # disabled: the line (and the Provenance row) disappear entirely -- nothing to
+    # report about a reference that will never be read.
+    s.processing.emg.noise.enabled = False
+    path2 = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report2 = open(path2, encoding="utf-8").read()
+    assert "Noise reference:" not in report2
+    prov2 = _provenance_rows(s, datetime(2026, 7, 11))
+    assert "Noise reference" not in set(prov2["Key"])
+
+
+def test_noise_reference_line_never_crashes_on_an_unrecognised_mode(tmp_path):
+    """resolve_noise_reference_mode() passes an explicit, non-'auto' reference_mode
+    through UNVALIDATED by design -- a settings object that reaches the writer without
+    Settings.validate() having run first (a test double, a future caller) could carry a
+    value the human-text table has no entry for. Self-review finding: a bare dict
+    lookup there would crash report generation with a KeyError over a cosmetic label;
+    the raw, unrecognised string is shown instead, matching the sibling
+    _segmentation_provenance_value's own "never crash on an unmapped value" stance."""
+    from respmech.core.io.writers import _provenance_rows, _write_run_report
+
+    result = SimpleNamespace(ok_files={}, failed_files={})
+    s = synth_settings(tmp_path, noise=True)
+    s.processing.emg.noise.reference_mode = "not_a_real_mode"   # bypasses validate()
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "Noise reference:         not_a_real_mode" in report
+    prov = _provenance_rows(s, datetime(2026, 7, 11))
+    row = prov.loc[prov["Key"] == "Noise reference", "Value"].iloc[0]
+    assert row == "not_a_real_mode"
+
+
 def test_partial_run_report_omits_the_cohort_figure_without_poes(tmp_path):
     """Self-review finding: the PARTIAL RUN block's ``cohort_bits`` list only checked
     ``save_pv_individual``, so a flow-only analysis (no Poes -- no Campbell figure ever
