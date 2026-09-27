@@ -74,11 +74,12 @@ except Exception:  # pragma: no cover
 from ._mechanics import _MechanicsMixin, _MechStackFloorFitter
 from ._ecg import _EcgMixin
 from ._emg_noise import _EmgNoiseMixin, NEEDS_ECG_HINT
+from ._segments import _SegmentsMixin
 from ._busy_overlay import BusyOverlay
 from ._figure_fit import _PlotTitleOverlay
 from ._jobs import (_TAB_MECH, _PANELS, _SPIN_TEXT, _KIND_LABEL, _AUTO_KINDS,
                    _FILE_KINDS, _kinds_for_settings_path, _changed_settings_paths,
-                   _Job, _ORPHANED_THREADS, _MAX_ACTIVE, _FileRunError)
+                   _Job, _ORPHANED_THREADS, _MAX_ACTIVE, _FileRunError, panels_for)
 
 
 #: why the manual ECG fields (and Auto-suggest) are inert while "Auto-detect for the batch" is on
@@ -88,7 +89,7 @@ AUTO_BATCH_HINT = ("Auto-detect for the batch is on: these five settings are re-
                    "to set them by hand.")
 
 
-class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
+class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, QWidget):
     status_changed = Signal(str)
     # emitted when a noise reference is chosen on the graph (feature B)
     noise_reference_changed = Signal(str, object, bool)
@@ -208,7 +209,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             "emg_all": self._on_emg_all_result,
             "emg_detail": self._on_emg_detail_result,
             "noise": self._on_noise_result,
-            "segments": self._render_emg_segments_preview,
+            "segments": self._render_segments_preview,
         }
 
     # -- construction -------------------------------------------------------
@@ -260,17 +261,28 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._mech_page = self._build_mech_tab()
         self._ecg_page = self._build_ecg_tab()     # inserted between Mechanics + noise when EMG cols exist
         self._emg_page = self._build_emg_tab()
+        self._segments_page = self._build_segments_tab()   # M-26: EMG-only's own first tab
         self._mech_tab = self._scrollable(self._mech_page)
         self._ecg_tab = self._scrollable(self._ecg_page)
         self._emg_tab = self._scrollable(self._emg_page)
-        self.subtabs.addTab(self._mech_tab, _TAB_MECH)
-        # D14: keep the Mechanics stack's floor eftergivende for whatever viewport this
-        # scroll area actually has right now — see _MechStackFloorFitter.
+        self._segments_tab = self._scrollable(self._segments_page)
+        # M-26: NOT self.subtabs.addTab(...) here any more — the first tab is now itself
+        # part of subtab_plan's decision (Mechanics XOR the segments tab), so
+        # _update_subtabs() below (which already builds the whole bar from the plan)
+        # inserts it too, instead of one caller hardcoding tab 0 and another managing
+        # the rest.
+        # D14: keep each stack's floor eftergivende for whatever viewport its own scroll
+        # area actually has right now — see _MechStackFloorFitter. Built unconditionally,
+        # like the tab pages themselves, since both viewports exist regardless of which
+        # one _update_subtabs actually inserts.
         self._mech_stack_fitter = _MechStackFloorFitter(self, self._mech_tab.viewport())
-        # D14: the QC verdict + its two per-file actions live OUTSIDE the scrolling page now
-        # (see _build_mech_action_band) — built here so it can be pinned in THIS screen's
+        self._segments_stack_fitter = _MechStackFloorFitter(
+            self, self._segments_tab.viewport(), update_fn=self._update_segments_stack_floor)
+        # D14: the QC verdict + its per-file action(s) live OUTSIDE the scrolling page now
+        # (see _build_mech_action_band) — built here so they can be pinned in THIS screen's
         # own root layout, below self.subtabs, instead of scrolling away with the page.
         self._mech_action_band = self._build_mech_action_band()
+        self._segments_action_band = self._build_segments_action_band()
 
         # B02: the file rail — one row per file, replacing the old file_combo. A left-hand
         # panel rather than folded into the top bar, since a filterable, stateful row list
@@ -317,7 +329,11 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # D14: fixed under the workspace, same as settings_screen.py pins its own QC strip
         # (self.qc) below its scrolling form — see _build_mech_action_band's docstring.
         root.addWidget(self._mech_action_band)
-        self._update_mech_action_band_visibility()
+        root.addWidget(self._segments_action_band)   # M-26: same placement, EMG-only's own band
+        # M-26: NOT called here yet — self.subtabs has no tabs at all until
+        # _update_subtabs() below inserts the first one (tab 0 is now part of its own
+        # plan, see subtab_plan), so currentWidget() would still be None here and hide
+        # both bands. Called once _update_subtabs() has actually populated the bar.
 
         # The control strips sit directly above wheel-zoomable plots, so an overshoot while
         # zooming used to land on a spin box and step it — and every ECG/noise parameter here
@@ -339,15 +355,16 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # dead patches: the page simply stopped moving under the cursor over the Campbell
         # diagram, the fidelity figure and the breath table.
         _passive = []
-        for _page in (self._mech_page, self._ecg_page, self._emg_page):
+        for _page in (self._mech_page, self._ecg_page, self._emg_page, self._segments_page):
             _passive.append([w for w in _page.findChildren(FigureCanvasQTAgg)]
                             + [w for w in _page.findChildren(QTableWidget)])
         self._page_wheel_guards = [
             _wheel.guard_scroll_area(a, extra=ex)
-            for a, ex in zip((self._mech_tab, self._ecg_tab, self._emg_tab), _passive)]
+            for a, ex in zip(
+                (self._mech_tab, self._ecg_tab, self._emg_tab, self._segments_tab), _passive)]
         # A panel scrolled half out of view must not report its spinner or its error card
         # off-screen — see BusyOverlay.centre_on_visible.
-        for _a in (self._mech_tab, self._ecg_tab, self._emg_tab):
+        for _a in (self._mech_tab, self._ecg_tab, self._emg_tab, self._segments_tab):
             _a.verticalScrollBar().valueChanged.connect(self._recentre_overlays)
         self._wheel_guard = _wheel.swallow_wheel(
             extra=[self.subtabs.tabBar()], parent=self)
@@ -370,6 +387,10 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             "detail": BusyOverlay(self.emg_plots),
             "detail_psd": BusyOverlay(self.emg_psd_canvas),   # the detail job also renders the PSD
             "fidelity": BusyOverlay(self.fidelity_canvas),
+            # M-26: the segments tab's own dedicated stack/table — the VIEWPORT for the
+            # stack, same reason 'raw' above uses one (it scrolls inside its panel).
+            "segstack": BusyOverlay(self._segments_scroll.viewport()),
+            "segtable": BusyOverlay(self.segtable),
         }
 
         self._refresh_emg_channels()
@@ -377,6 +398,9 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._load_noise_params()            # this already refreshes the band (D07) — no
         self._load_ecg_params()               # file is selected yet here, so it stays hidden;
         self._update_subtabs()     # the OLD unconditional _ensure_noise_region()
+        # M-26: now that _update_subtabs() has actually inserted the first tab (Mechanics
+        # or the segments tab), currentWidget() resolves to it and this shows the right band.
+        self._update_mech_action_band_visibility()
         # M-17 (R7): name the Campbell/flow-volume panel and its export button for the
         # signal set this analysis actually opened with, not the construction-time default.
         self._update_campbell_panel_title()
@@ -578,6 +602,12 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._run_active = active
         self.btn_process_file.setEnabled(self._process_ready and not active)
         self.btn_process_file.setToolTip(
+            "Locked while a run is in progress." if active
+            else "Run and write output for the previewed file only.")
+        # M-26: the segments tab's own twin button, same gate/wording — _process_ready is
+        # shared on purpose (Mechanics and the segments tab are mutually exclusive).
+        self.btn_process_segments_file.setEnabled(self._process_ready and not active)
+        self.btn_process_segments_file.setToolTip(
             "Locked while a run is in progress." if active
             else "Run and write output for the previewed file only.")
 
@@ -835,7 +865,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
                 continue
             if job in self._launch_queue:
                 self._launch_queue.remove(job)         # never started -> drop (no thread/finished)
-                self._clear_panel_overlays(*_PANELS[kind])   # ...and its spinner (no _on_job_done to stop it)
+                self._clear_panel_overlays(*job.panels)   # ...and its spinner (no _on_job_done to stop it)
             else:
                 if hasattr(job.worker, "cancel"):
                     try:
@@ -874,6 +904,9 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._table_model.set_dataframe(None)
         self.campbell.figure.clear(); self.campbell.draw()
         self._forget_campbell()      # the export must not resurrect a cleared diagram
+        self.segments_plots.clear(); self._segments_subplots = []   # M-26
+        self._segtable_model.set_dataframe(None)
+        self.segments_caption.setFullText("")
         self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []
         self._set_ecg_capture_title()   # drop the previous file's R-peak count/state
         self._set_ecg_processed_title()  # and the previous file's ON/OFF + suppression verdict
@@ -893,10 +926,12 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # _ensure_noise_region() call here could repaint a stale/mismatched band in the
         # window before the async detail render corrects it).
         self._refresh_noise_reference_band()
-        self._reset_qc_overview()    # neutral chip + disabled 'Process & write' (B02)
-        panels = [p for k in _FILE_KINDS for p in _PANELS[k]]
+        self._reset_qc_overview()    # neutral chip(s) + disabled 'Process & write' (B02, M-26)
+        # M-26: _panels_for, not the static _PANELS — 'batch' owns 'segtable' for the
+        # CURRENT (about to be re-dispatched) signal set, not necessarily 'table'/'campbell'.
+        panels = [p for k in _FILE_KINDS for p in self._panels_for(k)]
         if include_noise:
-            panels += _PANELS["noise"]
+            panels += self._panels_for("noise")
         self._clear_panel_overlays(*panels)   # dismiss stale spinners/cards on the cleared panels
 
     def _refresh_all(self):
@@ -916,6 +951,9 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._table_model.set_dataframe(None)
         self.campbell.figure.clear(); self.campbell.draw()
         self._forget_campbell()      # the export must not resurrect a cleared diagram
+        self.segments_plots.clear(); self._segments_subplots = []   # M-26
+        self._segtable_model.set_dataframe(None)
+        self.segments_caption.setFullText("")
         self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []
         self._set_ecg_capture_title()   # drop the previous analysis' R-peak count/state
         self._set_ecg_processed_title()  # and the previous analysis' ON/OFF + suppression verdict
@@ -929,7 +967,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._noise_has_result = False
         self._reset_breath_state()   # clears _bov/_breaths/_emg_all/result plot/_previewed_file
         self._refresh_noise_reference_band()   # re-attach + recompute (see _clear_file_panels, D07)
-        self._reset_qc_overview()    # neutral chip + disabled 'Process & write' (B02)
+        self._reset_qc_overview()    # neutral chip(s) + disabled 'Process & write' (B02, M-26)
         self._clear_panel_overlays(*self._overlays)   # dismiss stale spinners / error cards
 
     def _on_file_selected(self, name):
@@ -988,7 +1026,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
                 self._cancel_inflight(set(_AUTO_KINDS))
                 self._clear_file_panels(include_noise=True)
                 self._blanked_for_invalid = True
-            self._clear_panel_overlays(*_PANELS[kind])
+            self._clear_panel_overlays(*self._panels_for(kind))
             self._set_status(f"Setup incomplete: {why}")
             return
         if self._blanked_for_invalid:
@@ -1083,6 +1121,13 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._tokens[kind] += 1
         self._launch(kind, self._tokens[kind], worker)
 
+    def _panels_for(self, kind):
+        """The panel keys ``kind``'s dispatch right now would own, given the CURRENT
+        settings (M-26) — see ``_jobs.panels_for``'s own docstring for why a caller that
+        already has a dispatched ``_Job`` should read ``job.panels`` instead of calling
+        this again."""
+        return panels_for(kind, Capabilities.from_settings_or_none(self.state.settings))
+
     def _launch(self, kind, token, worker):
         old = self._jobs.pop(kind, None)
         if old is not None:
@@ -1097,12 +1142,15 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
                     except Exception:              # noqa: BLE001
                         pass
                 self._draining.add(old)            # still running -> keep referenced until it self-cleans
-        for p in _PANELS[kind]:
+        # frozen NOW, at dispatch time — never re-derived later from settings that may
+        # have since changed (M-26; see panels_for's own docstring)
+        panels = self._panels_for(kind)
+        for p in panels:
             self._overlays[p].start(_SPIN_TEXT[kind])
         thread = QThread()
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        job = _Job(kind, token, thread, worker)
+        job = _Job(kind, token, thread, worker, panels=tuple(panels))
         self._jobs[kind] = job
         # Worker -> GUI delivery is EXPLICITLY queued. AutoConnection decides
         # queued-vs-direct at emit time, and under a fast-emit race it can resolve a
@@ -1172,28 +1220,30 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # superseded by a newer same-kind job: drop the payload silently, and
         # only clear the spinner if no newer owner took over the panels — but
         # never wipe an error card the current owner already painted (a stale
-        # draining job finishing late must not erase the live job's error).
-        # A panel can now be shared across KINDS too ('raw' is in both
-        # _PANELS['mech'] and _PANELS['segments'], the two never dispatch for the
-        # same file at once, but a stale/superseded job of one kind can still be
-        # draining after a settings edit re-dispatches the other) — a stale stop()
-        # must not hide a DIFFERENT kind's genuinely live spinner on that same
-        # panel, so skip any panel another currently-active job also lists.
+        # draining job finishing late must not erase the live job's error). A panel
+        # CAN be listed by more than one currently-active job's own frozen `job.panels`
+        # (no two _AUTO_KINDS entries share one today, post-M-26 — 'segments' got its
+        # own dedicated panel — but 'batch's OWN panels can differ between two of ITS
+        # OWN in-flight/draining dispatches if the signal set changed mid-flight, see
+        # panels_for) — a stale stop() must not hide a genuinely live spinner some
+        # other still-active job also lists on that panel, so this stays a general
+        # defensive check rather than a special case tied to one specific pairing.
         if job.token != self._tokens[job.kind]:
             if job.kind not in self._jobs:
-                for p in _PANELS[job.kind]:
-                    owned_elsewhere = any(p in _PANELS[other.kind]
+                for p in job.panels:
+                    owned_elsewhere = any(p in other.panels
                                           for other in self._jobs.values())
                     if not self._overlays[p].error and not owned_elsewhere:
                         self._overlays[p].stop()
             self._update_actions(status=False)
             return
         label = _KIND_LABEL.get(job.kind, job.kind)
+        seg_chip = self.segments_qc_overview if "segtable" in job.panels else None
         err = job.error
         if err or result is None:
             detail = err or "The computation returned no data."
             self._set_status(f"{label} failed — {short_error(detail)}")
-            for p in _PANELS[job.kind]:
+            for p in job.panels:
                 # The diagnosis rides along in the card itself now, not only behind the "i"
                 # button — the status line carrying it is transient and, per the shared
                 # status-bar ownership rules, may not even be visible from this tab.
@@ -1205,7 +1255,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
                 cur = self._selected_filename()
                 if cur:
                     self.file_rail.mark_result(cur, ok=False, error=detail)
-                self._qc_overview_not_assessed(detail)
+                self._qc_overview_not_assessed(detail, chip=seg_chip)
             self._update_actions(status=False)
             return
         try:
@@ -1213,21 +1263,21 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         except _FileRunError as e:                     # a per-file analysis error -> "failed"
             detail = str(e)
             self._set_status(f"{label} failed — {short_error(detail)}")
-            for p in _PANELS[job.kind]:
+            for p in job.panels:
                 self._overlays[p].show_error(f"{label} failed — {short_error(detail)}", detail)
             self._update_actions(status=False)
             return
         except Exception:                              # noqa: BLE001 — a rendering bug
             detail = traceback.format_exc()
             self._set_status(f"{label} — display error: {short_error(detail)}")
-            for p in _PANELS[job.kind]:
+            for p in job.panels:
                 self._overlays[p].show_error(
                     f"{label} — display error: {short_error(detail)}", detail)
             if job.kind == "batch":
                 # a rendering bug in _on_batch_result itself (not a per-file analysis
                 # error, which _FileRunError above already covers) — the chip must not
                 # keep showing a stale prior verdict over a display-error card
-                self._qc_overview_not_assessed(detail)
+                self._qc_overview_not_assessed(detail, chip=seg_chip)
             self._update_actions(status=False)
             return
         # 'mech' is deliberately excluded: _render_preview_async only just returned from
@@ -1237,7 +1287,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # LAST one completes (ticket D15). Stopping them here would hide the busy
         # spinner over a panel that has not actually finished drawing yet.
         if job.kind != "mech":
-            for p in _PANELS[job.kind]:
+            for p in job.panels:
                 self._overlays[p].stop()
         if job.kind == "noise":
             self._noise_has_result = True   # the fidelity panel now holds a current result
@@ -1296,7 +1346,8 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # at each plot's OWN shutdown, rather than reaped from outside by conftest.py's
         # cross-window sweep after the fact.
         for _container in (self.plots, self.ecg_capture_plot, self.ecg_processed_plots,
-                            self.emg_raw_plots, self.emg_result_plots, self.emg_plots):
+                            self.emg_raw_plots, self.emg_result_plots, self.emg_plots,
+                            self.segments_plots):
             plot_perf.close_plots(_container)
 
     def panel_busy(self, key):

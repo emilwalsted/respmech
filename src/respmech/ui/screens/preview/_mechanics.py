@@ -146,7 +146,7 @@ def _buffer_debounce_hint(buffer_samples, resample, resample_to_frequency, nativ
 # EmgSegmentationError: a bad separator placement on an EMG-only set -- the
 # 'batch' test run reaches this via FileResult.error_kind exactly like the other three;
 # the 'segments' preview job never raises it at all (stage_emg_segments_preview catches
-# it itself, see _render_emg_segments_preview's own 'Not processed' status line).
+# it itself, see _segments.py's _render_segments_preview's own 'Not processed' status line).
 _SOFT_FILE_ERRORS = ("TrimError", "VolumeTrendError", "NoBreathsError", "EmgSegmentationError")
 
 # The Mechanics-advanced fields that change the volume the trend detector sees. The live
@@ -228,11 +228,16 @@ class _MechStackFloorFitter(QObject):
     anything is shown — so the first live measurement often arrives as a Show, not a Resize.
     """
 
-    def __init__(self, screen, viewport):
+    def __init__(self, screen, viewport, update_fn=None):
         super().__init__(viewport)
         self._screen = screen
         self._viewport = viewport
         self._pending = False
+        # M-26: bound per stack — the segments tab's own GraphicsLayoutWidget reuses this
+        # exact eftergivende-floor mechanism via its own update_fn (_update_segments_stack_
+        # floor) instead of the Mechanics-specific _update_mech_stack_floor every prior
+        # instance defaulted to.
+        self._update_fn = update_fn if update_fn is not None else screen._update_mech_stack_floor
         viewport.installEventFilter(self)
 
     def eventFilter(self, obj, ev):
@@ -243,7 +248,7 @@ class _MechStackFloorFitter(QObject):
 
     def _run(self):
         self._pending = False
-        self._screen._update_mech_stack_floor()
+        self._update_fn()
 
 
 class _MechanicsMixin:
@@ -400,14 +405,25 @@ class _MechanicsMixin:
             pass
 
     def _update_mech_action_band_visibility(self):
-        """Show the Mechanics action band (D14) only while the Mechanics sub-tab is the
-        current one — the ECG/EMG sub-tabs have no equivalent band, and it would otherwise
-        sit fixed under whichever page happens to be showing. Compares the TAB WRAPPER
-        (``_mech_tab``), not the page, because that is what ``self.subtabs`` actually holds
-        (see the comment in ``PreviewScreen._build`` on why the wrapper is the tab item)."""
+        """Show each tab's own action band only while ITS sub-tab is the current one —
+        the ECG/noise sub-tabs have no equivalent band, and a band would otherwise sit
+        fixed under whichever page happens to be showing. Compares the TAB WRAPPER
+        (``_mech_tab``/``_segments_tab``), not the page, because that is what
+        ``self.subtabs`` actually holds (see the comment in ``PreviewScreen._build`` on
+        why the wrapper is the tab item).
+
+        M-26: now toggles the segments tab's own band too — 'accepts both tabs' rather
+        than being Mechanics-only, since Mechanics and the segments tab are mutually
+        exclusive (never both present in the same ``subtab_plan``, see ``_schedule``'s
+        'mech'/'segments' gate), so exactly one of the two bands, or neither (ECG/noise),
+        is ever visible at once."""
+        cur = self.subtabs.currentWidget()
         band = getattr(self, "_mech_action_band", None)
         if band is not None:
-            band.setVisible(self.subtabs.currentWidget() is self._mech_tab)
+            band.setVisible(cur is self._mech_tab)
+        seg_band = getattr(self, "_segments_action_band", None)
+        if seg_band is not None:
+            seg_band.setVisible(cur is getattr(self, "_segments_tab", None))
 
     def _build_mech_action_band(self):
         """The Mechanics QC verdict + its two per-file actions (P16/P17), built as a small
@@ -479,29 +495,44 @@ class _MechanicsMixin:
         and this button: clearing what a panel shows and clearing the widget that judges
         it must be the same act. Called from ``_clear_file_panels`` (a file switch/blank);
         the mechanics render (``_render_preview``) is what re-enables the button for a
-        file that actually loaded."""
-        self.qc_overview.setText("QC:  —")
-        self.qc_overview.setProperty("status", "muted")
-        self.qc_overview.style().unpolish(self.qc_overview)
-        self.qc_overview.style().polish(self.qc_overview)
+        file that actually loaded.
+
+        M-26: resets BOTH the Mechanics chip and the segments tab's own chip
+        unconditionally — this runs on every file switch regardless of which shape/tab
+        is currently active, so the one that is not showing must not be left stale
+        either (it becomes visible again the moment the signal set changes back)."""
+        for chip in (self.qc_overview, getattr(self, "segments_qc_overview", None)):
+            if chip is None:
+                continue
+            chip.setText("QC:  —")
+            chip.setProperty("status", "muted")
+            chip.style().unpolish(chip)
+            chip.style().polish(chip)
         self.mech_window_label.setFullText("")
         self.mech_window_label.setToolTip(self._MECH_WINDOW_TOOLTIP)
         self._process_ready = False
         self.btn_process_file.setEnabled(False)
+        if hasattr(self, "btn_process_segments_file"):
+            self.btn_process_segments_file.setEnabled(False)
 
-    def _qc_overview_not_assessed(self, detail):
+    def _qc_overview_not_assessed(self, detail, chip=None):
         """The chip's honest state while the test run itself failed or was skipped —
         called from ``_on_batch_result``'s error branches and from ``_on_job_done``'s
-        'batch' failure branch. Purely presentational: no computed value changes."""
-        self.qc_overview.setText(f"QC:  not assessed — {short_error(str(detail))}")
-        self.qc_overview.setProperty("status", "warn")
-        self.qc_overview.style().unpolish(self.qc_overview)
-        self.qc_overview.style().polish(self.qc_overview)
+        'batch' failure branch. Purely presentational: no computed value changes.
+        ``chip`` (M-26): the segments tab's own QC chip for an EMG-only 'batch' run,
+        defaulting to the Mechanics chip unchanged."""
+        chip = chip if chip is not None else self.qc_overview
+        chip.setText(f"QC:  not assessed — {short_error(str(detail))}")
+        chip.setProperty("status", "warn")
+        chip.style().unpolish(chip)
+        chip.style().polish(chip)
 
-    def _update_qc_overview(self, fr):
+    def _update_qc_overview(self, fr, chip=None):
         """P16: a persistent, at-a-glance quality summary of the current test run —
         breaths used/excluded plus a conservative flag for any non-physiological
-        per-breath value (so a suspect run is obvious without reading the table)."""
+        per-breath value (so a suspect run is obvious without reading the table).
+        ``chip`` (M-26): see ``_qc_overview_not_assessed``."""
+        chip = chip if chip is not None else self.qc_overview
         bt = getattr(fr, "breaths_table", None)
         total = len(fr.breaths) if getattr(fr, "breaths", None) else (len(bt) if bt is not None else 0)
         used = len(bt) if bt is not None else 0
@@ -531,10 +562,10 @@ class _MechanicsMixin:
             status = "warn"
         else:
             msg += "   ·  no flags"
-        self.qc_overview.setText(msg)
-        self.qc_overview.setProperty("status", status)
-        self.qc_overview.style().unpolish(self.qc_overview)
-        self.qc_overview.style().polish(self.qc_overview)
+        chip.setText(msg)
+        chip.setProperty("status", status)
+        chip.style().unpolish(chip)
+        chip.style().polish(chip)
 
     def _set_analysis_window(self, data):
         """D23 (UI-overhaul): word the trim window at the persistent spot beside the QC
@@ -1212,63 +1243,10 @@ class _MechanicsMixin:
         self._raw_label_y = self._safe_top(emg[:, 0])
         self._repaint_view_breaths("raw")
 
-    def _render_emg_segments_preview(self, data):
-        """The 'segments' job's render entry point (EMG-only signal sets):
-        stage_emg_segments_preview's spans, drawn provisionally in the EXISTING raw/
-        detail/result EMG views via the same overlay machinery a flow-bearing set's
-        breaths already use (_render_raw_stack/_repaint_view_breaths) — an EMG-only set
-        has none of the mechanics stack's flow/volume/pressure channels to shade breaths
-        on, so self._channel_plots stays empty and _draw_breath_overlays is never
-        reached here. A dedicated 'EMG - segments' tab (fane-widget/action band/segtable)
-        is a later ticket's scope; until then this is the whole render for this job.
-
-        Synchronous, unlike 'mech' (_render_preview_async): D15's deferred-stage split
-        exists for the mechanics stack's own cost profile (up to 1210 items across five
-        channel plots on a long recording), which BreathSpansItem already bounds to O(1)
-        per plot regardless of span count — the raw EMG stack this draws into is the
-        same bounded shape, and an EMG-only set's segment count is small by construction
-        (whole_file = 1, separators = a user-placed handful), so there is no equivalent
-        cost here to split around."""
-        self._mech_render_gen += 1
-        self._trim_offset_s = 0.0                # already the file's own absolute clock
-        # Fold (ignored, kind) into ONE pseudo-kind, exactly as stage_mechanics_preview
-        # already does for a breath's own kind-or-'excluded'-or-None -- the EMG-view
-        # overlay machinery (_paint_breaths/_breath_brush) only ever reads a single kind,
-        # and stage_emg_segments_preview's own spans (a Qt-free, directly testable shape)
-        # keep 'ignored' and 'kind' apart instead of pre-folding them itself.
-        self._breaths = [
-            (num, t0, t1, kind if kind else ("excluded" if ignored else None))
-            for (num, t0, t1, ignored, kind) in data["spans"]
-        ]
-        # Segments are not mechanics-stack breaths -- there is no click-to-toggle surface
-        # for them here yet (a later ticket's scope), so _breath_spans/_regions/_texts
-        # stay empty; a
-        # stray click on the (nonexistent) mechanics stack's _on_plot_clicked already
-        # guards on `if not self._breath_spans: return`.
-        self._breath_spans = {}
-        self._breath_regions = {}
-        self._breath_texts = {}
-        self._render_raw_stack(data["emg"], data["fs"], data.get("emg_flow"))
-        # segments are now known -> (re)number any EMG detail/result already rendered
-        self._repaint_view_breaths("detail")
-        self._repaint_view_breaths("result")
-        self._previewed_file = data["name"]
-        nseg = len(data["spans"])
-        nign = sum(1 for (_n, _a, _b, ignored, _k) in data["spans"] if ignored)
-        if data.get("segment_error"):
-            # A precondition failure of THIS recording's separator configuration, not a
-            # bug (EmgSegmentationError) -- status line only, never a copyable
-            # 'failed' card: mirrors stage_mechanics_preview's own TrimError branch,
-            # which shows the raw channels with an explanatory status too.
-            self._set_status(f"{data['name']}: Not processed — {data['segment_error']}")
-        else:
-            self._set_status(
-                f"{data['name']}: {nseg} segment{'s' if nseg != 1 else ''}"
-                + (f" ({nign} excluded)" if nign else "") + ".")
-        # mech_caption is the Mechanics-stack's own "click a shaded breath…" caption
-        # (a later ticket's separator-placement scope, not this one's) -- left as whatever
-        # _reset_breath_state/_clear_file_panels already set (blank) rather than made to
-        # claim an include/exclude interaction that does not exist here yet.
+    # M-25's provisional 'segments' renderer (_render_emg_segments_preview) lived here —
+    # drawing into the raw EMG stack with no click surface at all, since no dedicated tab
+    # existed yet. M-26 replaces it with the real, interactive one:
+    # _segments.py::_SegmentsMixin._render_segments_preview.
 
     # -- feature A: breath overlays + include/exclude/type ------------------
     @staticmethod
@@ -1409,19 +1387,29 @@ class _MechanicsMixin:
         omitted from per-breath numbering — it is implicit from context on every graph."""
         return f"#{num}"
 
-    def _draw_breath_overlays(self, spans, label_y=0.0, carried=False):
-        """Shade every breath + a number label on the mechanics stack. One
-        BreathSpansItem PER PLOT carries every breath's region (D15) — the old
-        per-breath pg.LinearRegionItem (plus its now-dropped redundant boundary
-        line, see BreathSpansItem's docstring) is gone; only the label stays a
-        per-breath TextItem, same as before. ``spans``: ``(n, t0, t1, kind)`` — see
-        ``_breath_brush``'s docstring for what ``kind`` may be."""
+    def _draw_breath_overlays(self, spans, label_y=0.0, carried=False, plots=None):
+        """Shade every breath + a number label on ``plots`` (default: the Mechanics
+        channel stack, ``self._channel_plots``). One BreathSpansItem PER PLOT carries
+        every breath's region (D15) — the old per-breath pg.LinearRegionItem (plus its
+        now-dropped redundant boundary line, see BreathSpansItem's docstring) is gone;
+        only the label stays a per-breath TextItem, same as before. ``spans``:
+        ``(n, t0, t1, kind)`` — see ``_breath_brush``'s docstring for what ``kind`` may be.
+
+        ``plots`` (M-26): the segments tab's own stack passes its subplot list here
+        instead, reusing this exact click/type-menu-bearing overlay machinery — safe
+        because it writes into the SAME shared ``_breath_spans``/``_breath_regions``/
+        ``_breath_texts``/``_mech_unpin`` state ``_toggle_breath``/``_set_breath_type``
+        already read generically, and Mechanics and the segments tab are never both
+        rendering breaths at once (a signal set is either flow-bearing or EMG-only,
+        never both — see ``_schedule``'s 'mech'/'segments' gate)."""
+        if plots is None:
+            plots = self._channel_plots
         self._mech_unpin()               # the old labels are torn down with their pin slot
         self._breath_spans = {n: (t0, t1) for (n, t0, t1, _k) in spans}
         self._breath_regions = {n: [] for (n, _0, _1, _k) in spans}   # n -> [(item, index), ...]
         self._breath_texts = {}
         brushes_by_index = [self._breath_brush(kind, carried=carried) for _n, _t0, _t1, kind in spans]
-        for plot in self._channel_plots:
+        for plot in plots:
             item = BreathSpansItem()
             item.set_spans([(t0, t1, brushes_by_index[i], n)
                             for i, (n, t0, t1, _k) in enumerate(spans)])
@@ -1430,16 +1418,16 @@ class _MechanicsMixin:
             plot.addItem(item)
             for i, (n, _t0, _t1, _k) in enumerate(spans):
                 self._breath_regions[n].append((item, i))
-        if self._channel_plots:
+        if plots:
             for n, t0, t1, kind in spans:
                 txt = self._breath_text(n, kind)
                 txt.setPos((t0 + t1) / 2.0, label_y)
-                self._channel_plots[0].addItem(txt, ignoreBounds=True)
+                plots[0].addItem(txt, ignoreBounds=True)
                 self._breath_texts[n] = txt
-        if self._channel_plots and self._breath_texts:
+        if plots and self._breath_texts:
             # size the headroom from the label's REAL rendered height, not a guess
-            self._label_headroom(self._channel_plots[0], label_px=self._label_px(self._breath_texts))
-            self._mech_unpin = self._pin_breath_labels(self._channel_plots[0], self._breath_texts)
+            self._label_headroom(plots[0], label_px=self._label_px(self._breath_texts))
+            self._mech_unpin = self._pin_breath_labels(plots[0], self._breath_texts)
 
     def _breath_at(self, t):
         for n, (t0, t1) in self._breath_spans.items():
@@ -1905,10 +1893,29 @@ class _MechanicsMixin:
         return len(breaths)
 
     def _on_batch_result(self, result):
-        """Render the automatic mechanics test run: the per-breath table + Campbell (the
-        batch is mechanics-only, so no EMG/fidelity here). The noise_report branch is
-        retained for the direct-call path that still carries one."""
+        """Render the automatic test run. For a flow-bearing set: the per-breath table +
+        Campbell (mechanics-only, so no EMG/fidelity here). For an EMG-only set (M-26):
+        the segments tab's own per-segment table instead — there is no flow/volume/
+        pressure to draw a Campbell diagram against, and the Mechanics tab holding
+        ``self.table``/``self.campbell`` is not even shown for that shape (see
+        ``subtab_plan``). The noise_report branch is retained for the direct-call path
+        that still carries one, and applies to both shapes alike.
+
+        Reads CURRENT caps (not the dispatching job's own frozen ``job.panels``, unlike
+        ``_on_job_done``'s generic spinner/error bookkeeping) because this method has no
+        ``job`` parameter at all — it is called generically as ``_RENDER[job.kind]
+        (result)``. Safe only because ``_on_job_done`` already returned early on a stale
+        job (``job.token != self._tokens[job.kind]``) before ever reaching here, and any
+        settings edit that changes ``caps.mode`` synchronously bumps ``_tokens['batch']``
+        (``sync_from_settings`` -> ``_cancel_inflight``) before the GUI event loop can
+        deliver a stale job's queued ``finished`` signal — so by the time this runs,
+        "not stale" already implies "caps unchanged since dispatch", i.e. this always
+        agrees with what ``self._panels_for('batch')`` would also say. Re-check this
+        invariant if `_RENDER` calls are ever made asynchronous or a caps-affecting edit
+        is ever allowed to bypass `sync_from_settings`'s synchronous token bump."""
         cur = self._selected_filename()
+        caps = Capabilities.from_settings_or_none(self.state.settings)
+        emg_only = bool(caps is not None and caps.mode == "emg_only")
         fr = None
         if getattr(result, "files", None):
             fr = result.files.get(cur) or next(iter(result.files.values()), None)
@@ -1917,18 +1924,22 @@ class _MechanicsMixin:
             kind = getattr(fr, "error_kind", None) or str(err).split(":", 1)[0]
             if cur:
                 self.file_rail.mark_result(cur, ok=False, error=str(err))
-            self._qc_overview_not_assessed(err)
+            self._qc_overview_not_assessed(
+                err, chip=self.segments_qc_overview if emg_only else None)
             if kind in _SOFT_FILE_ERRORS:
-                # A precondition failure of THIS recording, not a fault: the mech preview
-                # keeps drawing the channels, so don't raise a 'Test run failed' card over
-                # them. The reason still has to live on these two panels — the status line
-                # is a single shared label that the EMG/ECG jobs overwrite moments later,
-                # which would leave a blank table and Campbell explaining nothing.
-                self._table_model.set_dataframe(None)
-                self._set_wob_table_note(None)
-                self.campbell.figure.clear(); self.campbell.draw()
-                self._forget_campbell()   # the export must not resurrect a cleared diagram
-                for p in _PANELS["batch"]:
+                # A precondition failure of THIS recording, not a fault: the mech/segments
+                # preview keeps drawing the channels, so don't raise a 'Test run failed'
+                # card over them. The reason still has to live on the panel(s) — the
+                # status line is a single shared label that the EMG/ECG jobs overwrite
+                # moments later, which would leave a blank table explaining nothing.
+                if emg_only:
+                    self._segtable_model.set_dataframe(None)
+                else:
+                    self._table_model.set_dataframe(None)
+                    self._set_wob_table_note(None)
+                    self.campbell.figure.clear(); self.campbell.draw()
+                    self._forget_campbell()   # the export must not resurrect a cleared diagram
+                for p in self._panels_for("batch"):
                     self._overlays[p].show_error(
                         f"Not processed — {short_error(str(err))}", str(err))
                 return
@@ -1936,9 +1947,13 @@ class _MechanicsMixin:
             raise _FileRunError(err)
         if cur:
             self.file_rail.mark_result(cur, ok=True, breaths=len(fr.breaths_table))
-        self._fill_table(fr.breaths_table)
-        self._draw_campbell_or_loop(fr.breaths)
-        self._update_qc_overview(fr)                  # P16 QC line, for THIS file only
+        if emg_only:
+            self._fill_segtable(fr.breaths_table)
+            self._update_qc_overview(fr, chip=self.segments_qc_overview)
+        else:
+            self._fill_table(fr.breaths_table)
+            self._draw_campbell_or_loop(fr.breaths)
+            self._update_qc_overview(fr)                  # P16 QC line, for THIS file only
         nr = getattr(result, "noise_report", None)
         if nr:
             self.render_noise_report(result)         # sets its own status incl. prop_decrease
