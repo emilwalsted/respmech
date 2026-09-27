@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton,
                                QScrollArea, QSplitter, QTableWidget, QTableWidgetItem,
                                QTabWidget, QVBoxLayout, QWidget)
-from PySide6.QtCore import Qt, QEvent, QObject, QRectF, QSize, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QEvent, QObject, QPointF, QRectF, QSize, QThread, QTimer, Signal
 from PySide6.QtGui import QFont
 
 import pyqtgraph as pg
@@ -467,6 +467,60 @@ class BreathSpansItem(pg.GraphicsObject):
             return
         ev.accept()
         self.typeRequested.emit(breath_no, ev.scenePos())
+
+
+class SeparatorLinesItem(pg.GraphicsObject):
+    """One aggregate item per plot that paints every manual EMG-segmentation separator
+    (M-27) as a thin dashed vertical line spanning the current view's full height —
+    the same one-item-per-plot design ``BreathSpansItem`` uses above and for the same
+    reason (a recording with many separators must not cost one QGraphicsItem apiece).
+
+    Y-extent tracks the current view exactly like ``BreathSpansItem``'s fill does
+    (``self.viewRect()``, refreshed by the base class on every view-transform change),
+    so ``dataBounds`` returns ``None`` for the y-axis for the identical reason
+    ``BreathSpansItem``'s does: an item whose y-extent is DERIVED from the view must
+    never feed back into that view's own y-autorange. Unlike ``BreathSpansItem``, a
+    separator line has zero width, so it never claims a mouse click either (placing/
+    removing one is resolved from the SCENE-level click position in
+    ``_place_or_remove_separator``, before this item — or the breath-span fill behind
+    it — ever sees the event): ``setAcceptedMouseButtons(Qt.NoButton)`` keeps it a
+    pure painter, matching how a breath span's own gaps already let a click fall
+    through to the scene."""
+
+    def __init__(self):
+        super().__init__()
+        self._times = []
+        self.setAcceptedMouseButtons(Qt.NoButton)
+
+    def set_times(self, times):
+        """Replace the full set of separator times (seconds, the recording's own
+        absolute clock — the same coordinate ``SeparatorEntry.times_s`` stores)."""
+        self._times = sorted(times)
+        self.prepareGeometryChange()
+        self.update()
+
+    def boundingRect(self):
+        vr = self.viewRect()
+        br = QRectF(vr) if vr is not None else QRectF()
+        if self._times:
+            br.setLeft(min(self._times))
+            br.setRight(max(self._times))
+        return br
+
+    def paint(self, p, *args):
+        if not self._times:
+            return
+        vr = self.viewRect()
+        full = QRectF(vr) if vr is not None else self.boundingRect()
+        top, bottom = full.top(), full.bottom()
+        p.setPen(pg.mkPen(_plot_pal()["separator"], width=1, style=Qt.DashLine))
+        for t in self._times:
+            p.drawLine(QPointF(t, top), QPointF(t, bottom))
+
+    def dataBounds(self, axis, frac=1.0, orthoRange=None):
+        if axis == 0:
+            return (min(self._times), max(self._times)) if self._times else None
+        return None            # never feeds this item's view-derived y-extent back in
 
 
 _CHECK_ICON_PATH = None
