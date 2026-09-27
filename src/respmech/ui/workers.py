@@ -1019,9 +1019,17 @@ def stage_noise_fidelity(settings: Settings, cancel_check=None) -> dict:
         # single-line, actionable message (rendered by _on_noise_result -> _FileRunError)
         # instead of a raw traceback. Genuine bugs (IndexError / KeyError / numeric) are NOT
         # caught here and still propagate.
+        #
+        # effective_signals(settings), not the _or_none form: by this point ``to_legacy_ns``
+        # above has already run ``Capabilities.from_settings`` (RAW) successfully, which calls
+        # the identical ``effective_signals`` -- so a malformed ``analysis.signals`` that would
+        # make this raise has ALREADY crashed this function earlier and unconditionally, before
+        # this except clause could ever be reached. This call is therefore exactly as safe as
+        # ``to_legacy_ns``'s own; degrading it here alone would not make the function tolerant
+        # of malformed settings (a pre-existing, out-of-scope property of this function).
         name = os.path.basename(ref_path) if ref_path else "the rest reference"
-        # M-24: the fix that actually applies depends on the signal set. A flow-bearing set's
-        # most common cause is a misassigned or inverted flow channel, so the reference has no
+        # The hint that actually applies depends on the signal set. A flow-bearing set's most
+        # common cause is a misassigned or inverted flow channel, so the reference has no
         # segmentable breaths for the quiet-expiration clip -- 'use expiration' and reference
         # intervals both mean something there. An EMG-only set has neither a flow channel nor
         # an expiration phase; its own two buildable sources (M-22) are a rest-typed segment
