@@ -919,6 +919,57 @@ def test_get_started_and_explore_sample_are_repeatable_from_the_menu(qapp, isola
     win.close()
 
 
+@pytest.mark.parametrize("signals, expected_filename", [
+    (["flow"], "sample_recording_flow.csv"),
+    (["flow", "poes"], "sample_recording_flow_poes.csv"),
+], ids=["flow_only", "poes_only"])
+def test_explore_sample_follows_the_current_declared_signal_set(
+        qapp, isolated_prefs, signals, expected_filename):
+    """'File/Analysis > Explore with sample data' (unlike the startup door) follows
+    whichever signal set the CURRENT analysis declares -- choosing 'Flow only' first and
+    then exploring opens the reduced flow-only sample, not the complete recording."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    win.settings_screen.apply_signal_set(signals)
+    win._explore_sample()
+    assert win.settings_screen.state.is_sample is True
+    assert win.settings_screen.state.settings.input.files == expected_filename
+    assert win.settings_screen.state.settings.analysis.signals == signals
+    win.close()
+
+
+def test_explore_sample_with_emg_declared_still_opens_the_full_recording(qapp, isolated_prefs):
+    """Self-review finding: Capabilities.mode strips 'emg' before classifying (a preset's
+    'Also EMG' toggle is orthogonal to the flow/pressure shape), so 'Flow only' + 'Also
+    EMG' reports the SAME mode as plain 'Flow only'. Mapping that straight to the 'flow'
+    sample variant would silently drop the very EMG channel (and the ECG-removal/noise-
+    reduction demo) the declared set asked for -- EMG in the declared set must fall back
+    to the complete recording instead."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.sample import FILENAME
+    win = MainWindow(AppState())
+    win.settings_screen.apply_signal_set(["flow", "emg"])
+    win._explore_sample()
+    assert win.settings_screen.state.settings.input.files == FILENAME
+    assert win.settings_screen.state.settings.input.channels.emg
+    win.close()
+
+
+def test_startup_door_always_opens_the_full_sample_regardless_of_current_signals(
+        qapp, isolated_prefs):
+    """The startup chooser's own sample door (StartupDialog, both on the first window and
+    via 'Get started…') always opens the complete demo recording -- unlike 'Explore with
+    sample data' in the menu -- even when re-invoked mid-session over an analysis that
+    already declares a reduced signal set."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.sample import FILENAME
+    win = MainWindow(AppState())
+    win.settings_screen.apply_signal_set(["flow"])
+    assert win.settings_screen.open_sample_analysis() is True   # the startup door's own call
+    assert win.settings_screen.state.settings.input.files == FILENAME
+    win.close()
+
+
 def test_open_analysis_dialog_and_import_start_in_the_open_analysis_folder(
         qapp, isolated_prefs, tmp_path, monkeypatch):
     """C03 point 4: before this ticket both started the file picker at a bare '.' — the
