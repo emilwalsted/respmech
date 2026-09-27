@@ -473,3 +473,25 @@ def test_an_emg_only_processing_edit_redispatches_batch(qapp, tmp_path):
     assert "batch" in pv._pending_kinds
     assert {"ecg", "emg_all", "emg_detail", "noise"} <= pv._pending_kinds
     pv.shutdown()
+
+
+def test_an_emg_only_processing_edit_redispatches_segments_too(qapp, tmp_path):
+    """The 'segments' preview job is the EMG-only counterpart of 'mech' (which a
+    flow-bearing set's own equivalent edit never touches): _kinds_for_settings_path
+    already widened its EMG buckets to include it, but until 'segments' joined
+    _AUTO_KINDS this stayed inert (filtered out of _schedule_all's dispatch loop) --
+    the reactive pipeline this drives (sync_from_settings -> _pending_kinds) is where
+    that actually becomes observable."""
+    import copy as _copy
+    from respmech.ui.screens.preview_screen import PreviewScreen
+    s = synth_settings(str(tmp_path), noise=True, data_out=_DATA_OUT,
+                       channels={"flow": None, "poes": None, "pgas": None, "pdi": None,
+                                "volume": None})
+    pv = PreviewScreen(AppState(s))
+    pv._refresh_files()
+    pv._last_synced_settings = _copy.deepcopy(pv.state.settings)   # clean diff baseline
+    pv._pending_kinds.clear(); pv._autorun_timer.stop()
+    pv.state.settings.processing.emg.rms_window_s += 0.01
+    pv.sync_from_settings()
+    assert "segments" in pv._pending_kinds
+    pv.shutdown()

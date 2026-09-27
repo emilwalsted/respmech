@@ -63,8 +63,8 @@ from respmech.ui.flow_layout import (ElidingLabel, FlowLayout, cluster as _clust
                                      elide as _elide, install_flow as _install_flow)
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
-                                  stage_ecg_reduction, stage_mechanics_preview,
-                                  stage_noise_fidelity)
+                                  stage_ecg_reduction, stage_emg_segments_preview,
+                                  stage_mechanics_preview, stage_noise_fidelity)
 
 try:
     from respmech.ui import theme as _theme
@@ -121,7 +121,8 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._launch_queue = []          # _Jobs registered but not yet thread.start()ed (concurrency cap)
         self._active = set()             # _Jobs whose thread is started, compute not yet delivered
         self._reaping = set()            # _Jobs delivered; thread quitting — ref held until thread.finished
-        self._tokens = {"mech": 0, "batch": 0, "ecg": 0, "emg_all": 0, "emg_detail": 0, "noise": 0}
+        self._tokens = {"mech": 0, "batch": 0, "ecg": 0, "emg_all": 0, "emg_detail": 0,
+                       "noise": 0, "segments": 0}
         self._overlays = {}              # panel key -> BusyOverlay
         # Debounced auto-recompute: rapid edits (a spinbox drag / multi-keystroke entry)
         # restart one single-shot timer, collapsing the burst into ONE re-dispatch after a
@@ -207,6 +208,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             "emg_all": self._on_emg_all_result,
             "emg_detail": self._on_emg_detail_result,
             "noise": self._on_noise_result,
+            "segments": self._render_emg_segments_preview,
         }
 
     # -- construction -------------------------------------------------------
@@ -1000,30 +1002,63 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             self._blanked_for_invalid = False
             self._request_autorun(set(_AUTO_KINDS))
         has_emg = bool(self.state.settings.input.channels.emg)
+        # Which of 'mech' (flow-bearing) / 'segments' (EMG-only) applies to THIS
+        # signal set. A valid Settings (checked by _settings_ok above) should always
+        # resolve a real Capabilities; caps=None (a malformed analysis.signals slipping
+        # through some other path) degrades to the old behaviour -- 'mech' runs,
+        # 'segments' does not -- same "erring wide is safe" default _kinds_for_settings_path
+        # already uses for an unclassified caps shape.
+        caps = Capabilities.from_settings_or_none(self.state.settings)
+        emg_only = bool(caps is not None and caps.mode == "emg_only")
+        has_flow = bool(caps is None or caps.flow)
         # snapshot the settings on the GUI thread so a worker never reads them while
         # the GUI mutates them in place (Settings is a plain, deep-copyable model)
         snap = copy.deepcopy(self.state.settings)
         worker = None
         if kind == "mech":
+            if not has_flow:
+                # An EMG-only set has no flow/volume/pressure channels to preview here at
+                # all (this job's own core.compute.trim would run on an empty flow array)
+                # -- 'segments' is this shape's own counterpart, gated below.
+                self._clear_panel_overlays(*_PANELS[kind])
+                return
             worker = FnWorker(stage_mechanics_preview, snap, path)
+        elif kind == "segments":
+            if not emg_only:
+                # A flow-bearing set has nothing for this job to segment (whole_file/
+                # separators are refused by Settings.validate() outside EMG-only) --
+                # 'mech' is this shape's own counterpart, gated above.
+                self._clear_panel_overlays(*_PANELS[kind])
+                return
+            worker = FnWorker(stage_emg_segments_preview, snap, path)
         elif kind == "ecg":
             if not has_emg:
                 self._clear_panel_overlays(*_PANELS[kind])   # gated out -> drop a stale spinner/card
                 return
             worker = FnWorker(stage_ecg_reduction, snap, path)
         elif kind == "batch":
-            # MECHANICS-ONLY test run: drop EMG so run_batch skips ECG removal, EMG RMS
-            # and noise reduction (that work is shown separately in the EMG tab).
-            # ecg_auto_detect has to go too, and not merely because it would be pointless
-            # here: Settings.validate() rejects it BOTH without remove_ecg and without
-            # input.channels.emg, and this snapshot clears both. Leaving it set made a test
-            # run on a perfectly valid setup (Remove ECG + Auto-detect for the batch, the
-            # combination the ECG tab actively steers the user towards) die inside
-            # run_batch's validate() with a raw SettingsError traceback.
-            snap.input.channels.emg = []
-            snap.processing.emg.remove_ecg = False
-            snap.processing.emg.ecg_auto_detect = False
-            snap.processing.emg.noise.enabled = False
+            if has_flow:
+                # MECHANICS-ONLY test run: drop EMG so run_batch skips ECG removal, EMG RMS
+                # and noise reduction (that work is shown separately in the EMG tab). Only
+                # a flow-bearing set has "the EMG tab" as a genuine alternative — for an
+                # EMG-only set the test run's own mechanics ARE built FROM these EMG
+                # settings (core.pipeline.run_batch's own EMG-only branch), so stripping
+                # them here left nothing to analyse: Settings.validate() then refused the
+                # snapshot outright ("analysis.signals must name at least one of 'flow' or
+                # 'emg'"), which BatchWorker.run's fatal-exception path turned into a raw
+                # 'Test run failed' card — found in self-review: 'batch' has always been
+                # auto-dispatched for every signal set, EMG-only included (_AUTO_KINDS
+                # predates this ticket), but nothing here was capability-aware until now.
+                # ecg_auto_detect has to go too, and not merely because it would be pointless
+                # here: Settings.validate() rejects it BOTH without remove_ecg and without
+                # input.channels.emg, and this snapshot clears both. Leaving it set made a test
+                # run on a perfectly valid setup (Remove ECG + Auto-detect for the batch, the
+                # combination the ECG tab actively steers the user towards) die inside
+                # run_batch's validate() with a raw SettingsError traceback.
+                snap.input.channels.emg = []
+                snap.processing.emg.remove_ecg = False
+                snap.processing.emg.ecg_auto_detect = False
+                snap.processing.emg.noise.enabled = False
             worker = BatchWorker(snap, write=False, only_files=[os.path.basename(path)])
         elif kind == "emg_all":
             if not has_emg:
@@ -1138,10 +1173,18 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # only clear the spinner if no newer owner took over the panels — but
         # never wipe an error card the current owner already painted (a stale
         # draining job finishing late must not erase the live job's error).
+        # A panel can now be shared across KINDS too ('raw' is in both
+        # _PANELS['mech'] and _PANELS['segments'], the two never dispatch for the
+        # same file at once, but a stale/superseded job of one kind can still be
+        # draining after a settings edit re-dispatches the other) — a stale stop()
+        # must not hide a DIFFERENT kind's genuinely live spinner on that same
+        # panel, so skip any panel another currently-active job also lists.
         if job.token != self._tokens[job.kind]:
             if job.kind not in self._jobs:
                 for p in _PANELS[job.kind]:
-                    if not self._overlays[p].error:
+                    owned_elsewhere = any(p in _PANELS[other.kind]
+                                          for other in self._jobs.values())
+                    if not self._overlays[p].error and not owned_elsewhere:
                         self._overlays[p].stop()
             self._update_actions(status=False)
             return
