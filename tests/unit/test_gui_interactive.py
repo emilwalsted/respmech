@@ -305,6 +305,29 @@ def test_malformed_signals_degrades_preview_subtabs_and_campbell_title(qapp, tmp
     win.close()
 
 
+def test_malformed_signals_with_a_noise_reference_set_does_not_crash_the_noise_readout(qapp):
+    """M-24 self-review finding: the sibling regression the test above does NOT cover.
+    _refresh_noise_readout/_refresh_noise_reference_band (_emg_noise.py) now call
+    resolve_noise_reference_mode on every construction/sync, same unprotected path as
+    Capabilities.from_settings above -- but ONLY once noise.reference_file is actually set
+    (both have an early 'not set'/hidden-band return otherwise, see their own guards), which
+    the test above's bare Settings() never does. Pin the actual crash scenario: a hand-edited
+    bare-string analysis.signals on a settings object that ALSO already has a noise
+    reference configured (the realistic case: an existing analysis file, hand-edited or
+    corrupted, reopened)."""
+    from respmech.core.settings import Settings
+    from respmech.ui.main_window import MainWindow
+    s = Settings()
+    s.analysis.signals = "flow"                          # malformed: a bare string
+    s.processing.emg.noise.reference_file = "ref.csv"     # the vulnerable guard is skipped
+    win = MainWindow(AppState(s))                          # must not raise
+    pv = win.preview_screen
+    # degrades to the 'unresolved' branch text, not a crash and not a stale/wrong readout
+    assert "unresolved" in pv.noise_ref_readout.toolTip().lower()
+    assert pv._noise_region.isVisible() is False           # no single span to shade either
+    win.close()
+
+
 def test_subtab_plan_per_preset(qapp, tmp_path):
     """subtab_plan(caps) itself, independent of any rebuild — the ordered (widget, title)
     pairs a Capabilities shape maps to, for the two presets M-17 activates plus the default
