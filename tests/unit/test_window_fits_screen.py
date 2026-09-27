@@ -131,8 +131,12 @@ def test_the_run_action_bar_wraps_rather_than_summing_its_buttons(qapp, tmp_path
 
 def test_the_segments_action_band_fits_on_windows_metrics(qapp, tmp_path, windows_metrics):
     """M-26's own new action band (the segments tab's twin of the Mechanics one) must not
-    demand the sum of its QC chip + button on the widest metrics we ship to — same ratio
-    guard as the Run action bar above, at the metrics that actually break these.
+    demand the sum of its chips on the widest metrics we ship to — same ratio guard as
+    the Run action bar above, at the metrics that actually break these. M-27 added a
+    THIRD element ('Place separators', between the QC chip and the process button) —
+    this same test now covers all three, unchanged in shape (the ratio guard does not
+    care how many widgets sum to the row's natural width, only that the row can still
+    squeeze below it).
 
     Runs a real (synchronous, no thread) batch first so the QC chip carries realistic
     text, the same way the Mechanics band's own squeezable label (``mech_window_label``)
@@ -167,6 +171,12 @@ def test_the_segments_action_band_fits_on_windows_metrics(qapp, tmp_path, window
         qapp.processEvents()
 
     band = pv._segments_action_band
+    # M-27: confirm the row really does carry all three elements before measuring it —
+    # a widget silently dropped from the layout would still pass the ratio check below
+    # (a smaller row squeezes just as easily), so the count is asserted explicitly.
+    assert band.layout().count() == 3
+    assert pv.btn_place_separators.parent() is band
+
     natural, floor = band.sizeHint().width(), band.minimumSizeHint().width()
     assert natural > 100, f"the segments action band reports a {natural} px natural width"
     assert floor < natural * _WRAPPED, (
