@@ -883,8 +883,10 @@ class RunScreen(QWidget):
         """The cohort-level output names to mention in subset-write UI text, joined into one
         readable phrase — shared by the subset dialog and the post-write log note so the two
         can never name a different set of artefacts."""
+        from respmech.core.analysis.signals import Capabilities
         bits = ["Average breathdata.xlsx", "Cohort summary.xlsx"]
-        if self.state.settings.output.diagnostics.save_pv_individual:
+        if (self.state.settings.output.diagnostics.save_pv_individual
+                and Capabilities.from_settings(self.state.settings).poes):
             bits.append("the cohort Campbell figure")
         return bits[0] if len(bits) == 1 else ", ".join(bits[:-1]) + " and " + bits[-1]
 

@@ -194,6 +194,39 @@ def test_mechanics_preview_series_without_pressures(tmp_path):
 
 
 @requires_synth()
+def test_no_campbell_paths_in_plan_and_none_written(tmp_path):
+    """A flow-only signal set has no Poes, so the Campbell (per-file average,
+    per-file individual, and cross-file cohort) figure jobs must never appear in
+    ``plan_outputs``' ceiling, and a real write must not produce any of those paths
+    either — the plan and the writer read the exact same
+    ``core.plots.per_file_figure_jobs`` list, so this also proves the writer itself
+    never tries to draw an empty/absent Poes trace. 'volume endpoints.pdf' (the drift
+    diagnostic, gated on ``Capabilities.volume`` — always True here, flow implies
+    volume) is still produced."""
+    from respmech.core.io.plan import plan_outputs
+    from respmech.core.io.writers import write_batch
+    from respmech.core.pipeline import run_batch
+
+    settings = synth_settings(
+        tmp_path, channels={"poes": None, "pgas": None, "pdi": None, "emg": [], "entropy": []}
+    )
+    for flag in ("save_pv_average", "save_pv_individual", "save_raw", "save_trimmed",
+                "save_drift"):
+        setattr(settings.output.diagnostics, flag, True)
+
+    files = [os.path.join(settings.input.folder, "synth_case_A.csv"),
+            os.path.join(settings.input.folder, "synth_case_B.csv")]
+    plan = plan_outputs(settings, files)
+    assert not any("Campbell" in p for p in plan.all_paths())
+    assert any("volume endpoints.pdf" in p for p in plan.all_paths())
+
+    result = run_batch(settings)
+    written = write_batch(result, settings, str(tmp_path))
+    assert not any("Campbell" in os.path.basename(p) for p in written)
+    assert any("volume endpoints.pdf" in os.path.basename(p) for p in written)
+
+
+@requires_synth()
 def test_mechanics_stack_renders_without_crashing_on_a_reduced_signal_set(qapp, tmp_path):
     """Regression, found by self-review before this ticket closed: a reduced signal set
     is already reachable today via ``channel_setup_dialog.py``'s declared-roles gating
