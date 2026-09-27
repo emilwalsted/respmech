@@ -193,8 +193,14 @@ LEGACY_SCENARIOS = {
 # (golden_newcore.py --write) rather than run through the legacy oracle. A v2
 # scenario expresses settings the legacy dict/migrate_dict path cannot (typed
 # breaths, references, separators, ...); it is never included in run_all()'s
-# legacy-oracle run. Empty until the first feature ticket that needs one.
-V2_SCENARIOS: dict = {}
+# legacy-oracle run. 'flow_only'/'poes_only' are the first two entries: neither has a
+# legacy-dict shape at all (analysis.signals is v2-only), so both are baked straight
+# from the v2 core and locked here to characterise the flow-only and flow+poes signal
+# sets end to end, over the same committed synthetic input.
+V2_SCENARIOS: dict = {
+    "flow_only": os.path.join("scenarios", "flow_only.toml"),
+    "poes_only": os.path.join("scenarios", "poes_only.toml"),
+}
 
 # The union both test_golden.py (via golden_newcore.mg.SCENARIOS) and this
 # module's own run_all() see the FULL set through; run_all() below filters back

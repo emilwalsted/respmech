@@ -1245,10 +1245,31 @@ class SettingsScreen(QWidget):
             self.enter_open_mode()
         return ok
 
-    def open_sample_analysis(self):
+    def open_sample_analysis(self, use_current_signals: bool = False):
         """P23: generate a small synthetic recording, wire a ready analysis around it,
         and open it in full mode — a no-setup door for first-time users. Returns True on
         success. The sample lives in a temp folder (throwaway).
+
+        ``use_current_signals``: the startup door (StartupDialog, both on the
+        very first window and via 'Get started…') always leaves this False, so it
+        always opens the complete demo recording regardless of whatever is currently
+        loaded — a predictable, unconditional door. 'File/Analysis > Explore with
+        sample data' (``MainWindow._explore_sample``), reachable again mid-session over
+        an already-configured analysis, passes True instead: the sample variant then
+        follows the CURRENT analysis's declared signal set (``Capabilities``, read
+        BEFORE this analysis is replaced below), so exploring after choosing 'Flow only'
+        opens a flow-only sample instead of the full one. Any mode without a dedicated
+        sample variant (the full set, or a not-yet-supported shape) still falls back to
+        'full' (``core.sample.sample_variant_for_mode``), so this door never fails to
+        open something. Self-review finding: ``Capabilities.mode`` alone strips 'emg'
+        before classifying (a preset's 'Also EMG' toggle is orthogonal to the flow/
+        pressure shape), so 'Flow only + Also EMG' and plain 'Flow only' report the SAME
+        mode ('flow_only') — mapping that straight to the 'flow' variant would silently
+        drop the very EMG channel the user just asked for (no ECG-removal/noise-
+        reduction demo either), where the demo the user's declared set actually promised
+        is the full one. EMG in the declared set therefore always wins to 'full',
+        checked explicitly below rather than folded into ``sample_variant_for_mode``
+        (which stays a pure, mode-string-only mapping — 'emg' is not a mode).
 
         The first call in a process is a synchronous ~1 s stall (measured: mostly the
         lazy import of the compute/reader stack, not the small CSV write itself, and a
@@ -1256,7 +1277,19 @@ class SettingsScreen(QWidget):
         threaded, so a wait cursor plus a status line is enough to say something is
         happening instead of the window appearing to freeze."""
         import tempfile  # noqa: PLC0415
-        from respmech.core.sample import write_sample_recording, build_sample_settings  # noqa: PLC0415
+        from respmech.core.sample import (write_sample_recording, build_sample_settings,  # noqa: PLC0415
+                                          sample_variant_for_mode)
+        from respmech.core.analysis.signals import Capabilities  # noqa: PLC0415
+        variant = "full"
+        if use_current_signals:
+            try:
+                caps = Capabilities.from_settings(self.state.settings)
+                variant = "full" if caps.emg else sample_variant_for_mode(caps.mode)
+            except (TypeError, AttributeError):
+                # a malformed analysis.signals (e.g. a hand-edited bare string) would
+                # raise here; Settings.validate() reports it properly once the user
+                # tries to run something, but this door must still open SOMETHING
+                variant = "full"
         self._set_status("Building the sample recording…")
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
@@ -1265,11 +1298,20 @@ class SettingsScreen(QWidget):
             # unrelated queued callback, and that must still hit the finally below —
             # nothing between a successful setOverrideCursor and the finally is unguarded.
             QApplication.processEvents()   # paint the status text and cursor before the stall
-            base = os.path.join(tempfile.gettempdir(), "respmech_sample")
-            desc = write_sample_recording(os.path.join(base, "input"))
-            # the sample carries an ECG artefact and EMG noise, so the ready analysis
-            # switches on ECG removal + noise reduction to demonstrate the full pipeline
-            s = build_sample_settings(desc, os.path.join(base, "output"))
+            # 'full' keeps today's folder (unchanged, so any code/docs elsewhere that
+            # already assume tempdir/respmech_sample/{input,output} keep working);
+            # 'flow'/'flow_poes' get their OWN folder pair, so exploring 'flow' after
+            # 'full' (or vice versa) never mixes leftover files from a previous variant
+            # into the same input/output folder — each variant is analysable in its own
+            # folder without overwriting another.
+            sample_root = os.path.join(tempfile.gettempdir(), "respmech_sample")
+            base = sample_root if variant == "full" else os.path.join(sample_root, variant)
+            desc = write_sample_recording(os.path.join(base, "input"), variant=variant)
+            # the full variant carries an ECG artefact and EMG noise, so its ready
+            # analysis switches on ECG removal + noise reduction to demonstrate the full
+            # pipeline; the flow/flow_poes variants have no EMG channel at all and skip it
+            # (build_sample_settings)
+            s = build_sample_settings(desc, os.path.join(base, "output"), variant=variant)
             self.state.settings, self.state.settings_path = s, None
             self.state.display_name = None
             self.state.legacy_source_path = None

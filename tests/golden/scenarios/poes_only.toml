@@ -1,0 +1,56 @@
+# V2_SCENARIOS golden fixture: 'poes_only' -- named for core.analysis.signals'
+# mode, but the DECLARED signal set is flow + poes ("Flow + Poes" in the signal-set
+# picker): work of breathing, no gastric/transdiaphragmatic pressure, no EMG. Same
+# committed synthetic recordings as every other golden scenario (tests/golden/input).
+# v2-only (analysis.signals has no legacy-dict shape), baked directly from the v2 core
+# (golden_newcore.py --write) -- see make_golden.py's V2_SCENARIOS / LEGACY_SCENARIOS
+# split and tests/golden/README.md. Do not hand-edit golden_reference.json's
+# "poes_only" entry; regenerate it with golden_newcore.py --write after a deliberate
+# change here.
+schema_version = 2
+
+[analysis]
+signals = ["flow", "poes"]
+
+[input]
+folder = "../input"
+files  = "synth_case_*.csv"
+
+[input.format]
+sampling_frequency = 1000
+decimal            = "."
+
+[input.channels]
+flow   = 5
+volume = 6
+poes   = 7
+# pgas/pdi/emg deliberately unset -- this is the flow+poes shape. Entropy is left unset
+# here too (unlike flow_only, which keeps it) -- entropy's signal-set-independence (R8)
+# is already characterised by flow_only and by every LEGACY_SCENARIOS entry; nothing
+# about the poes_only shape specifically needs its own entropy coverage.
+
+[processing.segmentation]
+method = "flow"
+buffer = 200
+
+[processing.segmentation.peak]
+height     = 0.1
+distance_s = 0.1
+width_s    = 0.2
+
+[processing.volume]
+integrate_from_flow = false
+correct_drift       = true
+correct_trend       = false
+
+[processing.wob]
+calc_from          = "average"
+avg_resampling_obs = 300
+
+[output]
+folder = "output"
+
+[output.data]
+save_average          = true
+save_breath_by_breath = true
+save_processed        = false
