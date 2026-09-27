@@ -7,6 +7,13 @@ for the installers themselves.
 
 ## Unreleased
 
+**Breaths can be typed (ic, fvc, max_insp, sniff, rest, other) in settings.** A typed
+breath is treated as excluded from the tidal average, the same as a manually excluded
+one, and its kind is recorded alongside it. This is settings-model groundwork only —
+there is no way to type a breath from the desktop app yet (a later release adds the
+right-click primitive in Preview & QC); a hand-edited `settings.toml` is the only way
+to use it today, via a new `[[processing.breath_types]]` table.
+
 **Explore with sample data follows the signal set.** The startup chooser's own
 'Explore with sample data' door still always opens the complete demo recording, but
 'File/Analysis > Explore with sample data' now opens a sample matching whichever
