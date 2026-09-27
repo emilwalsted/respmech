@@ -6,6 +6,73 @@ decision <date>" — never an internal ticket reference; this repo is public).
 
 ---
 
+**27-09-2026 — Manoeuvre-extraction quality thresholds (`IcSettings`) ship as
+documented placeholders, not measured values; `NOT_REPEATABLE` is a second pass over
+the whole file, not part of `extract()` itself (author's decision, 27-09-2026).**
+`core.analysis.manoeuvres.extract()` pulls IC/FVC/max-effort values straight from a
+typed breath's raw dict (it never reaches `calculatemechanics`, see the "typed breath"
+decision below). Its quality flags (`EELV_UNSTABLE`, `LOW_EFFORT`, `NO_PLATEAU`,
+`NOT_REPEATABLE`) each need a numeric cut-off — `eelv_tolerance_frac`,
+`plateau_flow_lps`/`min_plateau_s`, `low_effort_frac`, `repeatability_frac` — and no
+real IC recording was available in the sandbox that wrote this code to calibrate any
+of them against. Every one is a starting value only, pinned by analytical/synthetic
+tests (the formula is trusted, the cut-off is not) — measuring them against real
+recordings and freezing the result here is still owed. `NOT_REPEATABLE` specifically
+cannot be decided by `extract()` at all: a single call sees one breath, never its
+file's OTHER typed IC attempts. `apply_repeatability(manoeuvres, ic_cfg)` runs once
+per file, after every typed breath's own `extract()` result is in hand, comparing each
+eligible IC's `vol_ic` against the mean/median of the file's other eligible ones — an
+IC already carrying a `reject_flags` flag (`LOW_EFFORT` by default) is excluded from
+that comparison GROUP entirely, and a lone IC with no sibling is never flagged. Chosen
+because repeatability is inherently a property of a pair, and a bad attempt should not
+be able to either drag a genuinely repeatable pair down or "agree" with another bad
+attempt to look falsely repeatable.
+
+**27-09-2026 — `ic_eelv_pre` averages up to N preceding TIDAL breaths' own end-
+expiratory volume, falling back to this breath's own immediate pre-inspiratory sample
+only when too few precede it; `EELV_UNSTABLE` scales that preceding set's own spread
+by the MANOEUVRE'S OWN `vol_ic`, never by `ic_eelv_pre` itself (author's decision,
+27-09-2026, corrected same day by self-review).** The alternative to averaging —
+always using the manoeuvre breath's own single `inspiration['volume'][0]` sample as
+the baseline — is noisier and was set aside in favour of averaging over
+`IcSettings.preceding_breaths` (default 3, minimum 2) tidal breaths, which the module
+falls back to that single sample for only when fewer than `min_preceding_breaths`
+tidal breaths exist before it in the file (too little context to average, e.g. a
+manoeuvre near the very start of a recording). `EELV_UNSTABLE`'s first cut, a plain
+coefficient of variation of the preceding breaths' own EELVs (SD ÷ their own mean),
+was found wrong at self-review before merge: this codebase zero-references AND
+drift-corrects volume by default (`processing.volume.correct_drift=True`), so a real
+`ic_eelv_pre` routinely sits within a few millilitres of 0 L, and dividing by a
+near-zero baseline made the ratio explode on ordinary breath-to-breath noise — the
+flag would have fired on almost every real recording, not just genuinely unstable
+ones. Scaling the SAME spread by `vol_ic` instead (the manoeuvre's own, always
+non-trivial, volume) keeps the flag well-behaved near zero and physiologically
+scale-appropriate: "the pre-manoeuvre baseline wandered by more than
+`eelv_tolerance_frac` of the manoeuvre's own size" is the actual question a reader
+needs answered to trust `ic_eelv_pre`, not a self-referential ratio of the baseline to
+itself.
+
+**27-09-2026 — `poes_max_ref`/`pdi_max_ref` (max_insp/sniff) are SWINGS from the
+breath's own immediate pre-inspiratory baseline, not the raw absolute pressure
+(author's decision, 27-09-2026, corrected same day by self-review).** The first cut
+reported `poes_max_ref = −min(inspiration['poes'])`/`pdi_max_ref =
+max(inspiration['pdi'])` — the absolute peak pressure, unlike `poes_ic_swing`/
+`pdi_ic_swing` above, which are already baseline-subtracted. Self-review flagged the
+inconsistency: a resting Poes baseline is typically −5 to −8 cmH₂O (balloon
+zero-offset, not physiological zero), so the absolute-peak form silently inflated the
+reference by that offset, and a later normalisation ratio (M-47, "this breath's swing
+as a fraction of the max reference") would have divided a baseline-subtracted number
+by one that still carried it — never a physiologically meaningful ratio. Both are now
+swings from `inspiration[...][0]`, matching `poes_ic_swing`/`pdi_ic_swing` exactly.
+
+**27-09-2026 — `BOUNDARY` is judged directly from the argument breath NUMBERS
+`extract()` was given (first/last among the file's tidal breaths plus itself), not
+from a separate flag threaded in from the pipeline (author's decision, 27-09-2026).**
+Keeps `extract()` a pure function of exactly its own five arguments; the pipeline
+never needs to compute or pass "is this the file's first/last breath" itself.
+
+---
+
 **27-09-2026 — `use_expiration`/`reference_intervals` remain the two saved noise-
 reference fields for a flow-bearing analysis; `reference_mode` only names the EMG-only
 alternatives (author's decision, 27-09-2026).** An EMG-only signal set has no

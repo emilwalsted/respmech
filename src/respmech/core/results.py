@@ -118,6 +118,30 @@ def build_breath_table(file, breaths, settings):
     return mechs, ret
 
 
+def build_manoeuvre_table(manoeuvres: dict):
+    """The 'Manoeuvres' sheet: one row per typed breath, from
+    ``core.pipeline.FileResult.manoeuvres`` (``{breath_no: core.analysis.manoeuvres
+    .extract(...) result}``). Returns ``None`` when ``manoeuvres`` is empty -- "the
+    Manoeuvres sheet exists only when a typed breath is present" (M-29's own
+    acceptance criterion) -- so a caller can join it in exactly like ``EMG
+    normalised`` (``if df is not None and len(df):``).
+
+    ``quality`` (a list of flag strings from ``core.analysis.manoeuvres.extract``) is
+    joined into a single comma-separated cell -- a spreadsheet has no native list
+    type, and an empty list becomes "" (a blank cell), never the literal text "[]"."""
+    if not manoeuvres:
+        return None
+    rows = []
+    for breath_no, fields in manoeuvres.items():
+        row = {"breath_no": breath_no, "kind": fields.get("kind")}
+        for key, value in fields.items():
+            if key in ("kind",):
+                continue
+            row[key] = ", ".join(value) if key == "quality" else value
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def build_processed_data(breaths, settings):
     """Return the trimmed per-breath processed signals as a DataFrame. Faithful to
     legacy ``getprocesseddata`` (merge-on-index + dropna) but with EMG column names
