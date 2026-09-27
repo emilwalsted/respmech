@@ -22,6 +22,7 @@ import pyqtgraph as pg
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
+from respmech.core.analysis.signals import Capabilities
 from respmech.core.settings import ExcludeEntry
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
@@ -145,6 +146,30 @@ _TREND_PROBE_KEYS = ("integrate_from_flow", "correct_drift", "inverse_flow",
 _CAMPBELL_XLABEL_VARIANTS = ("Lung volume above end-expiration (L)",
                             "Volume above EELV (L)", "V−EELV (L)")
 _CAMPBELL_YLABEL_VARIANTS = ("Oesophageal pressure  Poes (cmH₂O)", "Poes (cmH₂O)", "Poes")
+
+#: M-17 (R7): the Campbell panel's stand-in for a Poes-less (Flow only) signal set — a
+#: tidal flow-volume loop, same axis-label ladder mechanics as the Campbell diagram above.
+_FV_XLABEL_VARIANTS = ("Lung volume (L)", "Volume (L)", "V (L)")
+_FV_YLABEL_VARIANTS = ("Flow (L/s)", "Flow")
+
+
+def _mech_channel_count(settings) -> int:
+    """How many rows the Mechanics stack draws for this signal set (M-17, R7).
+
+    ``_render_preview_stage1`` filters ``_CHANNELS`` (flow, volume, poes, pgas, pdi) down to
+    whichever keys ``series`` actually carries for the file just previewed — a crash guard
+    against a reduced signal set, added before this ticket. This mirrors that same count from
+    ``Capabilities`` alone, so the stack's floor (``_update_mech_stack_floor``) is right even
+    before any file has ever been previewed, and on every resize in between — the two counts
+    agree by construction, because both ultimately trace back to the same declared/assigned
+    channels: Capabilities' five flow/pressure fields are named and ordered exactly like
+    ``_CHANNELS``' five keys. Never zero: an analysis with no flow/pressure channel at all
+    (unreachable from the UI today, see ``subtab_plan``) falls back to the full five rather
+    than flooring a stack for none, which ``theme.set_stack_floor`` treats as at least one
+    anyway (``max(1, rows)``)."""
+    caps = Capabilities.from_settings(settings)
+    n = sum((caps.flow, caps.volume, caps.poes, caps.pgas, caps.pdi))
+    return n or len(_CHANNELS)
 
 #: QSettings key for the persisted vertical splitter (channel stack / table+Campbell) — D14.
 _MECH_VSPLIT_PREF_KEY = "preview.mech.vsplit"
@@ -279,7 +304,12 @@ class _MechanicsMixin:
         # figure's own title is deliberately screen-only, see above) — see
         # titled_panel()'s docstring for why it must not be allowed to collapse to a
         # bare ellipsis the way the general-purpose default floor allows.
-        lower.addWidget(self._titled("Campbell diagram", self.campbell, title_floor_chars=10))
+        # Stored (not just added) so its header text can follow the signal set (M-17): a
+        # Poes-less analysis draws a flow-volume loop here instead of a Campbell diagram —
+        # see _update_campbell_panel_title/_draw_campbell_or_loop.
+        self._campbell_panel = self._titled("Campbell diagram", self.campbell,
+                                            title_floor_chars=10)
+        lower.addWidget(self._campbell_panel)
         # Non-collapsible: a QSplitter's children are collapsible by default, and a
         # collapsible child can be dragged — or arrive from a restored/derived layout —
         # BELOW its minimumSizeHint, all the way to nothing. That is the one mechanism by
@@ -340,7 +370,7 @@ class _MechanicsMixin:
         try:
             area = getattr(self, "_mech_tab", None)
             vp_h = area.viewport().height() if area is not None else 0
-            _theme.set_stack_floor(self.plots, len(_CHANNELS),
+            _theme.set_stack_floor(self.plots, _mech_channel_count(self.state.settings),
                                    viewport_height=vp_h if vp_h > 0 else None)
         except RuntimeError:                  # pragma: no cover - deleted C++ widget
             pass
@@ -533,9 +563,13 @@ class _MechanicsMixin:
 
     def _export_campbell(self):
         from PySide6.QtWidgets import QFileDialog       # noqa: PLC0415
+        # M-17 (R7): the export follows whichever diagram the panel is actually showing —
+        # "Campbell" with Poes declared, "Flow-volume loop" without it.
+        is_campbell = Capabilities.from_settings(self.state.settings).poes
+        panel_title = "Campbell diagram" if is_campbell else "Flow-volume loop"
         base = (self._previewed_file or "campbell").rsplit(".", 1)[0]
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export Campbell diagram", f"{base} – Campbell.png",
+            self, f"Export {panel_title}", f"{base} – {panel_title}.png",
             "PNG image (*.png);;PDF document (*.pdf)")
         if not path:
             return
@@ -549,11 +583,12 @@ class _MechanicsMixin:
         redrawn = False
         try:
             if breaths is not None and _theme is not None and _theme.is_dark():
-                # set BEFORE the call it guards: _draw_campbell begins by clearing the
-                # figure, so a failure part-way through still leaves the on-screen diagram
-                # destroyed and the finally-branch below is the only thing that puts it back
+                # set BEFORE the call it guards: _draw_campbell_or_loop begins by clearing
+                # the figure, so a failure part-way through still leaves the on-screen
+                # diagram destroyed and the finally-branch below is the only thing that puts
+                # it back
                 redrawn = True
-                self._draw_campbell(breaths, pal=_theme._PLOT_LIGHT)
+                self._draw_campbell_or_loop(breaths, pal=_theme._PLOT_LIGHT)
             # The export is a stand-alone figure with no panel header around it, so it gets
             # the title back that the on-screen panel leaves to its header — and then loses
             # it again straight away. Leaving it set showed the title twice on screen, once
@@ -562,20 +597,20 @@ class _MechanicsMixin:
             fig = self.campbell.figure
             try:
                 for _ax in fig.axes:
-                    _ax.set_title("Campbell diagram")
+                    _ax.set_title(panel_title)
                 fig.savefig(path, dpi=150, bbox_inches="tight",
                             facecolor=fig.get_facecolor())
             finally:
                 for _ax in fig.axes:
                     _ax.set_title("")
                 self.campbell.draw_idle()
-            self._set_status(f"Saved Campbell diagram → {path}")
+            self._set_status(f"Saved {panel_title} → {path}")
         except Exception as e:                          # noqa: BLE001
             self._set_status(f"Could not save figure: {short_error(str(e))}")
         finally:
             if redrawn:                                 # put the on-screen figure back
                 try:
-                    self._draw_campbell(breaths)
+                    self._draw_campbell_or_loop(breaths)
                 except Exception:                       # pragma: no cover - defensive
                     pass
 
@@ -702,6 +737,18 @@ class _MechanicsMixin:
                           "End-expiratory window whose mean is the PTP baseline.",
                           lo=0.0, hi=1.0, step=0.01, decimals=4, suffix=" s")),
         ]
+        # M-17 (R7): "Work of breathing" and "Pressure–time product" are meaningless without
+        # a Poes trace — WOB/PTP are never computed for a Poes-less analysis (M-14's
+        # compute-guards). Filtering the FLAT fields list here, rather than the sections
+        # table below, drops both cards automatically (their keys leave `remaining` empty,
+        # so the "if picked" check skips them — see below) instead of dumping their fields
+        # onto "Other". Nothing is lost: unlike a value the user typed, these two cards'
+        # settings simply are not offered while the shape cannot use them, and return the
+        # moment Poes is added back to the signal set (Setup ▸ Signals) — same "hidden
+        # follows the set, never workflow progress" rule as every other R7 surface.
+        if not Capabilities.from_settings(s).poes:
+            _hidden_without_poes = {"calc_from", "avg_resampling_obs", "baseline_window_s"}
+            fields = [(grp, f) for grp, f in fields if f.key not in _hidden_without_poes]
         owner = {"seg": seg, "peak": peak, "vol": vol, "samp": samp, "wob": wob, "ptp": ptp}
         values = {f.key: getattr(owner[grp], f.key) for grp, f in fields}
         # breath counts round-trip as one 'file = count' line each, edited as text
@@ -1625,7 +1672,7 @@ class _MechanicsMixin:
         if cur:
             self.file_rail.mark_result(cur, ok=True, breaths=len(fr.breaths_table))
         self._fill_table(fr.breaths_table)
-        self._draw_campbell(fr.breaths)
+        self._draw_campbell_or_loop(fr.breaths)
         self._update_qc_overview(fr)                  # P16 QC line, for THIS file only
         nr = getattr(result, "noise_report", None)
         if nr:
@@ -1690,6 +1737,46 @@ class _MechanicsMixin:
         except Exception:                       # pragma: no cover - button may not exist yet
             pass
 
+    def _update_campbell_panel_title(self):
+        """Name the Campbell panel — and its export button — for the current signal set
+        (M-17, R7): "Campbell diagram" with Poes declared, "Flow-volume loop" without it.
+        Cheap and idempotent, so it is safe to call on every settings sync as well as every
+        draw — see ``_draw_campbell_or_loop`` and ``sync_from_settings``.
+
+        ``titled_panel``'s own docstring warns that ``title_floor_chars`` (the Campbell
+        panel's only caller of it) sizes the header's never-squeeze-below floor ONCE, from
+        the title given at construction, and does not follow a later ``setFullText()`` — a
+        floor sized for a short opt-in title would go stale against a longer one set here.
+        Checked, not merely assumed: both titles this function ever sets are at least as
+        long as the floor's own ``title_floor_chars`` cap (10), so ``min(len(title), 10)``
+        is 10 either way and the floor this call inherits is identical regardless of which
+        title built the panel. A THIRD title introduced later must satisfy the same check
+        (>= 10 characters) or recompute the floor explicitly."""
+        caps = Capabilities.from_settings(self.state.settings)
+        title = "Campbell diagram" if caps.poes else "Flow-volume loop"
+        panel = getattr(self, "_campbell_panel", None)
+        if panel is not None:
+            panel._title_label.setFullText(title)
+        btn = getattr(self, "btn_export_fig", None)
+        if btn is not None:
+            btn.setText("Export Campbell…" if caps.poes else "Export flow-volume…")
+            # Not title.lower(): "Campbell" is a proper noun (E.J.M. Campbell), so a bare
+            # lower() would misspell it mid-sentence.
+            tooltip_noun = "Campbell diagram" if caps.poes else "flow-volume loop"
+            btn.setToolTip(f"Save the {tooltip_noun} as a PNG or PDF.")
+
+    def _draw_campbell_or_loop(self, breaths, pal=None):
+        """Dispatch the Campbell panel to whichever diagram this signal set can actually
+        show (M-17, R7): the Campbell (volume-vs-Poes) diagram when Poes is declared, or a
+        tidal flow-volume loop when it is not — a Poes-less analysis has no pressure trace
+        to plot work of breathing against. Same cached-breaths/export plumbing either way
+        (``_campbell_breaths``, ``btn_export_fig``), because both draw functions set it."""
+        self._update_campbell_panel_title()
+        if Capabilities.from_settings(self.state.settings).poes:
+            self._draw_campbell(breaths, pal=pal)
+        else:
+            self._draw_flow_volume_loop(breaths, pal=pal)
+
     def _draw_campbell(self, breaths, pal=None):
         self._campbell_breaths = breaths        # kept so the export can re-render it light
         pal = _plot_pal() if pal is None else pal
@@ -1723,6 +1810,37 @@ class _MechanicsMixin:
             legend_kw={"loc": "lower right", "frameon": False, "fontsize": 7},
             xlabel_variants=_CAMPBELL_XLABEL_VARIANTS,
             ylabel_variants=_CAMPBELL_YLABEL_VARIANTS)
+        self.campbell.draw()
+        self.btn_export_fig.setEnabled(True)         # a diagram now exists to export
+
+    def _draw_flow_volume_loop(self, breaths, pal=None):
+        """The Campbell panel's stand-in for a Poes-less (Flow only) signal set (M-17, R7):
+        a tidal flow-volume loop per breath, plotted from the SAME breath dicts
+        ``_draw_campbell`` reads (``b["volume"]``/``b["flow"]`` are computed whenever flow
+        is declared, unaffected by whether Poes is — see ``core.compute._make_breath``).
+        Deliberately without the WOB/elastic-recoil overlay ``_overlay_campbell_work``
+        draws for the Campbell diagram: every one of that overlay's own inputs
+        (``wobtotal``, ``volumeavg``/``poesavg``, ``eelvavg``/``eilvavg``) comes from the
+        pressures family and is never computed for a Poes-less analysis."""
+        self._campbell_breaths = breaths        # kept so the export can re-render it light
+        pal = _plot_pal() if pal is None else pal
+        fig = self.campbell.figure
+        fig.clear()
+        fig.set_facecolor(pal["mpl_bg"])
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(pal["mpl_bg"])
+        kept = [b for b in breaths.values() if not b["ignored"]]
+        for b in kept:
+            ax.plot(b["volume"], b["flow"], color=pal["mpl_loop"], lw=0.7, alpha=0.5, zorder=1)
+        ax.axhline(0, color=pal["mpl_zeroline"], lw=0.8, zorder=0)
+        ax.set_xlabel(_FV_XLABEL_VARIANTS[0])
+        ax.set_ylabel(_FV_YLABEL_VARIANTS[0])
+        # No figure title on screen — the panel header carries it (_update_campbell_panel_title).
+        _fit_compact_figure(
+            self.campbell, ax,
+            legend_kw=None,           # no average/recoil overlay here to label — see docstring
+            xlabel_variants=_FV_XLABEL_VARIANTS,
+            ylabel_variants=_FV_YLABEL_VARIANTS)
         self.campbell.draw()
         self.btn_export_fig.setEnabled(True)         # a diagram now exists to export
 

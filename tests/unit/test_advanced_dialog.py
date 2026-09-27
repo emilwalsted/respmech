@@ -367,6 +367,84 @@ def test_mech_ok_commits_and_cancel_changes_nothing(qapp, tmp_path, accept, monk
     pv.shutdown()
 
 
+def test_wob_and_ptp_cards_are_hidden_without_poes(qapp, tmp_path, monkeypatch):
+    """M-17 (R7): 'Work of breathing' and 'Pressure–time product' are meaningless without
+    a Poes trace to compute either from (M-14's compute-guards never populate them for a
+    Poes-less analysis) — both cards drop out of the Mechanics — advanced… dialog for a
+    Flow-only signal set, and come back the moment Poes rejoins it. The other cards this
+    ticket does not touch (Breath detection, Volume, End-expiratory trend, Sampling,
+    Per-file overrides) must stay exactly as many as before."""
+    from respmech.ui.screens.preview_screen import PreviewScreen
+    from respmech.ui.state import AppState
+
+    flow_only = synth_settings(str(tmp_path), data_out=_OUT,
+                               channels={"poes": None, "pgas": None, "pdi": None, "emg": []})
+    pv = PreviewScreen(AppState(flow_only))
+    pv._refresh_files()
+    seen = {}
+    _mech_stub(monkeypatch, lambda d: seen.setdefault("titles", {c.title() for c in d.cards}))
+    pv._open_mech_advanced()
+    assert "Work of breathing" not in seen["titles"]
+    assert "Pressure–time product" not in seen["titles"]
+    assert "Other" not in seen["titles"], "the hidden fields must not resurface as 'Other'"
+    assert seen["titles"] == {"Breath detection", "Volume", "End-expiratory trend",
+                              "Sampling", "Per-file overrides"}
+    pv.shutdown()
+
+    full = synth_settings(str(tmp_path), data_out=_OUT)
+    pv2 = PreviewScreen(AppState(full))
+    pv2._refresh_files()
+    seen2 = {}
+    _mech_stub(monkeypatch, lambda d: seen2.setdefault("titles", {c.title() for c in d.cards}))
+    pv2._open_mech_advanced()
+    assert {"Work of breathing", "Pressure–time product"} <= seen2["titles"]
+    pv2.shutdown()
+
+    # the exact Flow + Poes preset (no Pgas/Pdi), not just the full family — pins the
+    # acceptance criterion against caps.poes specifically, not caps.pgas/caps.pdi
+    poes_only = synth_settings(str(tmp_path), data_out=_OUT,
+                               channels={"pgas": None, "pdi": None, "emg": []})
+    pv3 = PreviewScreen(AppState(poes_only))
+    pv3._refresh_files()
+    seen3 = {}
+    _mech_stub(monkeypatch, lambda d: seen3.setdefault("titles", {c.title() for c in d.cards}))
+    pv3._open_mech_advanced()
+    assert {"Work of breathing", "Pressure–time product"} <= seen3["titles"]
+    pv3.shutdown()
+
+
+def test_wob_and_ptp_settings_are_unreachable_but_not_reset_while_hidden(
+        qapp, tmp_path, monkeypatch):
+    """Hidden follows the SET, never workflow progress (R7): a Flow-only analysis simply
+    cannot edit processing.wob/processing.ptp through this dialog — proven directly by
+    checking the dialog never BUILT a widget for any of the three keys (not merely that
+    an edit-free open leaves the settings alone, which would hold even if the cards were
+    shown unconditionally) — but the settings themselves are untouched, exactly as they
+    were before the dialog opened, ready to reappear the moment Poes is declared again
+    (Setup ▸ Signals)."""
+    from respmech.ui.screens.preview_screen import PreviewScreen
+    from respmech.ui.state import AppState
+
+    flow_only = synth_settings(str(tmp_path), data_out=_OUT,
+                               channels={"poes": None, "pgas": None, "pdi": None, "emg": []})
+    pv = PreviewScreen(AppState(flow_only))
+    pv._refresh_files()
+    before = (flow_only.processing.wob.calc_from, flow_only.processing.wob.avg_resampling_obs,
+             flow_only.processing.ptp.baseline_window_s)
+    seen = {}
+    # d._fields (AdvancedDialog's own flattened Field-spec list, set in its __init__ from
+    # the sections actually built) is the ground truth for "was a widget ever built for
+    # this key" -- not d.cards[i]._fields, which holds the built QWidgets, not Field specs.
+    _mech_stub(monkeypatch, lambda d: seen.setdefault("keys", {f.key for f in d._fields}))
+    pv._open_mech_advanced()
+    assert not {"calc_from", "avg_resampling_obs", "baseline_window_s"} & seen["keys"], (
+        "a widget was built for a WOB/PTP key even though its card is hidden")
+    after = (flow_only.processing.wob.calc_from, flow_only.processing.wob.avg_resampling_obs,
+            flow_only.processing.ptp.baseline_window_s)
+    assert after == before
+    pv.shutdown()
+
+
 def test_buffer_field_is_labelled_debounce_and_tooltip_drops_the_padding_wording(
         qapp, tmp_path, monkeypatch):
     """D29 (UI-overhaul): the field was renamed from 'Breath-separation buffer' to
