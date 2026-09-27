@@ -13,7 +13,7 @@ import pyqtgraph as pg
 import pytest
 from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import QMouseEvent
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMenu
 
 from respmech.ui.screens.preview._plot_helpers import BreathSpansItem
 from respmech.ui.state import AppState
@@ -317,7 +317,7 @@ def test_toggle_breath_still_returns_the_same_bool_none_contract(qapp, tmp_path)
 
 
 # --------------------------------------------------------------------------- #
-# The minimal type menu (Tidal / Excluded / Rest)
+# The minimal type menu (Tidal / Excluded / Rest) — M-20's own scope
 # --------------------------------------------------------------------------- #
 def test_build_type_menu_has_the_minimal_labels_and_no_lone_ampersand(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
@@ -326,10 +326,14 @@ def test_build_type_menu_has_the_minimal_labels_and_no_lone_ampersand(qapp, tmp_
     win = MainWindow(AppState(s)); pv = win.preview_screen
     _render_mech(pv, s)
     a_breath = next(iter(pv._breath_spans))
+    pv._suggested_fvc = None   # deterministic: no hint competing with the minimal set
 
     from PySide6.QtWidgets import QMenu
     menu = pv._build_type_menu(a_breath, ("tidal", "excluded", "rest"))
-    assert [a.text() for a in menu.actions()] == ["Tidal", "Excluded", "Rest"]
+    # M-31: the caller's kinds are still exactly Tidal/Excluded/Rest, but the menu now
+    # always appends the M-37 placeholders behind a separator (text() == '').
+    assert [a.text() for a in menu.actions()] == [
+        "Tidal", "Excluded", "Rest", "", "Use as IC reference for ▸", "Reference manoeuvres…"]
     # Self-review finding: an unparented menu with these exact (ampersand-free) labels
     # would pass an "offenders is empty" check for the wrong reason. Prove the menu is
     # actually IN the tree _lone_ampersands walks, not just that its own text is clean.
@@ -353,6 +357,203 @@ def test_choosing_rest_from_the_menu_sets_the_type_and_status(qapp, tmp_path):
     entry = next(t for t in s.processing.breath_types if t.file == name and t.breath == a_breath)
     assert entry.kind == "rest"
     assert "rest" in pv.status.text().lower()
+    win.close()
+
+
+# --------------------------------------------------------------------------- #
+# M-31: the full manoeuvre menu — IC/FVC/max/sniff kinds, the Suggested-FVC hint,
+# the M-37 placeholders, and 'Rest' restricted to an EMG-only file.
+# --------------------------------------------------------------------------- #
+def test_build_type_menu_offers_the_full_manoeuvre_set_with_no_lone_ampersand(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.screens.preview._mechanics import _TYPE_MENU_KINDS
+    from _helpers import _lone_ampersands
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    pv._suggested_fvc = None
+
+    menu = pv._build_type_menu(a_breath, _TYPE_MENU_KINDS)
+    texts = [a.text() for a in menu.actions()]
+    assert texts == [
+        "Tidal", "Excluded", "IC manoeuvre", "FVC manoeuvre", "IC + FVC",
+        "Maximal inspiratory effort", "Sniff", "Rest", "Other…",
+        "", "Use as IC reference for ▸", "Reference manoeuvres…"]
+    assert not _lone_ampersands(win)
+    menu.close()
+    win.close()
+
+
+def test_the_two_m37_placeholders_are_present_but_disabled(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+
+    menu = pv._build_type_menu(a_breath, ("tidal", "excluded"))
+    ref_for = next(a for a in menu.actions() if a.text() == "Use as IC reference for ▸")
+    ref_manoeuvres = next(a for a in menu.actions() if a.text() == "Reference manoeuvres…")
+    assert ref_for.isEnabled() is False
+    assert ref_manoeuvres.isEnabled() is False
+    win.close()
+
+
+def test_choosing_ic_from_the_menu_sets_the_type_and_status(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    name = pv.file_rail.current_filename()
+
+    menu = pv._build_type_menu(a_breath, ("tidal", "excluded", "ic", "fvc"))
+    ic_action = next(a for a in menu.actions() if a.text() == "IC manoeuvre")
+    ic_action.trigger()
+    entry = next(t for t in s.processing.breath_types if t.file == name and t.breath == a_breath)
+    assert entry.kind == "ic"
+    assert "ic manoeuvre" in pv.status.text().lower()
+    win.close()
+
+
+def test_suggested_fvc_hint_is_shown_disabled_for_the_suggested_breath_only(qapp, tmp_path):
+    """The hint reads self._suggested_fvc directly — set here rather than depending on
+    which synthetic breath actually has the longest expiration, so the test is
+    deterministic regardless of the sample data's own shape."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    breaths = sorted(pv._breath_spans)
+    suggested, other = breaths[0], breaths[1]
+    pv._suggested_fvc = suggested
+
+    menu_hit = pv._build_type_menu(suggested, ("tidal", "excluded"))
+    actions = menu_hit.actions()
+    hint = next(a for a in actions if a.text() == "Suggested: FVC")
+    assert hint.isEnabled() is False
+    assert actions[0].text() == "Suggested: FVC", "the hint leads the menu"
+    assert actions[1].isSeparator(), "the hint is set off from the real choices below it"
+
+    menu_other = pv._build_type_menu(other, ("tidal", "excluded"))
+    assert not any(a.text() == "Suggested: FVC" for a in menu_other.actions())
+    win.close()
+
+
+def test_suggested_fvc_is_computed_from_the_staged_breaths(qapp, tmp_path):
+    """stage_mechanics_preview computes the hint from the SAME raw breath dicts
+    manoeuvres.suggest_fvc is documented against — end to end through a real render,
+    not a hand-set attribute like the test above. Cross-checked against an independent
+    computation from the file's own breaths, not just 'is not None'."""
+    from respmech.core import compute
+    from respmech.core._legacy_ns import to_legacy_ns
+    from respmech.core.analysis.manoeuvres import suggest_fvc
+    from respmech.ui.workers import stage_mechanics_preview
+    s = synth_settings(str(tmp_path))
+    data = stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv"))
+    assert data["suggested_fvc"] is not None
+
+    # independent expectation: re-derive the same breaths the worker staged, and
+    # compute the expected suggestion straight from suggest_fvc's own documented
+    # rule (longest untyped, non-ignored expiration) rather than trusting the
+    # worker's own number circularly.
+    ls = to_legacy_ns(s)
+    breaths = compute.separateintobreaths(
+        ls.processing.mechanics.separateby, "synth_case_A.csv", data["t"],
+        data["series"]["flow"], data["series"]["volume"],
+        data["series"].get("poes"), data["series"].get("pgas"), data["series"].get("pdi"),
+        [], [], ls)
+    assert data["suggested_fvc"] == suggest_fvc(breaths)
+
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    assert pv._suggested_fvc == data["suggested_fvc"]
+    win.close()
+
+
+def test_suggested_fvc_hint_is_dropped_the_instant_its_own_breath_is_typed(qapp, tmp_path):
+    """suggest_fvc's own contract is 'untyped, non-ignored' — the moment _set_breath_type
+    types (or excludes) the SUGGESTED breath, showing the hint on it again would be a
+    stale, self-contradicting suggestion until some later, unrelated re-stage happened
+    to correct it. Cleared immediately instead (see _set_breath_type's own comment)."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    pv._suggested_fvc = a_breath
+
+    pv._set_breath_type(a_breath, "fvc")
+    assert pv._suggested_fvc is None
+
+    menu = pv._build_type_menu(a_breath, ("tidal", "excluded"))
+    assert not any(a.text() == "Suggested: FVC" for a in menu.actions())
+    win.close()
+
+
+def test_suggested_fvc_hint_survives_typing_a_DIFFERENT_breath(qapp, tmp_path):
+    """The stale-hint fix must not over-clear: typing some OTHER breath leaves an
+    existing suggestion for a still-untyped breath alone."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    breaths = sorted(pv._breath_spans)
+    suggested, other = breaths[0], breaths[1]
+    pv._suggested_fvc = suggested
+
+    pv._set_breath_type(other, "excluded")
+    assert pv._suggested_fvc == suggested
+    win.close()
+
+
+def test_handle_type_requested_offers_the_manoeuvre_kinds_for_a_flow_bearing_set(
+        qapp, tmp_path, monkeypatch):
+    """M-31: 'Rest' names a noise-reference SEGMENT — offering it on a flow-bearing file
+    (where breaths, not segments, are the unit) would type a real tidal breath as a
+    reference no resolver for that shape ever reads."""
+    from respmech.ui.main_window import MainWindow
+    from PySide6.QtCore import QPointF as _QPointF
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+
+    captured = {}
+
+    def _capture(breath_no, kinds):
+        captured["kinds"] = kinds
+        return QMenu(pv.plots)
+    monkeypatch.setattr(pv, "_build_type_menu", _capture)
+    pv._handle_type_requested(a_breath, _QPointF(0.0, 0.0))
+    assert "rest" not in captured["kinds"], "flow-bearing set must not offer Rest"
+    assert {"ic", "fvc", "ic_fvc", "max_insp", "sniff", "other"} <= set(captured["kinds"])
+    win.close()
+
+
+def test_handle_type_requested_offers_only_rest_and_other_for_an_emg_only_signal_set(
+        qapp, tmp_path, monkeypatch):
+    """M-31 self-review finding: an EMG-only segment has no inspiration/expiration split
+    for `core.analysis.manoeuvres.extract` to read (`core.pipeline.run_batch` skips
+    manoeuvre extraction entirely for `caps.mode == 'emg_only'`) — offering IC/FVC/max/
+    sniff there would type a segment as, say, 'ic' with no Manoeuvres row ever appearing
+    for it. Only Tidal/Excluded/Rest/Other make sense on that tab."""
+    from respmech.ui.main_window import MainWindow
+    from PySide6.QtCore import QPointF as _QPointF
+    s = synth_settings(str(tmp_path), channels={
+        "flow": None, "poes": None, "pgas": None, "pdi": None, "volume": None})
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+
+    captured = {}
+
+    def _capture(breath_no, kinds):
+        captured["kinds"] = kinds
+        return QMenu(pv.plots)
+    monkeypatch.setattr(pv, "_build_type_menu", _capture)
+    pv._handle_type_requested(1, _QPointF(0.0, 0.0))
+    assert set(captured["kinds"]) == {"tidal", "excluded", "rest", "other"}
     win.close()
 
 
