@@ -143,7 +143,11 @@ def _buffer_debounce_hint(buffer_samples, resample, resample_to_frequency, nativ
 # Per-file errors that mean "this recording cannot support this step", not "something
 # broke". The mech preview lands them softly and explains them in the status line, so the
 # batch panel must not also paint a hard 'Test run failed' card over the same thing.
-_SOFT_FILE_ERRORS = ("TrimError", "VolumeTrendError", "NoBreathsError")
+# EmgSegmentationError: a bad separator placement on an EMG-only set -- the
+# 'batch' test run reaches this via FileResult.error_kind exactly like the other three;
+# the 'segments' preview job never raises it at all (stage_emg_segments_preview catches
+# it itself, see _render_emg_segments_preview's own 'Not processed' status line).
+_SOFT_FILE_ERRORS = ("TrimError", "VolumeTrendError", "NoBreathsError", "EmgSegmentationError")
 
 # The Mechanics-advanced fields that change the volume the trend detector sees. The live
 # trough count is only valid while these still match the rendered preview it was taken
@@ -1207,6 +1211,64 @@ class _MechanicsMixin:
         self._ensure_noise_region()
         self._raw_label_y = self._safe_top(emg[:, 0])
         self._repaint_view_breaths("raw")
+
+    def _render_emg_segments_preview(self, data):
+        """The 'segments' job's render entry point (EMG-only signal sets):
+        stage_emg_segments_preview's spans, drawn provisionally in the EXISTING raw/
+        detail/result EMG views via the same overlay machinery a flow-bearing set's
+        breaths already use (_render_raw_stack/_repaint_view_breaths) — an EMG-only set
+        has none of the mechanics stack's flow/volume/pressure channels to shade breaths
+        on, so self._channel_plots stays empty and _draw_breath_overlays is never
+        reached here. A dedicated 'EMG - segments' tab (fane-widget/action band/segtable)
+        is a later ticket's scope; until then this is the whole render for this job.
+
+        Synchronous, unlike 'mech' (_render_preview_async): D15's deferred-stage split
+        exists for the mechanics stack's own cost profile (up to 1210 items across five
+        channel plots on a long recording), which BreathSpansItem already bounds to O(1)
+        per plot regardless of span count — the raw EMG stack this draws into is the
+        same bounded shape, and an EMG-only set's segment count is small by construction
+        (whole_file = 1, separators = a user-placed handful), so there is no equivalent
+        cost here to split around."""
+        self._mech_render_gen += 1
+        self._trim_offset_s = 0.0                # already the file's own absolute clock
+        # Fold (ignored, kind) into ONE pseudo-kind, exactly as stage_mechanics_preview
+        # already does for a breath's own kind-or-'excluded'-or-None -- the EMG-view
+        # overlay machinery (_paint_breaths/_breath_brush) only ever reads a single kind,
+        # and stage_emg_segments_preview's own spans (a Qt-free, directly testable shape)
+        # keep 'ignored' and 'kind' apart instead of pre-folding them itself.
+        self._breaths = [
+            (num, t0, t1, kind if kind else ("excluded" if ignored else None))
+            for (num, t0, t1, ignored, kind) in data["spans"]
+        ]
+        # Segments are not mechanics-stack breaths -- there is no click-to-toggle surface
+        # for them here yet (a later ticket's scope), so _breath_spans/_regions/_texts
+        # stay empty; a
+        # stray click on the (nonexistent) mechanics stack's _on_plot_clicked already
+        # guards on `if not self._breath_spans: return`.
+        self._breath_spans = {}
+        self._breath_regions = {}
+        self._breath_texts = {}
+        self._render_raw_stack(data["emg"], data["fs"], data.get("emg_flow"))
+        # segments are now known -> (re)number any EMG detail/result already rendered
+        self._repaint_view_breaths("detail")
+        self._repaint_view_breaths("result")
+        self._previewed_file = data["name"]
+        nseg = len(data["spans"])
+        nign = sum(1 for (_n, _a, _b, ignored, _k) in data["spans"] if ignored)
+        if data.get("segment_error"):
+            # A precondition failure of THIS recording's separator configuration, not a
+            # bug (EmgSegmentationError) -- status line only, never a copyable
+            # 'failed' card: mirrors stage_mechanics_preview's own TrimError branch,
+            # which shows the raw channels with an explanatory status too.
+            self._set_status(f"{data['name']}: Not processed — {data['segment_error']}")
+        else:
+            self._set_status(
+                f"{data['name']}: {nseg} segment{'s' if nseg != 1 else ''}"
+                + (f" ({nign} excluded)" if nign else "") + ".")
+        # mech_caption is the Mechanics-stack's own "click a shaded breath…" caption
+        # (a later ticket's separator-placement scope, not this one's) -- left as whatever
+        # _reset_breath_state/_clear_file_panels already set (blank) rather than made to
+        # claim an include/exclude interaction that does not exist here yet.
 
     # -- feature A: breath overlays + include/exclude/type ------------------
     @staticmethod

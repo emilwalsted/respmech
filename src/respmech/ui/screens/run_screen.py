@@ -62,6 +62,11 @@ _FIX_HINTS = {
     "ConstantFlowError": "Setup ▸ channel assignment ('Assign channels from data…'); "
                          "or switch 'Signal used to split breaths' to volume under "
                          "Preview & QC ▸ Mechanics ▸ Advanced….",
+    "EmgSegmentationError": "Check the separator times configured for this file "
+                            "(processing.segmentation.separators) against the recording's "
+                            "own length, and that they strictly increase — Preview & QC ▸ "
+                            "EMG – segments once that tab exists, or the settings file "
+                            "directly for now.",
 }
 
 

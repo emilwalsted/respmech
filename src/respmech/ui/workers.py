@@ -1189,6 +1189,65 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
     }
 
 
+def stage_emg_segments_preview(settings: Settings, file_path: str) -> dict:
+    """Stage an EMG-only file's segmentation for the preview: load + ECG-condition
+    the EMG channels (the same cached ``_load_and_condition`` stage 1+2 the other EMG
+    panels share, tolerant of an entirely absent flow channel — see its own docstring),
+    then split the whole matrix into segments with the configured method (``whole_file``/
+    ``separators``, ``core.analysis.segments`` via ``compute.separateintobreaths``).
+
+    There is no flow-derived trim window for an EMG-only signal set — the whole raw
+    recording IS the analysis window, exactly as ``core.pipeline.segment_file``'s own
+    ``emg_only`` branch treats it — so every span is already in the file's own,
+    untrimmed clock and ``startix``/``endix`` are always ``0``/``len``. Reuses the core
+    exactly as ``run_batch``'s EMG-only branch does; never writes to disk and never
+    touches Qt.
+
+    A bad separator placement (:class:`~respmech.core.analysis.segments.
+    EmgSegmentationError`) is a precondition failure of THIS recording's
+    configuration, not a bug: caught here and reported as ``segment_error`` instead of
+    raised, so the preview keeps showing the raw EMG channels (no segments to shade)
+    with an explanatory status line, mirroring ``stage_mechanics_preview``'s own
+    ``TrimError`` handling — never a copyable 'failed' error card for an ordinary
+    misconfiguration."""
+    import os
+
+    from respmech.core import compute
+    from respmech.core._legacy_ns import to_legacy_ns
+    from respmech.core.analysis.segments import EmgSegmentationError
+
+    s = to_legacy_ns(settings)
+    name = os.path.basename(file_path)
+    fs = int(s.input.format.samplingfrequency)
+    emg, cond, ecg_applied, ecg_error, flow_full = _load_and_condition(settings, s, file_path)
+    n = cond.shape[0]
+    t = np.arange(n, dtype=float) / fs
+    empty = np.array([])
+    separator_times = dict(s.processing.mechanics.separators).get(name, [])
+    common = {
+        "name": name, "fs": fs, "t": t, "emg": emg, "emg_conditioned": cond,
+        "emg_flow": flow_full, "startix": 0, "endix": n, "separators": separator_times,
+        "ecg_applied": ecg_applied, "ecg_error": ecg_error,
+    }
+    try:
+        segs = compute.separateintobreaths(
+            s.processing.mechanics.separateby, name, t, empty, empty, empty, empty, empty,
+            [], cond, s)
+    except EmgSegmentationError as e:
+        return {**common, "spans": [], "segment_error": str(e)}
+    spans = []
+    for num, seg in segs.items():
+        time = np.atleast_1d(seg["time"])
+        length = time.size
+        t0 = float(time[0]) if length else 0.0
+        # half-open [t0, t0 + length/fs), not time[-1] -- matches the sample-count
+        # convention stage_mechanics_preview's own spans use (cum/fs, (cum+length)/fs),
+        # so adjacent segments touch exactly at the boundary with no visual gap.
+        t1 = t0 + length / fs
+        spans.append((num, t0, t1, bool(seg["ignored"]), seg["kind"]))
+    return {**common, "spans": spans, "segment_error": None}
+
+
 class FnWorker(QObject):
     """Generic off-thread wrapper: run ``fn(*args, **kwargs)`` and emit the
     result. Same ``moveToThread`` seam as the other workers (never touches Qt);
