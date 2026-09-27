@@ -75,7 +75,10 @@ def test_nested_optional_dataclass_round_trips():
                  id="unknown_toplevel_table"),
     pytest.param({"processing": {"lung_volumes": {"foo": 1}}}, "processing.lung_volumes",
                  id="unknown_nested_table"),
-    pytest.param({"processing": {"breath_types": [{"id": 1}]}}, "processing.breath_types",
+    # "processing.breath_types" is no longer an unknown list of tables as of M-19
+    # (ProcessingSettings.breath_types: list[BreathTypeEntry]) -- "processing.references"
+    # (a still-not-yet-implemented M-34 field) covers the same archived shape instead.
+    pytest.param({"processing": {"references": [{"id": 1}]}}, "processing.references",
                  id="unknown_list_of_tables"),
     pytest.param(
         {"processing": {"exclude_breaths": [
@@ -609,12 +612,19 @@ def _setup_normalization_reference(s, folder):
     return "x.txt"
 
 
+def _setup_breath_type_files(s, folder):
+    from respmech.core.settings import BreathTypeEntry
+    s.processing.breath_types.append(BreathTypeEntry(file="x.txt", breath=1, kind="ic", folder=folder))
+    return "x.txt"
+
+
 _ROW_SETUP = {
     "exclude_files": _setup_exclude_files,
     "breath_count_files": _setup_breath_count_files,
     "noise_reference": _setup_noise_reference,
     "ecg_reference": _setup_ecg_reference,
     "normalization_reference": _setup_normalization_reference,
+    "breath_type_files": _setup_breath_type_files,
 }
 
 
