@@ -105,7 +105,7 @@ def test_v2_scenarios_never_reach_the_legacy_oracle(monkeypatch):
 
 
 def test_typed_ic_fvc_same_file_vol_ic_matches_analytical_value(current):
-    """M-33's own acceptance criterion: 'typed_ic_fvc_same_file' breath #4 (typed
+    """This scenario's own acceptance criterion: 'typed_ic_fvc_same_file' breath #4 (typed
     'ic') reports vol_ic within 1e-9 of the analytical target, not merely whatever the
     code happens to compute this run — see generate_data.py's
     make_manoeuvre_file()/_manoeuvre_breath() docstring for why the generator's

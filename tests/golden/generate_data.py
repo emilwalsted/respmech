@@ -214,7 +214,7 @@ def _manoeuvre_breath(*, insp_ramp_n, insp_ramp_flow, insp_plateau_n, insp_plate
     """Build one breath's flow/volume/poes/pgas arrays as explicit TRAPEZOIDS
     (piecewise-constant flow, linearly-ramped volume/poes/pgas) — a deliberately
     different shape from ``_breath_waveforms``' smooth sin^2 model above, built for the
-    ``typed_ic_fvc_same_file`` golden scenario (M-33), whose own test checks an
+    ``typed_ic_fvc_same_file`` golden scenario, whose own test checks an
     extracted value (``vol_ic``) against a literal analytical constant, not merely
     against a previously committed reference.
 
@@ -246,7 +246,8 @@ def _manoeuvre_breath(*, insp_ramp_n, insp_ramp_flow, insp_plateau_n, insp_plate
     recording sit on a ``vol_base`` plateau) never perturb.
 
     ``insp_plateau_n``/``exp_plateau_n`` may be 0 (an ordinary tidal breath, or the
-    FVC breath's inspiration — M-42's scope, not this ticket's — needs no exact peak).
+    FVC breath's inspiration — the actual FVC numerics are a later feature's scope,
+    not this generator's — needs no exact peak).
     """
     insp_n = insp_ramp_n + insp_plateau_n
     exp_n = exp_ramp_n + exp_plateau_n
@@ -282,7 +283,7 @@ _MANOEUVRE_IC = dict(insp_ramp_n=2000, insp_ramp_flow=-2.0, insp_plateau_n=20, i
                      vol_base=0.0, vol_peak=3.0, exp_ramp_n=1500, exp_ramp_flow=1.5,
                      exp_plateau_n=20, exp_plateau_flow=1e-3, poes_swing=20.0, pgas_bump=10.0)
 #: FVC breath: a tidal-ish inspiration (no peak plateau — the actual FVC/FEV1/PEF
-#: numerics are M-42's scope, not this ticket's) followed by a long forced expiration
+#: numerics are a later feature's scope, not this generator's) followed by a long forced expiration
 #: (2.5 s ramp + trailing plateau, comfortably over manoeuvres.py's own
 #: ``_FVC_MIN_DURATION_S = 1.0`` threshold even after the one-sample boundary drop).
 _MANOEUVRE_FVC = dict(insp_ramp_n=1000, insp_ramp_flow=-2.0, insp_plateau_n=0, insp_plateau_flow=0.0,
@@ -308,7 +309,7 @@ _MANOEUVRE_SEQUENCE = (
 
 def make_manoeuvre_file(path, seed, lead_expiration_s=0.3):
     """Write the dedicated ``synth_manoeuvre_*.csv`` input for the
-    ``typed_ic_fvc_same_file`` golden scenario (M-33) — its own RNG stream (``seed`` is
+    ``typed_ic_fvc_same_file`` golden scenario — its own RNG stream (``seed`` is
     never one of ``make_file``'s/``make_emgonly_file``'s own seeds above), its own
     ``synth_manoeuvre_*.csv`` naming (never matching the ``synth_case_*.csv``/
     ``synth_emgonly_*.csv`` globs every other scenario's input uses), and its own

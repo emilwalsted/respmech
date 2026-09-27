@@ -28,7 +28,7 @@ within a tight tolerance.
 | `poes_only`           | v2     | flow | average    | off | `analysis.signals = ["flow", "poes"]` — work of breathing, no Pgas/Pdi |
 | `emg_only_whole_file`  | v2     | n/a (EMG-only) | n/a | on | `analysis.signals = ["emg"]`, `processing.segmentation.method = "whole_file"` — each entire file is one segment, over a DEDICATED `input/synth_emgonly_*.csv` pair (own RNG stream, never `synth_case_*.csv`) |
 | `emg_only_separators`  | v2     | n/a (EMG-only) | n/a | on | same EMG-only input pair, `processing.segmentation.method = "separators"` — one manual boundary list PER FILE, giving a DIFFERENT segment count per file (4 and 3) |
-| `typed_ic_fvc_same_file` | v2  | flow | average    | on  | (M-33) `processing.breath_types` marks breath #4 as an inspiratory-capacity manoeuvre and breath #7 as a forced-vital-capacity manoeuvre, IN THE SAME FILE — over a DEDICATED `input/synth_manoeuvre_A.csv` (own RNG stream, trapezoid breath shapes, never `synth_case_*.csv`). `test_typed_ic_fvc_same_file_vol_ic_matches_analytical_value` (`test_golden.py`) checks the extracted `vol_ic` against the literal analytical constant `3.0` (not just the committed reference), to `abs_tol=1e-9` — see `generate_data.py`'s `make_manoeuvre_file()`/`_manoeuvre_breath()` docstring for why the generator's plateau design makes that exact, not merely close. **v2-scenarios are extended by later tickets in the same programme**: M-35 (cross-file references), M-36 (operating lung volumes) and M-42 (FVC/MFVL numerics) each ADD keys to this SAME scenario and regenerate it with their own justification — an added key alone is not a regression here. |
+| `typed_ic_fvc_same_file` | v2  | flow | average    | on  | `processing.breath_types` marks breath #4 as an inspiratory-capacity manoeuvre and breath #7 as a forced-vital-capacity manoeuvre, IN THE SAME FILE — over a DEDICATED `input/synth_manoeuvre_A.csv` (own RNG stream, trapezoid breath shapes, never `synth_case_*.csv`). `test_typed_ic_fvc_same_file_vol_ic_matches_analytical_value` (`test_golden.py`) checks the extracted `vol_ic` against the literal analytical constant `3.0` (not just the committed reference), to `abs_tol=1e-9` — see `generate_data.py`'s `make_manoeuvre_file()`/`_manoeuvre_breath()` docstring for why the generator's plateau design makes that exact, not merely close. **v2-scenarios are extended by later work in the same programme**: a cross-file reference feature, operating-lung-volume derivation, and FVC/MFVL numerics will each ADD keys to this SAME scenario and regenerate it with their own justification — an added key alone is not a regression here. |
 
 `Oracle` names which generator is authoritative for that scenario's committed
 numbers: `legacy` = the frozen v1 oracle (`make_golden.py --write`, cross-checked
@@ -62,7 +62,7 @@ when every value is unchanged (these two new scenarios added ~34 KB combined and
 
 **Golden job runtime:** measured locally (sandbox, `pytest tests/golden -q`,
 13 non-skipped + 5 skipped production tests) at ~7.5 s after adding
-`typed_ic_fvc_same_file` (M-33) plus its own dedicated
+`typed_ic_fvc_same_file` plus its own dedicated
 `test_typed_ic_fvc_same_file_vol_ic_matches_analytical_value` test — still the same
 order of magnitude as the ~11 s measured for the 11 non-skipped tests before it
 (`emg_only_whole_file`/`emg_only_separators`), since the new scenario is one more

@@ -88,7 +88,7 @@ def run_scenario(name):
         # (none of which set either) produce an IDENTICAL dict to before this ticket.
         manoeuvres = getattr(fr, "manoeuvres", None)
         if manoeuvres:
-            # M-33: manoeuvres is {breath_no: extract()-dict}, keyed by an int. JSON has
+            # manoeuvres is {breath_no: extract()-dict}, keyed by an int. JSON has
             # no integer object keys -- json.dump/json.load round-trips this dict's keys
             # through str() -- so stringify here too, rather than only after a write/
             # read cycle: a scenario baked fresh in memory (this function's own return
