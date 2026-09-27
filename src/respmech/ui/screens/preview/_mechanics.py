@@ -53,15 +53,49 @@ from ._plot_helpers import (BreathSpansItem, SciAxis, _CHANNELS, _pen, _plot_pal
 #: A breath span's/BreathTypeEntry's kind -> the palette suffix _breath_brush/
 #: _breath_label_color reads (``breath_<suffix>_brush``/``_label``). 'excluded' is a
 #: UI-only pseudo-kind (processing.exclude_breaths, never a BREATH_KINDS member); any
-#: real BREATH_KINDS member without its own dedicated entry here (ic_fvc/max_insp/sniff
-#: — not reachable from the minimal type menu this ticket adds, only from M-31's fuller
-#: one) falls back to 'other' rather than raising on an unknown kind.
+#: real BREATH_KINDS member without its own dedicated entry here (ic_fvc/max_insp/sniff/
+#: other — M-20's minimal menu never offered them, and M-31's fuller one deliberately
+#: keeps them visually grouped with 'other' rather than growing the palette further)
+#: falls back to 'other' rather than raising on an unknown kind.
 _KIND_PALETTE_SUFFIX = {"excluded": "excl", "ic": "ic", "fvc": "fvc", "rest": "rest"}
 
-#: Minimal type-menu labels (M-20's scope only — Tidal / Excluded / Rest; the fuller
-#: manoeuvre menu is M-31). 'tidal' clears both exclusion and typing.
-_TYPE_MENU_KINDS = ("tidal", "excluded", "rest")
-_TYPE_MENU_LABELS = {"tidal": "Tidal", "excluded": "Excluded", "rest": "Rest"}
+#: The full type menu (M-31): every respmech.core.settings.BREATH_KINDS member, plus
+#: the two pseudo-kinds 'tidal'/'excluded' _set_breath_type also accepts. 'rest' is
+#: filtered out by _handle_type_requested for a flow-bearing (non-EMG-only) file —
+#: it names a noise-reference segment, which only makes sense on the EMG-only
+#: 'EMG – segments' tab this same menu-building code also serves (see the module's
+#: 'kunder' comment on _handle_type_requested). Order matches the ticket's own
+#: ordering, which is also the order BREATH_KINDS is declared in.
+_TYPE_MENU_KINDS = ("tidal", "excluded", "ic", "fvc", "ic_fvc", "max_insp", "sniff", "rest", "other")
+_TYPE_MENU_LABELS = {
+    "tidal": "Tidal",
+    "excluded": "Excluded",
+    "ic": "IC manoeuvre",
+    "fvc": "FVC manoeuvre",
+    "ic_fvc": "IC + FVC",
+    "max_insp": "Maximal inspiratory effort",
+    "sniff": "Sniff",
+    "rest": "Rest",
+    "other": "Other…",
+}
+
+#: statusTip shown while hovering each type-menu action (M-31) — the same
+#: bold-path/description shape ui.help_text.tooltip() uses for settings controls,
+#: but plain text (QAction.statusTip is not rich text) since there is no settings
+#: path to show for a menu choice.
+_TYPE_MENU_STATUS_TIPS = {
+    "tidal": "Ordinary tidal breathing — included in the average like any other breath.",
+    "excluded": "Exclude this breath from the tidal average without typing it.",
+    "ic": "Mark as an inspiratory capacity manoeuvre: reports its own volume, timing and "
+          "pressure swings on the Manoeuvres sheet.",
+    "fvc": "Mark as a forced vital capacity manoeuvre (a deliberately prolonged forced "
+           "exhalation).",
+    "ic_fvc": "Mark as a combined inspiratory-capacity-then-forced-exhalation manoeuvre.",
+    "max_insp": "Mark as a maximal inspiratory effort — reports a peak-effort reference value.",
+    "sniff": "Mark as a maximal sniff manoeuvre — reports a peak-effort reference value.",
+    "rest": "Mark as a quiet-breathing reference segment for noise-profile estimation.",
+    "other": "Mark as typed without extracting any manoeuvre values.",
+}
 
 
 def _short_boundary_note(notices):
@@ -308,11 +342,38 @@ class _MechanicsMixin:
         configure_result_table(self.table)
         # a table squeezed to one visible row is as useless as a flattened graph
         _theme.set_plot_floor(self.table)
+        # M-31: the Manoeuvres sheet, stacked BELOW the per-breath table in the SAME
+        # panel (no third action-band row — _build_mech_action_band stays a single fixed
+        # row) — its own small ResultTableModel, hidden until a test run reports at least
+        # one typed breath (_fill_manoeuvres_table), so an untyped file's Mechanics panel
+        # looks exactly as it did before this ticket.
+        self.manoeuvres_table = QTableView()
+        self.manoeuvres_table.setAccessibleName("Manoeuvres")   # C02
+        self._manoeuvres_model = ResultTableModel()
+        self.manoeuvres_table.setModel(self._manoeuvres_model)
+        self.manoeuvres_table.verticalHeader().setVisible(False)
+        configure_result_table(self.manoeuvres_table)
+        _theme.set_plot_floor(self.manoeuvres_table)
+        self._manoeuvres_label = ElidingLabel("Manoeuvres")
+        self._manoeuvres_label.setProperty("status", "muted")
+        self._manoeuvres_section = QWidget()
+        _mv_lay = QVBoxLayout(self._manoeuvres_section)
+        _mv_lay.setContentsMargins(0, 6, 0, 0)
+        _mv_lay.setSpacing(2)
+        _mv_lay.addWidget(self._manoeuvres_label)
+        _mv_lay.addWidget(self.manoeuvres_table, 1)
+        self._manoeuvres_section.setVisible(False)
+        _tables_box = QWidget()
+        _tables_lay = QVBoxLayout(_tables_box)
+        _tables_lay.setContentsMargins(0, 0, 0, 0)
+        _tables_lay.setSpacing(6)
+        _tables_lay.addWidget(self.table, 2)
+        _tables_lay.addWidget(self._manoeuvres_section, 1)
         # D22 (UI-overhaul): titled, like the Campbell panel beside it, so the header can
         # name the work-of-breathing source (see _set_wob_table_note) — otherwise nothing
         # on screen says that the five wob* columns are one whole-file value repeated on
         # every row when "Work of breathing from" is Average (the default).
-        self._table_panel = self._titled("Per-breath results", self.table)
+        self._table_panel = self._titled("Per-breath results", _tables_box)
         lower.addWidget(self._table_panel)
         self.campbell = FigureCanvasQTAgg(Figure(figsize=(4, 4)))
         self.campbell.setAccessibleName("Campbell diagram")   # C02: named for QAccessible/screen readers
@@ -1095,6 +1156,10 @@ class _MechanicsMixin:
         self._trim_offset_s = data["startix"] / data["fs"]  # trimmed span -> absolute EMG time
         self._set_analysis_window(data)                      # D23: persistent trim-window label
         self._breaths = list(data["spans"])
+        # M-31: the type menu's 'Suggested: FVC' hint — .get() so a stale suggestion from
+        # the previously-viewed file/tab can never survive (stage_emg_segments_preview's
+        # own dict carries no such key, since a segment has no expiration to judge).
+        self._suggested_fvc = data.get("suggested_fvc")
         # Drop the click-to-toggle maps NOW, not just on a file switch (_reset_breath_state):
         # a same-file settings edit re-dispatches 'mech' WITHOUT going through a file switch,
         # so without this, a click landing in the stage1->stage2 gap (the async path's
@@ -1592,6 +1657,14 @@ class _MechanicsMixin:
             paint_kind = kind
 
         self.settings_edited.emit()      # exclude_breaths/breath_types land in the .toml
+        # M-31: manoeuvres.suggest_fvc's own contract is "untyped, non-ignored" — the
+        # instant THIS write types/excludes the breath the hint was pointing at, that
+        # contract is broken until the next full re-stage (self._suggested_fvc is only
+        # ever recomputed there). Rather than showing a now-wrong hint on an already-
+        # decided breath until some LATER unrelated re-stage happens to correct it,
+        # drop it immediately — advertising nothing is honest; a stale suggestion is not.
+        if breath_no == self._suggested_fvc:
+            self._suggested_fvc = None
         self._repaint_breath(breath_no, paint_kind)
         self._sync_excluded_badge(name)
         # a type/exclude change must update the AVERAGED result in lockstep with the
@@ -1678,18 +1751,45 @@ class _MechanicsMixin:
         return now_excluded
 
     def _build_type_menu(self, breath_no, kinds):
-        """The minimal breath-type context menu (Tidal / Excluded / Rest — M-20's
-        scope; the fuller manoeuvre menu with IC/FVC/etc. is M-31, which extends this
-        same function). Parented to ``self.plots`` so ``_lone_ampersands``'s QMenu scan
-        (``tests/unit/_helpers.py``) reaches it like every other menu in the window —
-        a menu with no such parent is invisible to that scan — and set to delete
-        itself on close so a right-click doesn't leak one QMenu per use."""
+        """The breath-type context menu (M-20's minimal Tidal/Excluded/Rest, extended by
+        M-31 to the full manoeuvre set). Parented to ``self.plots`` so
+        ``_lone_ampersands``'s QMenu scan (``tests/unit/_helpers.py``) reaches it like
+        every other menu in the window — a menu with no such parent is invisible to that
+        scan — and set to delete itself on close so a right-click doesn't leak one QMenu
+        per use.
+
+        ``kinds`` is the caller's choice of which real kinds to OFFER (``_handle_type_
+        requested`` filters ``'rest'`` in/out by capability) — the disabled hint and the
+        two M-37 placeholders below are unconditional, since they are informational/
+        not-yet-wired rather than a choice ``kinds`` should ever need to suppress."""
         menu = QMenu(self.plots)
         menu.setAttribute(Qt.WA_DeleteOnClose)
+        # M-31: a plain, deterministic hint (manoeuvres.suggest_fvc) — the untyped
+        # breath with the longest expiration in the file is the most plausible untyped
+        # FVC candidate. Purely advisory: shown disabled, next to whichever breath it
+        # names, so it never competes with (or is mistaken for) an actual menu choice.
+        if getattr(self, "_suggested_fvc", None) == breath_no:
+            hint = menu.addAction("Suggested: FVC")
+            hint.setEnabled(False)
+            menu.addSeparator()
         for kind in kinds:
             action = menu.addAction(_TYPE_MENU_LABELS.get(kind, kind.capitalize()))
+            tip = _TYPE_MENU_STATUS_TIPS.get(kind)
+            if tip:
+                action.setStatusTip(tip)
             action.triggered.connect(
                 lambda _checked=False, k=kind: self._apply_breath_type_choice(breath_no, k))
+        # M-37 (not yet wired): reference-picker placeholders, visible so the menu's
+        # final shape is known now, disabled until the reference/subject model lands.
+        # A statusTip on each — every REAL choice above has one too — so a disabled,
+        # unclickable item still explains itself instead of just doing nothing.
+        menu.addSeparator()
+        ref_for = menu.addAction("Use as IC reference for ▸")
+        ref_for.setEnabled(False)
+        ref_for.setStatusTip("Not available yet — a later release.")
+        ref_manoeuvres = menu.addAction("Reference manoeuvres…")
+        ref_manoeuvres.setEnabled(False)
+        ref_manoeuvres.setStatusTip("Not available yet — a later release.")
         return menu
 
     def _apply_breath_type_choice(self, breath_no, kind):
@@ -1707,7 +1807,25 @@ class _MechanicsMixin:
         """Slot for ``BreathSpansItem.typeRequested`` (right-click/Ctrl+left-click on a
         span): resolve the emitting item's own scene to a global point (the item does
         not know which widget it is embedded in — it can be any plot on the mechanics
-        stack or any EMG view) and pop the type menu up there."""
+        stack or any EMG view) and pop the type menu up there.
+
+        M-31: the offered kinds differ by signal set — this one slot serves BOTH the
+        flow-bearing Mechanics stack and the EMG-only 'EMG – segments' tab (see
+        ``_draw_breath_overlays``'s own docstring on why the two share this machinery),
+        and the two shapes support genuinely different manoeuvre kinds:
+
+        - 'Rest' names a quiet-breathing noise-reference SEGMENT, which only exists as a
+          concept where segmentation (not inspiration/expiration) is the unit — offering
+          it on a flow-bearing file would type a real tidal breath as a noise reference
+          no resolver (``resolve_noise_reference_mode``) ever reads for that shape.
+        - IC/FVC/IC+FVC/max_insp/sniff all need ``core.pipeline.run_batch``'s per-breath
+          extraction loop, which is unconditionally skipped for an EMG-only set
+          (``if not emg_only:`` around the ``manoeuvreslib.extract`` call — a segment has
+          no inspiration/expiration split for it to read, see ``core.analysis.segments``'
+          own module docstring). Offering them on the 'EMG – segments' tab would type a
+          segment as, say, 'ic' with NO Manoeuvres row ever appearing for it — the kind
+          is silently a dead end there today (self-review finding: this ticket's first
+          cut offered the full set on both tabs, which is what the guard below fixes)."""
         item = self.sender()
         view = None
         if item is not None:
@@ -1723,7 +1841,13 @@ class _MechanicsMixin:
             global_pos = view.mapToGlobal(view.mapFromScene(scene_pos))
         else:                                          # pragma: no cover — defensive only
             global_pos = QCursor.pos()
-        menu = self._build_type_menu(breath_no, _TYPE_MENU_KINDS)
+        caps = Capabilities.from_settings_or_none(self.state.settings)
+        emg_only = bool(caps is not None and caps.mode == "emg_only")
+        if emg_only:
+            kinds = tuple(k for k in _TYPE_MENU_KINDS if k in ("tidal", "excluded", "rest", "other"))
+        else:
+            kinds = tuple(k for k in _TYPE_MENU_KINDS if k != "rest")
+        menu = self._build_type_menu(breath_no, kinds)
         menu.popup(global_pos)
 
     def _request_batch_recompute(self):
@@ -1853,6 +1977,7 @@ class _MechanicsMixin:
                     pass
         self._bov = {}
         self._breaths = []
+        self._suggested_fvc = None
         self._breath_spans = {}
         self._breath_regions = {}
         self._breath_texts = {}
@@ -1964,6 +2089,7 @@ class _MechanicsMixin:
                 else:
                     self._table_model.set_dataframe(None)
                     self._set_wob_table_note(None)
+                    self._fill_manoeuvres_table(None, None)
                     self.campbell.figure.clear(); self.campbell.draw()
                     self._forget_campbell()   # the export must not resurrect a cleared diagram
                 for p in self._panels_for("batch"):
@@ -1989,16 +2115,21 @@ class _MechanicsMixin:
             # whole test, independent of any one file's role).
             self._fill_table(fr.manoeuvres_table)
             self._table_panel._title_label.setFullText("Manoeuvres (reference-only file)")
+            # the primary table ALREADY shows this file's manoeuvres (above) — the
+            # separate stacked section below it would just repeat the same rows.
+            self._fill_manoeuvres_table(None, None)
             self.campbell.figure.clear(); self.campbell.draw()
             self._forget_campbell()
             self._update_qc_overview(fr)
         elif emg_only:
             self._fill_segtable(fr.breaths_table)
+            self._fill_manoeuvres_table(None, None)   # M-31 scope is the Mechanics tab only
             self._update_qc_overview(fr, chip=self.segments_qc_overview)
         else:
             self._fill_table(fr.breaths_table)
             self._draw_campbell_or_loop(fr.breaths)
             self._update_qc_overview(fr)                  # P16 QC line, for THIS file only
+            self._fill_manoeuvres_table(fr.manoeuvres_table, fr.manoeuvres)
         nr = getattr(result, "noise_report", None)
         if nr:
             self.render_noise_report(result)         # sets its own status incl. prop_decrease
@@ -2029,6 +2160,23 @@ class _MechanicsMixin:
         self._table_model.set_dataframe(df)
         resize_result_table(self.table)
         self._set_wob_table_note(df)
+
+    def _fill_manoeuvres_table(self, df, manoeuvres):
+        """Show the Manoeuvres sheet below the per-breath table (M-31), visible only
+        once the previewed file's most recent test run actually typed at least one
+        breath — ``manoeuvres`` (``FileResult.manoeuvres``, a ``{breath_no: ...}`` dict)
+        decides visibility rather than ``df`` alone, matching ``build_manoeuvre_table``'s
+        own "empty dict -> None" contract (``core/results.py``) so the two can never
+        disagree. Passing ``(None, None)`` hides the section — used for a soft file
+        error, an EMG-only file (out of this ticket's scope) and a reference-only file
+        (whose own manoeuvres already fill the PRIMARY table, see ``_on_batch_result``),
+        so an untyped or not-applicable file's panel looks exactly as it did before this
+        ticket, with no empty second table left visible."""
+        has_manoeuvres = bool(manoeuvres)
+        self._manoeuvres_model.set_dataframe(df if has_manoeuvres else None)
+        if has_manoeuvres:
+            resize_result_table(self.manoeuvres_table)
+        self._manoeuvres_section.setVisible(has_manoeuvres)
 
     def _set_wob_table_note(self, df):
         """Name the work-of-breathing source in the table's own header (D22,
