@@ -417,9 +417,14 @@ seg_duration_s}` rather than the flow-derived timing group `§5.4`'s
 fell (`t_rms_file_max_col_N`, from the same sliding-window RMS grid `calculate_rms`
 itself maximises over — `emg.rolling_rms`) and the mean of the three highest values in
 that envelope (`rms_file_top3_col_N`), a steadier "peak level" than the single max alone
-against a lone noise spike. `run_batch` separately warns (never fails) when that peak
-coincides with a heartbeat and `processing.emg.robust_peak` is off, since the reported
-"peak" could then be cardiac contamination rather than real muscle activity.
+against a lone noise spike — nan-aware throughout (a NaN sample, e.g. from upstream
+noise reduction, poisons every rolling-RMS window from that sample onward, since it sits
+in a cumulative sum; a real earlier peak is still recovered, and a channel with nothing
+left to recover from reports NaN for the value AND its timestamp together, never a
+concrete-looking time paired with a NaN value). Whether that peak coincides with a
+heartbeat is not itself checked here — this diagnostic only locates the peak; deciding
+whether it is real muscle activity or cardiac contamination is what
+`processing.emg.robust_peak` is for.
 
 **The loader's flow requirement is conditional on this shape**, not lifted generally:
 `core/io/loaders.py` still raises immediately on an unassigned flow whenever volume,

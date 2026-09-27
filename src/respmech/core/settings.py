@@ -14,6 +14,7 @@ The dataclasses mirror the TOML schema (``schema_version = 1``). ``from_dict`` i
 tolerant (unknown keys are collected, not fatal) and ``validate`` raises
 ``SettingsError`` with a clear message.
 """
+import math
 import os
 import types
 from dataclasses import dataclass, field, fields, is_dataclass
@@ -523,8 +524,16 @@ class Settings:
                     f"processing.segmentation.separators[{i}] must be a table with "
                     "file and times_s")
             times = se.times_s
+            # math.isfinite rejects NaN/Inf too -- both ARE instances of float (so the
+            # type check alone lets them through) but neither compares meaningfully
+            # against 0 or a neighbour (NaN compares False to everything; Inf reads as
+            # "increasing" relative to any finite predecessor), so without this a
+            # malformed TOML `times_s = [1.0, nan, 3.0]` (TOML has nan/inf literals)
+            # silently passed validate() and only surfaced later as a bare, untranslated
+            # ValueError/OverflowError from int(round(t * fs)) in core.analysis.segments.
             if not isinstance(times, list) or any(
-                    isinstance(t, bool) or not isinstance(t, (int, float)) for t in times):
+                    isinstance(t, bool) or not isinstance(t, (int, float))
+                    or not math.isfinite(t) for t in times):
                 raise SettingsError(
                     f"processing.segmentation.separators[{i}].times_s must be a list "
                     "of numbers")
@@ -592,6 +601,19 @@ class Settings:
                 "processing.emg.noise.enabled requires processing.emg.remove_ecg "
                 "to be enabled (noise reduction would otherwise treat the heartbeat "
                 "as steady background noise)")
+
+        # EMG-only noise reduction needs its own reference-resolution rule (a rest-typed
+        # segment, or an interburst clip) -- not yet built. Without this guard,
+        # core.pipeline._build_noise_set/_emg_segmented hardcode flow-based breath
+        # segmentation regardless of processing.segmentation.method, so an EMG-only
+        # analysis with noise reduction on reaches an unguarded `TrimError` deep in the
+        # noise-profile-building pre-pass and kills the WHOLE BATCH before a single file
+        # is processed -- not the clean, per-file, named error every other EMG-only
+        # misconfiguration in this method already gets.
+        if emg.noise.enabled and "flow" not in declared and "emg" in declared:
+            raise SettingsError(
+                "processing.emg.noise.enabled is not yet supported for an EMG-only "
+                "signal set (no flow channel) -- turn it off, or add a flow channel")
 
         v = self.processing.volume
         if v.correct_trend:

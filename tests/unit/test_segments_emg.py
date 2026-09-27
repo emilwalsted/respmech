@@ -144,6 +144,54 @@ def test_whole_file_rms_diagnostics_absent_without_emg_columns():
     assert "rms_file_max" not in seg
 
 
+def test_whole_file_rms_diagnostics_ignore_a_nan_sample():
+    """A NaN sample (e.g. from upstream noise reduction) must never be silently picked
+    as "the peak": rolling_rms's cumulative-sum grid means a NaN poisons every window
+    from that sample onward (not just the ones directly overlapping it), so a NaN
+    placed AFTER the real burst leaves the burst's own peak recoverable, while
+    everything past the NaN correctly reads as NaN too -- never a wrong, plausible-
+    looking timestamp paired with a NaN value (the bug this fix closes)."""
+    n = 5 * FS
+    timecol = np.arange(n) / FS
+    emgcols = np.zeros((n, 1))
+    burst_start = 1 * FS
+    emgcols[burst_start:burst_start + 20, 0] = 5.0
+    emgcols[3 * FS, 0] = np.nan          # after the burst -> the burst itself stays clean
+    seg = whole_file("f.csv", timecol, emgcols, [], rms_s=0.05, fs=FS,
+                     ignored_breaths=set(), kinds={})[1]
+    assert np.isfinite(seg["rms_file_max"][0])
+    assert 0.9 < seg["t_rms_file_max"][0] < 1.2          # lands inside the real, clean burst
+    assert np.isfinite(seg["rms_file_top3"][0])
+    # the mismatch this fix specifically closes: value and time must never disagree on
+    # whether the peak is trustworthy.
+    assert np.isnan(seg["rms_file_max"][0]) == np.isnan(seg["t_rms_file_max"][0])
+
+
+def test_whole_file_rms_diagnostics_all_nan_channel_reports_nan_not_a_crash():
+    n = 3 * FS
+    timecol = np.arange(n) / FS
+    emgcols = np.full((n, 1), np.nan)
+    seg = whole_file("f.csv", timecol, emgcols, [], rms_s=0.05, fs=FS,
+                     ignored_breaths=set(), kinds={})[1]
+    assert np.isnan(seg["rms_file_max"][0])
+    assert np.isnan(seg["t_rms_file_max"][0])
+    assert np.isnan(seg["rms_file_top3"][0])
+
+
+def test_one_sample_segment_keeps_a_length_one_time_array_not_a_scalar():
+    """A separator placement that produces a 1-sample segment must not collapse
+    breath["time"] to a 0-d scalar (no len(), no indexing) -- every downstream reader
+    (build_processed_data, the diagnostic plots) assumes at least 1-D."""
+    n = 5 * FS
+    timecol = np.arange(n) / FS
+    emgcols = _emg_data(n)
+    segs = separators("f.csv", [1.0, 1.0 + 1.0 / FS], timecol, emgcols, [], FS,
+                      ignored_breaths=set(), kinds={})
+    one_sample = segs[2]
+    assert len(one_sample["time"]) == 1
+    assert one_sample["time"].shape == (1,)
+
+
 # -- compute.separateintobreaths dispatch, and the run through compute_segment_emg ----
 
 def test_separateintobreaths_dispatches_whole_file_and_separators():
@@ -271,3 +319,23 @@ def test_run_batch_reports_a_separator_out_of_range_as_a_soft_per_file_error(tmp
     result = run_batch(s)
     fr = result.failed_files["synth_case_A.csv"]
     assert fr.error_kind == "EmgSegmentationError"
+
+
+def test_run_batch_refuses_emg_only_noise_reduction_cleanly(tmp_path):
+    """EMG-only noise reduction has no reference-resolution rule yet (a later ticket's
+    scope): core.pipeline._build_noise_set/_emg_segmented hardcode flow-based breath
+    segmentation regardless of processing.segmentation.method, so without
+    Settings.validate()'s guard this would reach an unguarded TrimError deep in the
+    noise-profile pre-pass and kill the WHOLE BATCH before any file is processed --
+    run_batch's own settings.validate() call must refuse it up front instead, with a
+    named, clean SettingsError."""
+    from respmech.core.pipeline import run_batch
+    from respmech.core.settings import SettingsError
+
+    s = _emg_only_synth_settings(tmp_path)
+    s.processing.segmentation.method = "whole_file"
+    s.processing.emg.remove_ecg = True
+    s.processing.emg.noise.enabled = True
+    s.input.files = "synth_case_A.csv"
+    with pytest.raises(SettingsError, match="not yet supported for an EMG-only signal set"):
+        run_batch(s)
