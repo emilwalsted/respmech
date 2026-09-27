@@ -348,6 +348,84 @@ def test_cli_validate_fails_on_a_constant_flow_channel(tmp_path, capsys):
     assert "Flow" in err
 
 
+def _emg_only_settings_toml(tmp_path, folder, filename, *, method="whole_file"):
+    """A minimal, standalone EMG-only Settings object (never the committed synth_case_*
+    golden inputs, which have real flow/pressure channels and must stay untouched) —
+    saved to a TOML the CLI can load, matching ``_validate_settings_toml``'s own
+    'build a minimal settings file, never hand-edit the committed golden' convention."""
+    from respmech.core.settings import Settings
+    from respmech.settingsio.toml_io import save_toml
+    s = Settings()
+    s.input.folder = str(folder)
+    s.input.files = filename
+    s.input.format.sampling_frequency = 1000
+    s.input.channels.emg = [2, 3, 4]
+    s.analysis.signals = ["emg"]
+    s.processing.segmentation.method = method
+    s.output.folder = str(tmp_path / "out")
+    toml = tmp_path / "s.toml"
+    save_toml(s, toml)
+    return toml
+
+
+def test_cli_validate_warns_about_a_constant_emg_channel_on_a_flow_bearing_set(tmp_path, capsys):
+    """The existing, unaffected case: a constant EMG channel on an ORDINARY (flow-
+    declared) set is advisory only — same as a constant Pdi above — never fails
+    validate. Negative case for the EMG-only test below, which DOES fail on this."""
+    import numpy as np
+    n = 2000
+    _write_layout_csv(tmp_path / "flatemg.csv", n, time_col=np.arange(n) / 1000.0,
+                      extra_cols={"emg1": np.zeros(n)})   # column 7 -- a constant EMG channel
+    from respmech.settingsio.toml_io import save_toml
+    legacy = {"input": {"inputfolder": str(tmp_path), "files": "*.csv",
+                        "format": {"samplingfrequency": 1000},
+                        "data": {"column_flow": 2, "column_volume": 3,
+                                 "column_poes": 4, "column_pgas": 5, "column_pdi": 6,
+                                 "columns_emg": [7], "columns_entropy": []}},
+             "output": {"outputfolder": str(tmp_path / "out")}}
+    settings, _ = migrate_dict(legacy)
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+    rc = cli_main(["validate", str(toml)])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "EMG #1" in err
+    assert "constant channel" in err
+
+
+def test_cli_validate_fails_on_a_constant_emg_channel_for_an_emg_only_set(tmp_path, capsys):
+    """Acceptance criterion: with NO flow declared at all (EMG-only), a constant
+    EMG channel is the hard failure — there is no flow channel for the ordinary rule to
+    even look at."""
+    import numpy as np
+    n = 2000
+    t = np.arange(n) / 1000.0
+    pd.DataFrame({"time": t, "EMG1": np.zeros(n),
+                 "EMG2": np.sin(t), "EMG3": np.cos(t)}).to_csv(
+        tmp_path / "flatemgonly.csv", index=False)
+    toml = _emg_only_settings_toml(tmp_path, tmp_path, "flatemgonly.csv")
+    rc = cli_main(["validate", str(toml)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "flatemgonly.csv" in err
+    assert "EMG #1" in err
+
+
+def test_cli_validate_passes_an_emg_only_set_with_no_constant_channel(tmp_path, capsys):
+    """The negative case: a well-behaved EMG-only recording (no constant channel) must
+    still validate cleanly, on either segmentation method."""
+    import numpy as np
+    n = 2000
+    t = np.arange(n) / 1000.0
+    pd.DataFrame({"time": t, "EMG1": np.sin(t), "EMG2": np.sin(t + 0.5),
+                 "EMG3": np.cos(t)}).to_csv(tmp_path / "okemgonly.csv", index=False)
+    toml = _emg_only_settings_toml(tmp_path, tmp_path, "okemgonly.csv", method="separators")
+    rc = cli_main(["validate", str(toml)])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "constant channel" not in err
+
+
 def test_cli_validate_the_golden_synthetic_files_have_no_new_caveats(tmp_path, capsys):
     """Acceptance criterion 1's negative case, against the committed golden input rather
     than a hand-built file: the real synth_case_*.csv recordings (with their real

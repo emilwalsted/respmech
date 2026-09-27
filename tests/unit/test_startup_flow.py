@@ -303,9 +303,10 @@ class _FakeSignalDialog:
     mode now opens this picker before the reset, so any test that ends up on that
     branch needs it stubbed the same way the channel-setup modal already is."""
 
-    def __init__(self, parent=None, *, accept=True, signals=None):
+    def __init__(self, parent=None, *, accept=True, signals=None, segmentation_method=None):
         self._accept = accept
         self.signals = signals if signals is not None else ["flow", "poes", "pgas", "pdi"]
+        self.segmentation_method = segmentation_method
 
     def exec(self):
         from PySide6.QtWidgets import QDialog
@@ -328,6 +329,22 @@ def test_begin_session_new_enters_guided_mode(qapp, monkeypatch):
     assert win.settings_screen._mode == "new"
     assert sorted(win.settings_screen.state.settings.analysis.signals) == [
         "flow", "pdi", "pgas", "poes"]
+    win.close()
+
+
+def test_begin_session_new_emg_only_passes_the_segmentation_method_through(qapp, monkeypatch):
+    """The EMG-only preset's own extra choice (segmentation_method) must reach
+    new_analysis_from_startup -> apply_signal_set, not just ``signals`` — the same
+    composed path as the ordinary flow-family case above, one field wider."""
+    from respmech.ui import startup_dialog
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    monkeypatch.setattr(startup_dialog, "StartupDialog", lambda parent=None: _FakeChooser("new"))
+    _stub_signal_dialog(monkeypatch, signals=["emg"], segmentation_method="separators")
+    win.begin_session()
+    s = win.settings_screen.state.settings
+    assert s.analysis.signals == ["emg"]
+    assert s.processing.segmentation.method == "separators"
     win.close()
 
 

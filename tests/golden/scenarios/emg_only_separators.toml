@@ -1,0 +1,45 @@
+# V2_SCENARIOS golden fixture: 'emg_only_separators'. Same EMG-only synthetic
+# input pair as emg_only_whole_file.toml (tests/golden/input/synth_emgonly_*.csv), but
+# ``processing.segmentation.method = "separators"`` with one manually-placed boundary
+# list PER FILE (generate_data.py::make_emgonly_file's own returned onset times —
+# 4 segments in the A file, 3 in the B file, so the two files exercise a DIFFERENT
+# segment count each). See emg_only_whole_file.toml's own header comment for the
+# LEGACY_SCENARIOS/V2_SCENARIOS split and the golden-regeneration warning; the same
+# applies here.
+schema_version = 2
+
+[analysis]
+signals = ["emg"]
+
+[input]
+folder = "../input"
+files  = "synth_emgonly_*.csv"
+
+[input.format]
+sampling_frequency = 1000
+decimal            = "."
+
+[input.channels]
+emg = [2, 3, 4]
+
+[processing.segmentation]
+method = "separators"
+
+[[processing.segmentation.separators]]
+file    = "synth_emgonly_A.csv"
+times_s = [2.4, 4.506945, 6.603964]
+
+[[processing.segmentation.separators]]
+file    = "synth_emgonly_B.csv"
+times_s = [2.4, 4.506945]
+
+[processing.emg]
+rms_window_s = 0.050
+
+[output]
+folder = "output"
+
+[output.data]
+save_average          = true
+save_breath_by_breath = true
+save_processed         = false

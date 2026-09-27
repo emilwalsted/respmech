@@ -200,6 +200,12 @@ LEGACY_SCENARIOS = {
 V2_SCENARIOS: dict = {
     "flow_only": os.path.join("scenarios", "flow_only.toml"),
     "poes_only": os.path.join("scenarios", "poes_only.toml"),
+    # EMG-only (no flow/pressure channel at all), over the dedicated
+    # synth_emgonly_*.csv input pair (never the flow-bearing synth_case_*.csv) —
+    # 'whole_file' (one segment per file) and 'separators' (a per-file manual
+    # boundary list, exercising a DIFFERENT segment count per file: 4 and 3).
+    "emg_only_whole_file": os.path.join("scenarios", "emg_only_whole_file.toml"),
+    "emg_only_separators": os.path.join("scenarios", "emg_only_separators.toml"),
 }
 
 # The union both test_golden.py (via golden_newcore.mg.SCENARIOS) and this
