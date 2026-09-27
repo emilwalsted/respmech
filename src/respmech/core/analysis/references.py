@@ -297,10 +297,17 @@ def _aggregate_ic(result, ref: BreathRef, ic_cfg) -> tuple[float | None, int, li
 
     Returns ``(None, 0, notices)`` when nothing usable resolved (every breath missing,
     or every resolved breath rejected) -- the caller (:func:`attach`) turns that into a
-    :class:`ReferenceLinkError`, exactly like a wholly unresolved reference."""
+    :class:`ReferenceLinkError`, exactly like a wholly unresolved reference.
+
+    ``ref.breaths`` is deduplicated first (``dict.fromkeys``, order-preserving):
+    nothing validates a hand-authored ``BreathRef`` for a repeated breath number the
+    way ``Settings.validate()`` already does for a duplicate file/group entry, and
+    without this a repeated number would silently double that breath's weight in the
+    aggregate and inflate ``ic_ref_n`` past the number of attempts actually made
+    (self-review finding)."""
     vols: list[float] = []
     notices: list[str] = []
-    for b in ref.breaths:
+    for b in dict.fromkeys(ref.breaths):
         row = _lookup_manoeuvre(result, ref.file, b)
         if row is None:
             notices.append(
