@@ -80,8 +80,15 @@ def cmd_run(args) -> int:
         from respmech.core.analysis.signals import Capabilities
         unit_word = "segments" if Capabilities.from_settings(settings).mode == "emg_only" else "breaths"
         for fname, fr in result.ok_files.items():
-            n = 0 if fr.breaths_table is None else len(fr.breaths_table)
-            print(f"  {fname}: {n} {unit_word}")
+            if getattr(fr, "role", "tidal") == "reference":
+                # M-30: no tidal table for this file at all — say so plainly instead
+                # of a bare, misleading "0 breaths".
+                n_ref = len(fr.manoeuvres or {})
+                print(f"  {fname}: 0 tidal breaths, {n_ref} reference manoeuvre"
+                     f"{'s' if n_ref != 1 else ''}")
+            else:
+                n = 0 if fr.breaths_table is None else len(fr.breaths_table)
+                print(f"  {fname}: {n} {unit_word}")
 
     if result.failed_files:
         print(f"\n{len(result.failed_files)} file(s) FAILED:", file=sys.stderr)
