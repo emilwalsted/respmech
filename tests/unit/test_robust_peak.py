@@ -182,30 +182,47 @@ def test_phaseless_segment_reports_nan_with_reason():
     assert ret["rms_gated_qc"] == {"ok": False, "reason": "segment has no phases"}
 
 
-def test_compute_segment_emg_phaseless_refuses_emg_or_entropy_loudly():
-    """Only ``_add_gated_peaks`` is genuinely phase-less-safe today (see above): the plain
-    RMS/integral-EMG lines and the whole entropy block in ``compute_segment_emg`` still
-    unconditionally index ``breath["inspiration"]``/``["expiration"]`` and would otherwise
-    raise a bare, unhelpful ``KeyError``. A ``phases=False`` call must fail loudly and
-    specifically instead, until those blocks are themselves made phase-less-aware."""
+def test_compute_segment_emg_phaseless_computes_whole_segment_emg_only():
+    """A ``phases=False`` segment (EMG-only ``whole_file``/``separators``, no
+    inspiration/expiration split) computes the WHOLE-segment RMS/integral-EMG exactly
+    like ``emglib.calculate_rms`` would on its own, without ever indexing
+    ``breath["inspiration"]``/``["expiration"]`` (a bare dict with no such keys must not
+    raise) and without setting the insp/exp-specific keys, which do not apply here."""
     from respmech.core import compute
 
-    s_emg = Settings.from_dict({"input": {"channels": {"emg": [2, 3]}}})
-    with pytest.raises(NotImplementedError):
-        compute.compute_segment_emg({}, {"emgcols": [1, 2]}, _legacy(s_emg), None,
-                                    None, True, "", phases=False)
+    s_emg = Settings.from_dict({"input": {"channels": {"emg": [2, 3]},
+                                          "format": {"sampling_frequency": 1000}}})
+    emgcols = np.array([[0.1, 0.2], [0.3, -0.1], [-0.2, 0.4], [0.05, -0.3]])
+    breath = {"emgcols": emgcols}
+    ret = {}
+    compute.compute_segment_emg(ret, breath, _legacy(s_emg), None, None, True, "", phases=False)
+    expected_rms, expected_intemg = emglib.calculate_rms(
+        emgcols, s_emg.processing.emg.rms_window_s, s_emg.input.format.sampling_frequency)
+    assert ret["rms"] == expected_rms
+    assert ret["intemg"] == expected_intemg
+    assert "rms_insp" not in ret and "rms_exp" not in ret
+    assert "intemg_insp" not in ret and "intemg_exp" not in ret
+
+
+def test_compute_segment_emg_phaseless_computes_whole_segment_entropy_only():
+    """Same as above for sample entropy (R8): only the whole-segment ``entropy`` is
+    computed, never ``entropy_insp``/``entropy_exp``, and no phase lookup happens."""
+    from respmech.core import compute
 
     s_entropy = Settings.from_dict({"input": {"channels": {"entropy": [10, 11]}}})
-    with pytest.raises(NotImplementedError):
-        compute.compute_segment_emg({}, {"emgcols": []}, _legacy(s_entropy), None,
-                                    None, True, "", phases=False)
+    entcols = np.array([[0.1, 0.5], [0.2, 0.4], [0.15, 0.6], [0.3, 0.2], [0.25, 0.45]])
+    breath = {"emgcols": [], "entcols": entcols}
+    ret = {}
+    compute.compute_segment_emg(ret, breath, _legacy(s_entropy), None, None, True, "", phases=False)
+    assert len(ret["entropy"]) == 2 + 3          # 2 channels + max/min/mean
+    assert "entropy_insp" not in ret and "entropy_exp" not in ret
 
     # The ordinary phases=True path (and a phase-less segment with neither EMG nor
-    # entropy configured) must be completely unaffected by the new guard.
+    # entropy configured) must be completely unaffected.
     s_none = Settings.from_dict({})
-    ret = {}
-    compute.compute_segment_emg(ret, {"emgcols": []}, _legacy(s_none), None, None, True, "", phases=False)
-    assert ret["entropy"] == []
+    ret2 = {}
+    compute.compute_segment_emg(ret2, {"emgcols": []}, _legacy(s_none), None, None, True, "", phases=False)
+    assert ret2["entropy"] == []
 
 
 def _legacy(s):

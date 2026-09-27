@@ -21,14 +21,22 @@ class DataValidationError(ValueError):
 
 
 def _absent(value):
-    """True when a column setting means 'not assigned'. Volume already treated this as
-    absent (``np.isnan(column_volume)``, the model's only channel optional today);
-    poes/pgas/pdi now do the same. Flow's resolution deliberately still goes straight
-    through ``_column`` below unconditionally, unchanged, because ``Settings.validate()``
-    still requires it and ``tests/unit/test_unassigned_channels.py`` pins that an
-    unassigned flow raises — ``_column``'s own guard uses this same test, so an absent
-    flow raises through THAT path instead of the short-circuit its siblings get."""
+    """True when a column setting means 'not assigned'. Volume/poes/pgas/pdi are always
+    optional this way. Flow is optional too, but ONLY when every one of those four is
+    ALSO absent (see ``_flow_optional`` below) — an EMG-only signal set, the one shape
+    ``Settings.validate()`` allows an unassigned flow in at all (poes/pgas/pdi declared
+    without flow is rejected there). With any of them still present, an unassigned flow
+    keeps raising exactly as before through ``_column``'s own unconditional guard —
+    ``tests/unit/test_unassigned_channels.py::test_an_unassigned_channel_is_named``
+    pins that this real misconfiguration (a full-channel analysis missing only flow)
+    is still caught, not silently reinterpreted as EMG-only."""
     return value is None or (isinstance(value, float) and np.isnan(value))
+
+
+def _flow_optional(d) -> bool:
+    """True when volume/poes/pgas/pdi are ALL absent too — see ``_absent``'s docstring."""
+    return all(_absent(v) for v in
+              (d.column_volume, d.column_poes, d.column_pgas, d.column_pdi))
 
 
 def _column(value, name, ncols, filepath):
@@ -136,12 +144,13 @@ def load(filepath, settings):
     def _cols_from_df(df):
         n = df.shape[1]
         col = lambda v, name: _column(v, name, n, filepath)          # noqa: E731
-        # flow always resolves through _column unconditionally (see _absent's docstring):
-        # unassigned flow must still raise today, unchanged from before this function grew
-        # optional-channel support for its three siblings below.
-        flow = df.iloc[:, col(d.column_flow, "Flow channel")].to_numpy()
         opt = lambda v, name: (np.asarray([], dtype=float) if _absent(v)          # noqa: E731
                                else df.iloc[:, col(v, name)].to_numpy())
+        # Flow resolves through _column unconditionally UNLESS this is an EMG-only shape
+        # (see _absent's docstring) -- an unassigned flow alongside a still-assigned
+        # volume/poes/pgas/pdi keeps raising exactly as before.
+        flow = (opt(d.column_flow, "Flow channel") if _flow_optional(d)
+               else df.iloc[:, col(d.column_flow, "Flow channel")].to_numpy())
         volume = opt(d.column_volume, "Volume channel")
         poes = opt(d.column_poes, "Oesophageal pressure channel")
         pgas = opt(d.column_pgas, "Gastric pressure channel")
@@ -188,9 +197,10 @@ def load(filepath, settings):
         # round to the end of the list and analyse a wholly unrelated channel.
         n = len(cols)
         get1 = lambda v, name: get(_column(v, name, n, f) + 1)       # noqa: E731
-        flow = get1(d.column_flow, "Flow channel")          # unconditional, see _absent's docstring
         opt1 = lambda v, name: (np.asarray([], dtype=float) if _absent(v)          # noqa: E731
                                 else get1(v, name))
+        # See the DataFrame path's identical comment above.
+        flow = opt1(d.column_flow, "Flow channel") if _flow_optional(d) else get1(d.column_flow, "Flow channel")
         volume = opt1(d.column_volume, "Volume channel")
         poes = opt1(d.column_poes, "Oesophageal pressure channel")
         pgas = opt1(d.column_pgas, "Gastric pressure channel")

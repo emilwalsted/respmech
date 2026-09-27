@@ -222,6 +222,28 @@ def test_resolve_full_capabilities_includes_every_legacy_module():
     assert "emg" in modules
 
 
+def test_seg_star_s_and_whole_file_rms_columns_resolve_to_units():
+    """EMG-only segmentation's own columns (core.analysis.segments): seg_start_s/
+    seg_end_s/seg_duration_s in seconds, whole_file's t_rms_file_max_col_/
+    rms_file_max_col_/rms_file_top3_col_ in seconds/a.u. -- and resolve() names the
+    segment_emg module for an emg_only capability set, distinct from the plain emg
+    module a full-channel breath's rms_* columns resolve to."""
+    from _helpers import assert_units
+
+    assert_units({
+        "seg_start_s": "s", "seg_end_s": "s", "seg_duration_s": "s",
+        "t_rms_file_max_col_2": "s",
+        "rms_file_max_col_2": "a.u.", "rms_file_top3_col_2": "a.u.",
+    })
+    caps = Capabilities(
+        flow=False, volume=False, poes=False, pgas=False, pdi=False, emg=True,
+        entropy=False, declared=frozenset({"emg"}), mode="emg_only",
+    )
+    modules = resolve(caps)
+    assert "segment_emg" in modules
+    assert "timing" not in modules             # no flow -> the legacy timing group never resolves
+
+
 def test_capabilities_full_constant_has_entropy_true_and_resolves_entropy_module():
     assert Capabilities.FULL.entropy is True
     assert "entropy" in resolve(Capabilities.FULL)

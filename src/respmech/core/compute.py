@@ -551,8 +551,31 @@ def separateintobreathsbyvolume(filename, timecol, flow, volume, poes, pgas, pdi
     return breaths
 
 
+def _separator_times_for(curfile, settings):
+    """Mirrors :func:`ignorebreaths`' file-keyed lookup, for the EMG-only ``separators``
+    method's per-file boundary times (``settings.processing.mechanics.separators``, the
+    ``[[file, [t…]], …]`` shape ``core._legacy_ns`` builds from ``SeparatorEntry``). A
+    file with no entry has no separators -- the same, explicit "one segment" shape
+    ``whole_file`` produces, just reached via this method instead."""
+    d = dict(getattr(settings.processing.mechanics, "separators", []))
+    return d.get(curfile, [])
+
+
 def separateintobreaths(method, filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings):
-    if str(str.lower(method)) == "volume":
+    method = str.lower(method)
+    if method in ("whole_file", "separators"):
+        from respmech.core.analysis import segments as _segments
+        ib = set(ignorebreaths(filename, settings))
+        bk = breathkinds(filename, settings)
+        fs = settings.input.format.samplingfrequency
+        if method == "whole_file":
+            return _segments.whole_file(
+                filename, timecol, emgcolumns, entropycolumns,
+                settings.processing.emg.rms_s, fs, ignored_breaths=ib, kinds=bk)
+        return _segments.separators(
+            filename, _separator_times_for(filename, settings), timecol, emgcolumns,
+            entropycolumns, fs, ignored_breaths=ib, kinds=bk)
+    if method == "volume":
         return separateintobreathsbyvolume(filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings)
     return separateintobreathsbyflow(filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings)
 
@@ -923,33 +946,29 @@ def compute_segment_emg(retbreath, breath, settings, cancel_check, peaks_s, dete
     """EMG (RMS/integral/gated-peak) and sample-entropy features for one breath or segment.
 
     A verbatim extraction of what ``calculatemechanics`` used to compute inline, so it can
-    later be called per-segment (a segment that may not have an inspiration/expiration
-    split — ``phases=False``) as well as per-breath (the call site here, always
-    ``phases=True``). Today only ``_add_gated_peaks`` is genuinely phase-less-safe: the
-    RMS/integral-EMG lines just below, and the whole entropy block, still unconditionally
-    index ``breath["inspiration"]``/``["expiration"]`` and would raise a bare ``KeyError``
-    on a real phase-less segment. No phase-less caller exists yet, so this is enforced with
-    a loud, named error below instead of relying on this docstring alone."""
-    if not phases and (len(breath["emgcols"]) > 0 or len(settings.input.data.columns_entropy) > 0):
-        raise NotImplementedError(
-            "compute_segment_emg(phases=False) does not yet support EMG or sample-entropy "
-            "columns: only the cardiac-gated-peak path (_add_gated_peaks) is phase-less-safe "
-            "today. Extend the EMG/entropy blocks below before calling this with phases=False "
-            "on a segment that has EMG or entropy channels configured.")
-
+    be called per-segment (a segment that may not have an inspiration/expiration split —
+    ``phases=False``, an EMG-only ``whole_file``/``separators`` segment from
+    ``core.analysis.segments``) as well as per-breath (the call site in
+    ``calculatemechanics``, always ``phases=True``). On the ``phases=True`` path every
+    statement below runs exactly as it always did (golden-safe); ``phases=False`` computes
+    only the WHOLE-segment quantities (R8: the segment's own ``rms``/``intemg``/``entropy``,
+    identical in shape to a phase-having breath's own whole-breath values) and skips the
+    inspiration/expiration-specific variants, which do not exist for such a segment."""
     if len(breath["emgcols"]) > 0:
         retbreath["rms"], retbreath["intemg"] = emglib.calculate_rms(breath["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
-        retbreath["rms_insp"], retbreath["intemg_insp"] = emglib.calculate_rms(breath["inspiration"]["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
-        retbreath["rms_exp"], retbreath["intemg_exp"] = emglib.calculate_rms(breath["expiration"]["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
+        if phases:
+            retbreath["rms_insp"], retbreath["intemg_insp"] = emglib.calculate_rms(breath["inspiration"]["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
+            retbreath["rms_exp"], retbreath["intemg_exp"] = emglib.calculate_rms(breath["expiration"]["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
         _add_gated_peaks(retbreath, breath, settings, peaks_s, detection_ok, detection_reason, phases=phases)
 
     if len(settings.input.data.columns_entropy) > 0:
         entropy = calculateentropy(breath, settings, cancel_check=cancel_check)
-        entropy_insp = calculateentropy(breath, settings, "inspiration", cancel_check=cancel_check)
-        entropy_exp = calculateentropy(breath, settings, "expiration", cancel_check=cancel_check)
         retbreath["entropy"] = np.append(entropy.T, [max(entropy.T), min(entropy.T), np.mean(entropy.T)])
-        retbreath["entropy_insp"] = np.append(entropy_insp.T, [max(entropy_insp.T), min(entropy_insp.T), np.mean(entropy_insp.T)])
-        retbreath["entropy_exp"] = np.append(entropy_exp.T, [max(entropy_exp.T), min(entropy_exp.T), np.mean(entropy_exp.T)])
+        if phases:
+            entropy_insp = calculateentropy(breath, settings, "inspiration", cancel_check=cancel_check)
+            entropy_exp = calculateentropy(breath, settings, "expiration", cancel_check=cancel_check)
+            retbreath["entropy_insp"] = np.append(entropy_insp.T, [max(entropy_insp.T), min(entropy_insp.T), np.mean(entropy_insp.T)])
+            retbreath["entropy_exp"] = np.append(entropy_exp.T, [max(entropy_exp.T), min(entropy_exp.T), np.mean(entropy_exp.T)])
     else:
         retbreath["entropy"] = []
 

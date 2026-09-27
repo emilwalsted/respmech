@@ -316,6 +316,40 @@ def test_figure_jobs_channel_aware_per_mode(tmp_path):
     assert not ({"volume correction", "trend", "drift"} & labels_novol)
 
 
+def test_figure_jobs_skip_raw_and_trimmed_signals_for_an_emg_only_set(tmp_path):
+    """EMG-only segmentation: _signals_raw/_signals_trimmed only ever draw flow/volume/
+    poes/pgas/pdi panels, never EMG -- an emg_only capability set has none of those, so
+    the job must not even be offered (it would otherwise build a figure with zero
+    subplots and crash on fig.axes[-1]). save_raw/save_trimmed default True, so this is
+    the default-settings shape for the feature, not a corner case."""
+    from respmech.core import plots
+
+    s = synth_settings(tmp_path, channels={
+        "flow": None, "poes": None, "pgas": None, "pdi": None, "volume": None})
+    s.output.diagnostics.save_raw = True
+    s.output.diagnostics.save_trimmed = True
+    labels = {label for label, _fn, _suffix in plots.per_file_figure_jobs(s)}
+    assert "raw signals" not in labels and "trimmed signals" not in labels
+
+
+def test_write_figures_does_not_crash_for_an_emg_only_whole_file_run(tmp_path):
+    """End-to-end regression for the same fix: a real run_batch + write_batch on an
+    EMG-only whole_file analysis, with the default diagnostics settings (save_raw/
+    save_trimmed both True), must not raise and must produce the EMG diagnostic figure
+    it CAN draw."""
+    from respmech.core.pipeline import run_batch
+    from respmech.core.io.writers import write_batch
+
+    s = synth_settings(tmp_path, channels={
+        "flow": None, "poes": None, "pgas": None, "pdi": None, "volume": None})
+    s.processing.segmentation.method = "whole_file"
+    s.input.files = "synth_case_A.csv"
+    result = run_batch(s)
+    written = write_batch(result, s, str(tmp_path))
+    assert any(p.endswith("Raw EMG.pdf") for p in written)
+    assert not any("signals (raw)" in p or "signals (trimmed)" in p for p in written)
+
+
 def test_drift_figure_renders_from_volume_endpoints(tmp_path):
     """Regression: eelv/eilv are [volume, pressure] pairs, not scalars — the drift
     figure must render (it was silently failing and producing no file)."""
@@ -626,6 +660,37 @@ def test_run_report_processing_block_names_none_when_unset(tmp_path):
     assert "Breath-count overrides:  none" in report
     assert "Excluded breaths:        none" in report
     assert "Cohort grouping:         leading filename token" in report
+
+
+def test_run_report_processing_block_segmentation_line(tmp_path):
+    """EMG-only segmentation methods (whole_file/separators) report a 'Segmentation:'
+    line, never 'Breath separation: ... buffer N' (buffer is a flow/volume-only
+    concept) — and the Provenance sheet's own row (read via _provenance_rows, which
+    _write_xlsx would otherwise be the only caller of) says the same thing."""
+    from respmech.core.settings import SeparatorEntry
+    from respmech.core.io.writers import _provenance_rows, _write_run_report
+
+    result = SimpleNamespace(ok_files={}, failed_files={})
+    s = synth_settings(tmp_path, channels={
+        "flow": None, "poes": None, "pgas": None, "pdi": None, "volume": None})
+    s.processing.segmentation.method = "whole_file"
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "Segmentation:            whole file" in report
+    assert "Breath separation" not in report
+    assert "buffer" not in report
+    prov = _provenance_rows(s, datetime(2026, 7, 11))
+    row = prov.loc[prov["Key"] == "Segmentation", "Value"].iloc[0]
+    assert row == "whole file"
+
+    s.processing.segmentation.method = "separators"
+    s.processing.segmentation.separators = [
+        SeparatorEntry(file="a.csv", times_s=[1.0, 2.0]),
+        SeparatorEntry(file="b.csv", times_s=[1.0, 2.0]),
+    ]
+    path2 = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report2 = open(path2, encoding="utf-8").read()
+    assert "Segmentation:            separators (2 per file)" in report2
 
 
 def test_partial_run_report_omits_the_cohort_figure_without_poes(tmp_path):

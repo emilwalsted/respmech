@@ -66,6 +66,8 @@ _CARRIED_PHRASES = {
     "normalization_reference": lambda names: "the EMG normalisation reference",
     "breath_type_files": lambda names: (
         f"breath types for {SettingsScreen._named_by_filename(names)}"),
+    "separator_files": lambda names: (
+        f"separators for {SettingsScreen._named_by_filename(names)}"),
 }
 
 

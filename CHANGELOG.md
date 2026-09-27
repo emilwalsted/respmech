@@ -7,6 +7,15 @@ for the installers themselves.
 
 ## Unreleased
 
+**EMG-only analyses: the whole file as one segment, or manual separators.** A recording
+with no flow channel at all — an EMG-only signal set — can now be split into segments
+RMS/integral-EMG/sample-entropy is computed on: `whole_file` treats the entire recording
+as one segment, or `separators` splits it at up to any number of user-placed times. This
+is settings-model groundwork only — there is no button in the desktop app to switch to
+EMG-only or place a separator yet (a later release adds Preview & QC's own EMG –
+segments tab); a hand-edited `settings.toml` and the CLI are the only way to use it
+today, via `analysis.signals = ["emg"]` and `[processing.segmentation]`.
+
 **Breaths can be typed (ic, fvc, max_insp, sniff, rest, other) in settings.** A typed
 breath is treated as excluded from the tidal average, the same as a manually excluded
 one, and its kind is recorded alongside it. This is settings-model groundwork only —

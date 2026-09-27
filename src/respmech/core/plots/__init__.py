@@ -511,15 +511,22 @@ def per_file_figure_jobs(settings):
     caps = Capabilities.from_settings_or_none(settings)
     poes = caps is not None and caps.poes
     volume = caps is not None and caps.volume
+    # _signals_raw/_signals_trimmed draw ONLY flow/volume/poes/pgas/pdi panels (never EMG);
+    # an EMG-only signal set (mode "emg_only") has none of those, so `panels` would be empty
+    # and `fig.axes[-1]` would raise IndexError on a figure with zero subplots. Gated the
+    # same way the Poes/volume jobs already are, rather than letting the per-job try/except
+    # in _write_figures_impl silently absorb it as an unexplained failure on every run.
+    any_pressure_or_flow = caps is not None and (
+        caps.flow or caps.volume or caps.poes or caps.pgas or caps.pdi)
     jobs = []
     if dg.save_pv_average and poes:
         jobs.append(("PV average", _pv_average, "Campbell (average).pdf"))
     if dg.save_pv_individual and poes:
         jobs.append(("PV individual", lambda fr, fn, p: _pv_individual(fr, fn, p, cols, rows),
                      "Campbell (breaths).pdf"))
-    if dg.save_raw:
+    if dg.save_raw and any_pressure_or_flow:
         jobs.append(("raw signals", _signals_raw, "signals (raw).pdf"))
-    if dg.save_trimmed:
+    if dg.save_trimmed and any_pressure_or_flow:
         jobs.append(("trimmed signals", _signals_trimmed, "signals (trimmed).pdf"))
     if dg.save_drift and volume:
         jobs.append(("volume correction", _volume_correction, "volume correction.pdf"))
