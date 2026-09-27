@@ -23,7 +23,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
 from respmech.core.settings import (ExcludeEntry, _reference_file_has_rest_segment,
-                                    resolve_noise_reference_mode)
+                                    resolve_noise_reference_mode_or_none)
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
 from respmech.ui.noise_profile_dialog import NOISE_ACCENT
@@ -697,7 +697,7 @@ class _EmgNoiseMixin:
         # pair directly — an EMG-only set ignores use_expiration entirely (it may still sit
         # at its True default), so the old bare predicate could describe a reference this
         # test will never actually build that way.
-        mode = resolve_noise_reference_mode(self.state.settings)
+        mode = resolve_noise_reference_mode_or_none(self.state.settings)
         if mode == "expiration":
             self.noise_ref_readout.setFullText(
                 f"Rest reference: {n.reference_file}, every expiration")
@@ -881,7 +881,7 @@ class _EmgNoiseMixin:
         # set that flag is never touched by this screen and stays at its True default, which
         # used to hide a genuinely-set explicit interval (the flag reads as 'expiration' even
         # though EMG-only ignores it and the interval IS what the resolver will use).
-        mode = resolve_noise_reference_mode(self.state.settings)
+        mode = resolve_noise_reference_mode_or_none(self.state.settings)
         show = bool(shown and mode == "intervals" and ivals and shown == (n.reference_file or ""))
         t0 = t1 = None
         if show:
@@ -1046,7 +1046,7 @@ class _EmgNoiseMixin:
                                  peak_times=data.get("peaks"), ecg_applied=ecg_applied,
                                  win_length=n.win_length, hop_length=n.hop_length,
                                  modes_available=modes_available)
-        mode = resolve_noise_reference_mode(self.state.settings)
+        mode = resolve_noise_reference_mode_or_none(self.state.settings)
         if "expiration" in modes_available:
             dlg.use_expiration.setChecked(bool(n.use_expiration or not n.reference_intervals))
         # Seed the picker with the reference already saved for this test (D07), so a user
