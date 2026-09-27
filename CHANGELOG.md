@@ -27,42 +27,45 @@ disabled until a later release calibrates it.
      signal-set picker's EMG-only preset itself was activated, making the whole feature
      reachable end to end for the first time. -->
 
-**Breaths can be typed (ic, fvc, max_insp, sniff, rest, other) in settings.** A typed
-breath is treated as excluded from the tidal average, the same as a manually excluded
-one, and its kind is recorded alongside it. This is settings-model groundwork only —
-there is no way to type a breath from the desktop app yet (a later release adds the
-right-click primitive in Preview & QC); a hand-edited `settings.toml` is the only way
-to use it today, via a new `[[processing.breath_types]]` table.
-<!-- changelog-skip f380c02 the right-click/Ctrl+left-click primitive this bullet
-     promises has now landed in Preview & QC (BreathSpansItem.typeRequested + a minimal
-     Tidal/Excluded/Rest menu), but the feature is still not something a user can reach
-     end to end: the fuller manoeuvre menu, EMG-only segmenting and the rest of this
-     bullet's own dependents are separate, not-yet-landed changes. The bullet above is
-     rewritten to describe the finished, reachable feature once those land. -->
-<!-- changelog-skip 5b0282d self-review fixes on top of f380c02, same not-yet-reachable
-     click primitive above (a real-dispatch crash in the menu popup, a stale-scene
-     click guard, the t_onset_s clock, distinct breath-kind colours, and hardened
-     tests) — no separate user-visible behaviour beyond what f380c02's skip note
-     already covers. -->
-
-**Mark a breath as an inspiratory capacity (IC) manoeuvre and get its volume and Poes
-without hand extraction.** A breath typed `ic` (or `ic_fvc`) now reports its own
+**Right-click a breath to mark it as an IC manoeuvre and get its volume and Poes
+without hand extraction.** Preview & QC ▸ Mechanics's breath overlays now take a
+right-click (or Ctrl+left-click), offering Tidal, Excluded, IC manoeuvre, FVC
+manoeuvre, IC + FVC, Maximal inspiratory effort, Sniff and Other… (the EMG-only 'EMG –
+segments' tab offers Tidal, Excluded, Rest and Other… instead — the flow-only kinds
+need a channel that tab does not have). A breath typed `ic`/`ic_fvc` reports its own
 inspiratory-capacity volume, timing and pressure swings — plus quality flags for a low
-effort, an unstable pre-manoeuvre baseline, no held plateau, an unrepeatable measurement
-against a repeat attempt in the same file, or a manoeuvre right at the edge of the
-recording — in a new "Manoeuvres" sheet alongside that file's breath-by-breath workbook.
-A `max_insp`/`sniff`-typed breath reports its own peak effort (Poes/Pdi/EMG) as a
-reference value for a later release's normalisation. Still settings-model-only, like the
-typing itself above — there is no menu in the app yet to pick these kinds (only
-Tidal/Excluded/Rest so far), so a hand-edited `settings.toml` is the only way to use it
-today.
-
-**A file with only manoeuvres — no ordinary tidal breathing at all — can be included in
-a batch.** A dedicated recording where every breath is typed (a separate IC or FVC
-file, say) used to fail the whole file with "no breaths detected"; it now runs, writes
-its own workbook (the Manoeuvres table stands in for the usual breath-by-breath data,
-with a note explaining why), and reports its manoeuvre count in Dry run and the run
-report instead of an error. Still settings-model-only, like the typing itself above.
+effort, an unstable pre-manoeuvre baseline, no held plateau, an unrepeatable
+measurement against a repeat attempt in the same file, or a manoeuvre right at the edge
+of the recording — in a new "Manoeuvres" table shown right under the ordinary
+breath-by-breath one, and in its own sheet alongside that file's workbook. A `fvc`/
+`ic_fvc`-typed breath's expiration is checked for a plausible forced-manoeuvre
+duration (the numeric FVC/FEV1/PEF extraction itself is a later release); a
+`max_insp`/`sniff`-typed breath reports its own peak effort (Poes/Pdi/EMG) as a
+reference value for a later release's normalisation. A disabled "Suggested: FVC" hint
+points at the untyped breath with the longest expiration, the most plausible untyped
+candidate. A dedicated recording where every breath is typed (a separate IC or FVC
+file, say) used to fail the whole file with "no breaths detected"; it now runs and
+writes its own workbook (the Manoeuvres table stands in for the usual breath-by-breath
+data, with a note explaining why) instead. Reference-picker menu entries ("Use as IC
+reference for…", "Reference manoeuvres…") are visible but disabled — a later release.
+<!-- changelog-skip f380c02 the right-click/Ctrl+left-click primitive itself landed in
+     this commit (BreathSpansItem.typeRequested + a minimal Tidal/Excluded/Rest menu);
+     folded into the rewritten bullet above once the fuller manoeuvre menu made typing
+     reachable end to end. -->
+<!-- changelog-skip 5b0282d self-review fixes on top of f380c02 (a real-dispatch crash
+     in the menu popup, a stale-scene click guard, the t_onset_s clock, distinct
+     breath-kind colours, hardened tests); folded, same as f380c02 above. -->
+<!-- changelog-skip 1bde775 IC/FVC/max-effort manoeuvre extraction and the Manoeuvres
+     workbook sheet landed here, settings-model-only (no menu yet); folded into the
+     rewritten bullet above. -->
+<!-- changelog-skip 4d820a3 merge commit for 1bde775; same fold as 1bde775 above. -->
+<!-- changelog-skip 9329db1 reference-only files (every breath typed, no tidal
+     breathing at all) landed here; folded into the rewritten bullet above. -->
+<!-- changelog-skip 950447d self-review fixes on top of 9329db1 (noise-report/QC-chip
+     for the reference-only preview, a spurious cardiac-gate notice, a negative
+     typed-breath count on EMG-only); folded, same as 9329db1 above. -->
+<!-- changelog-skip a1c0245 merge commit for 9329db1/950447d; same fold as 9329db1
+     above. -->
 
 **Explore with sample data follows the signal set.** The startup chooser's own
 'Explore with sample data' door still always opens the complete demo recording, but

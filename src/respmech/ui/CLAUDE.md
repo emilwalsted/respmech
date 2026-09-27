@@ -416,3 +416,24 @@ garbage-collect a widget just because it lost focus or hid — so a long interac
 session accumulates one dead `QMenu` QObject per right-click, forever. The same
 `WA_DeleteOnClose` gotcha this file already documents for a one-shot `QDialog` applies
 identically here.
+
+### One click-menu-building code path serves two mutually-exclusive tabs — state it caches must be reset in BOTH renderers (M-31)
+
+`_build_type_menu`/`_handle_type_requested` are shared between the flow-bearing
+Mechanics stack and the EMG-only 'EMG – segments' tab (M-26's own docstring on
+`_draw_breath_overlays` explains why: the two never render breaths at once, so sharing
+the overlay/click machinery is safe). M-31 added `self._suggested_fvc` — the breath
+number `core.analysis.manoeuvres.suggest_fvc()` points at, read by the menu's disabled
+"Suggested: FVC" hint — as more such shared, cached state, and it has the SAME trap
+`_breath_spans`/`_breath_regions`/etc. already had before this ticket touched them: it
+is only ever WRITTEN by `_render_preview_stage1` (Mechanics) and `_render_segments_
+preview` (Segments), never by a shared reset routine both paths funnel through. Setting
+it in one and forgetting the other silently lets a suggestion computed against one
+file/tab's breath numbering survive into a DIFFERENT file/tab's menu, where the number
+means something else entirely — the failure is not a crash, just a hint pointing at the
+wrong breath, which is easy to miss in review since neither render path errors. Any
+FUTURE per-file/per-tab cache added to this shared machinery needs to be written (or
+explicitly cleared) in every renderer that can leave it stale, not just the one whose
+ticket happens to introduce it — grep both `_render_preview_stage1` (`_mechanics.py`)
+and `_render_segments_preview` (`_segments.py`) before assuming one reset site is
+enough.
