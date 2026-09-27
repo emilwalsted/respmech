@@ -954,10 +954,12 @@ class _MechanicsMixin:
         self._update_actions(status=False)
 
     def _render_preview_stage1(self, data):
-        """Clear stale panel state and draw the five channel curves + crosshairs.
-        Kept cheap and synchronous even on the async path: curve-plotting is not
-        the cost this ticket addresses (decimation/clipToView already bound it,
-        see plot_perf.tune) — the breath overlays and the raw EMG stack are."""
+        """Clear stale panel state and draw the channel curves (flow/volume always;
+        poes/pgas/pdi only when the signal set declares them present, see
+        ``present_channels`` below) + crosshairs. Kept cheap and synchronous even on
+        the async path: curve-plotting is not the cost this ticket addresses
+        (decimation/clipToView already bound it, see plot_perf.tune) — the breath
+        overlays and the raw EMG stack are."""
         self._mech_render_gen += 1
         t = data["t"]
         series = data["series"]
@@ -990,7 +992,16 @@ class _MechanicsMixin:
         # is actually shown in (D14) — see _update_mech_stack_floor/theme.set_stack_floor.
         # Five channels sharing a flat 130 px container is 10 px of trace each.
         self._update_mech_stack_floor()
-        for i, (key, label, colour) in enumerate(_CHANNELS):
+        # A reduced signal set (Flow only / Flow + Poes, already reachable today via
+        # channel_setup_dialog.py's declared-roles gating) omits the absent pressure
+        # keys from `series` entirely (core/pipeline.py/ui/workers.py's "None means
+        # absent" contract) — filter the row list to what is actually present, rather
+        # than indexing `series[key]` unconditionally and raising KeyError. This is a
+        # crash guard, not the full relevance-driven layout a later ticket still owns
+        # (the stack floor above still sizes for all five rows regardless of how many
+        # are actually drawn — a cosmetic gap, not a correctness issue).
+        present_channels = [c for c in _CHANNELS if c[0] in series]
+        for i, (key, label, colour) in enumerate(present_channels):
             p = self.plots.addPlot(row=i, col=0, axisItems={"left": SciAxis(orientation="left")})
             p.showGrid(x=True, y=True, alpha=pal["grid_alpha"])
             # name over unit on two centred lines — "Poes (cmH₂O)" on one line is taller than
