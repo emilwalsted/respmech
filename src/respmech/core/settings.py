@@ -811,6 +811,23 @@ def resolve_noise_reference_mode(settings: "Settings") -> str:
     return "unresolved"
 
 
+def resolve_noise_reference_mode_or_none(settings: "Settings") -> str | None:
+    """``resolve_noise_reference_mode``, tolerant of a malformed ``analysis.signals`` --
+    the same defensive pairing as :meth:`respmech.core.analysis.signals.Capabilities.
+    from_settings_or_none`, for the identical reason (M-24): several UI render paths call
+    the resolver on every edit/open -- including ``MainWindow``'s own construction on the
+    command-line/drag-drop open path, which has no surrounding try/except at all -- so
+    letting a hand-edited bare-string ``signals = "flow"`` raise there (via
+    ``effective_signals``) crashes the whole window instead of leaving the report to
+    ``Settings.validate()``. Returns ``None`` (never a real mode string) to mean "nothing
+    safe to resolve"; callers degrade their render accordingly (the same way a caller of
+    ``from_settings_or_none`` treats a ``None`` Capabilities)."""
+    try:
+        return resolve_noise_reference_mode(settings)
+    except TypeError:
+        return None
+
+
 # --- carried-over per-folder state ------------------------------------------
 #
 # exclude_breaths/breath_counts key on the bare filename, and the noise reference is a
