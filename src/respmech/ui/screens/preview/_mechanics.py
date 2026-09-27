@@ -23,7 +23,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
 from respmech.core.analysis.signals import Capabilities
-from respmech.core.settings import BreathTypeEntry, ExcludeEntry, is_carried_folder
+from respmech.core.settings import BreathTypeEntry, ExcludeEntry
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
 from respmech.ui import plot_perf
@@ -1666,7 +1666,11 @@ class _MechanicsMixin:
         if breath_no == self._suggested_fvc:
             self._suggested_fvc = None
         self._repaint_breath(breath_no, paint_kind)
-        self._sync_excluded_badge(name)
+        # M-32: the wide, all-files sync (exclusion + typed + segment badges) — a
+        # narrower single-file version (the old _sync_excluded_badge) no longer exists,
+        # same reasoning _toggle_separator_at (_segments.py) already had for using this
+        # one directly.
+        self._sync_rail_breath_state()
         # a type/exclude change must update the AVERAGED result in lockstep with the
         # overlay — otherwise the Campbell loop + per-breath table stay stale and the
         # user tunes blind. Recompute the (mechanics-only) test run, debounced.
@@ -1703,23 +1707,6 @@ class _MechanicsMixin:
                     t.setColor(self._breath_label_color(paint_kind))
                 except Exception:                      # noqa: BLE001
                     pass
-
-    def _sync_excluded_badge(self, name):
-        """Refresh the rail's exclusion badge for ``name`` from the CURRENT
-        ``exclude_breaths`` (count + carried), the same computation
-        ``screen.py``'s ``_sync_rail_exclusions`` uses for every file — carried via
-        ``is_carried_folder(entry.folder, current_folder)``, never hardcoded, so an
-        existing entry that in fact carries a stale folder tag still reads as carried
-        after a click touches one of ITS breaths (B06's carried-fix, M-20): a plain
-        toggle deliberately never restamps an existing entry's folder (see
-        ``_set_breath_type``), so 'this entry now matches the current folder' was never
-        actually guaranteed just because a click happened."""
-        excl_entry = next((e for e in self.state.settings.processing.exclude_breaths
-                           if e.file == name), None)
-        carried = (is_carried_folder(excl_entry.folder, self.state.settings.input.folder)
-                  if excl_entry is not None else False)
-        self.file_rail.set_excluded_count(
-            name, len(excl_entry.breaths) if excl_entry is not None else 0, carried=carried)
 
     def _toggle_breath(self, breath_no):
         # D24: the single funnel both the Mechanics-stack click (_on_plot_clicked above)
@@ -2100,7 +2087,10 @@ class _MechanicsMixin:
             raise _FileRunError(err)
         if cur:
             n_breaths = 0 if fr.breaths_table is None else len(fr.breaths_table)
-            self.file_rail.mark_result(cur, ok=True, breaths=n_breaths)
+            # M-32: role rides along with the same successful result breaths/verdict
+            # already come from — see FileRailEntry.role's own docstring.
+            self.file_rail.mark_result(cur, ok=True, breaths=n_breaths,
+                                       role=getattr(fr, "role", None))
         is_reference_only = getattr(fr, "role", "tidal") == "reference"
         if is_reference_only:
             # M-30: no tidal breaths at all in this file — nothing for the Campbell

@@ -143,6 +143,22 @@ def test_a_click_away_from_any_existing_separator_places_a_new_one(qapp, tmp_pat
     win.close()
 
 
+def test_placing_a_separator_updates_the_rails_segment_count(qapp, tmp_path):
+    """M-32: _toggle_separator_at calls the wide _sync_rail_breath_state, which is the
+    only place FileRailEntry.segments gets computed — 1 separator makes 2 segments."""
+    from respmech.ui.main_window import MainWindow
+
+    s = _emg_only_settings(tmp_path, method="separators")
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    assert pv.file_rail.entry(FILENAME).segments == 1        # 0 separators -> 1 segment
+    pv._toggle_separator_at(FILENAME, 1.0, _FakeVB())
+    assert pv.file_rail.entry(FILENAME).segments == 2         # 1 separator -> 2 segments
+    pv._toggle_separator_at(FILENAME, 2.5, _FakeVB())
+    assert pv.file_rail.entry(FILENAME).segments == 3
+    win.close()
+
+
 def test_a_click_within_tolerance_of_an_existing_separator_removes_it(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
 
