@@ -106,6 +106,16 @@ def test_units_resolve_manoeuvre_columns():
     })
 
 
+def test_units_resolve_reference_manoeuvre_columns():
+    """M-35's cross-file-reference columns. `vol_ic_ref` is already covered by
+    _RULES' `vol_` prefix alone (pinned here anyway, same precedent as
+    test_units_resolve_manoeuvre_columns above); `ic_ref_n`/`ic_ref_source` are
+    neither a volume nor any other _RULES-matched shape, so their registry
+    `unit=""` IS the resolving path here, not merely documentation."""
+    from _helpers import assert_units
+    assert_units({"vol_ic_ref": "L", "ic_ref_n": "", "ic_ref_source": ""})
+
+
 def test_display_for_falls_back_to_the_column_identifier():
     """The registry has room for a human-readable name (ticket A04), but the name
     table itself is deliberately not populated yet — see quantities.py's docstring.
@@ -723,6 +733,58 @@ def test_provenance_names_the_wob_source(tmp_path):
     assert rows["Work of breathing"] == "individual breaths"
 
 
+def test_provenance_names_the_ic_reference_when_resolved(tmp_path):
+    """M-35: only present when a `reference_note` is actually passed (a file whose IC
+    reference resolved) -- write_batch derives it from FileResult.references_used;
+    _provenance_rows itself is tested directly here, same convention as the WOB/
+    entropy rows above."""
+    from respmech.core.io.writers import _provenance_rows
+    s = synth_settings(tmp_path)
+    rows = dict(_provenance_rows(s, datetime(2026, 7, 11)).values)
+    assert "IC reference" not in rows
+
+    note = "synth_manoeuvre_A.csv #4 → 1 accepted, 3 L"
+    rows = dict(_provenance_rows(s, datetime(2026, 7, 11), reference_note=note).values)
+    assert rows["IC reference"] == note
+
+
+def test_ic_reference_provenance_value_formats_source_breaths_and_aggregate():
+    from respmech.core.io.writers import _ic_reference_provenance_value
+    text = _ic_reference_provenance_value(
+        {"source": "P03_IC.txt", "breaths": [2, 3, 4], "n": 2, "value": 3.0512345})
+    assert text == "P03_IC.txt #2, 3, 4 → 2 accepted, 3.05 L"
+
+
+def test_write_batch_writes_the_ic_reference_provenance_row_end_to_end(tmp_path):
+    """End to end through the real pipeline and write_batch: a file whose IC
+    reference resolved gets an 'IC reference' Provenance row; a file with no
+    reference at all (the family absent) gets none."""
+    import openpyxl
+    from respmech.core.pipeline import run_batch
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.core.io.writers import write_batch
+
+    s = synth_settings(str(tmp_path))
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=4, kind="ic"))
+    s.validate()
+    result = run_batch(s)
+    write_batch(result, s, str(tmp_path))
+
+    vol_ic = result.files["synth_case_A.csv"].manoeuvres[4]["vol_ic"]   # own value, not a guess
+    wb_a = openpyxl.load_workbook(
+        os.path.join(tmp_path, "data", "synth_case_A.csv.breathdata.xlsx"))
+    prov_a = {row[0].value: row[1].value
+             for row in wb_a["Provenance"].iter_rows(min_row=2) if row[0].value}
+    assert prov_a["IC reference"] == f"synth_case_A.csv #4 → 1 accepted, {vol_ic:.3g} L"
+
+    wb_b = openpyxl.load_workbook(
+        os.path.join(tmp_path, "data", "synth_case_B.csv.breathdata.xlsx"))
+    prov_b = {row[0].value: row[1].value
+             for row in wb_b["Provenance"].iter_rows(min_row=2) if row[0].value}
+    assert "IC reference" not in prov_b
+
+
 def test_provenance_and_run_report_record_the_environment(tmp_path):
     """A SciPy point release alone can move the Simpson-integrated WOB/PTP/EMG columns
     (see 'Changes from RespMech 1.x' in the manual), so a reader comparing an old
@@ -888,6 +950,25 @@ def test_run_report_processing_block_lists_breath_types(tmp_path):
     assert "P03.csv" not in report.split("Breath types:")[1].split("\n")[0]
 
 
+def test_run_report_processing_block_lists_reference_manoeuvres(tmp_path):
+    """M-35: what processing.references/reference_defaults CONFIGURE (never what
+    actually resolved -- that is the REFERENCE MANOEUVRES block's own job), same
+    study-level register as Breath-count overrides/Excluded breaths/Breath types."""
+    from respmech.core.settings import BreathRef, GroupReferenceEntry, ReferenceEntry
+    from respmech.core.io.writers import _write_run_report
+
+    result = SimpleNamespace(ok_files={}, failed_files={})
+    s = synth_settings(tmp_path)
+    s.processing.references = [ReferenceEntry(
+        file="P03_peak.txt", ic=BreathRef(file="P03_IC.txt", breaths=[2, 3, 4]))]
+    s.processing.reference_defaults = [GroupReferenceEntry(
+        group="P04", fvc=BreathRef(file="P04_MFVL.txt", breaths=[1]))]
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert ("Reference manoeuvres:    P03_peak.txt: ic=P03_IC.txt; "
+           "group P04: fvc=P04_MFVL.txt") in report
+
+
 def test_run_report_processing_block_names_none_when_unset(tmp_path):
     from respmech.core.io.writers import _write_run_report
 
@@ -897,6 +978,7 @@ def test_run_report_processing_block_names_none_when_unset(tmp_path):
     report = open(path, encoding="utf-8").read()
     assert "Breath-count overrides:  none" in report
     assert "Excluded breaths:        none" in report
+    assert "Reference manoeuvres:    none" in report
     assert "Breath types:            none" in report
     assert "Cohort grouping:         leading filename token" in report
 
@@ -1057,6 +1139,49 @@ def test_diagnostics_carries_per_file_quality_notices(tmp_path):
     assert "Quality notices:" in report
     assert "synth_case_A.csv: cardiac-gated peak EMG reported as NaN — only 2 R-peaks " \
            "detected" in report
+
+
+def test_run_report_omits_reference_manoeuvres_block_when_nothing_to_say(tmp_path):
+    """M-35: the block is left out entirely when the IC family is absent from this
+    analysis and no external source was loaded or failed -- the overwhelming common
+    case today, same convention DIAGNOSTICS already follows above."""
+    from respmech.core.io.writers import _write_run_report
+
+    s = synth_settings(tmp_path)
+    result = SimpleNamespace(ok_files={}, failed_files={}, noise_report=None,
+                             ecg_auto_report=None)
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "REFERENCE MANOEUVRES" not in report
+
+
+def test_run_report_reference_manoeuvres_block(tmp_path):
+    """M-35: per-RUN outcomes (never study-wide settings, see the PROCESSING-block
+    test above) -- external sources loaded, resolved/unresolved files, and forepass
+    errors, hand-built the same way test_diagnostics_carries_per_file_quality_notices
+    above builds a fake result rather than running the real pipeline."""
+    from respmech.core.io.writers import _write_run_report
+
+    s = synth_settings(tmp_path)
+    result = SimpleNamespace(
+        ok_files={}, failed_files={}, noise_report=None, ecg_auto_report=None,
+        references={"P03_IC.txt": {2: {}, 3: {}, 4: {}}},
+        reference_errors={("P04_IC.txt", None): "FileNotFoundError: no such file"},
+        analysis_plan={"ic": {
+            "family": True,
+            "resolved": {"P03_peak.txt": {
+                "source": "P03_IC.txt", "breaths": [2, 3, 4], "n": 2, "value": 3.05}},
+            "unresolved": ["P05_walk.txt"],
+        }})
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "REFERENCE MANOEUVRES" in report
+    assert "External sources loaded" in report and "P03_IC.txt: 3 typed breaths" in report
+    assert "IC reference resolved:" in report
+    assert "P03_peak.txt: P03_IC.txt #2, 3, 4 → 2 accepted, 3.05 L" in report
+    assert "IC reference NOT resolved" in report and "P05_walk.txt" in report
+    assert "Reference source errors:" in report
+    assert "P04_IC.txt: FileNotFoundError: no such file" in report
 
 
 def test_full_run_with_failures_marks_cohort_files_incomplete_in_report_and_workbooks(tmp_path):

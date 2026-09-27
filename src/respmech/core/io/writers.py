@@ -839,7 +839,7 @@ def _write_run_report(result, settings, outputfolder: str,
         if ext_sources:
             L.append("  External sources loaded (not part of this run's own file list):")
             for src, rows in sorted(ext_sources.items()):
-                L.append(f"    {src}: {len(rows)} typed breath{'es' if len(rows) != 1 else ''}")
+                L.append(f"    {src}: {len(rows)} typed breath{'s' if len(rows) != 1 else ''}")
         if ic_plan.get("resolved"):
             L.append("  IC reference resolved:")
             for f, used in sorted(ic_plan["resolved"].items()):
