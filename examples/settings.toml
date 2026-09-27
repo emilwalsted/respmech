@@ -32,9 +32,9 @@ decimal            = "."    # use "," for European-locale text/CSV
                             # column 1 is the time axis, so signals start at 2
 flow    = 5                 # REQUIRED
 volume  = 6                 # REQUIRED unless processing.volume.integrate_from_flow = true
-poes    = 7                 # REQUIRED — oesophageal pressure
-pgas    = 8                 # REQUIRED — gastric pressure
-pdi     = 9                 # REQUIRED — transdiaphragmatic pressure
+poes    = 7                 # optional — omit to leave its columns out; adds work of breathing
+pgas    = 8                 # optional — omit to leave its columns out; adds gastric pressure
+pdi     = 9                 # optional — omit to leave its columns out; adds transdiaphragmatic pressure
 emg     = [2, 3, 4]         # EMG channels; [] disables all EMG processing
 entropy = [2, 3, 4]         # sample-entropy channels; [] disables entropy
 
