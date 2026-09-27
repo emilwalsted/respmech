@@ -13,6 +13,12 @@ one, and its kind is recorded alongside it. This is settings-model groundwork on
 there is no way to type a breath from the desktop app yet (a later release adds the
 right-click primitive in Preview & QC); a hand-edited `settings.toml` is the only way
 to use it today, via a new `[[processing.breath_types]]` table.
+<!-- changelog-skip f380c02 the right-click/Ctrl+left-click primitive this bullet
+     promises has now landed in Preview & QC (BreathSpansItem.typeRequested + a minimal
+     Tidal/Excluded/Rest menu), but the feature is still not something a user can reach
+     end to end: the fuller manoeuvre menu, EMG-only segmenting and the rest of this
+     bullet's own dependents are separate, not-yet-landed changes. The bullet above is
+     rewritten to describe the finished, reachable feature once those land. -->
 
 **Explore with sample data follows the signal set.** The startup chooser's own
 'Explore with sample data' door still always opens the complete demo recording, but
