@@ -355,3 +355,64 @@ modelled one (`..._labels_fit_or_hide_for_cause_in_windows_metrics`) asserts the
 mechanism: a shown label is never wider than its axis, and a hidden one is hidden only
 because the name at the smallest allowed font (`SciAxis._label_sizes()`) is wider still.
 Never a pixel literal in either.
+
+### Item-level click vs scene-signal click: two different pyqtgraph mechanisms for two different buttons (M-20)
+
+`BreathSpansItem`'s right-click/Ctrl+left-click "request a breath-type menu" primitive
+and the pre-existing plain-left-click "toggle include/exclude" primitive
+(`_on_plot_clicked`/`_toggle_from_emg_click`, wired to `scene().sigMouseClicked`) look
+like the same kind of thing but are resolved through genuinely different pyqtgraph
+machinery, and mixing them up produces a menu that never opens or a ViewBox context
+menu that never goes away.
+
+**The plain left-click toggle is scene-level and always fires.** `GraphicsScene.
+sendClickEvent` calls `self.sigMouseClicked.emit(ev)` unconditionally at the end,
+regardless of which item's (if any) `mouseClickEvent` accepted the event first — so a
+handler connected to that signal (as this app's toggle handlers are) sees EVERY click,
+and must check `ev.isAccepted()`/`ev.button()` itself to ignore what it doesn't want.
+
+**The right-click-for-a-menu primitive is item-level, and item-level resolution order
+is NOT what it looks like.** `GraphicsScene.itemsNearEvent` sorts candidate items by
+their absolute z-value (each item's own `zValue()` summed up its `parentItem()` chain),
+descending. Measured directly (`pyqtgraph.graphicsItems.ViewBox.ViewBox` itself has
+`zValue() == -100`): a `BreathSpansItem` painted at its usual `zValue(-10)` (so its
+translucent breath fill stays visually BEHIND the channel traces) has an absolute z of
+`-110` — BELOW the ViewBox it sits inside, which is itself an eligible click candidate
+with `mouseClickEvent` (it accepts a right-click to raise its own context menu,
+`menuEnabled()` permitting). The naive fix — raise the item's zValue so it is checked
+before ViewBox — collides with the paint requirement, since raising it to 0 (ViewBox's
+threshold) makes it paint on top of same-z-value trace curves instead of behind them.
+
+**The fix pyqtgraph itself provides for exactly this ambiguity is `HoverEvent.
+acceptClicks(button)`**, documented on `HoverEvent` in `pyqtgraph/GraphicsScene/
+mouseEvents.py`: an item's `hoverEvent()` can claim a SPECIFIC button ahead of the
+actual click, and `GraphicsScene.sendClickEvent` checks that claim FIRST — if claimed,
+the item's own `mouseClickEvent` is called directly, and the whole z-ordered
+`itemsNearEvent` loop (where ViewBox would otherwise win) never runs at all for that
+button. `BreathSpansItem.hoverEvent` claims `Qt.RightButton` only when the hover
+position is over an actual breath span (never a gap, so a right-click that misses every
+span still reaches ViewBox's own menu unclaimed, unmodified zValue and all). Ctrl+left-
+click needs no such claim: `ViewBox.mouseClickEvent` never accepts the left button
+regardless of modifiers, so the ordinary z-ordered fallback already reaches
+`BreathSpansItem` for that button without any hover trick — verified empirically (a
+small offscreen `pg.PlotWidget` + simulated hover/press/release), not assumed from
+reading pyqtgraph's source alone; the class docstring has the exact measured numbers.
+
+**Rule for any future "claim a button ahead of a competing item" need on a pyqtgraph
+item:** reach for `HoverEvent.acceptClicks`, not for a zValue fight — it is the
+documented mechanism for precisely this, and it decouples click-priority from paint
+order, which a zValue change never can.
+
+### A transient popup `QMenu` needs `Qt.WA_DeleteOnClose` or it never gets cleaned up
+
+`_MechanicsMixin._build_type_menu` (M-20) constructs a brand-new `QMenu` on every
+right-click/Ctrl+left-click (parented to `self.plots`, so `_lone_ampersands`'s
+`findChildren(QMenu)` scan reaches it — an unparented menu is invisible to that scan).
+Popped up with `.popup()`, not `.exec()`, matching pyqtgraph's own `ViewBox.
+raiseContextMenu` convention (non-blocking; the choice is handled via each action's
+`triggered` signal instead of `.exec()`'s blocking return value). Without
+`setAttribute(Qt.WA_DeleteOnClose)` the closed menu is never destroyed — Qt does not
+garbage-collect a widget just because it lost focus or hid — so a long interactive
+session accumulates one dead `QMenu` QObject per right-click, forever. The same
+`WA_DeleteOnClose` gotcha this file already documents for a one-shot `QDialog` applies
+identically here.

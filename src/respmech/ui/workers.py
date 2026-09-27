@@ -1148,7 +1148,12 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
     spans, cum = [], 0
     for bno, b in breaths.items():
         length = len(np.atleast_1d(b["time"]))
-        spans.append((bno, cum / fs, (cum + length) / fs, bool(b["ignored"])))
+        # M-20: kind is one of None (plain tidal), the pseudo-kind 'excluded' (manually
+        # excluded, no BREATH_KINDS entry), or a BREATH_KINDS member (typed, M-19) —
+        # b['kind'] is only ever set by compute._make_breath for the latter, so a merely
+        # excluded breath falls through to the 'excluded' pseudo-kind here.
+        kind = b["kind"] if b["kind"] else ("excluded" if b["ignored"] else None)
+        spans.append((bno, cum / fs, (cum + length) / fs, kind))
         cum += length
     label_y = float(np.nanmax(series["flow"])) if len(series["flow"]) else 0.0
     return {
