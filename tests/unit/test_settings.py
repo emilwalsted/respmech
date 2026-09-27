@@ -618,6 +618,13 @@ def _setup_breath_type_files(s, folder):
     return "x.txt"
 
 
+def _setup_separator_files(s, folder):
+    from respmech.core.settings import SeparatorEntry
+    s.processing.segmentation.separators.append(
+        SeparatorEntry(file="x.txt", times_s=[1.0, 2.0], folder=folder))
+    return "x.txt"
+
+
 _ROW_SETUP = {
     "exclude_files": _setup_exclude_files,
     "breath_count_files": _setup_breath_count_files,
@@ -625,6 +632,7 @@ _ROW_SETUP = {
     "ecg_reference": _setup_ecg_reference,
     "normalization_reference": _setup_normalization_reference,
     "breath_type_files": _setup_breath_type_files,
+    "separator_files": _setup_separator_files,
 }
 
 

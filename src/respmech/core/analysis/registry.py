@@ -139,9 +139,31 @@ _EMG = ColumnSpec(
     prefix="rms_", requires=frozenset({"emg"}), module="emg", unit=None,
 )
 
+# EMG-only segmentation (core.analysis.segments, whole_file/separators): every column
+# here requires ONLY `emg` (never `flow` -- these columns exist precisely because flow
+# is absent). `seg_start_s`/`seg_end_s`/`seg_duration_s` (set directly on a phase-less
+# segment's own `mechanics` dict, replacing the timing group `LEGACY_MECHANICS_ORDER`
+# computes from insp/exp) are the only ones `core.quantities`'s generic `_RULES` cannot
+# already classify on its own (no rule matches a bare `_s` suffix that is not `t_`-
+# prefixed), so they are the only entries here whose `unit=` is actually load-bearing;
+# `t_rms_file_max_col_`/`rms_file_max_col_`/`rms_file_top3_col_` (whole_file-only:
+# core.analysis.segments._attach_whole_file_rms_diagnostics) are already resolved by
+# _RULES' generic `t_`/`rms` prefixes before this registry is ever consulted -- their
+# `unit=` here is documentation, not the resolving path -- but are still named as their
+# own family (module="segment_emg") so `resolve()` can report this module distinctly
+# from the plain per-breath `emg` module above.
+_SEGMENT_EMG = (
+    ColumnSpec(name="seg_start_s", requires=frozenset({"emg"}), module="segment_emg", unit="s"),
+    ColumnSpec(name="seg_end_s", requires=frozenset({"emg"}), module="segment_emg", unit="s"),
+    ColumnSpec(name="seg_duration_s", requires=frozenset({"emg"}), module="segment_emg", unit="s"),
+    ColumnSpec(prefix="t_rms_file_max_col_", requires=frozenset({"emg"}), module="segment_emg", unit="s"),
+    ColumnSpec(prefix="rms_file_max_col_", requires=frozenset({"emg"}), module="segment_emg", unit="a.u."),
+    ColumnSpec(prefix="rms_file_top3_col_", requires=frozenset({"emg"}), module="segment_emg", unit="a.u."),
+)
+
 #: Every column/family this skeleton knows about. Later tickets append to this,
 #: never remove from or reorder ``LEGACY_MECHANICS_ORDER`` within it.
-REGISTRY = LEGACY_MECHANICS_ORDER + (_ENTROPY, _EMG)
+REGISTRY = LEGACY_MECHANICS_ORDER + (_ENTROPY, _EMG) + _SEGMENT_EMG
 
 # The Capabilities boolean fields resolve() is willing to read. Kept as an
 # explicit tuple (rather than e.g. dataclasses.fields(caps)) so a caller could

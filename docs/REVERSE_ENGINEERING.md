@@ -382,6 +382,61 @@ byte-identical).
   above — confirmed to fail with the exact `KeyError` before that fix and pass
   after it.
 
+### 5.12 EMG-only segmentation (v2-only) — `core/analysis/segments.py`
+
+A recording with no flow channel at all (`analysis.signals = ["emg"]`) has no
+inspiration/expiration split to compute — `§5.3`'s flow/volume segmenters both need a
+flow or volume signal to find breath boundaries on. Two segmentation methods split such
+a recording into **segments** instead, each carrying `has_phases=False` and the same
+`OrderedDict` shape a real breath does (`flow`/`volume`/`poes`/`pgas`/`pdi` all empty —
+the same absence convention every other optional channel already uses):
+
+- **`whole_file`** — the entire recording is one segment, always numbered 1.
+- **`separators`** — N user-placed times (`processing.segmentation.separators`, one
+  `SeparatorEntry` per file) split the recording into N+1 segments numbered from 1. A
+  time outside the recording, or two times close enough to round to the same sample,
+  raises `EmgSegmentationError` naming the file — a per-file `FileResult` error, never a
+  batch-stopping crash.
+
+`compute.separateintobreaths` dispatches to these two (via `core.analysis.segments`)
+before falling through to the flow/volume segmenters, so the dispatch point stays
+single. `core.pipeline.segment_file`/`run_batch` skip flow-only steps for such a
+recording (`Capabilities.mode == "emg_only"`): no `trim()` (there is no flow-based
+zero-crossing to trim to — the whole raw recording IS the analysis window), no volume
+zero/drift/trend correction, no `calculateaveragebreaths` (nothing to average across
+phases), and `vefactor`/`bcnt` (which would divide by an empty flow's length) are never
+computed. `compute.compute_segment_emg` — RMS/integral-EMG/gated-peak EMG and sample
+entropy, a verbatim extraction of what `calculatemechanics` computes inline — is called
+with `phases=False`, which computes the whole-segment values only (never the
+inspiration/expiration-specific ones, which do not exist for a phase-less segment); a
+phase-less segment's `mechanics` dict is built directly as `{seg_start_s, seg_end_s,
+seg_duration_s}` rather than the flow-derived timing group `§5.4`'s
+`LEGACY_MECHANICS_ORDER` computes.
+
+`whole_file` additionally reports, per EMG channel, where in the recording the peak RMS
+fell (`t_rms_file_max_col_N`, from the same sliding-window RMS grid `calculate_rms`
+itself maximises over — `emg.rolling_rms`) and the mean of the three highest values in
+that envelope (`rms_file_top3_col_N`), a steadier "peak level" than the single max alone
+against a lone noise spike. `run_batch` separately warns (never fails) when that peak
+coincides with a heartbeat and `processing.emg.robust_peak` is off, since the reported
+"peak" could then be cardiac contamination rather than real muscle activity.
+
+**The loader's flow requirement is conditional on this shape**, not lifted generally:
+`core/io/loaders.py` still raises immediately on an unassigned flow whenever volume,
+poes, pgas or pdi is STILL assigned (a real, previously-caught misconfiguration —
+`tests/unit/test_unassigned_channels.py::test_an_unassigned_channel_is_named` pins
+this unchanged); flow is treated as absent, exactly like its four siblings, only when
+ALL FOUR of them are absent too — the one shape `Settings.validate()` itself allows an
+unassigned flow in (poes/pgas/pdi declared without flow is rejected there).
+
+Golden-neutral: the EMG-only branch is taken only when `Capabilities.mode ==
+"emg_only"`, which no golden scenario declares — every existing (flow-bearing) run
+takes the unchanged path byte-for-byte.
+
+An automatic alternative to manual separators (fixed windows, burst detection) and a
+resolved single noise-reference rule for an EMG-only set (`reference_mode`) are later
+tickets' scope, not this one's.
+
 ---
 
 ## 6. Latent issues found (to fix deliberately in the refactor)

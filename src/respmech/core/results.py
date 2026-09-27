@@ -77,6 +77,16 @@ def build_breath_table(file, breaths, settings):
                     dfmech = dfmech.join(_getbreathdata(breath, "rms_gated_insp", "rms_gated_insp_col_", ['rms_gated_insp_max', 'rms_gated_insp_mean'], emgcols), how="outer", sort=False)
                     dfmech = dfmech.join(_getbreathdata(breath, "rms_gated_exp", "rms_gated_exp_col_", ['rms_gated_exp_max', 'rms_gated_exp_mean'], emgcols), how="outer", sort=False)
 
+            # whole_file-only diagnostics (core.analysis.segments): where in the recording
+            # the peak EMG activity fell, and how it compares to the top-3 highest values in
+            # the whole-file envelope. Never present for a real breath or a `separators`
+            # segment (only `segments.whole_file` sets these three keys), so this join is a
+            # pure no-op for every existing (has_phases=True) analysis.
+            if 'rms_file_max' in breath:
+                dfmech = dfmech.join(_getbreathdata(breath, "rms_file_max", "rms_file_max_col_", [], emgcols), how="outer", sort=False)
+                dfmech = dfmech.join(_getbreathdata(breath, "t_rms_file_max", "t_rms_file_max_col_", [], emgcols), how="outer", sort=False)
+                dfmech = dfmech.join(_getbreathdata(breath, "rms_file_top3", "rms_file_top3_col_", [], emgcols), how="outer", sort=False)
+
         if len(entcols) > 0:
             dfmech = dfmech.join(_getbreathdata(breath, "entropy", "sample_entropy_col_", ['sample_entropy_max', 'sample_entropy_min', 'sample_entropy_mean'], entcols), how="outer", sort=False)
             if has_phases:
