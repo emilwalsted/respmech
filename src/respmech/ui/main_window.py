@@ -198,7 +198,8 @@ class MainWindow(QMainWindow):
         sig_dlg = SignalSetDialog(self)
         if sig_dlg.exec() != QDialog.Accepted:
             return          # cancelled: leave whatever analysis was open untouched
-        self.settings_screen.new_analysis_from_startup(signals=sig_dlg.signals)
+        self.settings_screen.new_analysis_from_startup(
+            signals=sig_dlg.signals, segmentation_method=sig_dlg.segmentation_method)
 
     def _update_window_title(self):
         """Name the active analysis in the title bar and flag unsaved edits, so it is
@@ -423,7 +424,8 @@ class MainWindow(QMainWindow):
         sig_dlg = SignalSetDialog(self)
         if sig_dlg.exec() != QDialog.Accepted:
             return
-        self.settings_screen.new_analysis_from_startup(signals=sig_dlg.signals)
+        self.settings_screen.new_analysis_from_startup(
+            signals=sig_dlg.signals, segmentation_method=sig_dlg.segmentation_method)
         self._show_settings_status()
 
     def _open_analysis_dialog(self):

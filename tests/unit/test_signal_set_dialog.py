@@ -1,12 +1,13 @@
 """SignalSetDialog: the new-analysis signal-set picker.
 
-Three of the five presets — Flow only, Flow + Poes, and the full set (each with or
-without the 'Also EMG' toggle) — are reachable now (M-17, R7); EMG only and Custom…
-are not yet — see the module's own docstring for why those two doors exist on screen
-but disabled. These tests cover: which doors are enabled/disabled and what they say,
-the outcome of accepting/cancelling, and the same cross-cutting checks every other
-top-level window/dialog in this app carries (dark mode, no lone '&', fits under the
-Windows font-metrics model).
+Four of the five presets — Flow only, Flow + Poes, the full set (each with or without
+the 'Also EMG' toggle), and EMG only — are reachable now (R7);
+Custom… is not yet — see the module's own docstring for why that one door exists on
+screen but disabled. These tests cover: which doors are enabled/disabled and what they
+say, the outcome of accepting/cancelling (including EMG only's own sub-dialog,
+EmgRecordingContentDialog), and the same cross-cutting checks every other top-level
+window/dialog in this app carries (dark mode, no lone '&', fits under the Windows
+font-metrics model).
 """
 from PySide6.QtWidgets import QDialog
 
@@ -18,22 +19,20 @@ def _dlg(qapp):
     return SignalSetDialog()
 
 
-def test_the_three_flow_family_presets_are_enabled(qapp):
+def test_four_of_five_presets_are_enabled(qapp):
     dlg = _dlg(qapp)
-    for btn in (dlg.flow_only_btn, dlg.flow_poes_btn, dlg.full_btn):
+    for btn in (dlg.flow_only_btn, dlg.flow_poes_btn, dlg.full_btn, dlg.emg_only_btn):
         assert btn.isEnabled() is True
-    for btn in (dlg.emg_only_btn, dlg.custom_btn):
-        assert btn.isEnabled() is False
+    assert dlg.custom_btn.isEnabled() is False
     dlg.close()
 
 
-def test_disabled_presets_say_available_later(qapp):
+def test_only_custom_says_available_later(qapp):
     """Every disabled door names WHY it's disabled, on the door itself — the app's own
     gating convention (the reason hangs on the action, not a separate label)."""
     dlg = _dlg(qapp)
-    for btn in (dlg.emg_only_btn, dlg.custom_btn):
-        assert "later step" in btn.description().lower()
-    for btn in (dlg.flow_only_btn, dlg.flow_poes_btn, dlg.full_btn):
+    assert "later step" in dlg.custom_btn.description().lower()
+    for btn in (dlg.flow_only_btn, dlg.flow_poes_btn, dlg.full_btn, dlg.emg_only_btn):
         assert "later step" not in btn.description().lower()
     dlg.close()
 
@@ -47,18 +46,17 @@ def test_custom_door_is_rejected_in_this_milestone(qapp):
     dlg.close()
 
 
-def test_disabled_presets_produce_no_outcome_even_if_clicked(qapp):
+def test_custom_produces_no_outcome_even_if_clicked(qapp):
     """Qt's own quirk: QAbstractButton.click() bypasses isEnabled() and fires 'clicked'
     regardless — so being disabled alone does not guarantee inertness; what actually
-    protects these two doors today is that NEITHER has a connected slot. Pin that, so a
-    future ticket that wires one up without also flipping isEnabled(True) is caught by
-    THIS test going red, rather than shipping a door that silently 'works' while still
+    protects this door today is that it has no connected slot. Pin that, so a future
+    ticket that wires it up without also flipping isEnabled(True) is caught by THIS
+    test going red, rather than shipping a door that silently 'works' while still
     looking disabled."""
     dlg = _dlg(qapp)
-    for btn in (dlg.emg_only_btn, dlg.custom_btn):
-        btn.click()
-        assert dlg.signals is None
-        assert dlg.result() != QDialog.Accepted
+    dlg.custom_btn.click()
+    assert dlg.signals is None
+    assert dlg.result() != QDialog.Accepted
     dlg.close()
 
 
@@ -112,6 +110,7 @@ def test_cancel_leaves_signals_none(qapp):
     dlg.reject()
     assert dlg.result() == QDialog.Rejected
     assert dlg.signals is None
+    assert dlg.segmentation_method is None
 
 
 def test_no_lone_ampersand(qapp):
@@ -134,3 +133,118 @@ def test_signal_set_dialog_fits_under_windows_font_metrics(qapp, windows_metrics
         assert btn.text()          # QCommandLinkButton.text() is the title, never elided
     assert dlg.width() > 0 and dlg.height() > 0
     dlg.close()
+
+
+# --- EMG only + its recording-content sub-dialog -----------------------------------
+
+def test_choosing_emg_only_opens_the_recording_content_sub_dialog(qapp, monkeypatch):
+    """Clicking 'EMG only' must open EmgRecordingContentDialog rather than accepting
+    this dialog outright — unlike every other preset, EMG only has one more question to
+    answer before a signal set is actually decided."""
+    from respmech.ui.signal_set_dialog import EmgRecordingContentDialog
+    opened = []
+    original_exec = EmgRecordingContentDialog.exec
+
+    def _spy(self):
+        opened.append(self)
+        self.reject()
+        return QDialog.Rejected
+    monkeypatch.setattr(EmgRecordingContentDialog, "exec", _spy)
+    dlg = _dlg(qapp)
+    dlg.emg_only_btn.click()
+    assert len(opened) == 1
+    assert isinstance(opened[0], EmgRecordingContentDialog)
+    monkeypatch.setattr(EmgRecordingContentDialog, "exec", original_exec)
+    dlg.close()
+
+
+def test_choosing_emg_only_then_whole_file_accepts_with_emg_signals(qapp, monkeypatch):
+    from respmech.ui.signal_set_dialog import EmgRecordingContentDialog
+
+    def _fake_exec(self):
+        self.whole_file_btn.click()
+        return QDialog.Accepted
+    monkeypatch.setattr(EmgRecordingContentDialog, "exec", _fake_exec)
+    dlg = _dlg(qapp)
+    dlg.emg_only_btn.click()
+    assert dlg.result() == QDialog.Accepted
+    assert dlg.signals == ["emg"]
+    assert dlg.segmentation_method == "whole_file"
+    dlg.close()
+
+
+def test_choosing_emg_only_then_separators_accepts_with_that_method(qapp, monkeypatch):
+    from respmech.ui.signal_set_dialog import EmgRecordingContentDialog
+
+    def _fake_exec(self):
+        self.separators_btn.click()
+        return QDialog.Accepted
+    monkeypatch.setattr(EmgRecordingContentDialog, "exec", _fake_exec)
+    dlg = _dlg(qapp)
+    dlg.emg_only_btn.click()
+    assert dlg.result() == QDialog.Accepted
+    assert dlg.signals == ["emg"]
+    assert dlg.segmentation_method == "separators"
+    dlg.close()
+
+
+def test_cancelling_the_recording_content_dialog_leaves_signal_set_dialog_open_and_unchanged(
+        qapp, monkeypatch):
+    """Cancelling the sub-dialog must not partially commit anything — the outer dialog
+    stays open (never accepted/rejected) with signals/segmentation_method both still
+    None, exactly as if the 'EMG only' click never happened."""
+    from respmech.ui.signal_set_dialog import EmgRecordingContentDialog
+
+    def _fake_exec(self):
+        return QDialog.Rejected
+    monkeypatch.setattr(EmgRecordingContentDialog, "exec", _fake_exec)
+    dlg = _dlg(qapp)
+    dlg.emg_only_btn.click()
+    assert dlg.result() != QDialog.Accepted
+    assert dlg.signals is None
+    assert dlg.segmentation_method is None
+    dlg.close()
+
+
+def test_emg_recording_content_dialog_whole_file_and_separators_are_enabled(qapp):
+    from respmech.ui.signal_set_dialog import EmgRecordingContentDialog
+    sub = EmgRecordingContentDialog()
+    assert sub.whole_file_btn.isEnabled() is True
+    assert sub.separators_btn.isEnabled() is True
+    assert sub.emg_burst_btn.isEnabled() is False
+    assert "later step" in sub.emg_burst_btn.description().lower()
+    sub.close()
+
+
+def test_emg_recording_content_dialog_emg_burst_produces_no_outcome_even_if_clicked(qapp):
+    from respmech.ui.signal_set_dialog import EmgRecordingContentDialog
+    sub = EmgRecordingContentDialog()
+    sub.emg_burst_btn.click()
+    assert sub.method is None
+    assert sub.result() != QDialog.Accepted
+    sub.close()
+
+
+def test_emg_recording_content_dialog_cancel_leaves_method_none(qapp):
+    from respmech.ui.signal_set_dialog import EmgRecordingContentDialog
+    sub = EmgRecordingContentDialog()
+    sub.reject()
+    assert sub.result() == QDialog.Rejected
+    assert sub.method is None
+
+
+def test_emg_recording_content_dialog_no_lone_ampersand(qapp):
+    from respmech.ui.signal_set_dialog import EmgRecordingContentDialog
+    sub = EmgRecordingContentDialog()
+    offenders = _lone_ampersands(sub)
+    sub.close()
+    assert not offenders, offenders
+
+
+def test_emg_recording_content_dialog_fits_under_windows_font_metrics(qapp, windows_metrics):
+    from respmech.ui.signal_set_dialog import EmgRecordingContentDialog
+    sub = EmgRecordingContentDialog()
+    for btn in (sub.whole_file_btn, sub.separators_btn, sub.emg_burst_btn):
+        assert btn.text()
+    assert sub.width() > 0 and sub.height() > 0
+    sub.close()
