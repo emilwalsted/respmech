@@ -1273,7 +1273,12 @@ class SettingsScreen(QWidget):
         reduction demo either), where the demo the user's declared set actually promised
         is the full one. EMG in the declared set therefore always wins to 'full',
         checked explicitly below rather than folded into ``sample_variant_for_mode``
-        (which stays a pure, mode-string-only mapping — 'emg' is not a mode).
+        (which stays a pure, mode-string-only mapping — 'emg' is not a mode) — EXCEPT
+        for the genuine 'emg_only' mode itself, which has its own dedicated
+        'emg' variant and must be checked FIRST: ``caps.emg`` is also True there (it is
+        the only signal declared), so the 'Also EMG'-toggle rule above would otherwise
+        wrongly send an EMG-only analysis to the flow-bearing 'full' demo instead of its
+        own no-flow one.
 
         The first call in a process is a synchronous ~1 s stall (measured: mostly the
         lazy import of the compute/reader stack, not the small CSV write itself, and a
@@ -1288,7 +1293,12 @@ class SettingsScreen(QWidget):
         if use_current_signals:
             try:
                 caps = Capabilities.from_settings(self.state.settings)
-                variant = "full" if caps.emg else sample_variant_for_mode(caps.mode)
+                if caps.mode == "emg_only":
+                    variant = "emg"
+                elif caps.emg:
+                    variant = "full"
+                else:
+                    variant = sample_variant_for_mode(caps.mode)
             except (TypeError, AttributeError):
                 # a malformed analysis.signals (e.g. a hand-edited bare string) would
                 # raise here; Settings.validate() reports it properly once the user
@@ -1392,7 +1402,8 @@ class SettingsScreen(QWidget):
         self.new_analysis_from_startup()
 
     def new_analysis_from_startup(self, signals: list[str] | None = None,
-                                  use_last_rig: bool = False):
+                                  use_last_rig: bool = False,
+                                  segmentation_method: str | None = None):
         """The full-reset primitive behind ``new_analysis()`` above, the startup
         chooser's 'New analysis'/'New from last rig' doors, and 'File > New analysis'
         once its own ``SignalSetDialog`` has been accepted: a genuine ``Settings()``
@@ -1412,7 +1423,10 @@ class SettingsScreen(QWidget):
         funnel for changing it — see that method), or ``None`` to skip applying one and
         let it derive from whichever channels end up assigned (used by 'New from last
         rig', which derives its set from the rig's own channel mapping instead, and
-        never shows the picker — see ``prefs.apply_rig``)."""
+        never shows the picker — see ``prefs.apply_rig``). ``segmentation_method``
+        is the EMG-only preset's own extra choice
+        (``SignalSetDialog.segmentation_method``), passed straight through to
+        ``apply_signal_set`` — ``None`` for every other preset."""
         self.state.settings = Settings()
         self.state.settings_path = None
         self.state.display_name = None
@@ -1420,18 +1434,17 @@ class SettingsScreen(QWidget):
         self.state.is_sample = False
         self.from_state()
         if signals is not None:
-            self.apply_signal_set(signals)
+            self.apply_signal_set(signals, segmentation_method=segmentation_method)
         self.enter_new_mode(use_last_rig=use_last_rig)
         self._mark_clean()
 
-    def apply_signal_set(self, signals: list[str]):
+    def apply_signal_set(self, signals: list[str], segmentation_method: str | None = None):
         """The ONE funnel (R7) for changing ``analysis.signals`` in an already-running
         session: every action that changes the declared signal set — the New-analysis
-        picker above, and (once a later release wires it in) Setup's own Signals row
-        'Change…' door too — must go through this, never assign ``analysis.signals``
-        directly. A preset chosen over a NON-blank state must not be silently
-        re-inflated by channels the new set no longer includes; this is what clears
-        them first.
+        picker above, and Setup's own Signals row 'Change…' door too — must go
+        through this, never assign ``analysis.signals`` directly. A preset chosen over
+        a NON-blank state must not be silently re-inflated by channels the new set no
+        longer includes; this is what clears them first.
 
         Clears ``ch.<role> = None`` for every single-role signal (flow/poes/pgas/pdi)
         LEAVING the new set, and ``ch.emg = []`` when 'emg' leaves it; ``ch.entropy`` is
@@ -1440,17 +1453,50 @@ class SettingsScreen(QWidget):
         When flow's MEMBERSHIP of the set changes (added or removed — a different
         segmenter produces the breath numbers and kinds either way, so every existing
         one means something different afterwards) AND there is actually breath-keyed
-        state that would be affected, the user is asked ONCE whether to also clear it.
-        Today that is ``exclude_breaths``/``breath_counts``; ``breath_types``,
-        ``references``, ``reference_defaults`` and ``separators`` do not exist yet (later
-        tickets add them) and are cleared the same way via ``getattr``/``hasattr``, so
-        adding one of those lists needs no change here. Nothing is asked, and nothing is
-        cleared, when there is nothing to lose (a freshly reset analysis has none of
-        this yet) — the same "dropping a role clears the derived state that depended
-        on it" principle already established for removing the EMG role (silently
-        there, since a stuck-invalid ECG auto-detect flag was worse than asking; here
-        the confirmation is added because losing flow is the bigger change — see
-        ``docs/beslutninger.md``)."""
+        state that would be affected, the user is asked ONCE whether to also clear it:
+        ``exclude_breaths``/``breath_counts``/``breath_types`` (cleared via
+        ``getattr``/``hasattr`` so a future list added the same way needs no change
+        here) and ``processing.segmentation.separators`` (checked/cleared
+        separately, since it lives one level deeper than ``processing`` itself, not
+        directly on it like the others). ``references``/``reference_defaults`` do not
+        exist yet (a later ticket). Nothing is asked, and nothing is cleared, when
+        there is nothing to lose (a freshly reset analysis has none of this yet) — the
+        same "dropping a role clears the derived state that depended on it" principle
+        already established for removing the EMG role (silently there, since a
+        stuck-invalid ECG auto-detect flag was worse than asking; here the confirmation
+        is added because losing flow is the bigger change — see
+        ``docs/beslutninger.md``).
+
+        ``segmentation_method`` is set ONLY by the EMG-only preset (the sole
+        caller today that has a segmentation method to name at all —
+        ``SignalSetDialog``'s 'EMG only' button and Setup's 'Change…' door reopening
+        it), applied to ``processing.segmentation.method`` together with
+        ``noise.use_expiration = False`` and ``noise.auto_prop = False``: an EMG-only
+        analysis has no inspiration/expiration phases for ``use_expiration`` to mean
+        anything about (see ``core.settings.resolve_noise_reference_mode``), and
+        ``Settings.validate()`` outright REJECTS ``auto_prop`` while noise reduction is
+        enabled on an EMG-only set (no EMG-only implementation exists for it yet) — a
+        state reachable from the shipped UI TODAY (open the built-in 'full' sample,
+        which turns noise reduction and ``auto_prop`` on, then Setup ▸ Signals ▸
+        Change… ▸ EMG only) without this reset, so it is not a hypothetical. When
+        ``None`` (every other preset) but ``signals`` GAINS flow over a settings object
+        still left on an EMG-only-only method ('whole_file'/'separators'/…) from a
+        *previous* EMG-only preset, that method is reset to 'flow' here too;
+        conversely, LOSING flow with no explicit method (unreachable via the shipped
+        UI today — both EMG-only doors always supply one — but the funnel is meant for
+        a future caller too, e.g. an eventual 'Custom…' picker) falls back to
+        'whole_file' rather than leaving a flow-only method declared over a set that
+        no longer has one. Either way, ``Settings.validate()`` rejects a
+        ('flow'/'volume') method the moment flow leaves the set, and a
+        ('whole_file'/'separators'/'fixed_windows'/'emg_burst') method the moment it
+        re-enters — leaving either stale would make the very next validation fail with
+        no visible cause tying it to this signal-set change.
+
+        A method CHANGE within EMG-only itself (Change… re-asked, 'separators' ->
+        'whole_file' or back) also counts as "a different breath segmentation" for the
+        reconciliation prompt below, alongside flow leaving/entering the set — segment
+        NUMBERING changes completely either way, so a `breath_types`/`exclude_breaths`
+        entry keyed to an old segment number is exactly as stale."""
         # Same guard as core.analysis.signals.effective_signals, and for the same
         # reason: a bare string is iterable too, so frozenset("flow") would silently
         # become {'f','l','o','w'} — and since 'flow' is then None-of-the-above, the
@@ -1469,10 +1515,13 @@ class SettingsScreen(QWidget):
 
         proc = s.processing
         breath_keyed_attrs = ("exclude_breaths", "breath_counts", "breath_types",
-                              "references", "reference_defaults", "separators")
-        has_breath_keyed_state = any(getattr(proc, a, None) for a in breath_keyed_attrs)
+                              "references", "reference_defaults")
+        has_breath_keyed_state = (any(getattr(proc, a, None) for a in breath_keyed_attrs)
+                                  or bool(getattr(proc.segmentation, "separators", None)))
+        method_changing = (segmentation_method is not None
+                           and segmentation_method != proc.segmentation.method)
 
-        if had_flow != wants_flow and has_breath_keyed_state:
+        if (had_flow != wants_flow or method_changing) and has_breath_keyed_state:
             ans = QMessageBox.question(
                 self, "RespMech",
                 "Breath types, references, exclusions and separators were made for a "
@@ -1482,6 +1531,8 @@ class SettingsScreen(QWidget):
                 for a in breath_keyed_attrs:
                     if hasattr(proc, a):
                         setattr(proc, a, [])
+                if hasattr(proc.segmentation, "separators"):
+                    proc.segmentation.separators = []
 
         s.analysis.signals = list(signals)
         for role in SINGLE_SIGNALS:
@@ -1489,6 +1540,15 @@ class SettingsScreen(QWidget):
                 setattr(ch, role, None)
         if "emg" not in new_set:
             ch.emg = []
+
+        if segmentation_method is not None:
+            proc.segmentation.method = segmentation_method
+            proc.emg.noise.use_expiration = False
+            proc.emg.noise.auto_prop = False
+        elif wants_flow and proc.segmentation.method not in ("flow", "volume"):
+            proc.segmentation.method = "flow"
+        elif not wants_flow and proc.segmentation.method in ("flow", "volume"):
+            proc.segmentation.method = "whole_file"
 
         # M-11: analysis.signals is now part of _channel_view_signature, so this always
         # detects a real change and rebuilds — the Signals row and 'Analyses: …' must
@@ -1809,16 +1869,18 @@ class SettingsScreen(QWidget):
         lay.addWidget(self.btn_change_signals)
 
     def _change_signals(self):
-        """Setup's 'Change…' door (M-11) onto ``apply_signal_set`` — the SAME funnel the
+        """Setup's 'Change…' door onto ``apply_signal_set`` — the SAME funnel the
         New-analysis picker uses (R7's one-funnel rule), via the same ``SignalSetDialog``.
-        For an EMG-only analysis this is meant to be the ONE place the recording-content
-        question is re-asked (M-28); until that preset is reachable (still disabled in
-        ``SignalSetDialog`` — see its own docstring) there is nothing EMG-only-specific to
-        do here yet, so every analysis reopens the identical dialog."""
+        This is the ONE place the EMG-only recording-content question is RE-asked:
+        choosing 'EMG only' here opens the identical
+        ``EmgRecordingContentDialog`` the New-analysis picker uses, whether or not the
+        analysis was already EMG-only — there is no separate 'keep the current method'
+        shortcut, since the dialog itself is the single source of truth for that
+        choice."""
         from respmech.ui.signal_set_dialog import SignalSetDialog  # noqa: PLC0415
         dlg = SignalSetDialog(self)
         if dlg.exec() == QDialog.Accepted and dlg.signals is not None:
-            self.apply_signal_set(dlg.signals)
+            self.apply_signal_set(dlg.signals, segmentation_method=dlg.segmentation_method)
 
     def _capabilities_for_view(self, s):
         """``Capabilities.from_settings(s)``, tolerant of a malformed ``analysis.signals``.

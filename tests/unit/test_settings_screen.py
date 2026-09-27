@@ -1532,6 +1532,54 @@ def test_the_sample_analysis_never_shows_a_false_carried_over_banner(qapp):
     win.close()
 
 
+def test_the_emg_only_sample_never_shows_a_false_carried_over_banner(qapp):
+    """build_sample_settings's 'emg' branch stamps BOTH the noise reference AND
+    the manual SeparatorEntry's folder to match input.folder — miss either one and the
+    very first 'EMG only' 'Try it on sample data' would show a false carried-over
+    banner, exactly the class of bug the 'full' variant's own equivalent test above
+    guards against."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.apply_signal_set(["emg"], segmentation_method="separators")
+    assert sc.open_sample_analysis(use_current_signals=True) is True
+    assert sc.state.settings.analysis.signals == ["emg"]
+    assert sc.carried_banner.isHidden()
+    win.close()
+
+
+def test_save_as_repoints_the_emg_only_samples_separator_folder_too(qapp, tmp_path, monkeypatch):
+    """The same detach-and-repoint guarantee ``test_save_as_repoints_carried_
+    folder_tags_for_the_sample_too`` proves for exclude_breaths/breath_counts must also
+    hold for the EMG-only sample's OWN carried kind, processing.segmentation.separators
+    — otherwise reopening a saved EMG-only sample analysis would show a false
+    carried-over banner for its separators the moment the original OS temp folder is
+    gone, and 'Clear' on that banner would silently drop them."""
+    from PySide6.QtWidgets import QFileDialog
+    from respmech.ui.main_window import MainWindow
+    from respmech.settingsio.toml_io import load_toml
+
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.apply_signal_set(["emg"], segmentation_method="separators")
+    assert sc.open_sample_analysis(use_current_signals=True) is True
+    old_input = sc.state.settings.input.folder
+    assert len(sc.state.settings.processing.segmentation.separators) == 1
+    assert sc.state.settings.processing.segmentation.separators[0].folder == old_input
+
+    dest_dir = tmp_path / "saved"; dest_dir.mkdir()
+    picked = str(dest_dir / "analysis.toml")
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: (picked, "")))
+    assert sc.save_analysis_as() is True
+
+    reloaded = load_toml(picked)
+    new_input = str(dest_dir / "input")
+    assert reloaded.processing.segmentation.separators[0].folder == new_input
+    reloaded.validate()
+    win.close()
+
+
 def test_a_preview_side_edit_refreshes_a_showing_setup_banner(qapp, tmp_path):
     """Self-review finding: confirming/clearing carried state from Preview & QC (a breath
     toggle, a breath-count-overrides commit) must not leave Setup's banner showing a
@@ -1929,6 +1977,192 @@ def test_apply_signal_set_no_prompt_when_flow_membership_is_unchanged(qapp, tmp_
     win.close()
 
 
+# --- segmentation_method (EMG-only preset's own extra choice) --------------------
+
+def test_apply_signal_set_emg_only_sets_segmentation_method_and_use_expiration_false(
+        qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.state.settings.processing.emg.noise.use_expiration = True
+    sc.apply_signal_set(["emg"], segmentation_method="separators")
+    proc = sc.state.settings.processing
+    assert proc.segmentation.method == "separators"
+    assert proc.emg.noise.use_expiration is False
+    win.close()
+
+
+def test_apply_signal_set_emg_only_also_turns_off_auto_prop(qapp, tmp_path):
+    """Self-review finding: Settings.validate() outright REJECTS noise.auto_prop while
+    noise reduction is enabled on an EMG-only set (no EMG-only implementation exists
+    for it yet) -- and this is reachable from the shipped UI today, not hypothetical:
+    open the built-in 'full' sample (noise + auto_prop both on by default), then Setup
+    ▸ Signals ▸ Change… ▸ EMG only. Without this reset, the very next validate() would
+    fail with no visible cause tying it to the signal-set change just made."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    proc = sc.state.settings.processing
+    proc.emg.remove_ecg = True
+    proc.emg.noise.enabled = True
+    proc.emg.noise.auto_prop = True
+    sc.apply_signal_set(["emg"], segmentation_method="whole_file")
+    assert proc.emg.noise.auto_prop is False
+    ch = sc.state.settings.input.channels
+    ch.emg = [2, 3, 4]
+    proc.emg.noise.reference_file = "a.csv"
+    proc.emg.noise.reference_intervals = [[0.0, 1.0]]
+    sc.state.settings.validate()                    # must not raise on auto_prop
+    win.close()
+
+
+def test_apply_signal_set_defaults_to_whole_file_when_losing_flow_with_no_method(
+        qapp, tmp_path):
+    """Defensive-only today (both EMG-only doors always supply a method), but the
+    funnel is documented for a future caller too (e.g. an eventual 'Custom…' picker)
+    -- losing flow with segmentation_method=None must not leave a flow-only method
+    ('flow'/'volume') declared over a set that no longer has one."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    assert sc.state.settings.processing.segmentation.method == "flow"
+    sc.apply_signal_set(["emg"])                    # no segmentation_method given
+    assert sc.state.settings.processing.segmentation.method == "whole_file"
+    win.close()
+
+
+def test_apply_signal_set_leaving_emg_only_for_a_flow_preset_resets_the_method(
+        qapp, tmp_path):
+    """A settings object left on an EMG-only-only method ('whole_file'/'separators')
+    from a PREVIOUS EMG-only preset must not stay there once flow re-enters the
+    declared set — Settings.validate() rejects that combination outright, and the
+    ordinary flow-family presets never pass segmentation_method themselves (they have
+    nothing new to name), so apply_signal_set must reset it on their behalf."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.apply_signal_set(["emg"], segmentation_method="whole_file")
+    assert sc.state.settings.processing.segmentation.method == "whole_file"
+
+    sc.apply_signal_set(["flow", "poes"])          # an ordinary flow-family preset
+    assert sc.state.settings.processing.segmentation.method == "flow"
+    # apply_signal_set never ASSIGNS a channel for a role ENTERING the set (only ever
+    # clears one leaving it — test_apply_signal_set_over_a_reduced_state_cannot_be_
+    # reinflated above pins that same rule), so flow/poes need their own real mapping
+    # before validate() can pass; the point of THIS test is only that the METHOD no
+    # longer names an EMG-only-only value once flow is back.
+    ch = sc.state.settings.input.channels
+    ch.flow, ch.volume, ch.poes = 5, 6, 7
+    sc.state.settings.validate()                    # must not raise
+    win.close()
+
+
+def test_apply_signal_set_flow_family_to_flow_family_leaves_the_method_alone(
+        qapp, tmp_path):
+    """The ordinary case (never touched an EMG-only method) must not be perturbed by
+    the new reset rule -- 'volume' segmentation in particular must survive a preset
+    change that keeps flow in the set."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.state.settings.processing.segmentation.method = "volume"
+    sc.apply_signal_set(["flow", "poes"])
+    assert sc.state.settings.processing.segmentation.method == "volume"
+    win.close()
+
+
+def test_apply_signal_set_prompt_also_covers_separators(qapp, tmp_path, monkeypatch):
+    """The breath-keyed reconciliation prompt (already tested above for exclude_breaths/
+    breath_counts) must ALSO fire for, and clear, processing.segmentation.separators —
+    the ONLY carried kind reachable through a real UI path today. Guards against
+    the exact latent bug found while building this: the prompt's own presence-check
+    used to read a nonexistent `proc.separators` attribute (separators actually live
+    one level deeper, at `proc.segmentation.separators`) and so could never see them."""
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import SeparatorEntry
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.apply_signal_set(["emg"], segmentation_method="separators")
+    sc.state.settings.processing.segmentation.separators = [
+        SeparatorEntry(file="a.csv", times_s=[1.0, 2.0])]
+
+    calls = []
+    monkeypatch.setattr(ss.QMessageBox, "question",
+                        staticmethod(lambda *a, **k: (calls.append(a), ss.QMessageBox.Yes)[1]))
+    sc.apply_signal_set(["flow"])                   # flow re-enters the set
+    assert len(calls) == 1
+    assert sc.state.settings.processing.segmentation.separators == []
+    win.close()
+
+
+def test_apply_signal_set_declining_the_prompt_keeps_separators_too(
+        qapp, tmp_path, monkeypatch):
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import SeparatorEntry
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.apply_signal_set(["emg"], segmentation_method="separators")
+    sc.state.settings.processing.segmentation.separators = [
+        SeparatorEntry(file="a.csv", times_s=[1.0, 2.0])]
+    monkeypatch.setattr(ss.QMessageBox, "question",
+                        staticmethod(lambda *a, **k: ss.QMessageBox.No))
+    sc.apply_signal_set(["flow"])
+    assert len(sc.state.settings.processing.segmentation.separators) == 1
+    win.close()
+
+
+def test_apply_signal_set_prompt_also_fires_on_an_emg_only_method_change(
+        qapp, tmp_path, monkeypatch):
+    """Self-review finding: switching Setup's 'Change…' door from 'separators' back to
+    'whole_file' (or vice versa) on an ALREADY-EMG-only analysis keeps flow membership
+    unchanged (False both before and after), so the ORIGINAL gate (flow membership
+    alone) never fired -- yet segment NUMBERING changes completely, exactly the same
+    class of staleness the flow-membership check exists to catch. A leftover
+    breath_types entry keyed to a segment number 'separators' produced would silently
+    misapply (or fail validate()) under 'whole_file'."""
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import SeparatorEntry
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.apply_signal_set(["emg"], segmentation_method="separators")
+    sc.state.settings.processing.segmentation.separators = [
+        SeparatorEntry(file="a.csv", times_s=[1.0, 2.0])]
+
+    calls = []
+    monkeypatch.setattr(ss.QMessageBox, "question",
+                        staticmethod(lambda *a, **k: (calls.append(a), ss.QMessageBox.Yes)[1]))
+    sc.apply_signal_set(["emg"], segmentation_method="whole_file")   # method changes, flow doesn't
+    assert len(calls) == 1
+    assert sc.state.settings.processing.segmentation.separators == []
+    assert sc.state.settings.processing.segmentation.method == "whole_file"
+    win.close()
+
+
+def test_apply_signal_set_no_prompt_when_reapplying_the_same_emg_only_method(
+        qapp, tmp_path, monkeypatch):
+    """The negative case for the test above: re-choosing the SAME method through
+    Change… (e.g. re-confirming 'separators') must not ask, since nothing about the
+    segmentation actually changes."""
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import SeparatorEntry
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.apply_signal_set(["emg"], segmentation_method="separators")
+    sc.state.settings.processing.segmentation.separators = [
+        SeparatorEntry(file="a.csv", times_s=[1.0, 2.0])]
+
+    def _boom(*a, **k):
+        raise AssertionError("QMessageBox.question must not be called")
+    monkeypatch.setattr(ss.QMessageBox, "question", staticmethod(_boom))
+    sc.apply_signal_set(["emg"], segmentation_method="separators")   # same method again
+    assert len(sc.state.settings.processing.segmentation.separators) == 1
+    win.close()
+
+
 # ---------------------------------------------------------------------------
 # M-11: Setup Signals row, ChannelSummary's use of it, _channel_view_signature,
 # and the 'settings.unknown' notice
@@ -2001,17 +2235,78 @@ def test_change_signals_button_applies_the_chosen_set(qapp, tmp_path, monkeypatc
     win = MainWindow(AppState()); sc = win.settings_screen
     _valid(sc, tmp_path)
     calls = []
-    monkeypatch.setattr(sc, "apply_signal_set", lambda signals: calls.append(signals))
+    monkeypatch.setattr(
+        sc, "apply_signal_set",
+        lambda signals, segmentation_method=None: calls.append((signals, segmentation_method)))
 
     class _FakeDialog:
         def __init__(self, parent=None):
             self.signals = ["flow"]
+            self.segmentation_method = None
 
         def exec(self):
             return QDialog.Accepted
     monkeypatch.setattr(ssd, "SignalSetDialog", _FakeDialog)
     sc._change_signals()
-    assert calls == [["flow"]]
+    assert calls == [(["flow"], None)]
+    win.close()
+
+
+def test_change_signals_button_passes_through_the_emg_only_segmentation_method(
+        qapp, tmp_path, monkeypatch):
+    """Unlike the flow-family presets above (segmentation_method stays None),
+    choosing EMG only through 'Change…' must pass the dialog's own recording-content
+    answer through to apply_signal_set, not silently drop it."""
+    from respmech.ui.main_window import MainWindow
+    from PySide6.QtWidgets import QDialog
+    import respmech.ui.signal_set_dialog as ssd
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        sc, "apply_signal_set",
+        lambda signals, segmentation_method=None: calls.append((signals, segmentation_method)))
+
+    class _FakeDialog:
+        def __init__(self, parent=None):
+            self.signals = ["emg"]
+            self.segmentation_method = "separators"
+
+        def exec(self):
+            return QDialog.Accepted
+    monkeypatch.setattr(ssd, "SignalSetDialog", _FakeDialog)
+    sc._change_signals()
+    assert calls == [(["emg"], "separators")]
+    win.close()
+
+
+def test_change_signals_door_re_asks_the_question_on_an_already_emg_only_analysis(
+        qapp, tmp_path, monkeypatch):
+    """End-to-end (no stubbed apply_signal_set this time -- the REAL funnel runs):
+    an analysis already in EMG-only 'separators' mode, re-opening Setup ▸ Signals ▸
+    Change… and choosing 'whole_file' this time, must actually switch the method on
+    the real settings object -- proving the door is genuinely re-askable for an
+    analysis that was ALREADY EMG-only, not just for a fresh one (only ``SignalSet
+    Dialog`` itself is stubbed, to avoid a real blocking modal in the test)."""
+    from respmech.ui.main_window import MainWindow
+    from PySide6.QtWidgets import QDialog
+    import respmech.ui.signal_set_dialog as ssd
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.apply_signal_set(["emg"], segmentation_method="separators")
+    assert sc.state.settings.processing.segmentation.method == "separators"
+
+    class _FakeDialog:
+        def __init__(self, parent=None):
+            self.signals = ["emg"]
+            self.segmentation_method = "whole_file"
+
+        def exec(self):
+            return QDialog.Accepted
+    monkeypatch.setattr(ssd, "SignalSetDialog", _FakeDialog)
+    sc._change_signals()
+    assert sc.state.settings.analysis.signals == ["emg"]
+    assert sc.state.settings.processing.segmentation.method == "whole_file"
     win.close()
 
 

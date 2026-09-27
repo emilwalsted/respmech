@@ -132,10 +132,13 @@ def compute_all_breaths(s, breaths, n_trimmed):
 
 def _lone_ampersands(root):
     """Scan ``root`` (typically a ``QMainWindow``) for every caption this app's own
-    convention treats as button-like text — ``QAbstractButton.text()``,
-    ``QGroupBox.title()``, every ``QAction.text()`` reachable from ``root.menuBar()``
-    (when it has one) and from ``root.findChildren(QMenu)``, ``QTabBar.tabText(i)``, and
-    the text of any ``QLabel`` with a ``buddy()`` set. Returns a list of
+    convention treats as button-like text — ``QAbstractButton.text()`` (including a
+    ``QCommandLinkButton``'s own second-line ``description()``, which renders through
+    the SAME mnemonic-eating path as its title but is a separate string Qt never
+    exposes via ``text()``), ``QGroupBox.title()``, every ``QAction.text()`` reachable
+    from ``root.menuBar()`` (when it has one) and from ``root.findChildren(QMenu)``,
+    ``QTabBar.tabText(i)``, and the text of any ``QLabel`` with a ``buddy()`` set.
+    Returns a list of
     ``(widget-type-name, offending-text)`` pairs for every caption carrying a LONE ``&``
     that Qt would silently swallow as a mnemonic marker instead of rendering as a
     literal ampersand — the same defect class as the v2.4.0 "Run & results" ->
@@ -154,7 +157,8 @@ def _lone_ampersands(root):
     """
     import re
 
-    from PySide6.QtWidgets import QAbstractButton, QGroupBox, QLabel, QMenu, QTabBar
+    from PySide6.QtWidgets import (QAbstractButton, QCommandLinkButton, QGroupBox,
+                                   QLabel, QMenu, QTabBar)
 
     def _has_lone_ampersand(text):
         # Scan whole RUNS of consecutive '&', not one character at a time: Qt itself
@@ -182,6 +186,11 @@ def _lone_ampersands(root):
 
     for b in root.findChildren(QAbstractButton):
         _check(type(b).__name__, b.text())
+        # QCommandLinkButton's second line (its own caption, not a tooltip) goes
+        # through the same mnemonic-eating text-drawing path as .text() -- found by
+        # self-review missing a lone '&' here that .text() alone could never catch.
+        if isinstance(b, QCommandLinkButton):
+            _check(f"{type(b).__name__}.description()", b.description())
     for g in root.findChildren(QGroupBox):
         _check(type(g).__name__, g.title())
     for tb in root.findChildren(QTabBar):

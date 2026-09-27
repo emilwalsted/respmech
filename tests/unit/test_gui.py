@@ -295,6 +295,7 @@ def test_analysis_menu_actions_show_feedback_regardless_of_active_tab(qapp, tmp_
     class _FakeSignalDialog:
         def __init__(self, parent=None):
             self.signals = ["flow", "poes", "pgas", "pdi"]
+            self.segmentation_method = None
         def exec(self): return QDialog.Accepted
     # 'New analysis' now opens SignalSetDialog before resetting — stub it so this
     # test exercises the reset it actually cares about, not a real blocking modal.

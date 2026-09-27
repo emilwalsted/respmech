@@ -114,8 +114,9 @@ def _all_windows(qapp, tmp_path):
     report = MigrationReport(mapped=["a.b -> c.d"], normalised=["e.f changed meaning"],
                              dropped=["g.h (unused)"])
     windows["MigrationReportDialog"] = MigrationReportDialog(report)
-    from respmech.ui.signal_set_dialog import SignalSetDialog
+    from respmech.ui.signal_set_dialog import EmgRecordingContentDialog, SignalSetDialog
     windows["SignalSetDialog"] = SignalSetDialog()
+    windows["EmgRecordingContentDialog"] = EmgRecordingContentDialog()
     return windows
 
 
