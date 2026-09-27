@@ -166,8 +166,15 @@ def _mech_channel_count(settings) -> int:
     ``_CHANNELS``' five keys. Never zero: an analysis with no flow/pressure channel at all
     (unreachable from the UI today, see ``subtab_plan``) falls back to the full five rather
     than flooring a stack for none, which ``theme.set_stack_floor`` treats as at least one
-    anyway (``max(1, rows)``)."""
-    caps = Capabilities.from_settings(settings)
+    anyway (``max(1, rows)``). Uses ``from_settings_or_none``: ``_update_mech_stack_floor``
+    (the sole caller) is invoked from ``_MechStackFloorFitter``'s deferred resize/show
+    callback, which fires on real ``MainWindow`` startup exactly like the sub-tab bar and
+    Campbell title this same ticket's fix already covers — ``None`` (nothing safe to
+    derive) falls back the same way the zero-signal case already does, to the full five,
+    rather than raising out of that Qt callback."""
+    caps = Capabilities.from_settings_or_none(settings)
+    if caps is None:
+        return len(_CHANNELS)
     n = sum((caps.flow, caps.volume, caps.poes, caps.pgas, caps.pdi))
     return n or len(_CHANNELS)
 

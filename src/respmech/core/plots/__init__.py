@@ -497,21 +497,31 @@ def per_file_figure_jobs(settings):
     Channel-aware since this ticket: the Campbell jobs need Poes (``Capabilities.poes``) and
     the volume-correction/trend/drift jobs need a volume trace (``Capabilities.volume``) —
     a signal set without one of those never gets the job added at all, so it never shows up
-    in ``core.io.plan.plan_outputs``' ceiling either (the two read this exact list)."""
+    in ``core.io.plan.plan_outputs``' ceiling either (the two read this exact list).
+
+    Uses ``from_settings_or_none``: this is the exact function backing Setup's 'You will
+    get' preview (``diagnostic_figure_type_count``), which — per ``SettingsScreen.
+    _update_save_preview``'s own docstring — resolves one event-loop turn into
+    ``MainWindow``'s real startup, still before ``Settings.validate()`` ever runs. A
+    malformed, hand-edited ``analysis.signals`` must degrade the same way the UI's other
+    render paths do (no capability-gated jobs added) rather than throw out of a deferred
+    Qt callback."""
     dg = settings.output.diagnostics
     cols, rows = dg.pv_columns, dg.pv_rows
-    caps = Capabilities.from_settings(settings)
+    caps = Capabilities.from_settings_or_none(settings)
+    poes = caps is not None and caps.poes
+    volume = caps is not None and caps.volume
     jobs = []
-    if dg.save_pv_average and caps.poes:
+    if dg.save_pv_average and poes:
         jobs.append(("PV average", _pv_average, "Campbell (average).pdf"))
-    if dg.save_pv_individual and caps.poes:
+    if dg.save_pv_individual and poes:
         jobs.append(("PV individual", lambda fr, fn, p: _pv_individual(fr, fn, p, cols, rows),
                      "Campbell (breaths).pdf"))
     if dg.save_raw:
         jobs.append(("raw signals", _signals_raw, "signals (raw).pdf"))
     if dg.save_trimmed:
         jobs.append(("trimmed signals", _signals_trimmed, "signals (trimmed).pdf"))
-    if dg.save_drift and caps.volume:
+    if dg.save_drift and volume:
         jobs.append(("volume correction", _volume_correction, "volume correction.pdf"))
         jobs.append(("trend", lambda fr, fn, p: _trend(fr, fn, p, settings), "volume trend.pdf"))
         jobs.append(("drift", _drift, "volume endpoints.pdf"))
