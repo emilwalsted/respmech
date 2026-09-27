@@ -108,12 +108,13 @@ def test_typed_ic_fvc_same_file_vol_ic_matches_analytical_value(current):
     """This scenario's own acceptance criterion: 'typed_ic_fvc_same_file' breath #4 (typed
     'ic') reports vol_ic within 1e-9 of the analytical target, not merely whatever the
     code happens to compute this run — see generate_data.py's
-    make_manoeuvre_file()/_manoeuvre_breath() docstring for why the generator's
-    plateau design makes an EXACT match (not just a close one) possible: VT_IC = 3.0 L
-    is a bare Python float baked into a >= 2-sample plateau, and every step between
-    the CSV and this assertion (trim/zero/drift-correct, the breath-separation
-    sign-walk's one-sample-per-phase drop, the JSON round-trip) is a documented no-op
-    on that value. ic_eelv_pre is asserted too: it is the OTHER half of vol_ic's
+    make_manoeuvre_file()/_manoeuvre_breath() docstring for why the generator's design
+    makes an EXACT match (not just a close one) possible: VT_IC = 3.0 L is a bare
+    Python float that survives the breath-separation sign-walk's one-sample-per-phase
+    drop via linspace's own exact phase-boundary endpoints, and every other step
+    between the CSV and this assertion (trim/zero/drift-correct, the JSON round-trip)
+    is a documented no-op on that value. ic_eelv_pre is asserted too: it is the OTHER
+    half of vol_ic's
     formula (`max(volume) - ic_eelv_pre`), and this scenario's design makes it exactly
     0.0 (the mean of all three preceding tidal breaths' own end-expiratory volume) —
     an unasserted vol_ic alone would not catch a regression that moved EITHER term by

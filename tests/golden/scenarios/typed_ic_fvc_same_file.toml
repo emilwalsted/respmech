@@ -8,9 +8,10 @@
 # number this scenario's own dedicated test checks against a literal analytical
 # constant (not merely "matches the committed reference JSON") is vol_ic == 3.0 L --
 # see generate_data.py's make_manoeuvre_file()/_manoeuvre_breath() docstring for
-# exactly why a >= 2-sample PLATEAU at the manoeuvre's peak volume (rather than a
-# smooth curve's true, generally un-sampled extremum) is what makes that exact match
-# survive the CSV round-trip and the trim/zero/drift-correct chain.
+# exactly why the generator's trapezoid/plateau design (rather than a smooth curve's
+# true, generally un-sampled extremum) is what makes that exact match, and
+# ic_eelv_pre's exact 0.0, survive the CSV round-trip and the trim/zero/drift-correct
+# chain.
 #
 # v2-only (processing.breath_types has no legacy-dict shape at all), baked directly
 # from the v2 core (golden_newcore.py --write) -- see make_golden.py's
