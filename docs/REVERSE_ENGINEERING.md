@@ -534,6 +534,73 @@ measuring before these are trusted clinically. The FORMULAS themselves are pinne
 analytical/synthetic tests (`tests/unit/test_manoeuvres.py`), independent of the exact
 cut-offs.
 
+### 5.13a Cross-file reference resolution (v2-only) — `run_batch`'s forepass/afterpass
+
+`§7b`'s `processing.references`/`reference_defaults` tables only DECLARE where a
+file's reference values come from; `core.analysis.references.attach` and a small
+forepass in `core.pipeline.run_batch` are what actually resolve them into per-breath
+columns, in two passes around the ordinary main per-file loop:
+
+- **Forepass** (before the main loop): `core.analysis.references.
+  external_reference_sources(settings, files)` lists every reference SOURCE filename
+  `processing.references`/`reference_defaults` name that is not already in `files`
+  (this run's own file list — `only_files`-restricted or not). Each one is loaded and
+  segmented through the SAME `segment_file()` entry point the main loop itself uses,
+  and every TYPED breath in it is run through `manoeuvres.extract()` exactly like an
+  in-batch reference-only file (`§5.13`, M-30) already is — a source loaded here and
+  one loaded as an ordinary in-batch file give byte-identical results for the same
+  breath. Results land in `BatchResult.references`
+  (`{source_filename: {breath_no: extract(...) result}}`); a source that fails to
+  load/segment at all is recorded in `BatchResult.reference_errors` keyed
+  `(filename, None)` and simply contributes nothing — the batch is never aborted over
+  one failed reference source. This is why a SUBSET run (`only_files` excluding an
+  in-batch reference source) still resolves the same reference value a full run would:
+  the source falls outside `files`, so the forepass fetches it regardless.
+- **Afterpass** (`references.attach(result, settings, allfiles)`, after every file's
+  own manoeuvres/breath table are final but BEFORE `average_table` is concatenated
+  from the individual `average_row`s): for every OK tidal file, resolves its `ic` slot
+  (`resolve_reference`'s order) and looks the linked breaths up in EITHER an in-batch
+  `FileResult.manoeuvres` or the forepass's `BatchResult.references` (whichever has
+  them). The resolved value is the `ic_cfg.aggregate` ('mean'/'median') of `vol_ic`
+  over the breaths that resolve AND are not flagged with one of
+  `ic_cfg.reject_flags` (`LOW_EFFORT` by default — the same disqualifying rule
+  `apply_repeatability`'s own leave-one-out group already uses). Three columns are
+  APPENDED (never inserted before an existing one) to both `breaths_table` and
+  `average_row`: `vol_ic_ref` (L), `ic_ref_n` (the accepted-breath count), and
+  `ic_ref_source` (the resolved source filename, a text column).
+- **Column family rule**: whether these three columns exist AT ALL for a given
+  analysis is decided from SETTINGS across `allfiles` (the full matched set, never
+  just this run's own subset) — `any(resolve_reference(name, "ic", settings) for name
+  in allfiles)`. A subset run therefore writes the exact same column SET a full run
+  would. A file with the family present but no resolution of its own gets the three
+  columns as NaN plus a notice — "an unresolved link is a caution plus NaN and a
+  notice" (`§7b`'s policy) applies to the whole family, not only to an explicitly
+  configured link.
+- **`processing.lung_volume.require_references`**: off by default, an unresolved `ic`
+  reference is soft (NaN + notice, the file stays OK). When set, it escapes as
+  `core.analysis.references.ReferenceLinkError` and DEMOTES just that one file to
+  failed (`FileResult.error`/`error_kind` set on the same object already in
+  `result.files` — no new object constructed, avoiding a pipeline/references import
+  cycle) — the same policy `ui.validation.path_problem` already applies at
+  validation time to a source file missing from the matched set, now also covering a
+  runtime-only failure (a matched source that fails to load, say) `Settings.validate()`
+  cannot see ahead of time. `ReferenceLinkError` is registered in
+  `ui.screens.preview._mechanics._SOFT_FILE_ERRORS` and
+  `ui.screens.run_screen._FIX_HINTS` alongside `TrimError`/`VolumeTrendError`/
+  `NoBreathsError`/`EmgSegmentationError`.
+- **Reporting**: `core.io.writers._write_run_report`'s PROCESSING block gets a
+  "Reference manoeuvres:" line listing what `processing.references`/
+  `reference_defaults` CONFIGURE (a study-wide setting, like "Breath types:"
+  above it); a conditional "REFERENCE MANOEUVRES" block (DIAGNOSTICS' own
+  convention) reports what actually RESOLVED this run — external sources loaded,
+  per-file resolutions, unresolved files, and forepass errors. Each file's own
+  Provenance sheet gets an "IC reference" row when its own reference resolved
+  (`FileResult.references_used['ic']`, via `_ic_reference_provenance_value`).
+  `fvc`/`baseline_ic`/`max_insp` are extracted by the SAME forepass (any typed
+  breath in a source file, of any kind) but have no consuming column of their own
+  yet — that is `mfvl.py` (M-42) and the normalisation ticket (M-47)'s scope; only
+  `ic` has a column family today.
+
 ---
 
 ## 6. Latent issues found (to fix deliberately in the refactor)
@@ -718,5 +785,6 @@ source file is escalated).
 
 Neither table is read by `core.compute`/`core._legacy_ns` — resolving the actual
 values (loading the referenced file, running `core.analysis.manoeuvres.extract` on it,
-attaching the result to the referencing file's own columns) is a later pipeline pass's
-scope, well downstream of the ordinary per-breath mechanics loop this never touches.
+attaching the result to the referencing file's own columns) is `core.pipeline.run_batch`'s
+forepass/afterpass pass, well downstream of the ordinary per-breath mechanics loop this
+never touches — see `§5.13a`.
