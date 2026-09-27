@@ -104,6 +104,38 @@ def reference_values_for_batch(result, settings) -> "dict | None":
     return _rms_reference_values(fr.breaths_table, mode)
 
 
+def resolve_emg_reference(result, settings) -> "tuple[dict | None, str | None]":
+    """M-30: wraps :func:`reference_values_for_batch` (contract UNCHANGED) with a
+    notice for the one case that function itself cannot distinguish from "not
+    configured at all" -- a reference file that IS named and IS present in the batch,
+    but has no breath table to read a reference from (a reference-only file, M-30,
+    has no tidal breaths and so no ``breaths_table``; shared-file EMG normalisation
+    reading a typed manoeuvre's own reference value instead is M-47's scope, not
+    this one's).
+
+    Returns ``(values, None)`` unchanged whenever ``reference_values_for_batch``
+    itself resolves a value. Every OTHER reason it returns ``None`` -- no reference
+    configured, normalisation off, a typo'd/missing/excluded filename -- is
+    unchanged, silent, already-documented behaviour and gets no notice here either;
+    only the new, previously-silent "the reference resolved to a real file, but that
+    file has nothing to read" case gets one."""
+    values = reference_values_for_batch(result, settings)
+    if values is not None:
+        return values, None
+    emg = getattr(getattr(settings, "processing", None), "emg", None)
+    ref_name = getattr(emg, "normalization_reference_file", None)
+    mode = getattr(emg, "normalization", "none")
+    if not ref_name or mode in (None, "none"):
+        return None, None
+    fr = getattr(result, "ok_files", {}).get(ref_name)
+    if fr is not None and (fr.breaths_table is None or len(fr.breaths_table) == 0):
+        return None, (
+            f"EMG normalisation reference '{ref_name}' has no breath table to read "
+            "(a reference-only file has no tidal breaths) — falling back to each "
+            "file's own reference.")
+    return None, None
+
+
 def normalize_emg_table(breaths_table, settings, reference_values=None) -> "pd.DataFrame | None":
     """Per-file-normalised EMG RMS (feature P14).
 

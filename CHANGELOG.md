@@ -57,6 +57,13 @@ typing itself above — there is no menu in the app yet to pick these kinds (onl
 Tidal/Excluded/Rest so far), so a hand-edited `settings.toml` is the only way to use it
 today.
 
+**A file with only manoeuvres — no ordinary tidal breathing at all — can be included in
+a batch.** A dedicated recording where every breath is typed (a separate IC or FVC
+file, say) used to fail the whole file with "no breaths detected"; it now runs, writes
+its own workbook (the Manoeuvres table stands in for the usual breath-by-breath data,
+with a note explaining why), and reports its manoeuvre count in Dry run and the run
+report instead of an error. Still settings-model-only, like the typing itself above.
+
 **Explore with sample data follows the signal set.** The startup chooser's own
 'Explore with sample data' door still always opens the complete demo recording, but
 'File/Analysis > Explore with sample data' now opens a sample matching whichever
