@@ -82,6 +82,21 @@ def test_effective_signals_rejects_a_bare_string_instead_of_silently_splitting_i
         effective_signals(settings)
 
 
+def test_from_settings_or_none_degrades_instead_of_raising_on_a_bare_string():
+    """``Capabilities.from_settings_or_none`` is the tolerant counterpart UI render
+    paths use instead of the raising ``from_settings`` (a malformed, hand-edited
+    ``analysis.signals`` must never crash a screen mid-render — only
+    ``Settings.validate()`` should report it). ``None`` is the caller's cue that
+    there is nothing safe to derive a shape from."""
+    settings = _settings(_ch(flow=5), analysis_signals="flow")
+    assert Capabilities.from_settings_or_none(settings) is None
+
+
+def test_from_settings_or_none_matches_from_settings_when_well_formed():
+    settings = _settings(_ch(flow=5, poes=7))
+    assert Capabilities.from_settings_or_none(settings) == Capabilities.from_settings(settings)
+
+
 @pytest.mark.parametrize("assigned, expected_mode", [
     ({"flow": 5, "poes": 7, "pgas": 8, "pdi": 9}, "full"),
     ({"flow": 5, "poes": 7, "pgas": 8, "pdi": 9, "emg": [2]}, "full"),
