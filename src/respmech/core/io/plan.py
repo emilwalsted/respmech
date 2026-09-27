@@ -95,9 +95,11 @@ def plan_outputs(settings, filenames, cohort_outputs: bool = True) -> Plan:
     of the same settings could write, and the whole point of a ceiling is that it does not
     depend on which files happen to succeed.
     """
+    from respmech.core.analysis.signals import Capabilities
     from respmech.core.plots import (emg_audio_candidates, emg_overview_candidates,
                                      per_file_figure_jobs)
 
+    caps = Capabilities.from_settings(settings)
     d = settings.output.data
     dg = settings.output.diagnostics
     emg = settings.processing.emg
@@ -137,7 +139,7 @@ def plan_outputs(settings, filenames, cohort_outputs: bool = True) -> Plan:
         for nm in names:
             for _key, label in emg_overview_candidates(settings):
                 fig_paths.append(f"diagnostics/{nm} – {label}.pdf")
-    if dg.save_pv_individual and cohort_outputs and n > 1:
+    if dg.save_pv_individual and cohort_outputs and n > 1 and caps.poes:
         fig_paths.append("diagnostics/All files – Campbell (average).pdf")
     if fig_paths:
         groups.append(OutputGroup("Diagnostic figures", len(fig_paths), True,

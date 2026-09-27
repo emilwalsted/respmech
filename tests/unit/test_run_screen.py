@@ -620,6 +620,28 @@ def test_confirm_overwrite_subset_mentions_the_cohort_figure_only_when_enabled(q
     win.close()
 
 
+def test_confirm_overwrite_subset_omits_the_cohort_figure_without_poes(qapp, tmp_path, monkeypatch):
+    """Self-review finding: ``_cohort_output_names`` only checked
+    ``save_pv_individual``, so a flow-only analysis (no Poes -- no Campbell figure ever
+    exists, per-file or cohort) still claimed one was 'UNCHANGED by this run' in the
+    subset-overwrite dialog. It must also check the signal set has Poes."""
+    from PySide6.QtWidgets import QMessageBox
+    from respmech.ui.main_window import MainWindow
+    settings = synth_settings(
+        tmp_path, channels={"poes": None, "pgas": None, "pdi": None, "emg": []}
+    )
+    win = MainWindow(AppState(settings)); rn = win.run_screen
+    seen = {}
+    def _question(*a, **k):
+        seen["text"] = a[2]
+        return QMessageBox.Yes
+    monkeypatch.setattr(QMessageBox, "question", _question)
+    rn.state.settings.output.diagnostics.save_pv_individual = True   # ticked, but Poes is absent
+    rn._confirm_overwrite_subset(["synth_case_A.csv"])
+    assert "cohort Campbell figure" not in seen["text"]
+    win.close()
+
+
 def test_confirm_overwrite_subset_is_accurate_after_a_prior_subset_write(qapp, tmp_path, monkeypatch):
     """Regression: the dialog used to derive its "from a full run on {when}" claim from
     _existing_output()'s generic newest-mtime, which a PRIOR subset write's own per-file

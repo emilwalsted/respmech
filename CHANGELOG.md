@@ -304,6 +304,18 @@ QC strip) and by `respmech validate`, from the same shared logic:
      mapping. Golden 5/5 byte-identical; still not written up as a real changelog
      entry here for the same reason as 3142f25 above -->
 
+<!-- changelog-skip c085574 groundwork for the same future modular analysis pipeline: the
+     diagnostic-figure writer and the pre-flight plan now both skip the Campbell/PV-loop
+     figures (per-file and cross-file) for a signal set with no Poes, and the
+     volume-correction/trend/drift figures for one with no volume trace, instead of
+     attempting (and failing) to draw a pressure trace that is not there -- the reduced
+     signal sets this enables (flow only, flow+Poes) are already reachable today via a
+     hand-edited settings file, though the picker that will make them a normal, supported
+     choice is still a later step of the same in-flight feature (see the earlier
+     changelog-skip entries above). Golden untouched (this is plotting/reporting only, not
+     compute). Still not written up as a real changelog entry here for the same reason as
+     3142f25/ce1fe70 above -->
+
 <!--
 "Unreleased" above is a hand-maintained draft of the next release's entry. It is
 updated ONLY when explicitly asked to (not automatically on every commit), and it
