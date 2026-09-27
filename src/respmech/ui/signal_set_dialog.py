@@ -9,16 +9,16 @@ returns ``QDialog.Accepted``, or ``None`` if the dialog is cancelled — the cal
 leave the previous analysis untouched in that case.
 
 Every preset shown here matches ``core.analysis.signals``'s vocabulary exactly, so a
-chosen set is always a valid ``analysis.signals`` value. Only 'Flow + Poes + Pgas +
-Pdi' (the full set, today's shape, with or without EMG via the 'Also EMG' toggle) is
-reachable in THIS milestone: 'Flow only', 'Flow + Poes', 'EMG only' and 'Custom...'
-are shown — so the dialog's eventual, unchanging shape is visible early, and the
-dark-mode/lone-ampersand/windows-metrics checks already cover it — but disabled, with
-'Available in a later step.' as their description, until the compute guards (a later
-ticket) and the relevance-driven UI / EMG-only recording-content question (later
-tickets still) actually support running an analysis on a reduced set. Widening which
-buttons are enabled is exactly that later ticket's job; nothing else about this dialog
-should need to change for it.
+chosen set is always a valid ``analysis.signals`` value. Three of the five flow-family
+presets are reachable now: 'Flow only', 'Flow + Poes' and 'Flow + Poes + Pgas + Pdi'
+(the full set, today's default shape), each with or without EMG via the 'Also EMG'
+toggle. 'EMG only' and 'Custom...' are still shown — so the dialog's eventual,
+unchanging shape is visible early, and the dark-mode/lone-ampersand/windows-metrics
+checks already cover it — but disabled, with 'Available in a later step.' as their
+description, until the EMG-only recording-content question and the Custom checkbox
+picker (later tickets) actually support running an analysis on those two shapes.
+Widening which buttons are enabled is exactly that later ticket's job; nothing else
+about this dialog should need to change for it.
 """
 from __future__ import annotations
 
@@ -58,10 +58,9 @@ class SignalSetDialog(QDialog):
         v.addSpacing(6)
 
         self.flow_only_btn = QCommandLinkButton(
-            "Flow only", f"Breath timing from flow (and volume) alone. {_LATER_STEP}")
+            "Flow only", "Breath timing from flow (and volume) alone.")
         self.flow_poes_btn = QCommandLinkButton(
-            "Flow + Poes",
-            f"Adds work of breathing from oesophageal pressure. {_LATER_STEP}")
+            "Flow + Poes", "Adds work of breathing from oesophageal pressure.")
         self.full_btn = QCommandLinkButton(
             "Flow + Poes + Pgas + Pdi",
             "The complete mechanics set: work of breathing, gastric and "
@@ -72,12 +71,18 @@ class SignalSetDialog(QDialog):
         self.custom_btn = QCommandLinkButton(
             "Custom…", f"Choose exactly which signals to declare. {_LATER_STEP}")
 
-        for btn in (self.flow_only_btn, self.flow_poes_btn, self.emg_only_btn, self.custom_btn):
+        for btn in (self.emg_only_btn, self.custom_btn):
             btn.setEnabled(False)
             btn.setToolTip(_tip("analysis.signals", _LATER_STEP))
+        self.flow_only_btn.setToolTip(_tip(
+            "analysis.signals", "flow — breath timing (and volume) alone, no pressure "
+            "channels; the Mechanics stack and Campbell panel adjust to match (R7)."))
+        self.flow_poes_btn.setToolTip(_tip(
+            "analysis.signals", "flow, poes — adds work of breathing from oesophageal "
+            "pressure, without Pgas/Pdi."))
         self.full_btn.setToolTip(_tip(
             "analysis.signals",
-            "flow, poes, pgas, pdi — the default, and today's only reachable preset."))
+            "flow, poes, pgas, pdi — the complete, default set."))
         self.also_emg.setToolTip(_tip(
             "analysis.signals",
             "Adds 'emg' to the flow preset chosen above."))
@@ -89,6 +94,8 @@ class SignalSetDialog(QDialog):
         v.addWidget(self.emg_only_btn)
         v.addWidget(self.custom_btn)
 
+        self.flow_only_btn.clicked.connect(self._choose_flow_only)
+        self.flow_poes_btn.clicked.connect(self._choose_flow_poes)
         self.full_btn.clicked.connect(self._choose_full)
 
         foot = QHBoxLayout()
@@ -102,6 +109,20 @@ class SignalSetDialog(QDialog):
         # the multi-line command-link descriptions
         self.setMinimumWidth(480)
         self.adjustSize()
+
+    def _choose_flow_only(self):
+        signals = ["flow"]
+        if self.also_emg.isChecked():
+            signals.append("emg")
+        self.signals = signals
+        self.accept()
+
+    def _choose_flow_poes(self):
+        signals = ["flow", "poes"]
+        if self.also_emg.isChecked():
+            signals.append("emg")
+        self.signals = signals
+        self.accept()
 
     def _choose_full(self):
         signals = ["flow", "poes", "pgas", "pdi"]
