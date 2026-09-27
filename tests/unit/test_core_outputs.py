@@ -313,6 +313,38 @@ def test_resolve_emg_reference_notices_when_the_reference_file_has_no_breath_tab
     assert notice_ok is None
 
 
+def test_reference_only_file_as_emg_reference_notices_in_the_run_report_end_to_end(tmp_path):
+    """M-30, end to end through the real pipeline (not just the pure-function test
+    above): configuring a reference-only file as
+    ``processing.emg.normalization_reference_file`` must not silently drop the
+    notice on the floor -- ``write_batch`` has to actually attach it to that file's
+    own notices so it reaches the written run-report.txt. The rest of the batch (a
+    real tidal file) keeps its own per-file EMG normalisation as a graceful
+    fallback, rather than losing the feature entirely."""
+    import openpyxl
+    from respmech.core.io.writers import write_batch
+    from respmech.core.pipeline import run_batch
+    from respmech.core.settings import BreathTypeEntry
+
+    s = synth_settings(str(tmp_path))
+    for n in range(1, 7):
+        s.processing.breath_types.append(
+            BreathTypeEntry(file="synth_case_B.csv", breath=n, kind="ic"))
+    s.processing.emg.normalization = "per_file_max"
+    s.processing.emg.normalization_reference_file = "synth_case_B.csv"
+    s.validate()
+    result = run_batch(s)
+    write_batch(result, s, str(tmp_path))
+
+    report = open(os.path.join(str(tmp_path), "run-report.txt"), encoding="utf-8").read()
+    assert ("synth_case_B.csv: EMG normalisation reference 'synth_case_B.csv' has no "
+           "breath table") in report
+
+    wb_a = openpyxl.load_workbook(
+        os.path.join(str(tmp_path), "data", "synth_case_A.csv.breathdata.xlsx"))
+    assert "EMG normalised" in wb_a.sheetnames        # fell back to its own reference
+
+
 # --------------------------------------------------------------------------- #
 # M-29 — Manoeuvres sheet (typed IC/FVC/max_insp/sniff breaths)
 # --------------------------------------------------------------------------- #
@@ -761,6 +793,28 @@ def test_run_report_files_line_distinguishes_typed_from_plainly_excluded_breaths
     path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
     report = open(path, encoding="utf-8").read()
     assert "9 breaths (1 excluded, 2 typed: IC #2,#3 → 6 used)" in report
+
+
+def test_run_report_files_line_never_goes_negative_for_a_typed_but_kept_emg_only_breath(tmp_path):
+    """Self-review finding: on an EMG-only signal set, only 'rest'-typed segments are
+    unioned into exclude_breaths (_legacy_ns._merged_exclude_breaths) -- a segment
+    typed e.g. 'ic' stays NOT ignored (a manoeuvre effort kept in the used count).
+    ``_typed_breath_numbers`` must not count that breath as one of the file's
+    EXCLUDED breaths, or ``plain_excl = excl - n_typed`` would go negative."""
+    from types import SimpleNamespace
+    from respmech.core.io.writers import _write_run_report
+
+    ok = SimpleNamespace(breaths={
+        1: {"ignored": False, "kind": None},
+        2: {"ignored": False, "kind": "ic"},     # typed but NOT ignored (EMG-only, non-rest)
+        3: {"ignored": False, "kind": None},
+    }, error=None)
+    result = SimpleNamespace(ok_files={"seg.csv": ok}, failed_files={})
+    s = synth_settings(tmp_path)
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "-1 excluded" not in report
+    assert "[ok]   seg.csv   3 breaths\n" in report  # no exclusion note at all -- none excluded
 
 
 def test_run_report_lists_unknown_settings_keys(tmp_path):
