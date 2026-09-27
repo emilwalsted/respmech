@@ -19,6 +19,11 @@ to use it today, via a new `[[processing.breath_types]]` table.
      end to end: the fuller manoeuvre menu, EMG-only segmenting and the rest of this
      bullet's own dependents are separate, not-yet-landed changes. The bullet above is
      rewritten to describe the finished, reachable feature once those land. -->
+<!-- changelog-skip 5b0282d self-review fixes on top of f380c02, same not-yet-reachable
+     click primitive above (a real-dispatch crash in the menu popup, a stale-scene
+     click guard, the t_onset_s clock, distinct breath-kind colours, and hardened
+     tests) — no separate user-visible behaviour beyond what f380c02's skip note
+     already covers. -->
 
 **Explore with sample data follows the signal set.** The startup chooser's own
 'Explore with sample data' door still always opens the complete demo recording, but
