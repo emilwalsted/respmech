@@ -748,10 +748,19 @@ class _EmgNoiseMixin:
             self.btn_set_noise.setMinimumHeight(h)
 
     def _toggle_from_emg_click(self, ev, plot_items, offset):
+        # M-20: a right-click/Ctrl+left-click on a breath is handled at item level
+        # (BreathSpansItem.mouseClickEvent -> typeRequested) and accepted there — this
+        # scene-level handler is for the plain left-click toggle only. The button
+        # check is best-effort (getattr, not ev.button() directly): a fake event used
+        # by test_legend_click_does_not_toggle_breath has no .button() at all, and the
+        # ORIGINAL guard here never required one either.
         if not self._breath_spans:
             return
         try:
             if ev.isAccepted():
+                return
+            button = getattr(ev, "button", None)
+            if button is not None and button() != Qt.LeftButton:
                 return
             pos = ev.scenePos()
         except Exception:                              # noqa: BLE001

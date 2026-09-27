@@ -272,6 +272,15 @@ _FALLBACK_PAL = {
     "emg_cycle": list(_EMG_PENS),
     "breath_incl_brush": (44, 110, 155, 32), "breath_excl_brush": (180, 50, 42, 70),
     "breath_incl_label": (90, 107, 122), "breath_excl_label": (180, 50, 42),
+    # M-20: one brush/label pair per breath-type kind this ticket's minimal type menu
+    # (and M-31's fuller one) can set. 'ic'/'fvc' get their own hue so a manoeuvre reads
+    # differently from a plain exclusion at a glance; 'other' is the fallback for any
+    # BREATH_KINDS member without a dedicated entry here (ic_fvc/max_insp/sniff — not
+    # reachable from the UI until M-31/M-47).
+    "breath_ic_brush": (31, 122, 77, 70), "breath_ic_label": (31, 122, 77),
+    "breath_fvc_brush": (183, 121, 31, 70), "breath_fvc_label": (183, 121, 31),
+    "breath_rest_brush": (125, 91, 166, 70), "breath_rest_label": (125, 91, 166),
+    "breath_other_brush": (140, 100, 60, 70), "breath_other_label": (140, 100, 60),
     "separator": (150, 165, 180), "noise_region": (44, 110, 155, 45),
     "raw_trace": (150, 165, 180), "noise_trace": (90, 150, 200),
     "legend_bg": (255, 255, 255, 0),
@@ -279,6 +288,13 @@ _FALLBACK_PAL = {
     "mpl_accent": "#2C6E9B", "mpl_ok": "#1F7A4D", "mpl_warn": "#B7791F",
     "mpl_error": "#B4322A", "mpl_muted": "0.6",
     "mpl_loop": "0.55", "mpl_zeroline": "0.85", "mpl_target": "0.35",
+    # M-20 self-review: these three (edge/grid/tick) + mpl_cycle exist in theme.py's
+    # _PLOT_LIGHT/_PLOT_DARK but were missing here — a real, pre-existing key-set drift
+    # test_the_three_plot_palettes_share_one_key_set caught. Values match _PLOT_LIGHT's
+    # verbatim (same "light behaviour unchanged" contract as every other key here).
+    "mpl_edge": "#B5BEC8", "mpl_grid": "#DCE2E8", "mpl_tick": "#5C6B7A",
+    "mpl_cycle": ["#2C6E9B", "#B4322A", "#1F7A4D", "#B7791F", "#7D5BA6",
+                 "#0E7C7B", "#B4507A", "#5C6B7A"],
 }
 
 
@@ -313,29 +329,62 @@ class BreathSpansItem(pg.GraphicsObject):
     has it: the item's y-extent is DERIVED from the view, so it must never feed
     back into that view's own y-autorange calculation.
 
-    Purely a painter: mouse interaction (breath click-to-toggle) is resolved
-    elsewhere from scene coordinates against the breath-span data, never from an
-    item the mouse actually hit, so this item needs no hover/click handling of its
-    own to keep that behaviour. One consequence, accepted for this ticket: a
-    per-breath hover tooltip ("carried over from a previous folder…") that used to
-    sit on the individual LinearRegionItem cannot be reproduced on a single shared
+    Also the item-level entry point for the breath-typing click primitive (M-20): a
+    right-click or a Ctrl+left-click landing on an actual span emits ``typeRequested``
+    instead of painting anything differently — the type menu it drives lives on the
+    owning screen (``_mechanics.py``'s ``_set_breath_type``/``_build_type_menu``), never
+    here. A plain left click (no modifier) is deliberately left unhandled, exactly as
+    before this ticket: it still flows to the scene-level ``sigMouseClicked`` path
+    (``_on_plot_clicked``/``_toggle_from_emg_click``) that already does the include/
+    exclude toggle, unaffected by anything below.
+
+    Right-click needs one extra trick pyqtgraph's own docs call out for exactly this
+    situation: ``ViewBox.mouseClickEvent`` also wants right-clicks (to raise its own
+    context menu) and sits BEHIND this item in z-order (measured: ``ViewBox``'s own
+    absolute z is -100, this item's is -110 at its paint zValue of -10) — so a plain
+    ``ev.accept()`` inside ``mouseClickEvent`` arrives too late; the scene resolves
+    ``ViewBox`` first and never calls this item's handler at all for that button.
+    ``hoverEvent`` instead calls ``HoverEvent.acceptClicks(Qt.RightButton)`` — pyqtgraph's
+    own sanctioned mechanism for exactly this "which overlapping item gets the click"
+    ambiguity (see ``HoverEvent``'s docstring) — but ONLY when the hover position is
+    over an actual span, never over a gap: that claim bypasses ``ViewBox`` entirely
+    for THAT button, which is also why a right-click over a gap must not claim it (the
+    acceptance criterion "right-click hitting no span reaches pyqtgraph's menu" would
+    otherwise be silently defeated). A modifier-left-click needs no such claim: `
+    ViewBox.mouseClickEvent`` never accepts the left button, so this item is reached by
+    the ordinary itemsNearEvent fallback regardless of z-order, and a plain
+    (unmodified) left click is simply ``ev.ignore()``d there so it keeps flowing.
+
+    Purely a painter otherwise: which breath a plain click landed on is resolved
+    elsewhere from scene coordinates against the breath-span data, not from this item,
+    so a per-breath hover tooltip ("carried over from a previous folder…") that used to
+    sit on the individual LinearRegionItem still cannot be reproduced on a single shared
     item without new hover-tracking machinery outside this ticket's scope — the
     same fact is already shown, always-on, by the hatched brush this item still
     paints for a carried breath (see ``_breath_brush``) and by the QC line, so nothing
     that was the ONLY way to learn something is lost, only a redundant hover on top."""
 
+    #: (breath_no, scene_pos) — emitted when a right-click or Ctrl+left-click lands on
+    #: an actual breath span. The receiving screen resolves scene_pos to a global point
+    #: via the emitting item's own ``scene().views()`` (this item does not know which
+    #: widget it is embedded in).
+    typeRequested = Signal(int, object)
+
     def __init__(self):
         super().__init__()
-        self._spans = []      # [(t0, t1, QBrush), ...] — order is paint (== z) order
+        self._spans = []      # [(t0, t1, QBrush, breath_no), ...] — order is paint (== z) order
         self._x0 = self._x1 = 0.0
+        self.setAcceptHoverEvents(True)
+        self.setAcceptedMouseButtons(Qt.LeftButton | Qt.RightButton)
 
     def set_spans(self, spans):
-        """Replace the full set of spans. ``spans``: iterable of ``(t0, t1, brush)``.
-        Called once per file preview — not per breath, that is the whole point."""
+        """Replace the full set of spans. ``spans``: iterable of ``(t0, t1, brush,
+        breath_no)``. Called once per file preview — not per breath, that is the whole
+        point."""
         self._spans = list(spans)
         if self._spans:
-            self._x0 = min(t0 for t0, _t1, _b in self._spans)
-            self._x1 = max(t1 for _t0, t1, _b in self._spans)
+            self._x0 = min(t0 for t0, _t1, _b, _n in self._spans)
+            self._x1 = max(t1 for _t0, t1, _b, _n in self._spans)
         else:
             self._x0 = self._x1 = 0.0
         self.prepareGeometryChange()
@@ -343,12 +392,18 @@ class BreathSpansItem(pg.GraphicsObject):
 
     def set_brush(self, index, brush):
         """Recolour ONE span by its position in the list ``set_spans`` was given —
-        the include/exclude toggle repaint path. Geometry is untouched, so this is
+        the include/exclude/type toggle repaint path. Geometry is untouched, so this is
         just a paint, not a prepareGeometryChange."""
         if 0 <= index < len(self._spans):
-            t0, t1, _old = self._spans[index]
-            self._spans[index] = (t0, t1, brush)
+            t0, t1, _old, n = self._spans[index]
+            self._spans[index] = (t0, t1, brush, n)
             self.update()
+
+    def _breath_no_at(self, x):
+        for t0, t1, _b, n in self._spans:
+            if t0 <= x <= t1:
+                return n
+        return None
 
     def boundingRect(self):
         vr = self.viewRect()
@@ -365,7 +420,7 @@ class BreathSpansItem(pg.GraphicsObject):
         full = QRectF(vr) if vr is not None else self.boundingRect()
         top, height = full.top(), full.height()
         p.setPen(pg.mkPen(None))
-        for t0, t1, brush in self._spans:
+        for t0, t1, brush, _n in self._spans:
             p.setBrush(brush)
             p.drawRect(QRectF(t0, top, t1 - t0, height))
 
@@ -373,6 +428,31 @@ class BreathSpansItem(pg.GraphicsObject):
         if axis == 0:
             return (self._x0, self._x1) if self._spans else None
         return None
+
+    def hoverEvent(self, ev):
+        if ev.isExit():
+            return
+        try:
+            hit = self._breath_no_at(ev.pos().x()) is not None
+        except Exception:                              # noqa: BLE001 — cosmetic
+            hit = False
+        if hit:
+            ev.acceptClicks(Qt.RightButton)
+
+    def mouseClickEvent(self, ev):
+        button = ev.button()
+        mods = ev.modifiers()
+        wants_type = (button == Qt.RightButton
+                     or (button == Qt.LeftButton and mods & Qt.ControlModifier))
+        if not wants_type:
+            ev.ignore()
+            return
+        breath_no = self._breath_no_at(ev.pos().x())
+        if breath_no is None:
+            ev.ignore()                 # a gap: right-click reaches pyqtgraph's own menu
+            return
+        ev.accept()
+        self.typeRequested.emit(breath_no, ev.scenePos())
 
 
 _CHECK_ICON_PATH = None
