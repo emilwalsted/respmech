@@ -309,6 +309,48 @@ class PtpSettings:
 
 
 @dataclass
+class IcSettings:
+    """Inspiratory-capacity manoeuvre extraction (M-29, ``core.analysis.manoeuvres``).
+
+    ``preceding_breaths``/``min_preceding_breaths`` govern how ``ic_eelv_pre`` (the
+    end-expiratory-lung-volume baseline an IC's own volume swing is measured against)
+    is estimated: the mean end-expiratory volume of up to ``preceding_breaths`` tidal
+    breaths immediately before the manoeuvre, falling back to the manoeuvre breath's
+    OWN pre-inspiratory volume sample when fewer than ``min_preceding_breaths`` tidal
+    breaths precede it in the file (too little context to average over). All the
+    ``†``-marked fields below are DELIBERATE placeholders (the plan's own starting
+    values, not measured ones): ``core.analysis.manoeuvres`` has no production IC
+    recording available in this sandbox to calibrate against (K-035's lesson — a
+    threshold picked without a real recording in hand is a guess, not a fact), so the
+    formulas are implemented and pinned by synthetic/analytical tests, but the actual
+    cut-offs need a pass against real recordings before they are trusted clinically.
+    See ``docs/beslutninger.md`` for what to measure and where to record it.
+    """
+    preceding_breaths: int = 3
+    min_preceding_breaths: int = 2
+    # EELV_UNSTABLE fires when the preceding breaths' own EELV spread (SD) exceeds
+    # this fraction of the MANOEUVRE'S OWN vol_ic -- never of ic_eelv_pre itself
+    # (self-review finding): with the default zero-referenced + drift-corrected
+    # volume signal, ic_eelv_pre routinely sits within a few mL of 0 L, and dividing
+    # by a near-zero baseline would make the flag fire on ordinary breath-to-breath
+    # noise in almost every real recording. vol_ic is always a real, non-trivial size.
+    eelv_tolerance_frac: float = 0.2            # † EELV_UNSTABLE threshold
+    plateau_flow_lps: float = 0.1               # † inspiratory-plateau flow ceiling
+    min_plateau_s: float = 0.0                  # † NO_PLATEAU threshold (0 = never fires yet)
+    repeatability_frac: float = 0.10            # † NOT_REPEATABLE threshold
+    low_effort_frac: float = 0.5                # † LOW_EFFORT threshold (vs tidal median)
+    aggregate: str = "mean"                     # "mean" | "median" — how repeat ICs are combined
+    reject_flags: list[str] = field(default_factory=lambda: ["LOW_EFFORT"])
+
+
+@dataclass
+class LungVolumeSettings:
+    """Container for the operating-lung-volumes family (M-29's IC extraction now;
+    M-36 adds per-tidal-breath EELV/EILV tracking alongside it)."""
+    ic: IcSettings = field(default_factory=IcSettings)
+
+
+@dataclass
 class ExcludeEntry:
     file: str
     breaths: list[int] = field(default_factory=list)
@@ -380,6 +422,7 @@ class ProcessingSettings:
     emg: EmgSettings = field(default_factory=EmgSettings)
     entropy: EntropySettings = field(default_factory=EntropySettings)
     ptp: PtpSettings = field(default_factory=PtpSettings)
+    lung_volume: LungVolumeSettings = field(default_factory=LungVolumeSettings)
     exclude_breaths: list[ExcludeEntry] = field(default_factory=list)
     breath_counts: list[BreathCountEntry] = field(default_factory=list)
     breath_types: list[BreathTypeEntry] = field(default_factory=list)
@@ -743,6 +786,28 @@ class Settings:
                     raise SettingsError(
                         f"processing.breath_types: breath {bt.breath} > 1 is impossible "
                         "under whole_file segmentation")
+
+        # M-29 IcSettings: self-review finding -- `min_preceding_breaths < 1` would let
+        # `_ic_eelv_pre`'s mean-branch run over ZERO preceding breaths (an empty-array
+        # mean is NaN, silently poisoning `vol_ic`), and an `aggregate` typo (e.g. a
+        # hand-edited "medain") would silently fall through to the "mean" branch in
+        # `apply_repeatability` instead of erroring -- both front-line failure modes
+        # for a hand-edited TOML (no UI writes this table yet), same reasoning as the
+        # breath_types guards above.
+        ic = self.processing.lung_volume.ic
+        if ic.min_preceding_breaths < 1:
+            raise SettingsError(
+                "processing.lung_volume.ic.min_preceding_breaths must be at least 1")
+        if ic.preceding_breaths < ic.min_preceding_breaths:
+            raise SettingsError(
+                "processing.lung_volume.ic.preceding_breaths must be >= min_preceding_breaths")
+        if ic.aggregate not in ("mean", "median"):
+            raise SettingsError(
+                'processing.lung_volume.ic.aggregate must be "mean" or "median"')
+        for name in ("eelv_tolerance_frac", "plateau_flow_lps", "min_plateau_s",
+                    "repeatability_frac", "low_effort_frac"):
+            if getattr(ic, name) < 0:
+                raise SettingsError(f"processing.lung_volume.ic.{name} must not be negative")
 
         return self
 

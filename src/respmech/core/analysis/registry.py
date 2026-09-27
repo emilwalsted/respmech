@@ -161,9 +161,39 @@ _SEGMENT_EMG = (
     ColumnSpec(prefix="rms_file_top3_col_", requires=frozenset({"emg"}), module="segment_emg", unit="a.u."),
 )
 
+# Manoeuvre extraction (M-29, core.analysis.manoeuvres): the Manoeuvres-sheet columns
+# `core.quantities._RULES`' generic prefix/suffix conventions cannot already classify
+# on their own. `vol_ic` (`vol_` prefix -> L), `ic_peak_in_flow` (contains "flow" -> a
+# rate), and every `poes_ic_*`/`pdi_ic_*`/`pgas_ic_*`/`poes_max_ref`/`pdi_max_ref`
+# (poes/pgas/pdi prefix -> cmH2O) and `rms_max_ref` (`rms` prefix -> a.u.) are ALREADY
+# resolved by _RULES before this registry is ever consulted -- listed here anyway
+# (unit= is then documentation, not the resolving path, same precedent as
+# _SEGMENT_EMG's t_rms_file_max_col_/rms_file_max_col_/rms_file_top3_col_ rows) so a
+# reader of REGISTRY sees the whole Manoeuvres column family in one place.
+_MANOEUVRES = (
+    ColumnSpec(name="ic_eelv_pre", requires=_TIMING, module="manoeuvres", unit="L"),
+    ColumnSpec(name="ic_eelv_pre_sd", requires=_TIMING, module="manoeuvres", unit="L"),
+    ColumnSpec(name="ic_eelv_pre_n", requires=_TIMING, module="manoeuvres", unit=""),
+    ColumnSpec(name="ic_ti", requires=_TIMING, module="manoeuvres", unit="s"),
+    ColumnSpec(name="ic_plateau_s", requires=_TIMING, module="manoeuvres", unit="s"),
+    ColumnSpec(name="quality", requires=_TIMING, module="manoeuvres", unit=""),
+    ColumnSpec(name="vol_ic", requires=_TIMING, module="manoeuvres", unit="L"),
+    ColumnSpec(name="ic_peak_in_flow", requires=_TIMING, module="manoeuvres", unit="L·s⁻¹"),
+    ColumnSpec(name="poes_ic_min", requires=_PRESSURES_POES, module="manoeuvres", unit="cmH₂O"),
+    ColumnSpec(name="poes_ic_eelv", requires=_PRESSURES_POES, module="manoeuvres", unit="cmH₂O"),
+    ColumnSpec(name="poes_ic_swing", requires=_PRESSURES_POES, module="manoeuvres", unit="cmH₂O"),
+    ColumnSpec(name="poes_ic_peakvol", requires=_PRESSURES_POES, module="manoeuvres", unit="cmH₂O"),
+    ColumnSpec(name="pdi_ic_max", requires=_PRESSURES_PDI, module="manoeuvres", unit="cmH₂O"),
+    ColumnSpec(name="pdi_ic_swing", requires=_PRESSURES_PDI, module="manoeuvres", unit="cmH₂O"),
+    ColumnSpec(name="pgas_ic_peakvol", requires=_PRESSURES_PGAS, module="manoeuvres", unit="cmH₂O"),
+    ColumnSpec(name="poes_max_ref", requires=_PRESSURES_POES, module="manoeuvres", unit="cmH₂O"),
+    ColumnSpec(name="pdi_max_ref", requires=_PRESSURES_PDI, module="manoeuvres", unit="cmH₂O"),
+    ColumnSpec(name="rms_max_ref", requires=frozenset({"flow", "emg"}), module="manoeuvres", unit="a.u."),
+)
+
 #: Every column/family this skeleton knows about. Later tickets append to this,
 #: never remove from or reorder ``LEGACY_MECHANICS_ORDER`` within it.
-REGISTRY = LEGACY_MECHANICS_ORDER + (_ENTROPY, _EMG) + _SEGMENT_EMG
+REGISTRY = LEGACY_MECHANICS_ORDER + (_ENTROPY, _EMG) + _SEGMENT_EMG + _MANOEUVRES
 
 # The Capabilities boolean fields resolve() is willing to read. Kept as an
 # explicit tuple (rather than e.g. dataclasses.fields(caps)) so a caller could

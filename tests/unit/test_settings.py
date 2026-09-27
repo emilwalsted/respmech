@@ -21,6 +21,57 @@ def test_defaults_and_parse():
     assert s.processing.segmentation.method == "flow"
     assert s.processing.wob.calc_from == "average"
     assert s.processing.emg.rms_window_s == 0.050
+    assert s.processing.lung_volume.ic.preceding_breaths == 3
+    assert s.processing.lung_volume.ic.reject_flags == ["LOW_EFFORT"]
+
+
+def test_ic_settings_from_dict_round_trip():
+    """M-29: IcSettings is a nested dataclass field (processing.lung_volume.ic), built
+    by the same generic `_build`/`_coerce` mechanism as every other nested settings
+    block -- a hand-edited TOML table overrides its defaults, and `reject_flags` (a
+    plain `list[str]`, not a list of entry-dataclasses like `exclude_breaths`) survives
+    unchanged."""
+    d = _minimal()
+    d["processing"] = {"lung_volume": {"ic": {
+        "preceding_breaths": 5, "eelv_tolerance_frac": 0.3, "reject_flags": ["LOW_EFFORT", "BOUNDARY"],
+    }}}
+    s = Settings.from_dict(d).validate()
+    ic = s.processing.lung_volume.ic
+    assert ic.preceding_breaths == 5
+    assert ic.eelv_tolerance_frac == 0.3
+    assert ic.reject_flags == ["LOW_EFFORT", "BOUNDARY"]
+    assert ic.min_preceding_breaths == 2               # untouched fields keep their default
+    assert "processing.lung_volume" not in s.unknown
+
+
+def test_ic_settings_min_preceding_breaths_below_one_is_rejected():
+    """Self-review finding: 0 would let _ic_eelv_pre's mean-branch average ZERO
+    preceding breaths (an empty-array mean is NaN, silently poisoning vol_ic)."""
+    d = _minimal()
+    d["processing"] = {"lung_volume": {"ic": {"min_preceding_breaths": 0}}}
+    with pytest.raises(SettingsError, match=r"min_preceding_breaths must be at least 1"):
+        Settings.from_dict(d).validate()
+
+
+def test_ic_settings_preceding_breaths_below_the_minimum_is_rejected():
+    d = _minimal()
+    d["processing"] = {"lung_volume": {"ic": {"preceding_breaths": 1, "min_preceding_breaths": 2}}}
+    with pytest.raises(SettingsError, match=r"preceding_breaths must be >= min_preceding_breaths"):
+        Settings.from_dict(d).validate()
+
+
+def test_ic_settings_aggregate_typo_is_rejected_not_silently_treated_as_mean():
+    d = _minimal()
+    d["processing"] = {"lung_volume": {"ic": {"aggregate": "medain"}}}
+    with pytest.raises(SettingsError, match=r'aggregate must be "mean" or "median"'):
+        Settings.from_dict(d).validate()
+
+
+def test_ic_settings_negative_fractions_are_rejected():
+    d = _minimal()
+    d["processing"] = {"lung_volume": {"ic": {"repeatability_frac": -0.1}}}
+    with pytest.raises(SettingsError, match=r"repeatability_frac must not be negative"):
+        Settings.from_dict(d).validate()
 
 
 def test_unknown_keys_are_captured_not_fatal():
