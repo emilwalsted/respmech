@@ -7,6 +7,16 @@ for the installers themselves.
 
 ## Unreleased
 
+**Explore with sample data follows the signal set.** The startup chooser's own
+'Explore with sample data' door still always opens the complete demo recording, but
+'File/Analysis > Explore with sample data' now opens a sample matching whichever
+signal set the current analysis declares: Flow only or Flow + Poes opens a matching
+reduced sample (no pressure/EMG channels it would not otherwise have), and every other
+signal set (including the full one) still opens the complete recording with ECG
+removal and noise reduction demonstrated. `examples/settings.toml`'s Poes/Pgas/Pdi
+channels are documented as optional now, matching what `Settings.validate()` has
+allowed since the signal-set model was introduced.
+
 **A new analysis now starts with a choice of signal set, and two reduced presets are
 usable end to end: Flow only, and Flow + Poes.** 'New analysis' (from the startup
 chooser, 'Get started…' and File/Analysis > New) opens a picker naming which signals
