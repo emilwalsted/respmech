@@ -11830,6 +11830,27 @@
       "bf": [
         25.642243221425524
       ],
+      "delta_eelv": [
+        "NaN"
+      ],
+      "delta_ic": [
+        "NaN"
+      ],
+      "delta_ic_pct": [
+        "NaN"
+      ],
+      "eelv_pct_tlc": [
+        "NaN"
+      ],
+      "eelv_pct_vc": [
+        "NaN"
+      ],
+      "eilv_pct_tlc": [
+        "NaN"
+      ],
+      "eilv_pct_vc": [
+        "NaN"
+      ],
       "ex_flow_midvol": [
         0.5
       ],
@@ -11844,6 +11865,9 @@
       ],
       "flow_midvolinsp": [
         0.5
+      ],
+      "ic_op": [
+        3.0
       ],
       "ic_ref_n": [
         1.0
@@ -11910,6 +11934,12 @@
       ],
       "integralemg_mean": [
         0.003994178907100235
+      ],
+      "irv_pct_tlc": [
+        "NaN"
+      ],
+      "irv_pct_vc": [
+        "NaN"
       ],
       "max_ex_flow": [
         0.5
@@ -12085,17 +12115,35 @@
       "ti_ttot": [
         0.5000357679376207
       ],
+      "tlc": [
+        "NaN"
+      ],
       "tlr_insp": [
         0.04504504499999973
       ],
       "ttot": [
         1.9978571428571428
       ],
+      "vc": [
+        "NaN"
+      ],
       "ve": [
         12.821121610712762
       ],
       "vmr": [
         -0.6
+      ],
+      "vol_eelv": [
+        "NaN"
+      ],
+      "vol_eelv_abs": [
+        "NaN"
+      ],
+      "vol_eilv": [
+        "NaN"
+      ],
+      "vol_eilv_abs": [
+        "NaN"
       ],
       "vol_endexp": [
         0.0
@@ -12106,8 +12154,14 @@
       "vol_ic_ref": [
         3.0
       ],
+      "vol_irv": [
+        2.5
+      ],
       "vt": [
         0.5
+      ],
+      "vt_pct_ic": [
+        16.666666666666668
       ],
       "wob_ex_total": [
         0.0
@@ -12171,6 +12225,69 @@
           8,
           9
         ],
+        "delta_eelv": [
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN"
+        ],
+        "delta_ic": [
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN"
+        ],
+        "delta_ic_pct": [
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN"
+        ],
+        "eelv_pct_tlc": [
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN"
+        ],
+        "eelv_pct_vc": [
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN"
+        ],
+        "eilv_pct_tlc": [
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN"
+        ],
+        "eilv_pct_vc": [
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN"
+        ],
         "ex_flow_midvol": [
           0.5,
           0.5,
@@ -12206,6 +12323,15 @@
           0.5,
           0.5,
           0.5
+        ],
+        "ic_op": [
+          3.0,
+          3.0,
+          3.0,
+          3.0,
+          3.0,
+          3.0,
+          3.0
         ],
         "ic_ref_n": [
           1.0,
@@ -12404,6 +12530,24 @@
           0.003991228632280703,
           0.003961413080633746,
           0.003963652078662216
+        ],
+        "irv_pct_tlc": [
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN"
+        ],
+        "irv_pct_vc": [
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN"
         ],
         "max_ex_flow": [
           0.5,
@@ -12927,6 +13071,15 @@
           0.5,
           0.500250375563345
         ],
+        "tlc": [
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN"
+        ],
         "tlr_insp": [
           0.04504504499999973,
           0.04504504499999973,
@@ -12945,6 +13098,15 @@
           1.998,
           1.997
         ],
+        "vc": [
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN"
+        ],
         "ve": [
           12.821121610712758,
           12.821121610712758,
@@ -12962,6 +13124,42 @@
           -0.6,
           -0.6,
           -0.6000000000000001
+        ],
+        "vol_eelv": [
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN"
+        ],
+        "vol_eelv_abs": [
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN"
+        ],
+        "vol_eilv": [
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN"
+        ],
+        "vol_eilv_abs": [
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN",
+          "NaN"
         ],
         "vol_endexp": [
           0.0,
@@ -12990,6 +13188,15 @@
           3.0,
           3.0
         ],
+        "vol_irv": [
+          2.5,
+          2.5,
+          2.5,
+          2.5,
+          2.5,
+          2.5,
+          2.5
+        ],
         "vt": [
           0.5,
           0.5,
@@ -12998,6 +13205,15 @@
           0.5,
           0.5,
           0.5
+        ],
+        "vt_pct_ic": [
+          16.666666666666668,
+          16.666666666666668,
+          16.666666666666668,
+          16.666666666666668,
+          16.666666666666668,
+          16.666666666666668,
+          16.666666666666668
         ],
         "wob_ex_total": [
           0.0,

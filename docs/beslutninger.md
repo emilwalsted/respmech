@@ -29,6 +29,47 @@ uses an IC reference) — reopen if that proves a poor default in practice.
 
 ---
 
+**26-09-2026 — Operating lung volumes: RV-anchored EELV is primary, TLC-anchored is
+reported alongside as an absolute value; `eelv_tracking` defaults to `"none"`; a
+within-file tracking request against a cross-file IC reference NaNs rather than
+guesses (author's decision, 26-09-2026).** `vol_eelv = vc_src - ic_op` (volume above
+residual volume at end-expiration — ERV by definition; there is no separate
+`vol_erv` column) is the PRIMARY EELV datum, against the recommendation reviewed at
+the time (a TLC-anchored primary with the RV-anchored value as the secondary
+`vol_erv`). Chosen because a spirometry-derived VC (`input.subjects.vc_l`, or in
+future a linked FVC manoeuvre's own value) is far more often available in practice
+than a measured TLC (which needs plethysmography or an equivalent) — the primary
+family is therefore usable without any lung-volume measurement beyond ordinary
+spirometry, a practical reason, not merely a stylistic preference. The TLC-anchored
+absolute value (`vol_eelv_abs = tlc - ic_op`) is kept alongside, never merged into
+one column family, so a study that DOES have a measured TLC is never forced to
+choose between the two. `ic_op = vol_ic_ref - d_eelv` (not `+`): a RISE in EELV
+between breaths SHRINKS the inspiratory capacity actually available for the next
+breath, so the reference IC must be reduced by the same amount the end-expiratory
+level has risen, never increased. `eelv_tracking = "none"` (the reference IC held
+constant across the whole file) is the default, matching the traditional "IC
+measured once, assumed constant" convention; `"within_file"` is opt-in, and is
+restricted to a same-file IC reference only — two different recordings rarely share
+a common volume zero, so a cross-file end-expiratory comparison would be numerically
+well-defined but physiologically meaningless, and NaNs with a notice instead of
+silently reporting a number nobody should trust. See
+`docs/REVERSE_ENGINEERING.md` §5.14 for the full arithmetic.
+
+**Known gap, not fixed by this ticket (self-review, 27-09-2026):** the RV-anchored
+family's whole rationale (`vc - ic_op` equals `eelv - rv`) depends on a subject's
+entered `tlc_l`/`vc_l`/`rv_l` being mutually consistent (`vc_l ≈ tlc_l - rv_l`).
+`Settings.validate()` only checks `rv_l < tlc_l`; nothing cross-checks `vc_l`
+against the other two, and `rv_l` is not consumed by any code path outside that one
+check today. An internally inconsistent subject entry therefore produces a
+silently wrong split between the two EELV families, with no notice — the module's
+own implausible-value checks (`vol_eelv < 0`, `vol_eelv_abs < 0`) cannot catch it,
+since both families can individually be non-negative and still disagree by exactly
+the inconsistency. Left open for a future ticket to either validate
+`abs(tlc_l - vc_l - rv_l)` against a tolerance, or document `rv_l` as presently
+decorative.
+
+---
+
 **27-09-2026 — Manoeuvre-extraction quality thresholds (`IcSettings`) ship as
 documented placeholders, not measured values; `NOT_REPEATABLE` is a second pass over
 the whole file, not part of `extract()` itself (author's decision, 27-09-2026).**

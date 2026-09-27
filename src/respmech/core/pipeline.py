@@ -29,6 +29,7 @@ import numpy as np
 
 from respmech.core import compute
 from respmech.core import emg as emglib
+from respmech.core.analysis import lungvol as lungvollib
 from respmech.core.analysis import manoeuvres as manoeuvreslib
 from respmech.core.analysis import references as referenceslib
 from respmech.core.analysis.signals import Capabilities
@@ -1212,6 +1213,11 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
     # (the common case: require_references off, or every file resolved) this is the
     # exact same set of average_row objects, in the same order, as the list above.
     referenceslib.attach(result, settings, allfiles)
+    # M-36: operating lung volumes (EELV/EILV/IRV per tidal breath, TLC/VC/delta_ic
+    # per file) CONSUME references.attach's vol_ic_ref, so it must run strictly after
+    # -- and, like it, before average_rows is rebuilt below, so the new columns are
+    # already on each average_row when pd.concat's outer join runs.
+    lungvollib.attach(result, settings, allfiles)
     average_rows = [fr.average_row for fr in result.ok_files.values()
                     if fr.average_row is not None]
 
