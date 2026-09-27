@@ -171,6 +171,23 @@ def test_cli_run_dry_run_shows_the_output_plan(tmp_path, capsys):
     assert str(tmp_path) in out
 
 
+def test_cli_run_dry_run_says_segments_for_an_emg_only_set(tmp_path, capsys):
+    """EMG-only segmentation (whole_file/separators) has no breaths to count -- the
+    per-file dry-run line says 'N segments' instead."""
+    from respmech.settingsio.toml_io import save_toml
+
+    s = synth_settings(tmp_path, channels={
+        "flow": None, "poes": None, "pgas": None, "pdi": None, "volume": None})
+    s.processing.segmentation.method = "whole_file"
+    toml = tmp_path / "s.toml"
+    save_toml(s, toml)
+    rc = cli_main(["run", str(toml), "--dry-run"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "synth_case_A.csv: 1 segments" in out
+    assert "synth_case_A.csv: 1 breaths" not in out
+
+
 def test_cli_run_wrote_message_names_the_output_root(tmp_path, capsys):
     """K-278: '... to <output>/data' undercounted what a run actually writes —
     diagnostics/ figures and the two root-level provenance files are all part of the
