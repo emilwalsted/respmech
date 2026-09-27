@@ -15,6 +15,13 @@ is settings-model groundwork only — there is no button in the desktop app to s
 EMG-only or place a separator yet (a later release adds Preview & QC's own EMG –
 segments tab); a hand-edited `settings.toml` and the CLI are the only way to use it
 today, via `analysis.signals = ["emg"]` and `[processing.segmentation]`.
+<!-- changelog-skip 72afcff the 'EMG – segments' tab named in the bullet above has now
+     landed in Preview & QC (its own stack with real click-to-exclude/right-click-to-type
+     overlays, an action band, and a per-segment results table fed by the test run), but
+     the feature is still not something a user can reach end to end: the signal-set
+     picker's EMG-only preset stays disabled until a later release activates it, and
+     placing a separator is a further, not-yet-landed change. The bullet above is
+     rewritten to describe the finished, reachable feature once both land. -->
 
 **Breaths can be typed (ic, fvc, max_insp, sniff, rest, other) in settings.** A typed
 breath is treated as excluded from the tidal average, the same as a manually excluded
