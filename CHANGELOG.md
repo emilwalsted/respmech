@@ -7,28 +7,25 @@ for the installers themselves.
 
 ## Unreleased
 
-**EMG-only analyses: the whole file as one segment, or manual separators.** A recording
-with no flow channel at all — an EMG-only signal set — can now be split into segments
-RMS/integral-EMG/sample-entropy is computed on: `whole_file` treats the entire recording
-as one segment, or `separators` splits it at up to any number of user-placed times. This
-is settings-model groundwork only — there is no button in the desktop app to switch to
-EMG-only or place a separator yet (a later release adds Preview & QC's own EMG –
-segments tab); a hand-edited `settings.toml` and the CLI are the only way to use it
-today, via `analysis.signals = ["emg"]` and `[processing.segmentation]`.
-<!-- changelog-skip 72afcff the 'EMG – segments' tab named in the bullet above has now
-     landed in Preview & QC (its own stack with real click-to-exclude/right-click-to-type
-     overlays, an action band, and a per-segment results table fed by the test run), but
-     the feature is still not something a user can reach end to end: the signal-set
-     picker's EMG-only preset stays disabled until a later release activates it, and
-     placing a separator is a further, not-yet-landed change. The bullet above is
-     rewritten to describe the finished, reachable feature once both land. -->
-<!-- changelog-skip 4ea83a7 a separator can now be placed or removed by hand from that
-     same 'EMG – segments' tab (checkable 'Place separators' action; renumbers any
-     existing exclusion/typing for the file in lockstep), closing the "placing a
-     separator is a further, not-yet-landed change" gap the marker above named. The
-     feature is STILL not reachable end to end: the signal-set picker's EMG-only preset
-     stays disabled until a later release activates it. The bullet above is rewritten
-     once that lands too. -->
+**EMG-only analyses of maximal manoeuvres, with no flow channel at all.** Choosing
+'EMG only' in the signal-set picker (New analysis, or Setup ▸ Signals ▸ Change… on an
+existing analysis) now asks how each recording should be split into the segments
+RMS/integral-EMG/sample-entropy are computed on — 'One maximal manoeuvre' treats the
+entire file as one segment, or 'Several efforts or breaths — I will place separators'
+lets you mark the boundaries yourself in Preview & QC's 'EMG – segments' tab (click to
+place, click near an existing one to remove; any exclusion or type on a segment follows
+it through a renumbering). 'Try it on sample data' opens a ready-made EMG-only demo,
+already split at its own natural breath boundaries. Automatic burst detection for tidal
+breathing is not available yet — its own door in the picker is visibly there but
+disabled until a later release calibrates it.
+<!-- changelog-skip 72afcff the 'EMG – segments' tab landed in Preview & QC in this
+     commit; folded into the rewritten bullet above once the signal-set picker's EMG-only
+     preset itself was activated (see the 4ea83a7 marker below and the bullet's own
+     history). -->
+<!-- changelog-skip 4ea83a7 manual separator placement/removal landed in that same
+     'EMG – segments' tab in this commit; folded into the rewritten bullet above once the
+     signal-set picker's EMG-only preset itself was activated, making the whole feature
+     reachable end to end for the first time. -->
 
 **Breaths can be typed (ic, fvc, max_insp, sniff, rest, other) in settings.** A typed
 breath is treated as excluded from the tidal average, the same as a manually excluded
