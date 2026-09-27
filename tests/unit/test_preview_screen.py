@@ -1002,6 +1002,38 @@ def test_reference_only_test_run_shows_manoeuvres_not_not_processed(qapp, tmp_pa
         assert not pv._overlays[p].isVisible()
     assert pv.table.model().rowCount() == 6
     assert pv._table_panel._title_label.fullText() == "Manoeuvres (reference-only file)"
+    assert "excluded" not in pv.qc_overview.text().lower()   # not a QC dropout — every breath was typed
+    assert "6 typed manoeuvre" in pv.qc_overview.text()
+    win.close()
+
+
+def test_reference_only_test_run_still_applies_the_noise_report(qapp, tmp_path):
+    """Self-review finding: an earlier version of the reference-only branch above
+    returned before ``result.noise_report`` was ever applied. That report is built
+    once per WHOLE TEST (independent of any one file's role) whenever EMG channels
+    and noise reduction are configured, so skipping it for a reference-only file
+    would silently drop the batch's auto-tuned suppression strength and never
+    re-condition the EMG views."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    from respmech.core.settings import BreathTypeEntry
+
+    s = synth_settings(str(tmp_path), noise=True)
+    for n in range(1, 7):
+        s.processing.breath_types.append(
+            BreathTypeEntry(file="synth_case_B.csv", breath=n, kind="ic"))
+    s.validate()
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_B.csv")
+
+    result = run_batch(s, only_files=["synth_case_B.csv"])
+    assert result.noise_report is not None            # the fixture actually exercises this path
+    assert result.ok_files["synth_case_B.csv"].role == "reference"
+
+    pv._on_batch_result(result)
+
+    assert s.processing.emg.noise.prop_decrease == pytest.approx(
+        result.noise_report["prop_decrease"])
     win.close()
 
 

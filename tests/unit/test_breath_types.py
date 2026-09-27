@@ -373,6 +373,33 @@ def test_a_file_with_every_breath_typed_runs_as_reference_only(tmp_path):
     assert fr_b.manoeuvres_table is not None and len(fr_b.manoeuvres_table) == 6
     assert any("no tidal breaths" in n for n in fr_b.notices)
 
+
+@requires_synth()
+def test_reference_only_file_gets_no_spurious_cardiac_gated_nan_notice(tmp_path):
+    """Self-review finding: the cardiac-gated peak EMG NaN notice is about the
+    per-breath mechanics loop (compute.calculatemechanics/compute_segment_emg), which
+    a reference-only file never reaches (it is entirely skipped for such a file) --
+    with robust_peak enabled but remove_ecg off (guaranteeing 'no R-peaks available'),
+    a reference-only file must not report a NaN gating failure for a computation it
+    never attempted, while an ordinary tidal file in the SAME batch still does."""
+    from respmech.core.pipeline import run_batch
+
+    s = synth_settings(str(tmp_path))
+    s.processing.emg.robust_peak.enabled = True
+    s.processing.emg.remove_ecg = False           # -> "no R-peaks available" for every file
+    for n in range(1, 7):
+        s.processing.breath_types.append(
+            BreathTypeEntry(file="synth_case_B.csv", breath=n, kind="ic"))
+    s.validate()
+    result = run_batch(s)
+
+    fr_a = result.ok_files["synth_case_A.csv"]
+    assert any("cardiac-gated peak EMG reported as NaN" in n for n in fr_a.notices)
+
+    fr_b = result.ok_files["synth_case_B.csv"]
+    assert fr_b.role == "reference"
+    assert not any("cardiac-gated" in n for n in fr_b.notices)
+
     # the reference-only file contributes no row (not even a NaN one) to the average
     assert list(result.average_table["file"]) == ["synth_case_A.csv"]
 

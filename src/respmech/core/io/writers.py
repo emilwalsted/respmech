@@ -525,14 +525,22 @@ _KIND_LABELS = {
 
 
 def _typed_breath_numbers(fr) -> dict:
-    """{kind: [breath_no, ...]} for every MANOEUVRE-typed breath in a file result
-    (M-30), in first-encountered order — 'rest' excluded (see ``_KIND_LABELS``)."""
+    """{kind: [breath_no, ...]} for every MANOEUVRE-typed, EXCLUDED breath in a file
+    result (M-30), in first-encountered order — 'rest' is excluded (see
+    ``_KIND_LABELS``), and so, self-review finding, is a typed breath that is NOT
+    itself ``ignored``: on a flow-bearing set every typed kind is always also
+    ignored (``_legacy_ns._merged_exclude_breaths``), but on an EMG-only set only
+    ``rest`` is -- a non-``rest``-typed EMG-only breath is a manoeuvre effort kept
+    IN the used count, not one of the excluded breaths this function's caller
+    subtracts FROM ``excl``. Without this guard the caller's
+    ``plain_excl = excl - n_typed`` could go negative for such a file, since
+    ``n_typed`` would then count a breath that was never in ``excl`` at all."""
     if not fr.breaths:
         return {}
     out: dict = {}
     for no, b in fr.breaths.items():
         kind = b.get("kind")
-        if kind and kind != "rest":
+        if kind and kind != "rest" and b.get("ignored"):
             out.setdefault(kind, []).append(no)
     for nos in out.values():
         nos.sort()
