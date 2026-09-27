@@ -86,7 +86,7 @@ def test_ic_settings_eelv_tracking_defaults_to_none():
 
 
 # --------------------------------------------------------------------------- #
-# M-34: ReferenceEntry / GroupReferenceEntry / SubjectEntry / LungVolumeSettings
+# ReferenceEntry / GroupReferenceEntry / SubjectEntry / LungVolumeSettings
 # --------------------------------------------------------------------------- #
 
 def test_breath_ref_nested_optional_round_trips_via_toml(tmp_path):
@@ -280,12 +280,11 @@ def test_nested_optional_dataclass_round_trips():
                  id="unknown_toplevel_table"),
     pytest.param({"processing": {"lung_volumes": {"foo": 1}}}, "processing.lung_volumes",
                  id="unknown_nested_table"),
-    # "processing.breath_types" is no longer an unknown list of tables as of M-19, and
-    # "processing.references"/"reference_defaults" are no longer unknown as of M-34
-    # (ProcessingSettings.references/reference_defaults: list[ReferenceEntry/
-    # GroupReferenceEntry]) -- "processing.fixed_windows" (a still-not-yet-implemented
-    # M-48 field; "fixed_windows" is already a valid segmentation.method value, but no
-    # settings list backs it yet) covers the same archived shape instead.
+    # "processing.breath_types" and "processing.references"/"reference_defaults" are no
+    # longer unknown list-of-tables shapes (ProcessingSettings.breath_types/references/
+    # reference_defaults) -- "processing.fixed_windows" (still not backed by a settings
+    # list; "fixed_windows" is already a valid segmentation.method value, but nothing
+    # implements it yet) covers the same archived shape instead.
     pytest.param({"processing": {"fixed_windows": [{"id": 1}]}}, "processing.fixed_windows",
                  id="unknown_list_of_tables"),
     pytest.param(
@@ -921,7 +920,6 @@ _ROW_SETUP = {
     "normalization_reference": _setup_normalization_reference,
     "breath_type_files": _setup_breath_type_files,
     "separator_files": _setup_separator_files,
-    # M-34
     "reference_files": _setup_reference_files,
     "group_reference_groups": _setup_group_reference_groups,
     "subject_keys": _setup_subject_keys,
