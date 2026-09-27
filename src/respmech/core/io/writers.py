@@ -156,6 +156,16 @@ def _noise_reference_provenance_value(settings) -> str:
     return _NOISE_REFERENCE_TEXT.get(mode, mode)
 
 
+def _olv_active_files(result) -> set:
+    """The filenames ``core.analysis.lungvol.attach`` actually gave the ``ic_op``
+    column family to, read from ``result.analysis_plan['lung_volume']`` -- the ONE
+    place that decision is recorded (``lungvol.attach``'s own docstring), never
+    re-derived by sniffing a DataFrame's columns at each call site here (three
+    independent, easily-drifting copies of the same check before this helper)."""
+    plan = (getattr(result, "analysis_plan", None) or {}).get("lung_volume") or {}
+    return set(plan.get("active_files", ()))
+
+
 def _ic_reference_provenance_value(used: dict) -> str:
     """The text for a per-file 'IC reference' Provenance row, from one entry of
     ``FileResult.references_used`` (``core.analysis.references.attach``'s own shape:
@@ -168,7 +178,7 @@ def _ic_reference_provenance_value(used: dict) -> str:
 
 
 def _provenance_rows(settings, when, incomplete_note: str | None = None,
-                     reference_note: str | None = None):
+                     reference_note: str | None = None, olv_active: bool = False):
     ts = (when or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
     ip = settings.input
     rows = [("RespMech version", __version__),
@@ -201,6 +211,14 @@ def _provenance_rows(settings, when, incomplete_note: str | None = None,
         # DIAGNOSTICS block / FileResult.notices), not here, since there is no
         # resolved value to show in a Key/Value row.
         rows.append(("IC reference", reference_note))
+    if olv_active:
+        # M-36: study-wide settings that shape every olv column (not a per-file
+        # resolution outcome -- that is run-report.txt's own LUNG VOLUMES block) --
+        # same "what is configured" register as the IC reference row above.
+        lv = settings.processing.lung_volume
+        tracking_text = "within-file" if lv.ic.eelv_tracking == "within_file" else "none"
+        rows.append(("EELV tracking", tracking_text))
+        rows.append(("EELV datum", "above RV (VC from subjects | linked FVC)"))
     # K-227: a cohort-level workbook (Average breathdata.xlsx, Cohort summary.xlsx) built
     # while some files failed carries nothing else to say so — inserted first so it is
     # the first thing a reader of the Provenance sheet sees, not buried after the routine
@@ -235,7 +253,8 @@ def _autofit(writer):
 
 
 def _write_xlsx(df: pd.DataFrame, path: str, settings=None, when=None, extra_sheets=None,
-                incomplete_note: str | None = None, reference_note: str | None = None):
+                incomplete_note: str | None = None, reference_note: str | None = None,
+                olv_active: bool = False):
     """Write a Data sheet plus Units, any extra sheets, Provenance and Version.
 
     Only the Data sheet content is load-bearing (the golden suite pins the DataFrame,
@@ -247,7 +266,7 @@ def _write_xlsx(df: pd.DataFrame, path: str, settings=None, when=None, extra_she
             edf.to_excel(writer, sheet_name=name, index=False)
         if settings is not None:
             _provenance_rows(settings, when, incomplete_note=incomplete_note,
-                             reference_note=reference_note).to_excel(
+                             reference_note=reference_note, olv_active=olv_active).to_excel(
                 writer, sheet_name="Provenance", index=False)
         _version_df().to_excel(writer, sheet_name="Version", index=False)
         _autofit(writer)
@@ -329,8 +348,14 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
                     extra["Manoeuvres"] = fr.manoeuvres_table                                          # M-29
             ic_used = (getattr(fr, "references_used", None) or {}).get("ic")
             reference_note = _ic_reference_provenance_value(ic_used) if ic_used else None
+            # M-36: read core.analysis.lungvol.attach's own recorded decision (same
+            # "record once in attach(), read it back" convention M-35's own
+            # analysis_plan['ic'] already established for REFERENCE MANOEUVRES below),
+            # never re-derive it by sniffing DataFrame columns.
+            olv_active = fname in _olv_active_files(result)
             _write_xlsx(data_df, p, settings=settings, when=when, extra_sheets=extra,
-                       incomplete_note=note, reference_note=reference_note)
+                       incomplete_note=note, reference_note=reference_note,
+                       olv_active=olv_active)
             written.append(p)
 
     if settings.output.data.save_processed:
@@ -353,8 +378,9 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
             f"excluded from this workbook: {', '.join(sorted(result.failed_files))}"
             if result.failed_files else None)
         p = os.path.join(datadir, "Average breathdata.xlsx")
+        olv_active = bool(_olv_active_files(result))
         _write_xlsx(result.average_table, p, settings=settings, when=when,
-                   incomplete_note=incomplete_note)
+                   incomplete_note=incomplete_note, olv_active=olv_active)
         written.append(p)
         written += _write_cohort_summary(result, settings, datadir, when,
                                          incomplete_note=incomplete_note)   # P8/P15
@@ -858,6 +884,27 @@ def _write_run_report(result, settings, outputfolder: str,
                     key=lambda kv: (kv[0][0], -1 if kv[0][1] is None else kv[0][1])):
                 where = src if breath is None else f"{src} #{breath}"
                 L.append(f"    {where}: {msg}")
+        L.append("")
+
+    # M-36: operating lung volumes -- present only when at least one OK tidal file
+    # actually got the `ic_op` column family (core.analysis.lungvol.attach's own
+    # recorded decision, read via _olv_active_files; absent whenever no IC reference
+    # resolves anywhere in the analysis, the overwhelming common case today), same
+    # "leave the block out entirely" rule DIAGNOSTICS/REFERENCE MANOEUVRES already
+    # use above.
+    olv_active_names = _olv_active_files(result)
+    olv_files = {f: fr for f, fr in ok.items() if f in olv_active_names}
+    if olv_files:
+        lv = settings.processing.lung_volume
+        tracking_text = "within-file" if lv.ic.eelv_tracking == "within_file" else "none"
+        L.append("LUNG VOLUMES")
+        L.append(f"  EELV tracking:           {tracking_text}")
+        L.append("  EELV datum:              above RV (VC from subjects | linked FVC)")
+        for f, fr in sorted(olv_files.items()):
+            row = fr.average_row.iloc[0]
+            tlc_s = f"{row['tlc']:.3g} L" if row["tlc"] == row["tlc"] else "n/a"
+            vc_s = f"{row['vc']:.3g} L" if row["vc"] == row["vc"] else "n/a"
+            L.append(f"    {f}: ic_op {row['ic_op']:.3g} L, TLC {tlc_s}, VC {vc_s}")
         L.append("")
 
     report_name = "run-report.txt"

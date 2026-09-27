@@ -19,6 +19,21 @@ from respmech.core.analysis.signals import Capabilities
 _GOLDEN_UNIT_SNAPSHOT = {
     'bf': 'min⁻¹',
     'breath_no': '',
+    # M-36: operating lung volumes (core.analysis.lungvol.attach), added to
+    # golden_reference.json's typed_ic_fvc_same_file scenario once the SAME
+    # own-typed IC reference M-35 already resolves is consumed (no new settings
+    # entry needed; d_eelv itself is NOT in this scenario -- default
+    # eelv_tracking='none'). ic_op/delta_ic/delta_eelv/tlc/vc resolve via the
+    # registry (unit='L', none matches the generic vol_/vt rule); every
+    # vol_*/vt_pct_ic/delta_ic_pct/*_pct_vc/*_pct_tlc column already resolves via
+    # the pre-existing vol_/_pct generic rules.
+    'delta_eelv': 'L',
+    'delta_ic': 'L',
+    'delta_ic_pct': '%',
+    'eelv_pct_tlc': '%',
+    'eelv_pct_vc': '%',
+    'eilv_pct_tlc': '%',
+    'eilv_pct_vc': '%',
     'ex_flow_midvol': 'L·s⁻¹',
     'exp_pgas_rise': 'cmH₂O',
     'file': '',
@@ -29,10 +44,13 @@ _GOLDEN_UNIT_SNAPSHOT = {
     # breath resolves as its own reference (the own-typed fallback, no new settings
     # entry needed). ic_ref_n/ic_ref_source resolve via the registry (unit=""), not
     # _RULES; vol_ic_ref via the pre-existing vol_ prefix rule.
+    'ic_op': 'L',
     'ic_ref_n': '',
     'ic_ref_source': '',
     'in_flow_midvol': 'L·s⁻¹',
     'insp_pdi_rise': 'cmH₂O',
+    'irv_pct_tlc': '%',
+    'irv_pct_vc': '%',
     'int_oesinsp': 'cmH₂O·s',
     'int_pdiinsp': 'cmH₂O·s',
     'int_pgasexp': 'cmH₂O·s',
@@ -128,14 +146,22 @@ _GOLDEN_UNIT_SNAPSHOT = {
     'te': 's',
     'ti': 's',
     'ti_ttot': '—',
+    'tlc': 'L',
     'tlr_insp': '',
     'ttot': 's',
+    'vc': 'L',
     've': 'L·min⁻¹',
     'vmr': '',
+    'vol_eelv': 'L',
+    'vol_eelv_abs': 'L',
+    'vol_eilv': 'L',
+    'vol_eilv_abs': 'L',
     'vol_endexp': 'L',
     'vol_endinsp': 'L',
     'vol_ic_ref': 'L',
+    'vol_irv': 'L',
     'vt': 'L',
+    'vt_pct_ic': '%',
     'wob_ex_total': 'J·min⁻¹',
     'wob_in_ela': 'J·min⁻¹',
     'wob_in_res': 'J·min⁻¹',
