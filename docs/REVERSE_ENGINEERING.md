@@ -596,10 +596,148 @@ columns, in two passes around the ordinary main per-file loop:
   per-file resolutions, unresolved files, and forepass errors. Each file's own
   Provenance sheet gets an "IC reference" row when its own reference resolved
   (`FileResult.references_used['ic']`, via `_ic_reference_provenance_value`).
-  `fvc`/`baseline_ic`/`max_insp` are extracted by the SAME forepass (any typed
-  breath in a source file, of any kind) but have no consuming column of their own
-  yet — that is `mfvl.py` (M-42) and the normalisation ticket (M-47)'s scope; only
-  `ic` has a column family today.
+  `fvc`/`max_insp` are extracted by the SAME forepass (any typed breath in a source
+  file, of any kind) but have no consuming column of their own yet — that is
+  `mfvl.py` (M-42) and the normalisation ticket (M-47)'s scope. `baseline_ic` gained
+  its first consumer in §5.14 below (`delta_ic`) — it is aggregated the same way an
+  `ic` reference is, on demand, rather than through this forepass/afterpass pair
+  (see §5.14's own note on why).
+
+---
+
+### 5.14 Operating lung volumes (v2-only) — `core/analysis/lungvol.py`
+
+`§5.13a`'s `references.attach` resolves a file's `vol_ic_ref` (the IC reference
+VALUE) but stops there — it does not turn that single number into what a tidal
+breath's own lung volumes actually are. `core.analysis.lungvol.attach`, wired into
+`core.pipeline.run_batch` immediately AFTER `references.attach` (M-36), does that:
+per-tidal-breath EELV/EILV/IRV (and their %VC/%TLC forms) plus four per-file scalars
+(`tlc`, `vc`, `delta_ic`, `delta_eelv`, `delta_ic_pct`).
+
+**Column family**: the SAME `resolve_reference(..., "ic", ...)` check
+`references.attach` already uses across `allfiles` — operating lung volumes are
+meaningless without a resolvable IC reference, so this ticket's family is exactly
+that one. Once present, EVERY olv column is added to EVERY OK tidal file, never
+conditionally per file (a file with no subject VC/TLC simply gets NaN in the
+VC-/TLC-anchored triples) — this is what keeps a subset run's column SET identical
+to a full run's even when only some files' groups have a VC/TLC entered.
+
+**`ic_op` (the reference IC actually operating for this breath)**:
+`processing.lung_volume.ic.eelv_tracking` (declared and validated by M-29's
+`IcSettings`, unused until this ticket) decides how it moves:
+
+- `"none"` (default): `ic_op = vol_ic_ref`, unchanged across the whole file — the
+  ordinary "IC measured once, assumed constant" convention. No `d_eelv` column at
+  all in this mode (a settings-uniform family decision, simpler than M-35's own
+  multi-file family rule, since `eelv_tracking` is one flag for the whole analysis).
+- `"within_file"`: `d_eelv = vol_endexp - ic_eelv_pre` (positive = EELV has RISEN
+  since the reference IC's own end-expiratory level, i.e. hyperinflation), then
+  `ic_op = vol_ic_ref - d_eelv` — a RISE in EELV SHRINKS the IC actually available
+  (the minus sign is load-bearing: an earlier draft of this ticket had it backwards,
+  caught by the analytical test that pins the direction). `ic_eelv_pre` is the SAME
+  `ic_cfg.aggregate` (mean/median) of the resolved IC breaths' own `ic_eelv_pre`
+  field the reference itself was aggregated from — but ONLY for a SAME-FILE IC
+  reference (`FileResult.references_used['ic']['source'] == filename`); a
+  CROSS-file reference NaNs `d_eelv`/`ic_op` with one per-file notice instead
+  (two different recordings rarely share a common volume zero, so a cross-file
+  end-expiratory comparison is not meaningful) — and this notice fires ONLY when
+  the reference genuinely resolved to a different file (`references_used['ic']` is
+  set, `source != filename`); when it never resolved at all, `references.attach`
+  has already said so, and this module adds nothing further (self-review finding:
+  an earlier draft conflated the two and reported "cross-file" even for a file
+  whose reference simply never resolved). `processing.volume.correct_trend`
+  being on ALSO forces NaN even for a same-file reference: the trend-correction pass
+  subtracts the trough envelope so every `vol_endexp` sample sits at the same level
+  by construction, which would otherwise report a flat, definite zero for a
+  quantity the filter has actively erased.
+
+**Two EELV data, reported side by side (Emil's decision 26-09-2026, see
+`docs/beslutninger.md`)**: `vol_eelv = vc_src - ic_op` (volume above residual
+volume at end-expiration — ERV by definition, no separate `vol_erv` column) is the
+PRIMARY family, because it needs only a spirometry-derived VC, not a measured TLC
+(`vc_src` = `input.subjects`' own `vc_l` for this file's group, else the linked
+`fvc` reference's own `fvc` field — always `None` today, since
+`manoeuvres.extract` computes no numeric FVC value until M-42's `mfvl.py` lands;
+the fallback is already wired to read whichever key is there, so it starts working
+unchanged the moment M-42 adds it). `vol_eelv_abs = tlc - ic_op` is the absolute,
+TLC-anchored value reported ALONGSIDE it, present only when `input.subjects` names a
+TLC for this file's group. `vol_eilv`/`vol_eilv_abs` add `vt`; `vol_irv = ic_op -
+vt`; every `_pct_vc`/`_pct_tlc` column divides by `vc`/`tlc`. Missing VC/TLC is the
+ordinary case (most studies measure neither) and NaNs the corresponding family
+silently — never a notice.
+
+`vol_eelv` is the OPERATING (per-breath, model-derived) ERV for this breath, not a
+single spirometrically-measured ERV value — under `eelv_tracking="within_file"` it
+varies breath to breath by design (that is the point: tracking dynamic
+hyperinflation), so a reader expecting the one stable clinical ERV number should not
+mistake this column for that. The algebra (`vc - ic_op == eelv - rv` when
+`vc == tlc - rv` for that subject) only holds when the subject's entered
+`tlc_l`/`vc_l`/`rv_l` are themselves mutually consistent — `Settings.validate()`
+only checks `rv_l < tlc_l`, nothing cross-checks `vc_l` against `tlc_l - rv_l`, and
+`rv_l` is not otherwise consumed anywhere in this codebase yet; an inconsistent
+subject entry produces a silently wrong split between the RV- and TLC-anchored
+families with no notice (self-review finding, not fixed by this ticket — flagged in
+`docs/beslutninger.md`'s 26-09-2026 entry as a known gap). Separately, once
+`vc_src` can fall back to a linked FVC manoeuvre (M-42), note that a *forced*
+vital capacity under-reads true (slow) VC in obstructive disease (gas trapping) —
+that fallback will systematically UNDERESTIMATE `vol_eelv` in exactly the
+population dynamic-hyperinflation tracking is most useful for, once it is wired in.
+
+**`tlc`/`vc`/`delta_ic`/`delta_eelv`/`delta_ic_pct`** are per-FILE scalars (constant
+across every row of `breaths_table`, and the value in `average_row`): `tlc`/`vc` as
+above; `delta_ic = vol_ic_ref - vol_ic_ref(baseline)`, `delta_eelv = -delta_ic`,
+`delta_ic_pct = 100 · delta_ic / vol_ic_ref(baseline)`. The baseline's own
+`vol_ic_ref` is resolved two ways: an explicit/group `baseline_ic` link names
+specific breaths in some file, aggregated exactly like an `ic` reference
+(`ic_cfg.aggregate` of `vol_ic` over accepted breaths — a baseline IS itself just
+another IC measurement, hence the same rule); with no such link, a filename
+matching `lung_volume.baseline_pattern` is searched for among this file's OWN
+`group_key` siblings in `allfiles` (the full matched set, never just this run's own
+subset — the same "decide from settings across the full set" rule the column
+family above already follows, so a subset run picks the SAME baseline candidate a
+full run would), and the alphabetically first match's ALREADY-RESOLVED
+`vol_ic_ref` scalar is looked up from `result.ok_files` (deliberately simpler than
+re-aggregating specific breaths: a whole file matched by name is naturally "this
+file's own IC reference is the baseline", not a hand-picked subset) — every ok
+tidal file has `vol_ic_ref` on its `average_row` by the time this module runs,
+regardless of processing order, so looking up ANY other file's value is always
+safe; if the matched candidate happens to fall outside THIS run's own subset,
+`delta_ic` is honestly NaN for this run (the DECISION of which file is the
+baseline stays consistent, only the VALUE'S availability depends on what this run
+actually processed). More than one sibling matching the pattern is reported with
+its own notice (never silent) even though a match is still chosen deterministically.
+`delta_ic` is silently NaN when no baseline mechanism resolves at all — a notice
+fires only when `baseline_ic` was EXPLICITLY configured but could not be resolved
+(the "unresolved link is a caution plus NaN and a notice" policy, `§7b`); an
+ABSENT baseline configuration (the common case) is not a caution at all.
+
+**Notices** (once per file, never per breath): a within-file cross-file/trend-
+correction NaN (above, only when the reference genuinely resolved elsewhere);
+an ambiguous `baseline_pattern` match; `vol_irv < 0`; `vol_eelv < 0` (the operating
+IC exceeds VC); `vol_eelv_abs < 0` (the operating IC exceeds TLC) — the last three
+are checks for a physiologically implausible operating volume, independent of
+whether VC/TLC itself was even available. **Per-file isolation**: an unanticipated
+exception while computing one file's operating lung volumes is caught and turned
+into a notice on that file alone (the same per-file isolation `core.pipeline.
+run_batch`'s own main loop already gives every other failure mode) — it never
+aborts the whole batch. The family decision and which files actually got the
+column family are recorded once, in `BatchResult.analysis_plan['lung_volume']`
+(`{'family': bool, 'active_files': [...]}`), and `core.io.writers` reads that back
+rather than re-deriving "is this active" by inspecting DataFrame columns at each
+call site (the same "record once in `attach()`, read it back" convention
+`analysis_plan['ic']` already established for §5.13a's REFERENCE MANOEUVRES).
+
+**Reporting**: `run-report.txt` gets a "LUNG VOLUMES" block (present only when at
+least one OK tidal file has the `ic_op` column family) naming the study-wide
+`eelv_tracking`/EELV-datum choice and, per file, `ic_op`/TLC/VC; each file's own
+Provenance sheet gets "EELV tracking"/"EELV datum" rows under the same condition.
+
+**Units** (`core/quantities.py`/`core/analysis/registry.py`): `d_eelv`, `ic_op`,
+`delta_ic`, `delta_eelv`, `tlc`, `vc` do not match the generic `vol_`/`vt` naming
+convention, so their `unit="L"` is registered explicitly; every other new column
+(`vol_irv`, `vol_eelv`, `vol_eilv`, `vol_eelv_abs`, `vol_eilv_abs` via the `vol_`
+prefix; every `_pct`/`_pct_` column via the generic suffix rule) already resolves
+without a registry entry.
 
 ---
 
