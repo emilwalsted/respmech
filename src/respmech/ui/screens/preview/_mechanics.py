@@ -1494,16 +1494,24 @@ class _MechanicsMixin:
                 excl_entry.breaths = [b for b in excl_entry.breaths if b != breath_no]
                 if not excl_entry.breaths:
                     excl.remove(excl_entry)
-            t0, _t1 = self._breath_spans[breath_no]
+            # self._breath_spans is zero-based at the TRIMMED window's own start
+            # (stage_mechanics_preview's cum/fs); + _trim_offset_s recovers the
+            # recording's own clock, matching both breath['time'][0] (core) and the
+            # absolute time base the EMG views already align their spans to
+            # (_paint_breaths' own `t0 + offset`) — self-review finding: an earlier
+            # version stored the trimmed-window-relative t0 instead, which would have
+            # silently drifted from the recording's own clock whenever the trim
+            # settings changed.
+            t0_abs = self._breath_spans[breath_no][0] + self._trim_offset_s
             if type_entry is None:
                 # same folder-stamp-only-on-creation rule as the exclude branch above.
                 type_entry = BreathTypeEntry(file=name, breath=breath_no, kind=kind,
-                                             t_onset_s=t0,
+                                             t_onset_s=t0_abs,
                                              folder=self.state.settings.input.folder)
                 types.append(type_entry)
             else:
                 type_entry.kind = kind
-                type_entry.t_onset_s = t0
+                type_entry.t_onset_s = t0_abs
             paint_kind = kind
 
         self.settings_edited.emit()      # exclude_breaths/breath_types land in the .toml
@@ -1612,7 +1620,11 @@ class _MechanicsMixin:
         if result is None:
             return
         name = self._selected_filename()
-        self._set_status(f"{name}: breath {breath_no} set to {_TYPE_MENU_LABELS[kind].lower()}.")
+        # .get(), mirroring _build_type_menu's own fallback: a future menu offering a
+        # kind not in _TYPE_MENU_LABELS (M-31) must not KeyError here AFTER the
+        # settings write above has already happened (self-review finding).
+        label = _TYPE_MENU_LABELS.get(kind, kind.capitalize())
+        self._set_status(f"{name}: breath {breath_no} set to {label.lower()}.")
 
     def _handle_type_requested(self, breath_no, scene_pos):
         """Slot for ``BreathSpansItem.typeRequested`` (right-click/Ctrl+left-click on a
@@ -1626,7 +1638,12 @@ class _MechanicsMixin:
             if sc is not None and sc.views():
                 view = sc.views()[0]
         if view is not None:
-            global_pos = view.mapToGlobal(view.mapFromScene(scene_pos).toPoint())
+            # QGraphicsView.mapFromScene(QPointF) returns a QPoint in PySide6, which
+            # has no .toPoint() (only QPointF does) — a real right-click crashed this
+            # slot every time (self-review finding), silently: PySide6 prints the
+            # AttributeError to stderr from inside the signal emission and swallows
+            # it, so the only visible symptom was "nothing happens".
+            global_pos = view.mapToGlobal(view.mapFromScene(scene_pos))
         else:                                          # pragma: no cover — defensive only
             global_pos = QCursor.pos()
         menu = self._build_type_menu(breath_no, _TYPE_MENU_KINDS)
