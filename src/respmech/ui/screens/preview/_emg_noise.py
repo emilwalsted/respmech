@@ -561,9 +561,12 @@ class _EmgNoiseMixin:
         channels being assigned is the sole trigger for the ECG-reduction/noise-
         reduction tabs — independent of the flow/pressure family, since a "Flow
         only"/"Flow + Poes" preset can carry EMG too (the "Also EMG" checkbox) —
-        matching the has-EMG-channels check this replaces."""
+        matching the has-EMG-channels check this replaces. ``caps=None`` (a
+        malformed ``analysis.signals`` — see ``Capabilities.from_settings_or_none``)
+        has nothing safe to derive an EMG shape from, so it renders as Mechanics
+        alone, same as a shape with no EMG channels."""
         plan = [(self._mech_tab, _TAB_MECH)]
-        if caps.emg:
+        if caps is not None and caps.emg:
             plan.append((self._ecg_tab, _TAB_ECG))
             plan.append((self._emg_tab, _TAB_NOISE))
         return plan
@@ -576,8 +579,11 @@ class _EmgNoiseMixin:
         the one function every other relevance decision in the program also
         consults, though today it can only ever agree with the old boolean —
         see :meth:`subtab_plan`. ``emg_channel``/cleanup-contract tests rely on
-        the widgets never being recreated, only inserted/removed."""
-        caps = Capabilities.from_settings(self.state.settings)
+        the widgets never being recreated, only inserted/removed. Uses
+        ``from_settings_or_none`` (not the raising ``from_settings``) because
+        this runs on every settings sync AND on ``PreviewScreen`` construction,
+        which sits directly on ``MainWindow.__init__``'s no-try/except path."""
+        caps = Capabilities.from_settings_or_none(self.state.settings)
         plan = self.subtab_plan(caps)
         wanted = {widget for widget, _title in plan}
         if self._ecg_tab in wanted:
