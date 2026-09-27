@@ -495,7 +495,9 @@ def _write_run_report(result, settings, outputfolder: str,
         if settings.output.data.save_average:
             cohort_bits.append("Average breathdata.xlsx")
             cohort_bits.append("Cohort summary.xlsx")
-        if settings.output.diagnostics.save_pv_individual:
+        from respmech.core.analysis.signals import Capabilities
+        if (settings.output.diagnostics.save_pv_individual
+                and Capabilities.from_settings(settings).poes):
             cohort_bits.append("the cohort Campbell figure")
         if cohort_bits:
             named = (cohort_bits[0] if len(cohort_bits) == 1

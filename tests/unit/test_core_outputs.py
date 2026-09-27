@@ -278,6 +278,44 @@ def test_figures_written_and_flag_driven(tmp_path):
         assert os.path.getsize(p) > 0
 
 
+def test_figure_jobs_channel_aware_per_mode(tmp_path):
+    """``per_file_figure_jobs`` (the one list both the plan and the writer read) is
+    channel-aware. Full channels: Campbell jobs present (Poes is there). Flow-only: no
+    Campbell job, but the drift/trend/volume jobs stay (``Capabilities.volume`` is True
+    whenever flow is and a volume channel/``integrate_from_flow`` is set, per
+    ``Settings.validate``). A THIRD settings object turns ``integrate_from_flow`` off and
+    removes the volume channel too — not reachable through ``Settings.validate()`` on its
+    own path but perfectly constructible without going through it (this test never calls
+    ``validate()``) — pinning that the drift/trend/volume group answers to
+    ``Capabilities.volume`` specifically, not to ``Capabilities.poes`` as a stand-in."""
+    from respmech.core import plots
+
+    s_full = synth_settings(tmp_path / "full")
+    for flag in ("save_pv_average", "save_pv_individual", "save_drift"):
+        setattr(s_full.output.diagnostics, flag, True)
+    labels_full = {label for label, _fn, _suffix in plots.per_file_figure_jobs(s_full)}
+    assert {"PV average", "PV individual", "volume correction", "trend", "drift"} <= labels_full
+
+    s_fo = synth_settings(
+        tmp_path / "flow_only", channels={"poes": None, "pgas": None, "pdi": None, "emg": []}
+    )
+    for flag in ("save_pv_average", "save_pv_individual", "save_drift"):
+        setattr(s_fo.output.diagnostics, flag, True)
+    labels_fo = {label for label, _fn, _suffix in plots.per_file_figure_jobs(s_fo)}
+    assert "PV average" not in labels_fo and "PV individual" not in labels_fo
+    assert {"volume correction", "trend", "drift"} <= labels_fo   # flow implies volume here
+
+    s_novol = synth_settings(
+        tmp_path / "no_volume", channels={"poes": None, "pgas": None, "pdi": None, "emg": []}
+    )
+    for flag in ("save_pv_average", "save_pv_individual", "save_drift"):
+        setattr(s_novol.output.diagnostics, flag, True)
+    s_novol.input.channels.volume = None
+    s_novol.processing.volume.integrate_from_flow = False
+    labels_novol = {label for label, _fn, _suffix in plots.per_file_figure_jobs(s_novol)}
+    assert not ({"volume correction", "trend", "drift"} & labels_novol)
+
+
 def test_drift_figure_renders_from_volume_endpoints(tmp_path):
     """Regression: eelv/eilv are [volume, pressure] pairs, not scalars — the drift
     figure must render (it was silently failing and producing no file)."""
@@ -588,6 +626,26 @@ def test_run_report_processing_block_names_none_when_unset(tmp_path):
     assert "Breath-count overrides:  none" in report
     assert "Excluded breaths:        none" in report
     assert "Cohort grouping:         leading filename token" in report
+
+
+def test_partial_run_report_omits_the_cohort_figure_without_poes(tmp_path):
+    """Self-review finding: the PARTIAL RUN block's ``cohort_bits`` list only checked
+    ``save_pv_individual``, so a flow-only analysis (no Poes -- no Campbell figure ever
+    exists, per-file or cohort) still claimed one was 'UNCHANGED by this run' for a
+    subset write. It must also check the signal set has Poes, the same way
+    ``core.io.plan``/``core.plots`` themselves gate the figure job."""
+    from respmech.core.io.writers import _write_run_report
+
+    result = SimpleNamespace(ok_files={}, failed_files={})
+    s = synth_settings(
+        tmp_path, channels={"poes": None, "pgas": None, "pdi": None, "emg": []}
+    )
+    s.output.diagnostics.save_pv_individual = True   # ticked, but Poes is absent
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11),
+                             cohort_outputs=False)
+    report = open(path, encoding="utf-8").read()
+    assert "cohort Campbell figure" not in report
+    assert "PARTIAL RUN" in report
 
 
 def test_channel_label_defensive_fallbacks():
@@ -913,18 +971,29 @@ def _rel(paths, base):
     return {os.path.relpath(p, str(base)).replace(os.sep, "/") for p in paths}
 
 
-def test_plan_contains_every_path_a_real_run_writes(tmp_path):
+@pytest.mark.parametrize("mode,channels", [
+    ("full", None),
+    ("flow_only", {"poes": None, "pgas": None, "pdi": None}),
+    ("poes_only", {"pgas": None, "pdi": None}),
+])
+def test_plan_contains_every_path_a_real_run_writes(tmp_path, mode, channels):
     """The regression this ticket exists for. Measured before the fix: a dry run of the
     bundled sample settings said 4 files where a real run wrote 14 (missing Cohort
     summary.xlsx and every diagnostics/ figure); on a bigger batch, 7 vs 45. For the SAME
     settings and the SAME files, every path write_batch actually writes must be a member
     of plan_outputs' ceiling — proven here with every diagnostic figure, EMG overview,
-    EMG audio and cohort output turned on at once."""
+    EMG audio and cohort output turned on at once.
+
+    Parametrized over full/flow_only/poes_only: the invariant must hold whichever
+    signal set is in play, in particular that neither the plan nor the writer promises a
+    Campbell path a reduced signal set can never draw — a channel-blind plan would have
+    kept listing it (and ``plan.is_cap`` would have hidden the gap, since it is already
+    an upper bound for other reasons)."""
     from respmech.core.io.plan import plan_outputs
     from respmech.core.io.writers import write_batch
     from respmech.core.pipeline import run_batch
 
-    s = synth_settings(tmp_path, noise=True)          # ECG removal + shared-profile noise
+    s = synth_settings(tmp_path, noise=True, channels=channels)   # ECG removal + shared-profile noise
     s.output.data.save_processed = True
     s.processing.emg.save_sound = True
     for flag in ("save_pv_average", "save_pv_individual", "save_raw", "save_trimmed",
@@ -934,6 +1003,10 @@ def test_plan_contains_every_path_a_real_run_writes(tmp_path):
     files = [os.path.join(INPUT, "synth_case_A.csv"), os.path.join(INPUT, "synth_case_B.csv")]
     plan = plan_outputs(s, files)
     assert plan.is_cap                                 # figures/EMG-audio are ceilings, not promises
+    if mode == "flow_only":
+        assert not any("Campbell" in p for p in plan.all_paths())
+    else:                                              # full and poes_only both have Poes
+        assert any("Campbell" in p for p in plan.all_paths())
 
     result = run_batch(s)
     written = write_batch(result, s, str(tmp_path))
@@ -941,7 +1014,7 @@ def test_plan_contains_every_path_a_real_run_writes(tmp_path):
     rel_written = _rel(written, tmp_path)
     rel_plan = set(plan.all_paths())
     missing = rel_written - rel_plan
-    assert not missing, f"written but not in the plan: {sorted(missing)}"
+    assert not missing, f"[{mode}] written but not in the plan: {sorted(missing)}"
     assert plan.total_count >= len(written)            # a ceiling, never smaller than reality
 
 
