@@ -227,6 +227,29 @@ def test_no_campbell_paths_in_plan_and_none_written(tmp_path):
 
 
 @requires_synth()
+def test_per_file_figure_jobs_degrades_instead_of_raising_on_malformed_signals(tmp_path):
+    """Companion to the MainWindow-construction crash fix: ``per_file_figure_jobs`` backs
+    Setup's deferred 'You will get' preview (``diagnostic_figure_type_count`` <-
+    ``_update_save_preview``), which — per that method's own docstring — resolves one
+    event-loop turn into real startup, still before ``Settings.validate()`` ever runs.
+    A malformed, hand-edited ``analysis.signals`` (a bare string instead of a list) must
+    degrade the poes/volume-gated jobs away rather than raise out of that deferred Qt
+    callback."""
+    from respmech.core.plots import per_file_figure_jobs
+    settings = synth_settings(tmp_path)
+    settings.analysis.signals = "flow"     # malformed: a bare string, not a list
+    for flag in ("save_pv_average", "save_pv_individual", "save_drift"):
+        setattr(settings.output.diagnostics, flag, True)
+    jobs = per_file_figure_jobs(settings)  # must not raise
+    labels = [label for label, _fn, _suffix in jobs]
+    assert "PV average" not in labels
+    assert "PV individual" not in labels
+    assert "volume correction" not in labels
+    assert "trend" not in labels
+    assert "drift" not in labels
+
+
+@requires_synth()
 def test_mechanics_stack_renders_without_crashing_on_a_reduced_signal_set(qapp, tmp_path):
     """Regression, found by self-review before this ticket closed: a reduced signal set
     is already reachable today via ``channel_setup_dialog.py``'s declared-roles gating
@@ -286,6 +309,20 @@ def test_mech_stack_floor_uses_the_actual_channel_count_not_a_fixed_five(qapp, t
     assert heights["flow_only"] < heights["full"], (
         f"a 2-row Flow-only analysis floored the same as, or taller than, the 5-row "
         f"full family: {heights}")
+
+
+@requires_synth()
+def test_mech_channel_count_degrades_instead_of_raising_on_malformed_signals(tmp_path):
+    """Companion regression: ``_mech_channel_count`` backs ``_update_mech_stack_floor``,
+    called from ``_MechStackFloorFitter``'s deferred resize/show callback — real
+    ``MainWindow`` startup, the same class of crash the ticket's fix targets elsewhere. A
+    malformed, hand-edited ``analysis.signals`` must fall back to the full five rows
+    (the same fallback the pre-existing "no signal at all" case already uses), never
+    raise."""
+    from respmech.ui.screens.preview._mechanics import _CHANNELS, _mech_channel_count
+    settings = synth_settings(str(tmp_path))
+    settings.analysis.signals = "flow"     # malformed: a bare string, not a list
+    assert _mech_channel_count(settings) == len(_CHANNELS)
 
 
 @requires_synth()

@@ -342,6 +342,18 @@ QC strip) and by `respmech validate`, from the same shared logic:
      compute). Still not written up as a real changelog entry here for the same reason as
      3142f25/ce1fe70 above -->
 
+<!-- changelog-skip 41fbb6b internal fix: MainWindow's construction crashed on a
+     malformed, hand-edited analysis.signals (a bare string instead of a list) because
+     PreviewScreen's own build path called Capabilities.from_settings unprotected;
+     Settings.validate() already reports this case cleanly, so the fix is purely
+     defensive (degrade to the safest render, never crash) and never shipped in any
+     release -- nothing for a reader of this entry to be told -->
+
+<!-- changelog-skip 400884a same internal fix as 41fbb6b, extended to two more
+     Capabilities.from_settings call sites on the same before-validate() real-startup
+     path (self-review finding): the Setup 'You will get' preview and the Mechanics
+     stack's floor sizing. Same reasoning: purely defensive, never shipped -->
+
 <!--
 "Unreleased" above is a hand-maintained draft of the next release's entry. It is
 updated ONLY when explicitly asked to (not automatically on every commit), and it
