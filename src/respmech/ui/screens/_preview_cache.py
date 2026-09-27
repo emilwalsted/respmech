@@ -127,7 +127,13 @@ def _exclude_key(settings):
     # breaths) alone already invalidates, but a folder restamp with an unchanged breath set
     # (a click that only confirms, never edits, the current selection) would not. Include
     # it so a cache hit can never silently outlive either kind of change.
-    return tuple((x.file, tuple(x.breaths), x.folder) for x in settings.processing.exclude_breaths)
+    #
+    # M-20: processing.breath_types is unioned into core's own ignored-breath set exactly
+    # like exclude_breaths is (core._legacy_ns.to_legacy_ns), so a typed breath changes the
+    # SAME cached mechanics/EMG output a manual exclusion would — a cache key that only
+    # watched exclude_breaths would silently serve a stale preview after typing a breath.
+    return (tuple((x.file, tuple(x.breaths), x.folder) for x in settings.processing.exclude_breaths),
+           tuple((t.file, t.breath, t.kind, t.folder) for t in settings.processing.breath_types))
 
 
 def ecg_matrix_key(settings, file_path):

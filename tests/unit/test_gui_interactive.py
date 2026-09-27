@@ -8,7 +8,7 @@ import os
 
 import numpy as np
 import pytest
-
+from PySide6.QtCore import Qt
 
 
 
@@ -57,6 +57,39 @@ def test_breath_overlays_and_toggle(qapp, tmp_path):
     assert pv._toggle_breath(a_breath) is False
     assert all(e.file != name for e in win.state.settings.processing.exclude_breaths)
     assert "included" in pv.status.text()
+
+
+def test_toggling_a_second_breath_in_an_existing_carried_entry_still_reports_carried(qapp, tmp_path):
+    """M-20 carried-fix (B06): _toggle_breath/_set_breath_type must compute the rail
+    badge's carried flag fresh each time via is_carried_folder, never hardcode False.
+    An EXISTING entry's folder is never restamped by a plain toggle (see
+    _set_breath_type's own comment on why), so before this fix a click that merely
+    added a SECOND breath to an already-carried entry made the rail badge silently
+    forget the entry was carried at all — even though the entry's folder tag never
+    actually changed to match the folder now loaded."""
+    from respmech.core.settings import ExcludeEntry
+    from respmech.ui.main_window import MainWindow
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
+    name = pv.file_rail.current_filename()
+    b1, b2 = sorted(pv._breath_spans)[:2]
+    s.processing.exclude_breaths.append(
+        ExcludeEntry(file=name, breaths=[b1], folder="/a/different/folder"))
+    pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))   # repaint with the carried entry already there
+    b1_item, b1_idx = pv._breath_regions[b1][0]
+    assert b1_item._spans[b1_idx][2].style() != Qt.SolidPattern, "b1 must start out hatched"
+
+    assert pv._toggle_breath(b2) is True                # excludes a SECOND breath in the SAME entry
+    entry = next(e for e in s.processing.exclude_breaths if e.file == name)
+    assert entry.folder == "/a/different/folder", "an existing entry's folder is never restamped"
+    assert set(entry.breaths) == {b1, b2}
+    assert pv.file_rail.entry(name).excluded_carried is True, (
+        "the rail badge must still read carried after a click touched one of this "
+        "entry's OTHER breaths")
+    # b1's own overlay brush, untouched by the b2 click, is still exactly as painted
+    assert b1_item._spans[b1_idx][2].style() != Qt.SolidPattern
 
 
 # -- Feature B: select a noise-profile region on the graph ------------------
