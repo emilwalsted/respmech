@@ -65,8 +65,7 @@ _FIX_HINTS = {
     "EmgSegmentationError": "Check the separator times configured for this file "
                             "(processing.segmentation.separators) against the recording's "
                             "own length, and that they strictly increase — Preview & QC ▸ "
-                            "EMG – segments once that tab exists, or the settings file "
-                            "directly for now.",
+                            "EMG – segments, or the settings file directly.",
 }
 
 
