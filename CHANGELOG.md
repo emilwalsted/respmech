@@ -22,6 +22,13 @@ today, via `analysis.signals = ["emg"]` and `[processing.segmentation]`.
      picker's EMG-only preset stays disabled until a later release activates it, and
      placing a separator is a further, not-yet-landed change. The bullet above is
      rewritten to describe the finished, reachable feature once both land. -->
+<!-- changelog-skip 4ea83a7 a separator can now be placed or removed by hand from that
+     same 'EMG – segments' tab (checkable 'Place separators' action; renumbers any
+     existing exclusion/typing for the file in lockstep), closing the "placing a
+     separator is a further, not-yet-landed change" gap the marker above named. The
+     feature is STILL not reachable end to end: the signal-set picker's EMG-only preset
+     stays disabled until a later release activates it. The bullet above is rewritten
+     once that lands too. -->
 
 **Breaths can be typed (ic, fvc, max_insp, sniff, rest, other) in settings.** A typed
 breath is treated as excluded from the tidal average, the same as a manually excluded
