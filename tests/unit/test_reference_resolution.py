@@ -435,6 +435,23 @@ def test_attach_uses_median_aggregate_when_configured():
     assert a.average_row["vol_ic_ref"].iloc[0] == pytest.approx(2.0)   # median, not mean
 
 
+def test_attach_deduplicates_a_repeated_breath_number_in_one_breathref():
+    """Self-review finding: nothing validates a hand-authored BreathRef for a
+    repeated breath number the way Settings.validate() already does for a duplicate
+    file/group entry -- without deduplication, breath 4 listed twice would silently
+    count twice in both the mean and ic_ref_n."""
+    s = _settings()
+    s.processing.references.append(ReferenceEntry(
+        file="A.csv", ic=BreathRef(file="A.csv", breaths=[4, 4, 9])))
+    s.processing.breath_types.append(BreathTypeEntry(file="A.csv", breath=4, kind="ic"))
+    s.processing.breath_types.append(BreathTypeEntry(file="A.csv", breath=9, kind="ic"))
+    a = _file_result(manoeuvres={4: _manoeuvre_row(3.0), 9: _manoeuvre_row(5.0)})
+    result = _batch_result({"A.csv": a})
+    attach(result, s, ["A.csv"])
+    assert a.average_row["vol_ic_ref"].iloc[0] == pytest.approx(4.0)   # mean(3.0, 5.0)
+    assert a.average_row["ic_ref_n"].iloc[0] == pytest.approx(2.0)     # not 3
+
+
 def test_attach_nans_and_notices_a_file_with_no_reference_when_family_present():
     s = _settings()
     s.processing.breath_types.append(BreathTypeEntry(file="A.csv", breath=4, kind="ic"))
@@ -621,3 +638,52 @@ def test_a_failing_external_reference_source_is_soft_and_the_batch_continues(tmp
     assert a.error is None                            # soft: the file itself still succeeds
     assert a.average_row["vol_ic_ref"].isna().iloc[0]
     assert a.notices
+
+
+@requires_synth()
+def test_group_default_reference_resolves_through_the_real_pipeline(tmp_path):
+    """The group-default precedence branch (as opposed to an explicit per-file entry
+    or the own-typed fallback, both already covered above), exercised through the
+    real pipeline for the first time: a GroupReferenceEntry applies to every file in
+    its group (core.summary.group_key), not just one named file."""
+    from respmech.core.pipeline import run_batch
+
+    s = synth_settings(str(tmp_path))
+    # synth_case_A.csv/synth_case_B.csv/synth_manoeuvre_A.csv all share the leading-
+    # token group "synth" by default (core.summary.group_key) -- one group default
+    # therefore applies to BOTH matched files at once, unlike the explicit
+    # per-file ReferenceEntry the other end-to-end tests above use.
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_manoeuvre_A.csv", breath=4, kind="ic"))
+    s.processing.reference_defaults.append(GroupReferenceEntry(
+        group="synth", ic=BreathRef(file="synth_manoeuvre_A.csv", breaths=[4])))
+    s.validate()
+
+    result = run_batch(s)
+
+    for fname in ("synth_case_A.csv", "synth_case_B.csv"):
+        fr = result.files[fname]
+        assert fr.average_row["vol_ic_ref"].iloc[0] == pytest.approx(3.0)
+        assert fr.references_used["ic"]["source"] == "synth_manoeuvre_A.csv"
+
+
+@requires_synth()
+def test_cancel_during_forepass_stops_the_whole_batch(tmp_path):
+    """Self-review finding: the forepass's own loop only BREAKS on a cancellation
+    flagged mid-load (see _load_external_references's docstring); run_batch itself
+    must still check again right after and return, so a cancel flagged during the
+    forepass has the SAME visible effect a cancel flagged between two ordinary main-
+    loop files already has, instead of being silently swallowed."""
+    from respmech.core.pipeline import run_batch
+
+    s = synth_settings(str(tmp_path))
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_manoeuvre_A.csv", breath=4, kind="ic"))
+    s.processing.references.append(ReferenceEntry(
+        file="synth_case_A.csv", ic=BreathRef(file="synth_manoeuvre_A.csv", breaths=[4])))
+    s.validate()
+
+    result = run_batch(s, cancel_check=lambda: True)
+
+    assert result.files == {}          # the main loop never even started
+    assert result.references == {}     # cancelled before the forepass loaded anything

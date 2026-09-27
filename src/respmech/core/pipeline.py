@@ -765,6 +765,13 @@ def _load_external_references(settings: Settings, s, files: list, *, cache: dict
     failure is recorded, never raised -- the batch keeps going); one breath's own
     extraction failing does not drop the rest of that same source's typed breaths.
 
+    ``cancel_check``, checked before each source: stops loading further sources
+    (``break``, keeping whatever was already loaded) rather than raising or returning
+    early itself -- the caller checks again right after this returns and does the
+    actual early return, exactly like it already does between two ordinary files in
+    the main loop, so a cancel flagged mid-forepass has the same visible effect as one
+    flagged mid-batch instead of being silently swallowed.
+
     Returns ``(references, errors)`` -- see ``BatchResult.references``/
     ``reference_errors`` for the exact shapes. Never raises."""
     sources = referenceslib.external_reference_sources(settings, files)
@@ -897,6 +904,15 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
     # reference-only file (M-30) already does.
     result.references, result.reference_errors = _load_external_references(
         settings, s, files, cache=load_cache, cancel_check=cancel_check, progress=progress)
+    # The forepass's own loop only BREAKS on a cancellation flagged mid-load (never
+    # raises/returns itself -- see its own docstring); check again here, exactly like
+    # the main loop's per-file check just below, so a cancel flagged during the
+    # forepass has the SAME effect (an immediate, silent "cancelled" return) a cancel
+    # flagged between two ordinary files already has, instead of a run that ignores it
+    # and quietly falls through into the main loop (self-review finding).
+    if cancel_check is not None and cancel_check():
+        _emit(progress, ProgressEvent("finished", message="cancelled"))
+        return result
 
     for fi in files:
         if cancel_check is not None and cancel_check():
