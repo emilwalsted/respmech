@@ -432,3 +432,44 @@ def test_settings_change_scopes_recompute_to_affected_panels(qapp, tmp_path):
     assert {"mech", "batch"} <= mech                 # mechanics panels recompute
     assert "emg_all" not in mech and "emg_detail" not in mech  # EMG panels do NOT
     win.close()
+
+
+def test_a_rest_typed_breath_redispatches_emg_all(qapp, tmp_path):
+    """M-24 acceptance: typing a breath 'rest' (M-19's BreathTypeEntry) changes the noise
+    reference mask (decision 11), so a rest-typing must re-dispatch emg_all — via
+    _kinds_for_settings_path's wide, unclassified-path catch-all, deliberately NOT the
+    narrower rule processing.exclude_breaths gets (see that function's own docstring)."""
+    import copy as _copy
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.ui.screens.preview_screen import PreviewScreen
+    pv = PreviewScreen(AppState(synth_settings(str(tmp_path), noise=True, data_out=_DATA_OUT)))
+    pv._refresh_files()
+    pv._last_synced_settings = _copy.deepcopy(pv.state.settings)   # clean diff baseline
+    pv._pending_kinds.clear(); pv._autorun_timer.stop()
+    pv.state.settings.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=1, kind="rest"))
+    pv.sync_from_settings()
+    assert "emg_all" in pv._pending_kinds
+    pv.shutdown()
+
+
+def test_an_emg_only_processing_edit_redispatches_batch(qapp, tmp_path):
+    """M-24 acceptance: for an EMG-only signal set, the test run's OWN mechanics are built
+    from EMG (M-21's S2 branch in core.pipeline.run_batch) — unlike a flow-bearing set,
+    where the same edit leaves 'batch' alone (see test_settings_change_scopes_recompute_to_
+    affected_panels above, whose {"emg_all","emg_detail"} & emg / "batch" not in emg
+    assertion is the flow-bearing counterpart this must NOT change)."""
+    import copy as _copy
+    from respmech.ui.screens.preview_screen import PreviewScreen
+    s = synth_settings(str(tmp_path), noise=True, data_out=_DATA_OUT,
+                       channels={"flow": None, "poes": None, "pgas": None, "pdi": None,
+                                "volume": None})
+    pv = PreviewScreen(AppState(s))
+    pv._refresh_files()
+    pv._last_synced_settings = _copy.deepcopy(pv.state.settings)   # clean diff baseline
+    pv._pending_kinds.clear(); pv._autorun_timer.stop()
+    pv.state.settings.processing.emg.rms_window_s += 0.01
+    pv.sync_from_settings()
+    assert "batch" in pv._pending_kinds
+    assert {"ecg", "emg_all", "emg_detail", "noise"} <= pv._pending_kinds
+    pv.shutdown()
