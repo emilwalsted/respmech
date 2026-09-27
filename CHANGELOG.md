@@ -7,6 +7,17 @@ for the installers themselves.
 
 ## Unreleased
 
+**One IC file per participant can now reference all of that participant's other
+files.** A recording's inspiratory-capacity reference no longer has to be a breath
+in the SAME file — a dedicated IC recording (or a shared, per-participant default)
+can supply the value for every one of that participant's exercise files, and a file
+excluded from a single-file test run still resolves the same reference a full batch
+would. Reported as new `vol_ic_ref`/`ic_ref_n`/`ic_ref_source` columns, a
+"Reference manoeuvres" line and block in the run report, and an "IC reference" row
+in a resolved file's own Provenance sheet. Settings-file only for now — the
+reference-picker menu entries mentioned below stay disabled until a later release
+puts this in the UI.
+
 **EMG-only analyses of maximal manoeuvres, with no flow channel at all.** Choosing
 'EMG only' in the signal-set picker (New analysis, or Setup ▸ Signals ▸ Change… on an
 existing analysis) now asks how each recording should be split into the segments

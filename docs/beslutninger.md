@@ -6,6 +6,29 @@ decision <date>" — never an internal ticket reference; this repo is public).
 
 ---
 
+**27-09-2026 — Cross-file `ic` reference aggregation excludes `reject_flags`-flagged
+breaths; the column family is settings-wide, and an unresolved link once the family
+exists is a caution on EVERY non-resolving file, not only an explicitly linked one
+(author's decision, 27-09-2026).** `references.attach`'s aggregate over a resolved
+`BreathRef`'s breaths drops any breath flagged with one of `IcSettings.reject_flags`
+(`LOW_EFFORT` by default) before averaging — the same disqualifying rule
+`apply_repeatability`'s own leave-one-out group already applies, so a rejected
+attempt never silently drags a reference value the way it is already kept from
+dragging a repeatability check. Chosen over aggregating every linked breath
+unconditionally, which would have made `ic_ref_n` (the accepted-breath count) a
+trivial echo of the settings' own breath list rather than a meaningful quality
+signal. Separately: whether the three reference columns exist at all is decided from
+settings across the FULL matched file set, never from what a given run's own subset
+happened to resolve (so a subset run's written columns always match a full run's);
+once that family exists, a file with no reference of its own gets the three columns
+NaN'd plus a notice — read literally from the design's own "an unresolved link is a
+caution plus NaN and a notice" policy applied to the whole family, not narrowed to
+only a file that names an explicit link. This can be noisier than some study designs
+want (every non-participating file in a large batch gets a notice once ANY file in it
+uses an IC reference) — reopen if that proves a poor default in practice.
+
+---
+
 **27-09-2026 — Manoeuvre-extraction quality thresholds (`IcSettings`) ship as
 documented placeholders, not measured values; `NOT_REPEATABLE` is a second pass over
 the whole file, not part of `extract()` itself (author's decision, 27-09-2026).**
