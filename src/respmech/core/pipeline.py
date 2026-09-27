@@ -927,8 +927,15 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
             # to gate on. An undetected beat is neither subtracted nor blanked, so gating a
             # file with missed beats reports a heartbeat with extra confidence — hence the
             # guard, evaluated once here rather than per breath.
+            # M-30 self-review finding: skipped for a reference-only file too -- the ONLY
+            # consumers of gate_peaks/gate_ok/gate_reason are the per-breath mechanics loop
+            # (already skipped below, `if not reference_only:`) and compute_segment_emg,
+            # neither of which a reference-only file ever reaches. Without this guard, a
+            # reference-only file with poor R-peak detection would still get a spurious
+            # "cardiac-gated peak EMG reported as NaN" notice for a computation that was
+            # never attempted and has no corresponding column in any output of this file.
             gate_peaks, gate_ok, gate_reason = None, True, ""
-            if s.processing.emg.robust_peak.enabled:
+            if not reference_only and s.processing.emg.robust_peak.enabled:
                 gate_peaks = np.asarray(ecg_diag["peaks_s"], float) if ecg_diag else None
                 if gate_peaks is None or gate_peaks.size == 0:
                     gate_ok = False
