@@ -86,6 +86,26 @@ def test_units_registry_fallback_is_used_only_when_rules_leave_a_name_blank():
     assert units.unit_for("totally_unregistered_column_xyz") == ""
 
 
+def test_units_resolve_manoeuvre_columns():
+    """M-29's Manoeuvres-sheet columns — the ones _RULES' generic prefix/suffix
+    conventions cannot already classify (see core/analysis/registry.py::_MANOEUVRES'
+    own docstring for which ones ARE already covered by _RULES alone). Every column
+    `extract()` can emit is here, including the four already covered by _RULES alone
+    (poes_ic_eelv, poes_ic_peakvol, pdi_ic_max, pdi_max_ref)."""
+    from _helpers import assert_units
+    assert_units({
+        "ic_eelv_pre": "L", "ic_eelv_pre_sd": "L", "ic_eelv_pre_n": "", "ic_ti": "s",
+        "ic_plateau_s": "s", "quality": "",
+        # already covered by _RULES alone (vol_/flow/poes-pgas-pdi/rms prefixes) —
+        # pinned here anyway so a reader sees the WHOLE Manoeuvres family at once.
+        "vol_ic": "L", "ic_peak_in_flow": "L·s⁻¹",
+        "poes_ic_min": "cmH₂O", "poes_ic_eelv": "cmH₂O", "poes_ic_swing": "cmH₂O",
+        "poes_ic_peakvol": "cmH₂O", "pdi_ic_max": "cmH₂O", "pdi_ic_swing": "cmH₂O",
+        "pgas_ic_peakvol": "cmH₂O", "poes_max_ref": "cmH₂O", "pdi_max_ref": "cmH₂O",
+        "rms_max_ref": "a.u.",
+    })
+
+
 def test_display_for_falls_back_to_the_column_identifier():
     """The registry has room for a human-readable name (ticket A04), but the name
     table itself is deliberately not populated yet — see quantities.py's docstring.
@@ -253,6 +273,86 @@ def test_emg_normalization_reference_file_falls_back_when_absent():
     settings_unset = SimpleNamespace(processing=SimpleNamespace(emg=SimpleNamespace(
         normalization="per_file_max", normalization_reference_file=None)))
     assert reference_values_for_batch(result, settings_unset) is None
+
+
+# --------------------------------------------------------------------------- #
+# M-29 — Manoeuvres sheet (typed IC/FVC/max_insp/sniff breaths)
+# --------------------------------------------------------------------------- #
+def test_build_manoeuvre_table_is_none_when_empty():
+    from respmech.core.results import build_manoeuvre_table
+    assert build_manoeuvre_table({}) is None
+
+
+def test_build_manoeuvre_table_joins_quality_flags_into_one_cell():
+    from respmech.core.results import build_manoeuvre_table
+    df = build_manoeuvre_table({
+        4: {"kind": "ic", "vol_ic": 3.0, "quality": ["LOW_EFFORT", "BOUNDARY"]},
+        7: {"kind": "other", "quality": []},
+    })
+    assert list(df["breath_no"]) == [4, 7]
+    assert list(df["kind"]) == ["ic", "other"]
+    row4 = df[df["breath_no"] == 4].iloc[0]
+    assert row4["quality"] == "LOW_EFFORT, BOUNDARY"
+    assert row4["vol_ic"] == 3.0
+    row7 = df[df["breath_no"] == 7].iloc[0]
+    assert row7["quality"] == ""                          # empty list -> blank, not "[]"
+
+
+def test_write_batch_adds_manoeuvres_sheet_for_a_typed_breath(tmp_path):
+    """End to end through the real pipeline: a breath typed 'ic' produces a
+    'Manoeuvres' sheet on that file's breathdata workbook, the Data sheet stays
+    exactly as it would without the typing (the excluded breath just isn't in it —
+    the same behaviour any manually excluded breath already has), and a file with NO
+    typed breath gets no such sheet at all."""
+    import openpyxl
+    from respmech.core.pipeline import run_batch
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.core.io.writers import write_batch
+
+    s = synth_settings(str(tmp_path))
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=4, kind="ic"))
+    s.validate()
+    result = run_batch(s)
+    write_batch(result, s, str(tmp_path))
+
+    wb_a = openpyxl.load_workbook(os.path.join(tmp_path, "data", "synth_case_A.csv.breathdata.xlsx"))
+    assert "Manoeuvres" in wb_a.sheetnames
+    sheet = wb_a["Manoeuvres"]
+    header = [c.value for c in next(sheet.iter_rows(min_row=1, max_row=1))]
+    assert "vol_ic" in header and "kind" in header and "quality" in header
+
+    wb_b = openpyxl.load_workbook(os.path.join(tmp_path, "data", "synth_case_B.csv.breathdata.xlsx"))
+    assert "Manoeuvres" not in wb_b.sheetnames               # no typed breath in this file
+
+    # breath #4 is now excluded from the Data sheet, same as any excluded breath
+    data_a = pd.read_excel(os.path.join(tmp_path, "data", "synth_case_A.csv.breathdata.xlsx"),
+                           sheet_name="Data")
+    assert 4 not in set(data_a["breath_no"])
+
+
+def test_low_effort_flag_is_identical_between_a_subset_batch_and_a_full_batch(tmp_path):
+    """Acceptance criterion, exercised through the REAL pipeline (not just a unit-level
+    call to `extract` with a hand-built tidal list — see test_manoeuvres.py's
+    test_extract_is_deterministic_given_the_same_tidal_breaths for that half): a batch
+    restricted to synth_case_A.csv alone (`only_files=`, the shape `BatchWorker` uses
+    for a single-file test run) must compute the EXACT SAME `FileResult.manoeuvres` for
+    that file as a full batch that also processes synth_case_B.csv — LOW_EFFORT (and
+    every other extracted value) is a function of the file's own tidal breaths alone,
+    never of what else is in the batch."""
+    from respmech.core.pipeline import run_batch
+    from respmech.core.settings import BreathTypeEntry
+
+    s = synth_settings(str(tmp_path))
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=4, kind="ic"))
+    s.validate()
+
+    full = run_batch(s)
+    subset = run_batch(s, only_files=["synth_case_A.csv"])
+
+    assert full.files["synth_case_A.csv"].manoeuvres == subset.files["synth_case_A.csv"].manoeuvres
+    assert full.files["synth_case_A.csv"].manoeuvres[4]["kind"] == "ic"   # the comparison isn't vacuous
 
 
 # --------------------------------------------------------------------------- #

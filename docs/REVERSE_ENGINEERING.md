@@ -442,6 +442,98 @@ An automatic alternative to manual separators (fixed windows, burst detection) a
 resolved single noise-reference rule for an EMG-only set (`reference_mode`) are later
 tickets' scope, not this one's.
 
+### 5.13 Manoeuvre extraction (v2-only) — `core/analysis/manoeuvres.py`
+
+A single breath can be TYPED (`processing.breath_types`, one `BreathTypeEntry` per
+breath — `ic`/`fvc`/`ic_fvc`/`max_insp`/`sniff`/`rest`/`other`) as a named manoeuvre
+rather than tidal breathing. On a flow-bearing signal set every typed kind is unioned
+into `excludebreaths` (`§5.3`'s exclusion mechanism, extended by M-19), so a typed
+breath **never reaches `calculatemechanics()`** — the ordinary mechanics loop's own
+`if breath["ignored"]: continue` skips it exactly like a manually excluded breath.
+`manoeuvres.extract(breath, kind, tidal_breaths, caps, s)` is called separately, once
+per typed breath, straight from its raw breath dict (never from `calculatemechanics`'
+output):
+
+- **`ic`/`ic_fvc`** (an inspiratory-capacity manoeuvre; `ic_fvc` also carries a forced
+  expiration on the SAME breath): `vol_ic = max(breath['volume']) − ic_eelv_pre`.
+  `ic_eelv_pre` is the mean end-expiratory volume of up to
+  `IcSettings.preceding_breaths` TIDAL breaths immediately preceding this one (by
+  breath NUMBER, not list order), falling back to this breath's own
+  `inspiration['volume'][0]` (`ic_eelv_pre_n=1`, `ic_eelv_pre_sd=0.0`) when fewer than
+  `min_preceding_breaths` tidal breaths precede it. `ic_ti` = inspiration sample count
+  / fs (the same "a sample COUNT, not `time[-1] - time[0]`" convention `§5.12`'s
+  `seg_duration_s` uses). `ic_peak_in_flow = −min(inspiration['flow'])`.
+  `ic_plateau_s` counts back from the very end of the inspiration while `|flow| <
+  plateau_flow_lps`, uninterrupted — how long the manoeuvre was held at its inspiratory
+  peak. `poes_ic_min`/`poes_ic_eelv`/`poes_ic_swing`/`poes_ic_peakvol`,
+  `pdi_ic_max`/`pdi_ic_swing`, `pgas_ic_peakvol` mirror the volume fields for each
+  pressure channel present (`peakvol` = the channel's value at the SAME sample index
+  `max(breath['volume'])` was found at).
+- **Quality flags** (`quality`, a list, joined with `", "` for the sheet):
+  `EELV_UNSTABLE` (the preceding-breaths' EELV standard deviation, scaled by the
+  MANOEUVRE'S OWN `vol_ic` — never by `ic_eelv_pre` itself: this codebase
+  zero-references and drift-corrects volume by default, so a real `ic_eelv_pre` sits
+  within a few mL of 0 L, and a relative tolerance measured against it would explode
+  on ordinary breath-to-breath noise — exceeds `eelv_tolerance_frac`, only evaluable
+  with ≥ 2 preceding breaths), `LOW_EFFORT` (this manoeuvre's own peak inspiratory
+  flow, or Poes swing, is below `low_effort_frac` × the FILE's OWN tidal median —
+  computed from raw arrays over the file's own non-ignored breaths, never the
+  mechanics table, so a subset run and a full batch run agree), `NO_PLATEAU`
+  (`ic_plateau_s < min_plateau_s`), `BOUNDARY` (this breath is the first- or
+  last-numbered breath the file has), and — for `fvc`/`ic_fvc` — `FVC_TOO_SHORT`
+  (`validate_fvc_manoeuvre`: the expiratory limb's own duration is under 1.0 s).
+  `NOT_REPEATABLE` is NOT set by `extract()` itself (a single breath cannot see its
+  file's OTHER typed breaths); `apply_repeatability(manoeuvres, ic_cfg)` runs once
+  per file AFTER every typed breath's own `extract()` result is in hand, comparing
+  each IC/IC+FVC breath's `vol_ic` against the mean (or median, `aggregate=`) of the
+  file's OTHER eligible ICs — LEAVE-ONE-OUT, never including the row's own value in
+  what it is compared against, or the effective tolerance for exactly two attempts
+  would silently halve and a single bad attempt could drag a genuinely agreeing pair
+  into looking unrepeatable too. One already carrying a `reject_flags` flag
+  (`LOW_EFFORT` by default) is excluded from that comparison group entirely (on
+  either side), and a lone IC with no sibling is never flagged (repeatability is a
+  property of a pair). `aggregate='mean'` (the default) is still outlier-sensitive
+  once there are ≥ 4 total eligible attempts — `aggregate='median'` is the
+  outlier-robust choice for a study expecting more than three repeats.
+- **`max_insp`/`sniff`** (a maximal-effort reference breath):
+  `max_effort_from_breath` reports `poes_max_ref = inspiration['poes'][0] −
+  min(inspiration['poes'])`, `pdi_max_ref = max(inspiration['pdi']) −
+  inspiration['pdi'][0]` (both SWINGS from the breath's own immediate
+  pre-inspiratory baseline — the same convention `poes_ic_swing`/`pdi_ic_swing`
+  use above, not the raw absolute pressure, so a later normalisation ratio (M-47)
+  never divides a baseline-subtracted swing by a channel's absolute resting offset),
+  and `rms_max_ref` — the peak rolling-RMS envelope (`emg.rolling_rms`, the same grid
+  `§5.12`'s whole-file diagnostics use) across every EMG channel in the breath,
+  computed here rather than read off the breath dict because a typed breath's
+  `compute_segment_emg` is never called (it is `ignored=True`). No `quality` flags —
+  the IC-specific acceptance checks do not apply to a maximal-effort breath.
+- **`fvc`** (pure, not combined with an IC): `validate_fvc_manoeuvre`'s
+  `FVC_TOO_SHORT` flag only — the actual FVC/FEV1/PEF/flow-volume-curve numerics are
+  `core/analysis/mfvl.py`'s scope (a later ticket), not this module's.
+  `suggest_fvc(breaths)` is a separate, pure UI-facing heuristic (not called from
+  `extract()` or the pipeline): the untyped, non-ignored breath with the longest
+  expiration in the file — a deterministic hint, never an automatic choice.
+- **`other`**: `{'kind': 'other', 'quality': []}` — recorded so the breath is visible
+  in the Manoeuvres sheet, no numeric semantics defined for it. **`rest`** is never
+  passed to `extract()` at all — the pipeline skips it (a noise-reference segment
+  label, not a manoeuvre — see M-22/`§5.12`'s `rest_segments` reference mode).
+
+`core.pipeline.run_batch` builds `FileResult.manoeuvres` (`{breath_no: extract(...)
+result}`) and `.manoeuvres_table` (`core.results.build_manoeuvre_table`, `None` when
+empty) right after the main mechanics loop, flow-bearing runs only (an EMG-only
+segment has no `inspiration`/`expiration` for `extract` to read).
+`core.io.writers.write_batch` adds it as an extra "Manoeuvres" sheet on the per-file
+breathdata workbook, exactly like the existing "EMG normalised" sheet — present only
+when at least one typed breath exists in that file.
+
+Every numeric threshold in `IcSettings` (`eelv_tolerance_frac`, `plateau_flow_lps`,
+`min_plateau_s`, `repeatability_frac`, `low_effort_frac`) is a documented PLACEHOLDER,
+not a value measured against a real IC recording (no production recording exists in
+the sandbox that implemented this) — see `docs/beslutninger.md` for what still needs
+measuring before these are trusted clinically. The FORMULAS themselves are pinned by
+analytical/synthetic tests (`tests/unit/test_manoeuvres.py`), independent of the exact
+cut-offs.
+
 ---
 
 ## 6. Latent issues found (to fix deliberately in the refactor)

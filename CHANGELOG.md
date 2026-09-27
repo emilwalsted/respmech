@@ -45,6 +45,18 @@ to use it today, via a new `[[processing.breath_types]]` table.
      tests) — no separate user-visible behaviour beyond what f380c02's skip note
      already covers. -->
 
+**Mark a breath as an inspiratory capacity (IC) manoeuvre and get its volume and Poes
+without hand extraction.** A breath typed `ic` (or `ic_fvc`) now reports its own
+inspiratory-capacity volume, timing and pressure swings — plus quality flags for a low
+effort, an unstable pre-manoeuvre baseline, no held plateau, an unrepeatable measurement
+against a repeat attempt in the same file, or a manoeuvre right at the edge of the
+recording — in a new "Manoeuvres" sheet alongside that file's breath-by-breath workbook.
+A `max_insp`/`sniff`-typed breath reports its own peak effort (Poes/Pdi/EMG) as a
+reference value for a later release's normalisation. Still settings-model-only, like the
+typing itself above — there is no menu in the app yet to pick these kinds (only
+Tidal/Excluded/Rest so far), so a hand-edited `settings.toml` is the only way to use it
+today.
+
 **Explore with sample data follows the signal set.** The startup chooser's own
 'Explore with sample data' door still always opens the complete demo recording, but
 'File/Analysis > Explore with sample data' now opens a sample matching whichever
