@@ -61,11 +61,42 @@ class Channels:
 
 
 @dataclass
+class SubjectEntry:
+    """One participant's spirometry-derived lung volumes (M-34), keyed on
+    ``core.summary.group_key(file, settings)`` -- the SAME leading-filename-token (or
+    ``output.group_regex``) key the cohort summary already groups files by, so a
+    subject's TLC/VC/RV/FEV1/MVV apply to every file ``group_key`` assigns to their key,
+    with no separate per-subject file list to keep in sync. ``fev1_l`` is a spirometry
+    value, preferred over any FEV1 this codebase might derive from a recorded FVC
+    manoeuvre (M-42) -- a formal spirometer reading is the more reliable number.
+    ``mvv_lpm`` (maximum voluntary ventilation, L/min) is likewise a spirometry value,
+    for comparison against M-42's own derived MVV estimate.
+
+    Sent into ``core.compute`` for NOTHING (M-34's own scope: "referencer og subjekter
+    sendes IKKE ind i compute") -- only ``core.analysis.lungvol`` (M-36) and
+    ``core.analysis.references``/``core.analysis.mfvl`` read this table, well after the
+    per-breath mechanics loop this ticket never touches has already run.
+
+    ``folder`` is the same carried-over-state provenance tag as every other tagged kind
+    -- see ``_CARRIED_KINDS`` below."""
+    key: str
+    tlc_l: float | None = None
+    vc_l: float | None = None
+    rv_l: float | None = None
+    fev1_l: float | None = None
+    mvv_lpm: float | None = None
+    folder: str | None = None
+
+
+@dataclass
 class InputSettings:
     folder: str = "input"
     files: str = "*.*"
     format: InputFormat = field(default_factory=InputFormat)
     channels: Channels = field(default_factory=Channels)
+    # M-34: per-participant lung volumes (TLC/VC/RV/FEV1/MVV), keyed on group_key -- see
+    # SubjectEntry's own docstring.
+    subjects: list[SubjectEntry] = field(default_factory=list)
 
 
 @dataclass
@@ -341,12 +372,39 @@ class IcSettings:
     low_effort_frac: float = 0.5                # † LOW_EFFORT threshold (vs tidal median)
     aggregate: str = "mean"                     # "mean" | "median" — how repeat ICs are combined
     reject_flags: list[str] = field(default_factory=lambda: ["LOW_EFFORT"])
+    # M-34: how a tidal breath's operating-lung-volume baseline tracks the reference IC
+    # (M-36's own scope builds the arithmetic; this ticket only declares and validates the
+    # field, so the settings model for the whole E6 epic is complete before the pipeline
+    # wiring lands). "none" (the default): ic_op is simply the resolved reference IC,
+    # unchanged across the file. "within_file": ic_op additionally tracks each tidal
+    # breath's own end-expiratory drift relative to the reference IC's own end-expiratory
+    # level, using ONLY same-file IC/EELV data (a cross-file end-expiratory comparison is
+    # not meaningful -- two different recordings rarely share a common volume zero).
+    eelv_tracking: str = "none"                  # "none" | "within_file"
 
 
 @dataclass
 class LungVolumeSettings:
     """Container for the operating-lung-volumes family (M-29's IC extraction now;
-    M-36 adds per-tidal-breath EELV/EILV tracking alongside it)."""
+    M-36 adds per-tidal-breath EELV/EILV tracking alongside it).
+
+    ``require_references``: off by default -- a reference source named in
+    ``processing.references``/``reference_defaults`` but absent from the batch's own
+    matched files (``core.pipeline.match_input_files``) is only a soft
+    ``core.analysis.references.check_links`` caution while this is False; turning it on
+    makes such a missing source a hard ``ui.validation.path_problem`` blocker instead
+    (M-34's own "one policy: an unresolved link is a caution + NaN + notice; a blocker
+    only with require_references" -- see that module and ``ui.validation.path_problem``).
+
+    ``baseline_pattern``: a case-insensitive regex (default matches a filename
+    containing 'baseline' or 'rest') used -- by a LATER ticket (M-35/M-36's own
+    baseline-file heuristics), never here -- to suggest which file in a
+    participant's own set is their resting/baseline recording when
+    ``ReferenceEntry.baseline_ic``/``GroupReferenceEntry.baseline_ic`` is not set
+    explicitly. Stored and round-tripped by this ticket; not yet read by any code path.
+    """
+    require_references: bool = False
+    baseline_pattern: str = r"(?i)baseline|rest"
     ic: IcSettings = field(default_factory=IcSettings)
 
 
@@ -414,6 +472,76 @@ class BreathTypeEntry:
 
 
 @dataclass
+class BreathRef:
+    """One or more breaths in one file, named as a reference source for a manoeuvre
+    kind (M-34) -- e.g. ``ic = { file = "P03_IC.txt", breaths = [2, 3, 4] }`` under a
+    :class:`ReferenceEntry`/:class:`GroupReferenceEntry`. Plural ``breaths`` because a
+    file can carry more than one repeat of the same manoeuvre (``IcSettings.aggregate``
+    combines them once M-35 resolves the link); a single-breath reference is simply a
+    one-element list.
+
+    Nested inside an ``X | None`` field (``ReferenceEntry.ic`` etc.), which needs the
+    PEP 604 fix to ``_unwrap_optional`` (M-02) to round-trip through TOML at all --
+    without it ``_coerce`` never reaches the ``is_dataclass(typ)`` branch for a
+    ``BreathRef | None`` annotation and silently hands back the raw dict instead of a
+    ``BreathRef`` instance."""
+    file: str
+    breaths: list[int] = field(default_factory=list)
+
+
+@dataclass
+class ReferenceEntry:
+    """Per-file reference manoeuvres (M-34): which breaths (in which file, possibly a
+    different one) an ANALYSED file's inspiratory-capacity/forced-vital-capacity/
+    maximal-effort values are read from. Takes precedence over any matching
+    :class:`GroupReferenceEntry` for the same file's group, which in turn takes
+    precedence over the file's OWN typed breaths -- see
+    ``core.analysis.references.resolve_reference`` for the exact order, applied
+    independently per slot (a file can have an explicit ``ic`` but fall through to the
+    group default for ``fvc``).
+
+    ``baseline_ic`` names the resting/baseline recording an operating-lung-volume
+    calculation's ``delta_ic``/``delta_eelv`` (M-36) is measured relative to -- a
+    DIFFERENT recording by nature (a baseline is measured before/after, never inferred
+    from the manoeuvre breath itself), so unlike ``ic``/``fvc``/``max_insp`` it has no
+    "own typed breath" fallback (see ``resolve_reference``'s docstring).
+
+    Referenced breaths are never sent into ``core.compute`` (M-34's own scope): this
+    table is read only by ``core.analysis.references``/``lungvol``/``mfvl`` (M-35/M-36/
+    M-42), all downstream of the ordinary per-breath mechanics loop.
+
+    ``folder`` is the same carried-over-state provenance tag as every other tagged kind
+    -- see ``_CARRIED_KINDS`` below."""
+    file: str
+    folder: str | None = None
+    ic: BreathRef | None = None
+    fvc: BreathRef | None = None
+    baseline_ic: BreathRef | None = None
+    max_insp: BreathRef | None = None
+
+
+@dataclass
+class GroupReferenceEntry:
+    """Same shape as :class:`ReferenceEntry`, but applied to every file in a GROUP
+    (``core.summary.group_key``) rather than to one named file -- the common
+    multi-file-per-participant case, where every file from the same participant shares
+    one IC/FVC/baseline recording instead of repeating the same
+    :class:`ReferenceEntry` under every one of that participant's files. A file-level
+    ``ReferenceEntry`` for the same slot always wins over its group's default -- see
+    :class:`ReferenceEntry`'s docstring and ``core.analysis.references.
+    resolve_reference``.
+
+    ``folder`` is the same carried-over-state provenance tag as every other tagged kind
+    -- see ``_CARRIED_KINDS`` below."""
+    group: str
+    folder: str | None = None
+    ic: BreathRef | None = None
+    fvc: BreathRef | None = None
+    baseline_ic: BreathRef | None = None
+    max_insp: BreathRef | None = None
+
+
+@dataclass
 class ProcessingSettings:
     sampling: SamplingSettings = field(default_factory=SamplingSettings)
     segmentation: SegmentationSettings = field(default_factory=SegmentationSettings)
@@ -426,6 +554,10 @@ class ProcessingSettings:
     exclude_breaths: list[ExcludeEntry] = field(default_factory=list)
     breath_counts: list[BreathCountEntry] = field(default_factory=list)
     breath_types: list[BreathTypeEntry] = field(default_factory=list)
+    # M-34: per-file and per-group reference manoeuvres -- see ReferenceEntry/
+    # GroupReferenceEntry's own docstrings and core.analysis.references.
+    references: list[ReferenceEntry] = field(default_factory=list)
+    reference_defaults: list[GroupReferenceEntry] = field(default_factory=list)
 
 
 @dataclass
@@ -808,6 +940,51 @@ class Settings:
                     "repeatability_frac", "low_effort_frac"):
             if getattr(ic, name) < 0:
                 raise SettingsError(f"processing.lung_volume.ic.{name} must not be negative")
+        if ic.eelv_tracking not in ("none", "within_file"):
+            raise SettingsError(
+                'processing.lung_volume.ic.eelv_tracking must be "none" or "within_file"')
+
+        # M-34: references/reference_defaults/subjects -- FORM only (this ticket never
+        # resolves a link or touches a file on disk; that is core.analysis.references'
+        # job). Same two-pass shape as breath_types/separators above: a malformed entry
+        # (hand-edited TOML; no UI writes these tables yet) is reported on its own terms
+        # first, THEN the one cross-entry conflict that assumes well-formed data.
+        for i, r in enumerate(self.processing.references):
+            if not isinstance(r, ReferenceEntry):
+                raise SettingsError(
+                    f"processing.references[{i}] must be a table with file")
+        seen_ref_files: set[str] = set()
+        for r in self.processing.references:
+            if r.file in seen_ref_files:
+                raise SettingsError(
+                    f"processing.references: {r.file} appears more than once")
+            seen_ref_files.add(r.file)
+
+        for i, g in enumerate(self.processing.reference_defaults):
+            if not isinstance(g, GroupReferenceEntry):
+                raise SettingsError(
+                    f"processing.reference_defaults[{i}] must be a table with group")
+        seen_ref_groups: set[str] = set()
+        for g in self.processing.reference_defaults:
+            if g.group in seen_ref_groups:
+                raise SettingsError(
+                    f"processing.reference_defaults: group {g.group} appears more than once")
+            seen_ref_groups.add(g.group)
+
+        for i, subj in enumerate(self.input.subjects):
+            if not isinstance(subj, SubjectEntry):
+                raise SettingsError(f"input.subjects[{i}] must be a table with key")
+        seen_subject_keys: set[str] = set()
+        for i, subj in enumerate(self.input.subjects):
+            if subj.key in seen_subject_keys:
+                raise SettingsError(f"input.subjects: key {subj.key} must be unique")
+            seen_subject_keys.add(subj.key)
+            if subj.tlc_l is not None and not (0.0 <= subj.tlc_l <= 15.0):
+                raise SettingsError(
+                    f"input.subjects[{i}].tlc_l must be between 0 and 15 L")
+            if (subj.rv_l is not None and subj.tlc_l is not None
+                    and not (subj.rv_l < subj.tlc_l)):
+                raise SettingsError(f"input.subjects[{i}].rv_l must be below tlc_l")
 
         return self
 
@@ -1014,6 +1191,15 @@ _CARRIED_KINDS: tuple[tuple[str, str, Callable[[Any], Any], Callable[[Any], None
     # otherwise be a no-op left behind by the UI).
     ("processing.segmentation.separators", "separator_files",
      lambda e: e.file, None),
+    # M-34: a reference entry always names a file worth reporting once it exists at
+    # all, same reasoning as breath_types/separators above (an entry with every slot
+    # still unset is still a deliberate placeholder the user created, not a no-op).
+    ("processing.references", "reference_files",
+     lambda e: e.file, None),
+    ("processing.reference_defaults", "group_reference_groups",
+     lambda e: e.group, None),
+    ("input.subjects", "subject_keys",
+     lambda e: e.key, None),
 )
 
 
@@ -1058,6 +1244,22 @@ class CarriedOverState:
     @property
     def breath_type_files(self) -> list[str]:
         return self._by_kind.get("breath_type_files", [])
+
+    @property
+    def separator_files(self) -> list[str]:
+        return self._by_kind.get("separator_files", [])
+
+    @property
+    def reference_files(self) -> list[str]:
+        return self._by_kind.get("reference_files", [])
+
+    @property
+    def group_reference_groups(self) -> list[str]:
+        return self._by_kind.get("group_reference_groups", [])
+
+    @property
+    def subject_keys(self) -> list[str]:
+        return self._by_kind.get("subject_keys", [])
 
     def kinds_present(self) -> list[tuple[str, list[str]]]:
         """``(kind, names)`` for every kind that IS carried, in `_CARRIED_KINDS` table
