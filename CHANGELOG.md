@@ -18,6 +18,16 @@ in a resolved file's own Provenance sheet. Settings-file only for now — the
 reference-picker menu entries mentioned below stay disabled until a later release
 puts this in the UI.
 
+**Operating lung volumes derived from a resolved IC reference.** Once a file has a
+resolved inspiratory-capacity reference (see above), every tidal breath now also
+reports its operating IC, EELV, EILV and inspiratory reserve volume (IRV) — as a
+volume above residual volume (from a spirometry-derived vital capacity entered in
+`[[input.subjects]]`) and, alongside it whenever a total lung capacity is entered,
+the same set as an absolute value above RV. Per-file TLC/VC and the change in
+IC/EELV against a baseline recording are reported too. A new "LUNG VOLUMES" block in
+the run report and two new Provenance rows name the tracking mode and datum used.
+Settings-file only for now, same as the reference feature it builds on.
+
 **EMG-only analyses of maximal manoeuvres, with no flow channel at all.** Choosing
 'EMG only' in the signal-set picker (New analysis, or Setup ▸ Signals ▸ Change… on an
 existing analysis) now asks how each recording should be split into the segments
