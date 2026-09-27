@@ -32,6 +32,10 @@ from respmech.core.analysis.signals import SINGLE_SIGNALS, Capabilities
 #: an analysis switch between the flow/volume family and the EMG-only family of
 #: methods. Kept as one constant so the two messages below can never drift apart.
 _SIGNAL_SET_CHANGE_LOCATION = "Setup ▸ Signals ▸ Change…"
+#: M-34: the one location string every reference/subject/lung-volume message points at —
+#: a later ticket's (M-37) new Setup card, not built yet. Kept as a constant for the same
+#: reason as ``_SIGNAL_SET_CHANGE_LOCATION`` above.
+_SUBJECTS_LOCATION = "Setup ▸ Subjects && lung volumes"
 
 _FRIENDLY_SETTINGS_ERRORS = {
     "input.channels.volume is required unless processing.volume.integrate_from_flow is true":
@@ -92,6 +96,11 @@ _FRIENDLY_SETTINGS_ERRORS = {
         "Automatic noise-reduction strength is not available for an EMG-only signal "
         "set yet — set the noise-reduction strength manually (Preview & QC ▸ EMG – "
         "noise reduction)",
+    # M-34: reference/subject/lung-volume settings — all point at the same screen
+    # location, a later ticket's (M-37) new Setup card.
+    'processing.lung_volume.ic.eelv_tracking must be "none" or "within_file"':
+        "EELV tracking must be 'none' or 'within file' "
+        f"({_SUBJECTS_LOCATION})",
 }
 #: messages whose text carries a dynamic suffix (e.g. "... at the analysis rate (500 Hz)")
 #: — matched by prefix, so the friendly text stands alone rather than gluing raw TOML
@@ -158,6 +167,23 @@ _SEPARATOR_ENTRY_FORM_RE = re.compile(
     r"increasing))$")
 _SEPARATOR_ENTRY_DUPLICATE_RE = re.compile(
     r"^processing\.segmentation\.separators: .+ has more than one entry$")
+#: M-34: ReferenceEntry/GroupReferenceEntry's own "malformed"/"conflict" messages — same
+#: two-message split as SeparatorEntry above (form vs. duplicate), one pair per table.
+_REFERENCE_ENTRY_FORM_RE = re.compile(
+    r"^processing\.references\[\d+\] must be a table with file$")
+_REFERENCE_ENTRY_DUPLICATE_RE = re.compile(
+    r"^processing\.references: .+ appears more than once$")
+_GROUP_REFERENCE_ENTRY_FORM_RE = re.compile(
+    r"^processing\.reference_defaults\[\d+\] must be a table with group$")
+_GROUP_REFERENCE_ENTRY_DUPLICATE_RE = re.compile(
+    r"^processing\.reference_defaults: group .+ appears more than once$")
+#: M-34: SubjectEntry's three checks (malformed, duplicate key, out-of-range volumes) all
+#: point at the same not-yet-built Setup card, so they share ONE friendly sentence per
+#: the plan's own translation table (section 5.2) rather than three separate ones.
+_SUBJECT_ENTRY_RE = re.compile(
+    r"^input\.subjects\[\d+\](?: must be a table with key|\.(?:tlc_l must be between 0 "
+    r"and 15 L|rv_l must be below tlc_l))$")
+_SUBJECT_ENTRY_DUPLICATE_RE = re.compile(r"^input\.subjects: key .+ must be unique$")
 #: a single-channel-role "is required" message, with an OPTIONAL " by analysis.signals"
 #: suffix (R7): the suffix means the role was named in an EXPLICIT ``analysis.signals``
 #: list (so the fix can also be "remove it from the signal set"); its absence means the
@@ -229,6 +255,14 @@ def friendly_settings_error(exc, settings=None) -> str:
                 "EMG – segments)")
     if _SEPARATOR_ENTRY_DUPLICATE_RE.match(msg):
         return "A separator entry is duplicated — keep one"
+    if _REFERENCE_ENTRY_FORM_RE.match(msg) or _GROUP_REFERENCE_ENTRY_FORM_RE.match(msg):
+        return f"A reference entry is not valid ({_SUBJECTS_LOCATION})"
+    if _REFERENCE_ENTRY_DUPLICATE_RE.match(msg) or _GROUP_REFERENCE_ENTRY_DUPLICATE_RE.match(msg):
+        return "A reference entry is duplicated — keep one"
+    if _SUBJECT_ENTRY_RE.match(msg):
+        return f"A subject's lung volumes are out of range or not valid ({_SUBJECTS_LOCATION})"
+    if _SUBJECT_ENTRY_DUPLICATE_RE.match(msg):
+        return f"A subject key is duplicated — keep one ({_SUBJECTS_LOCATION})"
     return _DOTTED_KEY_RE.sub("a setting", msg)
 
 
