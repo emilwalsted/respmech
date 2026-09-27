@@ -192,6 +192,62 @@ def test_one_sample_segment_keeps_a_length_one_time_array_not_a_scalar():
     assert one_sample["time"].shape == (1,)
 
 
+# -- remap_segment_number (M-27's renumbering rule for a placed/removed separator) ----
+
+def test_remap_is_the_identity_when_the_boundaries_do_not_change():
+    from respmech.core.analysis.segments import remap_segment_number
+    bounds = [0.0, 1.0, 2.0, 3.5]        # 4 segments
+    for n in (1, 2, 3, 4):
+        assert remap_segment_number(bounds, bounds, n) == n
+
+
+def test_insertion_after_a_segment_leaves_its_own_number_and_start_unchanged():
+    """Segments strictly BEFORE the inserted boundary keep both their number and
+    their start time — nothing about them changed."""
+    from respmech.core.analysis.segments import remap_segment_number
+    old = [0.0, 1.0, 2.0]                # segments 1, 2, 3
+    new = [0.0, 1.0, 1.5, 2.0]           # a new separator at 1.5 splits old segment 2
+    assert remap_segment_number(old, new, 1) == 1
+
+
+def test_insertion_before_a_segment_shifts_its_number_but_not_its_start():
+    """The literal acceptance sequence: 3 separators (4 segments), exclude segment 3,
+    insert a separator BEFORE it -- the exclusion must follow to the new segment 4.
+    Segment 3 started at 2.0 in the old list; that instant is STILL an exact boundary
+    in the new list, just with one more boundary ahead of it now."""
+    from respmech.core.analysis.segments import remap_segment_number
+    old = [0.0, 1.0, 2.0, 3.5]            # segments 1..4 (3 separators)
+    new = [0.0, 1.0, 1.5, 2.0, 3.5]       # inserted at 1.5, strictly before segment 3's start
+    assert remap_segment_number(old, new, 3) == 4
+    # segment 4 (started at 3.5, after the inserted boundary) shifts the same way
+    assert remap_segment_number(old, new, 4) == 5
+    # segment 1 (started at 0.0, before everything) is untouched
+    assert remap_segment_number(old, new, 1) == 1
+
+
+def test_removing_a_boundary_merges_into_the_preceding_segment():
+    """The removal/merge case: the boundary at 2.0 disappears, so what was segment 3
+    (started at 2.0) now falls INSIDE segment 2 (which now spans 1.0..3.5)."""
+    from respmech.core.analysis.segments import remap_segment_number
+    old = [0.0, 1.0, 2.0, 3.5]             # segments 1..4
+    new = [0.0, 1.0, 3.5]                  # the separator at 2.0 was removed
+    assert remap_segment_number(old, new, 3) == 2
+    # the segment before the removed boundary is unaffected
+    assert remap_segment_number(old, new, 2) == 2
+    # and the one after just shifts down by one, exactly like the merged segment
+    assert remap_segment_number(old, new, 4) == 3
+
+
+def test_remap_clamps_a_stale_number_beyond_the_old_bounds_instead_of_raising():
+    """Stale data (a breath number the current separators no longer produce) has no
+    better instant to compare with than the recording's own last known boundary --
+    a renumbering aid, not a validator, so it clamps rather than raises IndexError."""
+    from respmech.core.analysis.segments import remap_segment_number
+    old = [0.0, 1.0, 2.0]
+    new = [0.0, 1.0, 2.0, 2.5]
+    assert remap_segment_number(old, new, 99) == remap_segment_number(old, new, 3)
+
+
 # -- compute.separateintobreaths dispatch, and the run through compute_segment_emg ----
 
 def test_separateintobreaths_dispatches_whole_file_and_separators():

@@ -15,6 +15,8 @@ from PySide6.QtCore import Qt
 
 import pyqtgraph as pg
 
+from respmech.core.analysis.segments import remap_segment_number
+from respmech.core.settings import SeparatorEntry
 from respmech.ui.flow_layout import ElidingLabel
 from respmech.ui.plot_overlays import add_flow_background
 from respmech.ui import wheel as _wheel
@@ -26,7 +28,13 @@ try:
 except Exception:  # pragma: no cover
     _theme = None
 
-from ._plot_helpers import _pen, _plot_pal
+from ._plot_helpers import SeparatorLinesItem, _pen, _plot_pal
+
+#: M-27's own tooltip while placement is unavailable, worded exactly as the ticket
+#: requires — whole-file mode has no boundaries to place (one segment, always).
+_WHOLE_FILE_TOOLTIP = (
+    "Whole-file mode has one segment — choose Manual separators in Setup ▸ "
+    "Signals ▸ Change… to place separators.")
 
 
 class _SegmentsMixin:
@@ -73,14 +81,20 @@ class _SegmentsMixin:
         self.segments_plots.scene().sigMouseClicked.connect(self._on_segments_clicked)
         self._segments_subplots = []
         self._segments_label_y = None
+        # M-27: whether 'Place separators' is currently armed (read by the shared
+        # _toggle_from_emg_click funnel in _emg_noise.py, checked before it does
+        # anything else) + the SeparatorLinesItem drawn on each segments subplot.
+        self._separators_armed = False
+        self._separator_items = []
         return w
 
     def _build_segments_action_band(self):
         """The segments tab's own QC verdict + per-file action, mirroring
         ``_MechanicsMixin._build_mech_action_band`` exactly (same pinned-outside-the-
         scrolling-page placement, same reason: on a short screen the verdict must not be
-        the one thing scrolled out of view). 'Place separators' (M-27) slots in beside
-        the button — out of THIS ticket's scope (see the plan's own "Uden for omfang").
+        the one thing scrolled out of view). Three elements now sit in this row: the QC
+        label, M-27's own 'Place separators' toggle, and the process button —
+        ``test_the_segments_action_band_fits_on_windows_metrics`` covers all three.
 
         ``segments_qc_overview`` (not a spacer) carries the row's stretch factor, same
         role ``_build_mech_action_band``'s ``mech_window_label`` plays: an ElidingLabel
@@ -100,12 +114,20 @@ class _SegmentsMixin:
             "Quality overview of the CURRENTLY PREVIEWED file's most recent test run — "
             "not a batch summary. See the file rail for every file's exclusion count.")
         bar.addWidget(self.segments_qc_overview, 1)   # M-27's button lands beside this
+        # M-27: checkable, so its own pressed state IS the "armed" flag the shared click
+        # funnel reads (_toggle_from_emg_click) — toggled() keeps _separators_armed and
+        # the checked visual in lockstep with no separate bookkeeping to drift.
+        self.btn_place_separators = QPushButton("Place separators")
+        self.btn_place_separators.setCheckable(True)
+        self.btn_place_separators.toggled.connect(self._on_place_separators_toggled)
+        bar.addWidget(self.btn_place_separators)
         self.btn_process_segments_file = QPushButton("Process && write this file")
         self.btn_process_segments_file.setEnabled(False)
         self.btn_process_segments_file.setToolTip(
             "Run and write output for the previewed file only.")
         self.btn_process_segments_file.clicked.connect(self._process_this_file)
         bar.addWidget(self.btn_process_segments_file)
+        self._update_separators_button()
         return band
 
     def _update_segments_stack_floor(self):
@@ -126,19 +148,26 @@ class _SegmentsMixin:
     def _on_segments_clicked(self, ev):
         self._toggle_from_emg_click(ev, self._segments_subplots, self._trim_offset_s)
 
-    def _render_segments_stack(self, emg, fs, flow=None):
+    def _render_segments_stack(self, emg, fs, flow=None, filename=None):
         """Draw the segments tab's own stacked EMG channels, with REAL click-to-exclude/
         right-click-to-type overlays (``_draw_breath_overlays``) — unlike
         ``_render_raw_stack``'s passive per-view overlay (``_paint_breaths``/``_bov``),
         this stack IS the tab a user interacts with for an EMG-only set, so it drives
         ``_breath_spans``/``_breath_regions``/``_breath_texts`` directly, exactly as the
         Mechanics channel stack does for a flow-bearing set — safe because the two are
-        mutually exclusive (see ``_draw_breath_overlays``'s own docstring)."""
+        mutually exclusive (see ``_draw_breath_overlays``'s own docstring).
+
+        ``filename`` (M-27) is the file THIS render is for — never read from
+        ``self._previewed_file``, which the caller (``_render_segments_preview``) only
+        updates AFTER this call returns, so it would still name the PREVIOUS file on a
+        file switch. Drives which file's ``processing.segmentation.separators`` entry
+        the new ``SeparatorLinesItem`` per subplot draws (``_update_separator_lines``)."""
         emg = np.asarray(emg, dtype=float)
         if emg.ndim == 1:
             emg = emg[:, None]
         self._segments_subplots = []
         self._segments_label_y = None
+        self._separator_items = []
         self.segments_plots.clear()
         if emg.size == 0 or emg.ndim != 2 or emg.shape[1] == 0:
             self._draw_breath_overlays([], plots=[])   # drop stale overlays
@@ -160,8 +189,25 @@ class _SegmentsMixin:
             self._segments_subplots.append(p)
         self._style_channel_stack(self.segments_plots, self._segments_subplots, link_y=True)
         self._segments_label_y = self._safe_top(emg[:, 0])
+        self._update_separator_lines(filename)
         self._draw_breath_overlays(self._breaths, label_y=self._segments_label_y or 0.0,
                                    plots=self._segments_subplots)
+
+    def _update_separator_lines(self, filename):
+        """(Re)draw M-27's separator markers on every current segments subplot from
+        ``processing.segmentation.separators`` — called from ``_render_segments_stack``
+        after every (re)render, the same reactive path any other settings edit already
+        follows, so a placement/removal shows the instant its recompute comes back."""
+        entry = next((e for e in self.state.settings.processing.segmentation.separators
+                     if e.file == filename), None)
+        times = list(entry.times_s) if entry is not None else []
+        self._separator_items = []
+        for p in self._segments_subplots:
+            item = SeparatorLinesItem()
+            item.set_times(times)
+            item.setZValue(-5)          # above BreathSpansItem's fill (-10), below the trace
+            p.addItem(item)
+            self._separator_items.append(item)
 
     def _render_segments_preview(self, data):
         """The 'segments' job's render entry point (EMG-only signal sets, M-26): draws
@@ -190,7 +236,8 @@ class _SegmentsMixin:
             (num, t0, t1, kind if kind else ("excluded" if ignored else None))
             for (num, t0, t1, ignored, kind) in data["spans"]
         ]
-        self._render_segments_stack(data["emg"], data["fs"], data.get("emg_flow"))
+        self._update_separators_button()
+        self._render_segments_stack(data["emg"], data["fs"], data.get("emg_flow"), data["name"])
         self._render_raw_stack(data["emg"], data["fs"], data.get("emg_flow"))
         # segments are now known -> (re)number any EMG detail/result already rendered
         self._repaint_view_breaths("detail")
@@ -222,3 +269,170 @@ class _SegmentsMixin:
     def _fill_segtable(self, df):
         self._segtable_model.set_dataframe(df)
         resize_result_table(self.segtable)
+
+    # -- M-27: manual separators (placement, removal, renumbering) ----------
+
+    def _update_separators_button(self):
+        """Enable/disable + tooltip 'Place separators' for the CURRENT segmentation
+        method and run state — called once at construction and again at the top of
+        every ``_render_segments_preview`` (the one place a settings load/edit is
+        guaranteed to have already landed). ``whole_file`` has exactly one segment by
+        construction (there is nothing to cut), so the button is disabled with the
+        ticket's own wording rather than left clickable-but-inert; a run in progress
+        disables it the same way the process button already is (``set_run_active``
+        mirrors this same rule for a run that STARTS after the tab is already showing
+        'separators' mode)."""
+        method = self.state.settings.processing.segmentation.method
+        if method == "whole_file":
+            if self.btn_place_separators.isChecked():
+                self.btn_place_separators.setChecked(False)   # also clears _separators_armed
+            self.btn_place_separators.setEnabled(False)
+            self.btn_place_separators.setToolTip(_WHOLE_FILE_TOOLTIP)
+        else:
+            self.btn_place_separators.setEnabled(not self._run_active)
+            self.btn_place_separators.setToolTip(
+                "Click a channel trace to add a separator there, or click an existing "
+                "separator (within a few pixels) to remove it.")
+
+    def _on_place_separators_toggled(self, checked):
+        self._separators_armed = checked
+
+    def _set_separators(self, file, times):
+        """Rewrite ``file``'s manual separator times and renumber every existing
+        ``ExcludeEntry``/``BreathTypeEntry`` for it in lockstep, so a segment's own
+        exclusion/typing follows it through an insertion or removal instead of
+        silently re-attaching to whatever segment happens to carry its OLD number
+        afterwards — M-27's whole reason for existing: without this, excluding
+        segment 3 and then inserting a separator earlier in the file would silently
+        turn into excluding a DIFFERENT segment 3.
+
+        ``times``: the FULL new sorted list of separator times (seconds, the
+        recording's own absolute clock). The renumbering compares each existing
+        entry's OLD segment START time (derived from the OLD bounds this file had
+        before the call) against the NEW bounds ``times`` implies, mapping it to
+        whichever new segment now contains that same instant — see
+        ``core.analysis.segments.remap_segment_number`` for the single rule that
+        covers insertion, removal/merge and no-op renumbering alike. Folder is
+        stamped ONLY when a brand-new ``SeparatorEntry`` is created here, never on an
+        edit of an existing one — the same carried-over-state rule ``ExcludeEntry``/
+        ``BreathTypeEntry`` already follow (see ``_set_breath_type`` in
+        ``_mechanics.py``)."""
+        proc = self.state.settings.processing
+        seg = proc.segmentation
+        entry = next((e for e in seg.separators if e.file == file), None)
+        old_bounds = [0.0] + (sorted(entry.times_s) if entry is not None else [])
+        new_times = sorted(times)
+        new_bounds = [0.0] + new_times
+
+        def remap(old_number):
+            return remap_segment_number(old_bounds, new_bounds, old_number)
+
+        excl_entry = next((e for e in proc.exclude_breaths if e.file == file), None)
+        if excl_entry is not None and excl_entry.breaths:
+            excl_entry.breaths = sorted({remap(b) for b in excl_entry.breaths})
+
+        for t in proc.breath_types:
+            if t.file != file:
+                continue
+            t.breath = remap(t.breath)
+            # t_onset_s krydstjekkes: re-anchor the advisory onset time to the segment's
+            # ACTUAL new start rather than leave it pointing at the pre-edit instant —
+            # keeps the anchor meaningful for the NEXT edit instead of drifting further
+            # from the truth with every subsequent placement/removal.
+            idx = min(max(t.breath - 1, 0), len(new_bounds) - 1)
+            t.t_onset_s = new_bounds[idx]
+        # A merge can fold two previously distinct typed breaths onto the SAME new
+        # number -- Settings.validate()'s "typed more than once" invariant forbids two
+        # BreathTypeEntry rows for one (file, breath), so keep the first one this file's
+        # own list still holds (lowest original breath number, since the list is walked
+        # in append order) and drop the rest, exactly as a user resolving the same
+        # collision by hand would have to pick one.
+        seen = set()
+        deduped = []
+        for t in proc.breath_types:
+            key = (t.file, t.breath)
+            if t.file == file:
+                if key in seen:
+                    continue
+                seen.add(key)
+            deduped.append(t)
+        proc.breath_types[:] = deduped
+
+        if entry is None:
+            seg.separators.append(SeparatorEntry(file=file, times_s=new_times,
+                                                 folder=self.state.settings.input.folder))
+        else:
+            entry.times_s = new_times
+
+    def _toggle_separator_at(self, name, t, vb):
+        """Decide add vs. remove for a click at absolute-recording-time ``t`` on
+        ``name``, using ``vb``'s OWN current pixel scale for the removal tolerance
+        (``vb.viewPixelSize()[0] * 6`` — unit-testable with a fake ``vb`` exposing
+        just that one method, no real Qt scene needed) — a fixed-seconds tolerance
+        would feel wildly different zoomed in versus zoomed out; a fixed-pixel one
+        tracks what the user actually sees. Never validates ``t`` against the
+        recording's own duration itself: ``segments.separators()`` already does
+        exactly that (``EmgSegmentationError``), and ``_render_segments_preview``
+        already turns that into the SAME graceful 'Not processed — …' status line a
+        bad separator from any other source gets — duplicating the bound here would
+        be a second, divergent copy of a rule that already lives in one place."""
+        proc = self.state.settings.processing
+        entry = next((e for e in proc.segmentation.separators if e.file == name), None)
+        existing = list(entry.times_s) if entry is not None else []
+        tol = abs(vb.viewPixelSize()[0]) * 6
+        nearest = min(existing, key=lambda s: abs(s - t)) if existing else None
+        if nearest is not None and abs(nearest - t) <= tol:
+            new_times = [s for s in existing if s != nearest]
+            verb = "removed"
+            at = nearest
+        else:
+            new_times = existing + [t]
+            verb = "placed"
+            at = t
+        self._set_separators(name, new_times)
+        self.settings_edited.emit()
+        self._sync_rail_exclusions()
+        # Wide, not just {"segments", "batch"}: _kinds_for_settings_path treats every
+        # processing.segmentation.* field (this one included) as needing the full
+        # _AUTO_KINDS recompute, deliberately -- it feeds segment_file/the noise
+        # reference clip's rest_segments branch exactly like buffer does. _set_separators
+        # can ALSO renumber a rest-typed BreathTypeEntry, which that same function's own
+        # wide rule for processing.breath_types exists to cover. Requesting only the two
+        # kinds this ticket's own render touches would under-recompute the noise profile
+        # whenever a placement/removal moves which segment is typed 'rest'.
+        self._request_autorun()
+        self._set_status(f"Separator {verb} at {at:.2f} s in {name}.")
+
+    def _place_or_remove_separator(self, ev, plot_items, offset):
+        """The armed counterpart of ``_toggle_from_emg_click``: while 'Place
+        separators' is checked, every click this shared funnel would otherwise resolve
+        as an include/exclude toggle instead places or removes a separator. Mirrors
+        ``_toggle_from_emg_click``'s own event-resolution exactly (same best-effort
+        button check, same scene-position lookup, same per-plot ViewBox hit test) so
+        the two behave identically about WHICH click counts, differing only in what
+        the click then does."""
+        if self._run_active:
+            # Same forced-onto-the-status-bar escape hatch _set_breath_type uses: a
+            # non-run_screen status alone would be invisible while a run suppresses it.
+            msg = "Separator placement is locked while a run is in progress."
+            self._set_status(msg)
+            self.write_action_blocked.emit(msg)
+            return
+        name = self._selected_filename()
+        if not name:
+            return
+        try:
+            if ev.isAccepted():
+                return
+            button = getattr(ev, "button", None)
+            if button is not None and button() != Qt.LeftButton:
+                return
+            pos = ev.scenePos()
+        except Exception:                              # noqa: BLE001
+            return
+        for p in plot_items:
+            vb = p.getViewBox()
+            if vb is not None and vb.sceneBoundingRect().contains(pos):
+                t = vb.mapSceneToView(pos).x() - offset
+                self._toggle_separator_at(name, t, vb)
+                return
