@@ -467,3 +467,85 @@ def test_the_tab_and_dialog_quote_the_same_frame_count(qapp, tmp_path):
     assert vist is not None
     assert int(vist.group(1)) == stft_frame_count(int(round(0.45 * fs)), 256, 64)
     dlg.deleteLater()
+
+
+# -- M-24: modes_available -----------------------------------------------------------
+
+def test_default_modes_available_is_todays_two_whole_modes(qapp):
+    """Every call site predating this ticket omits modes_available entirely and must see
+    EXACTLY the old behaviour: the expiration checkbox present and reachable, no rest-typed-
+    segments checkbox anywhere."""
+    from respmech.ui.noise_profile_dialog import EXPIRATION, NoiseProfileDialog
+    raw, t, fs, cols = _data()
+    dlg = NoiseProfileDialog(raw, t, fs, cols)
+    # isHidden(), not isVisible(): the dialog itself is never shown in these headless
+    # tests, so isVisible() reports False for every child regardless of state — isHidden()
+    # reflects the EXPLICIT setVisible(False) this ticket's construction logic applies,
+    # independent of whether the top-level dialog was ever show()n (the same reason the
+    # existing test_the_tab_and_dialog_quote_the_same_frame_count etc. above check
+    # dlg.warn.isHidden(), not isVisible()).
+    assert dlg.use_expiration.isHidden() is False
+    assert dlg.use_rest_segments.isHidden() is True
+    dlg.use_expiration.setChecked(True)
+    assert dlg.selected_region() is EXPIRATION
+    dlg.deleteLater()
+
+
+def test_expiration_absent_and_forced_off_when_not_in_modes_available(qapp):
+    """An EMG-only signal set has no inspiration/expiration phases at all — the checkbox
+    must be absent (not merely disabled), forced unchecked, and selected_region() must
+    never be able to return EXPIRATION regardless of how the (hidden) checkbox ends up."""
+    from respmech.ui.noise_profile_dialog import EXPIRATION, NoiseProfileDialog
+    raw, t, fs, cols = _data()
+    dlg = NoiseProfileDialog(raw, t, fs, cols, modes_available=frozenset({"intervals"}))
+    assert dlg.use_expiration.isHidden() is True
+    assert dlg.use_expiration.isChecked() is False
+    assert dlg.selected_region() is None
+    # even if something forced the hidden control back on, the dialog must never report it
+    dlg.use_expiration.setChecked(True)
+    assert dlg.selected_region() is not EXPIRATION
+    dlg.deleteLater()
+
+
+def test_rest_segments_radio_absent_by_default_and_present_when_offered(qapp):
+    from respmech.ui.noise_profile_dialog import NoiseProfileDialog
+    raw, t, fs, cols = _data()
+    default = NoiseProfileDialog(raw, t, fs, cols)
+    assert default.use_rest_segments.isHidden() is True
+    default.deleteLater()
+
+    offered = NoiseProfileDialog(raw, t, fs, cols,
+                                 modes_available=frozenset({"intervals", "rest_segments"}))
+    assert offered.use_rest_segments.isHidden() is False
+    assert offered.use_expiration.isHidden() is True   # not offered alongside it here
+    offered.deleteLater()
+
+
+def test_selecting_rest_segments_returns_the_sentinel_and_is_exclusive_with_a_span(qapp):
+    from respmech.ui.noise_profile_dialog import REST_SEGMENTS, NoiseProfileDialog
+    raw, t, fs, cols = _data()
+    dlg = NoiseProfileDialog(raw, t, fs, cols,
+                             modes_available=frozenset({"intervals", "rest_segments"}))
+    assert dlg.selected_region() is None
+    dlg._set_selection(1.0, 2.0)
+    assert dlg.selected_region() == (1.0, 2.0)
+    dlg.use_rest_segments.setChecked(True)
+    assert dlg.selected_region() is REST_SEGMENTS         # rest-segments takes over
+    assert dlg.btn_ok.isEnabled() is True
+    dlg.use_rest_segments.setChecked(False)
+    assert dlg.selected_region() == (1.0, 2.0)             # ...and the span comes back
+    dlg.deleteLater()
+
+
+def test_expiration_and_rest_segments_are_mutually_exclusive(qapp):
+    from respmech.ui.noise_profile_dialog import EXPIRATION, REST_SEGMENTS, NoiseProfileDialog
+    raw, t, fs, cols = _data()
+    dlg = NoiseProfileDialog(
+        raw, t, fs, cols,
+        modes_available=frozenset({"expiration", "intervals", "rest_segments"}))
+    dlg.use_expiration.setChecked(True)
+    assert dlg.selected_region() is EXPIRATION
+    dlg.use_rest_segments.setChecked(True)
+    assert dlg.selected_region() is REST_SEGMENTS
+    assert dlg.use_expiration.isChecked() is False        # the other retired itself
+    dlg.deleteLater()
