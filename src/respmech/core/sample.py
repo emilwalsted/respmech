@@ -65,6 +65,35 @@ EMG_TEXTURE_WEIGHT = 0.20      # weight of the superimposed MUAP-spike texture (
 FILENAME = "sample_recording.csv"
 DETECT_CHANNEL = 1             # 0-based index of the strongest-ECG EMG channel
 
+#: Sample variants: 'full' is today's unchanged recording (SHA-256-pinned by a
+#: regression test — its column layout and bytes never change); 'flow' and 'flow_poes'
+#: are column SUBSETS of the SAME deterministic signals, for "Explore with sample data"
+#: to follow whichever signal set the current analysis declares. Each variant's own
+#: filename keeps the three from colliding when a caller writes them into sibling
+#: folders. EMG-only has no variant here — a future release may add one.
+VARIANT_FILENAMES = {
+    "full": FILENAME,
+    "flow": "sample_recording_flow.csv",
+    "flow_poes": "sample_recording_flow_poes.csv",
+}
+#: The ``analysis.signals`` a built variant declares (core.analysis.signals vocabulary).
+VARIANT_SIGNALS = {
+    "full": ["flow", "poes", "pgas", "pdi", "emg"],
+    "flow": ["flow"],
+    "flow_poes": ["flow", "poes"],
+}
+#: Maps a Capabilities.mode (core.analysis.signals) to the sample variant that matches
+#: it. Every mode without a dedicated variant (the full set, 'emg_only', or an
+#: unclassifiable 'custom' set) falls back to 'full', so "Explore with sample data"
+#: always has something to open.
+VARIANT_FOR_MODE = {"flow_only": "flow", "poes_only": "flow_poes", "full": "full"}
+
+
+def sample_variant_for_mode(mode: str) -> str:
+    """The sample variant matching a :class:`~respmech.core.analysis.signals.Capabilities`
+    mode, defaulting to 'full' for any mode without a dedicated variant."""
+    return VARIANT_FOR_MODE.get(mode, "full")
+
 
 def _physio_noise(n, rng, amp, smooth_s=0.35):
     """Low-frequency, physiological-looking wander (not white fuzz): white noise
@@ -272,36 +301,73 @@ def _signals():
     return flow, vol, poes, pgas, pdi, emg
 
 
-def write_sample_recording(folder: str) -> dict:
+def write_sample_recording(folder: str, variant: str = "full") -> dict:
     """Write the sample CSV into ``folder`` and return a descriptor with the file path,
     the 1-based channel mapping, the sampling frequency and the strongest-ECG channel,
-    ready to build Settings."""
+    ready to build Settings.
+
+    ``variant`` selects a column SUBSET of the same deterministic signals (the physics
+    is computed once, unconditionally, by ``_signals()``, so 'flow'/'flow_poes' trace
+    the identical breaths as 'full' — just fewer columns exported):
+
+    * ``'full'`` (default) — every channel, unchanged from before this parameter
+      existed: same folder convention, same ``FILENAME``, same bytes (SHA-256-pinned).
+    * ``'flow'`` — time, flow, volume only (no pressures, no EMG).
+    * ``'flow_poes'`` — time, flow, volume, poes (no pgas/pdi, no EMG).
+
+    Each non-'full' variant gets its own filename (``VARIANT_FILENAMES``), so writing
+    two variants into the same folder never overwrites one with the other.
+    """
+    if variant not in VARIANT_FILENAMES:
+        raise ValueError(f"unknown sample variant: {variant!r}")
     os.makedirs(folder, exist_ok=True)
     flow, vol, poes, pgas, pdi, emg = _signals()
     n = len(flow)
     time = np.arange(n) / FS
-    cols = [time] + list(emg) + [flow, vol, poes, pgas, pdi]
-    emg_hdr = ",".join(f"EMG{i + 1}" for i in range(N_EMG))
-    header = f"time,{emg_hdr},flow,volume,poes,pgas,pdi"
-    path = os.path.join(folder, FILENAME)
+    filename = VARIANT_FILENAMES[variant]
+    if variant == "full":
+        cols = [time] + list(emg) + [flow, vol, poes, pgas, pdi]
+        emg_hdr = ",".join(f"EMG{i + 1}" for i in range(N_EMG))
+        header = f"time,{emg_hdr},flow,volume,poes,pgas,pdi"
+        mapping = {"flow": 2 + N_EMG, "volume": 3 + N_EMG, "poes": 4 + N_EMG,
+                   "pgas": 5 + N_EMG, "pdi": 6 + N_EMG,
+                   "emg": list(range(2, 2 + N_EMG)), "entropy": []}
+        detect_channel = DETECT_CHANNEL
+    elif variant == "flow":
+        cols = [time, flow, vol]
+        header = "time,flow,volume"
+        mapping = {"flow": 2, "volume": 3, "poes": None, "pgas": None, "pdi": None,
+                   "emg": [], "entropy": []}
+        detect_channel = None
+    else:   # "flow_poes"
+        cols = [time, flow, vol, poes]
+        header = "time,flow,volume,poes"
+        mapping = {"flow": 2, "volume": 3, "poes": 4, "pgas": None, "pdi": None,
+                   "emg": [], "entropy": []}
+        detect_channel = None
+    path = os.path.join(folder, filename)
     # %.5g keeps the CSV a few MB at 1 kHz (full precision would be >10 MB)
     np.savetxt(path, np.column_stack(cols), delimiter=",", header=header,
                comments="", fmt="%.5g")
-    emg_cols = list(range(2, 2 + N_EMG))
-    return {"path": path, "folder": folder, "filename": FILENAME,
+    return {"path": path, "folder": folder, "filename": filename, "variant": variant,
             "sampling_frequency": FS,
-            "detect_channel": DETECT_CHANNEL,
+            "detect_channel": detect_channel,
             "reference_interval": [0.1, LEAD_S - 0.1],
-            "mapping": {"flow": 2 + N_EMG, "volume": 3 + N_EMG, "poes": 4 + N_EMG,
-                        "pgas": 5 + N_EMG, "pdi": 6 + N_EMG,
-                        "emg": emg_cols, "entropy": []}}
+            "mapping": mapping}
 
 
-def build_sample_settings(desc: dict, output_folder: str):
-    """A ready ``Settings`` for the sample recording, with the full EMG pipeline — ECG
-    removal (on the strongest-ECG channel) and spectral noise reduction (referenced to
-    the quiet rest lead-in) — enabled, so "Explore sample data" demonstrates them out of
-    the box. Shared by the onboarding door and the README-figure generator."""
+def build_sample_settings(desc: dict, output_folder: str, variant: str = "full"):
+    """A ready ``Settings`` for the sample recording matching ``desc``'s variant.
+
+    ``variant='full'`` (default, unchanged from before this parameter existed) enables
+    the full EMG pipeline — ECG removal (on the strongest-ECG channel) and spectral
+    noise reduction (referenced to the quiet rest lead-in) — so "Explore sample data"
+    demonstrates them out of the box. The 'flow'/'flow_poes' variants have no EMG
+    channel at all, so none of that pipeline is meaningful for them and is left at its
+    ``Settings()`` default instead. Every
+    variant sets ``analysis.signals`` explicitly, matching ``VARIANT_SIGNALS`` — the
+    same "declared, not merely derived" convention ``apply_signal_set`` uses elsewhere.
+    Shared by the onboarding door and the README-figure generator."""
     from respmech.core.settings import Settings  # noqa: PLC0415
     s = Settings()
     s.input.folder = desc["folder"]
@@ -311,6 +377,7 @@ def build_sample_settings(desc: dict, output_folder: str):
     ch.flow, ch.volume = m["flow"], m["volume"]
     ch.poes, ch.pgas, ch.pdi = m["poes"], m["pgas"], m["pdi"]
     ch.emg, ch.entropy = list(m["emg"]), list(m["entropy"])
+    s.analysis.signals = list(VARIANT_SIGNALS[variant])
     # K-030 (05-09-2026 content review, finding 7.1): the sample used to set 200,
     # below the schema default of 800, though not because 800 breaks this recording — at
     # FS=1000, buffer 200/800/1600 all detect the same 9 breaths with the same VT and WOB
@@ -319,22 +386,24 @@ def build_sample_settings(desc: dict, output_folder: str):
     # showing a Default field the sample itself doesn't use was a self-inflicted
     # inconsistency, not a demonstration of anything.
     s.processing.segmentation.buffer = 800
-    e = s.processing.emg
-    e.remove_ecg = True
-    e.detect_channel = desc["detect_channel"]
-    e.ecg_min_height = 0.4      # between the EMG/noise (~0.2) and the R-wave (~0.9) so the
-                                # detector locks onto the heartbeats, not EMG or noise peaks
-    e.noise.enabled = True
-    e.noise.reference_file = desc["filename"]
-    e.noise.use_expiration = False
-    e.noise.reference_intervals = [desc["reference_interval"]]
-    e.noise.reference_folder = desc["folder"]   # matches s.input.folder set above — see
-    # core.settings.carried_over_state: leaving this unset reads as "unrecorded", which is
-    # ALWAYS carried (an unknown provenance can never be proven current), so the very first
-    # load of a freshly BUILT (not migrated) sample analysis would falsely show the
-    # carried-over banner even though it never named a different folder.
-    e.noise.auto_prop = True
-    e.plot_yscale = []          # auto-scale the diagnostic EMG figures: the raw stage is
-                                # dominated by the R-waves, the conditioned stages are ~5× smaller
+    if variant == "full":
+        e = s.processing.emg
+        e.remove_ecg = True
+        e.detect_channel = desc["detect_channel"]
+        e.ecg_min_height = 0.4  # between the EMG/noise (~0.2) and the R-wave (~0.9) so
+                                # the detector locks onto the heartbeats, not EMG/noise
+        e.noise.enabled = True
+        e.noise.reference_file = desc["filename"]
+        e.noise.use_expiration = False
+        e.noise.reference_intervals = [desc["reference_interval"]]
+        e.noise.reference_folder = desc["folder"]   # matches s.input.folder set above —
+        # see core.settings.carried_over_state: leaving this unset reads as "unrecorded",
+        # which is ALWAYS carried (an unknown provenance can never be proven current), so
+        # the very first load of a freshly BUILT (not migrated) sample analysis would
+        # falsely show the carried-over banner even though it never named a different
+        # folder.
+        e.noise.auto_prop = True
+        e.plot_yscale = []      # auto-scale the diagnostic EMG figures: the raw stage is
+                                # dominated by the R-waves, the conditioned stages are ~5x smaller
     s.output.folder = output_folder
     return s

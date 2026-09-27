@@ -24,14 +24,45 @@ within a tight tolerance.
 | `flow_integratevol`   | legacy | flow | average    | on  | volume integrated from flow (`cumtrapz`) |
 | `flow_exclude_emg`    | legacy | flow | average    | on  | `excludebreaths` + `breathcounts` with the EMG pipeline active |
 | `flow_exclude_noemg`  | legacy | flow | average    | off | `excludebreaths` + `breathcounts` override + processed-data export |
+| `flow_only`           | v2     | flow | average    | off | `analysis.signals = ["flow"]`, no pressure channels — entropy columns [10,11,12] kept, to prove entropy stays signal-set-independent |
+| `poes_only`           | v2     | flow | average    | off | `analysis.signals = ["flow", "poes"]` — work of breathing, no Pgas/Pdi |
 
 `Oracle` names which generator is authoritative for that scenario's committed
 numbers: `legacy` = the frozen v1 oracle (`make_golden.py --write`, cross-checked
 by `golden_newcore.py`); `v2` = bagt directly from the v2 core
 (`golden_newcore.py --write`), for a scenario whose settings the legacy dict/
-`migrate_dict` path has no shape for at all. Every scenario today is `legacy`;
-`V2_SCENARIOS` in `make_golden.py` is the (currently empty) table a feature ticket
-adds a `v2` row to.
+`migrate_dict` path has no shape at all. `flow_only`/`poes_only` are the
+first two `v2` rows — each a committed `tests/golden/scenarios/<name>.toml`, since
+`analysis.signals` has no legacy-dict shape to express it in; `V2_SCENARIOS` in
+`make_golden.py` is the table a feature ticket adds a `v2` row to.
+
+**Regenerating `golden_reference.json` after adding a `v2` scenario merges, it never
+overwrites.** `golden_newcore.py --write` recomputes the ENTIRE `SCENARIOS` union
+(legacy + v2) through the current v2 core, and a naive `json.dump` of that result
+would rewrite every legacy entry's numbers too — two different NumPy/SciPy builds can
+legitimately differ in a float's last one or two bits (well within the
+`rtol=1e-9`/`atol=1e-12` the tests themselves use), which is enough for a plain
+overwrite to silently stop being byte-for-byte identical to the previously committed
+legacy entries. Adding `flow_only`/`poes_only` hit exactly this (two legacy
+entries' `wob_ex_total` moved in their 17th significant digit against the sandbox's
+freshly installed NumPy/pandas/SciPy). The fix: load the freshly written file back,
+take ONLY the new scenario key(s) from it, and merge those onto the previously
+committed dict before writing — never take the whole freshly written file as-is.
+Verify with a value-level (not text-level) equality check across every pre-existing
+key, since `git diff` on this file is not a reliable read here either — inserting a
+new scenario's tens of KB in the middle of a `sort_keys=True` dump shifts everything
+after it, and a naive text diff of the shifted region can look like a rewrite even
+when every value is unchanged (these two new scenarios added ~34 KB combined and the
+`git diff` still showed thousands of changed lines).
+
+**Golden job runtime:** measured locally (sandbox, `pytest tests/golden -q`,
+9 non-skipped + 5 skipped production tests) at ~8 s after adding the two new `v2`
+scenarios — the same order of magnitude as before, since each scenario is still one
+`run_batch` over the same two small synthetic files. `ci.yml`'s `golden` job
+(`timeout-minutes: 15`) was not itself re-measured on the real runner by this ticket
+(no Actions access from this environment) — confirm the actual CI duration on the
+merge commit that adds `flow_only`/`poes_only` and raise `timeout-minutes` in the
+same commit only if it is ever observed to exceed ~10 minutes.
 
 For each scenario the reference stores: the merged **average** breath data, the
 **per-file** breath-by-breath tables, and a compact **processed-data** summary

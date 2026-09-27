@@ -447,12 +447,17 @@ class MainWindow(QMainWindow):
     def _explore_sample(self):
         """Analysis/File > 'Explore with sample data' (ticket C03 point 2): the sample was
         previously reachable only from the FIRST window of a session — this makes it a
-        real, repeatable door, guarded the same way 'New analysis' already is."""
+        real, repeatable door, guarded the same way 'New analysis' already is.
+
+        Passes ``use_current_signals=True`` so the sample variant follows whichever
+        signal set the CURRENT analysis declares (flow-only, flow+poes, or the full
+        set) — unlike the startup door's own call to ``open_sample_analysis()``
+        (``_apply_startup_choice``), which always opens the complete demo recording."""
         if not self.settings_screen.confirm_discard_changes(
                 "Explore with sample data",
                 question="Save them before exploring the built-in sample data?"):
             return
-        self.settings_screen.open_sample_analysis()
+        self.settings_screen.open_sample_analysis(use_current_signals=True)
         self._show_settings_status()
 
     def _duplicate_analysis(self):
