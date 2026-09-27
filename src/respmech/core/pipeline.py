@@ -64,6 +64,11 @@ class FileResult:
     # breath is present", the ticket's own acceptance criterion).
     manoeuvres: dict = field(default_factory=dict)
     manoeuvres_table: object = None
+    # M-30: 'tidal' (the ordinary shape -- a breaths_table/average_row from tidal
+    # breathing) or 'reference' (every breath in this file is typed, none tidal --
+    # a dedicated IC/FVC recording, say). breaths_table/average_row are both None
+    # for a 'reference' file; manoeuvres/manoeuvres_table carry its actual content.
+    role: str = "tidal"
     error: Optional[str] = None
     # exception class name, so consumers can tell a precondition failure of THIS recording
     # (TrimError, VolumeTrendError) from a real fault without parsing ``error``.
@@ -862,11 +867,6 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                             warnings.warn(f"{filename}: {_msg}")
                             file_notices.append(_msg)
 
-            # Stop here rather than compute mechanics for an empty set: everything below
-            # is per-breath work, and the results layer can only report the empty table as
-            # an opaque internal error.
-            compute.check_breaths(breaths, filename, s)
-
             # EMG-only: none of trim_boundary_notices (a flow-trim-truncation
             # check -- there was no trim), vefactor (60 / len(flow)/fs would ZeroDivisionError
             # on an empty flow array) or calculateaveragebreaths (indexes
@@ -874,7 +874,32 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
             # have) apply to a signal set with no flow channel at all.
             emg_only = getattr(s, "capabilities", Capabilities.FULL).mode == "emg_only"
 
-            if not emg_only:
+            # M-30: a file where EVERY breath is typed (no tidal breathing at all) is not
+            # an error -- it is a reference-only file (a dedicated IC/FVC recording, say).
+            # Detected up front, before check_breaths would otherwise refuse it by name
+            # (`check_breaths` cannot itself tell "nothing to analyse" apart from "this IS
+            # the analysis, just not a tidal one" -- both look identical as "used == 0").
+            # EMG-only is excluded here: on that signal set only 'rest'-typed segments are
+            # ever ignored (`_merged_exclude_breaths`), so an EMG-only file with zero
+            # non-ignored segments already means a genuinely empty file, not a
+            # manoeuvre-only one -- check_breaths' existing error is still the right one.
+            tidal_breaths = [b for b in breaths.values() if not b["ignored"]]
+            has_typed = any(
+                b.get("kind") and b["kind"] != "rest" for b in breaths.values())
+            reference_only = (not emg_only) and (not tidal_breaths) and has_typed
+
+            if not reference_only:
+                # Stop here rather than compute mechanics for an empty set: everything
+                # below is per-breath work, and the results layer can only report the
+                # empty table as an opaque internal error.
+                compute.check_breaths(breaths, filename, s)
+            else:
+                _msg = "no tidal breaths — reference manoeuvres only"
+                file_notices.append(_msg)
+                _emit(progress, ProgressEvent(
+                    "stage", file=filename, message=f"{filename}: {_msg}"))
+
+            if not emg_only and not reference_only:
                 # K-035: the boundary breath trim KEEPS is never verified as complete — warn
                 # when it is much shorter than this file's own typical breath, instead of
                 # analysing it silently as whole. Live (ProgressEvent) as well as recorded
@@ -924,54 +949,60 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                     # so the "no R-peaks -- is remove_ecg on?" reason was invisible everywhere.
                     file_notices.append(f"cardiac-gated peak EMG reported as NaN — {gate_reason}")
 
-            total = sum(1 for b in breaths.values() if not b["ignored"])
-            done = 0
-            for breathno in breaths:
-                breath = breaths[breathno]
-                if breath["ignored"]:
-                    continue
-                if emg_only:
-                    # No inspiration/expiration split to compute mechanics from --
-                    # compute_segment_emg (RMS/integral-EMG/gated-peak/entropy, whole
-                    # segment only) is the entire per-segment computation, and the
-                    # segment's own span replaces the flow-derived timing group.
-                    compute.compute_segment_emg(breath, breath, s, cancel_check, gate_peaks,
-                                                gate_ok, gate_reason, phases=breath["has_phases"])
-                    fs = s.input.format.samplingfrequency
-                    time = np.atleast_1d(breath["time"])
-                    seg_start_s = float(time[0]) if time.size else 0.0
-                    # len(time)/fs (not time[-1] - time[0]) matches how every other
-                    # duration in this codebase is derived (e.g. calculatemechanics's
-                    # ti/te/ttot = len(...)/samplingfrequency) -- a sample COUNT, not
-                    # the gap between the first and last sample's own timestamps.
-                    seg_duration_s = time.size / fs
-                    breath["mechanics"] = OrderedDict([
-                        ("seg_start_s", seg_start_s),
-                        ("seg_end_s", seg_start_s + seg_duration_s),
-                        ("seg_duration_s", seg_duration_s),
-                    ])
-                else:
-                    compute.calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, s,
-                                               cancel_check=cancel_check, peaks_s=gate_peaks,
-                                               detection_ok=gate_ok, detection_reason=gate_reason)
-                done += 1
-                _emit(progress, ProgressEvent("breath", file=filename, breath=done, total_breaths=total))
+            # M-30: a reference-only file has nothing for this loop to do (every breath
+            # is typed, so `tidal_breaths` is empty and the loop's own
+            # `if breath["ignored"]: continue` would skip every single one anyway) --
+            # skipped explicitly rather than relying on that, since `vefactor`/
+            # `avgvolumein` etc. are never computed for such a file either.
+            if not reference_only:
+                total = sum(1 for b in breaths.values() if not b["ignored"])
+                done = 0
+                for breathno in breaths:
+                    breath = breaths[breathno]
+                    if breath["ignored"]:
+                        continue
+                    if emg_only:
+                        # No inspiration/expiration split to compute mechanics from --
+                        # compute_segment_emg (RMS/integral-EMG/gated-peak/entropy, whole
+                        # segment only) is the entire per-segment computation, and the
+                        # segment's own span replaces the flow-derived timing group.
+                        compute.compute_segment_emg(breath, breath, s, cancel_check, gate_peaks,
+                                                    gate_ok, gate_reason, phases=breath["has_phases"])
+                        fs = s.input.format.samplingfrequency
+                        time = np.atleast_1d(breath["time"])
+                        seg_start_s = float(time[0]) if time.size else 0.0
+                        # len(time)/fs (not time[-1] - time[0]) matches how every other
+                        # duration in this codebase is derived (e.g. calculatemechanics's
+                        # ti/te/ttot = len(...)/samplingfrequency) -- a sample COUNT, not
+                        # the gap between the first and last sample's own timestamps.
+                        seg_duration_s = time.size / fs
+                        breath["mechanics"] = OrderedDict([
+                            ("seg_start_s", seg_start_s),
+                            ("seg_end_s", seg_start_s + seg_duration_s),
+                            ("seg_duration_s", seg_duration_s),
+                        ])
+                    else:
+                        compute.calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, s,
+                                                   cancel_check=cancel_check, peaks_s=gate_peaks,
+                                                   detection_ok=gate_ok, detection_reason=gate_reason)
+                    done += 1
+                    _emit(progress, ProgressEvent("breath", file=filename, breath=done, total_breaths=total))
 
-            # M-29: typed (non-`rest`) breaths never reach calculatemechanics above (M-19
-            # unions every typed kind into `excludebreaths` on a flow-bearing set, so the
-            # loop's own `if breath["ignored"]: continue` skips them) -- extract their
-            # manoeuvre values here instead, straight from the raw breath dict. EMG-only
-            # breaths have no inspiration/expiration split (`has_phases=False`, empty
-            # flow/volume/pressure arrays) for `extract` to read, so this is flow-bearing
-            # only, same guard as the boundary-notice/vefactor block above.
-            # NB a file where EVERY breath is typed (no tidal breaths at all) never
-            # reaches this block: `compute.check_breaths` above (line ~861) already
-            # raises NoBreathsError for it. That is deliberate, not an M-29 gap --
-            # "reference-only files" are explicitly M-30's scope (see this ticket's
-            # own "Uden for omfang").
+            # M-29/M-30: typed (non-`rest`) breaths never reach calculatemechanics above
+            # (M-19 unions every typed kind into `excludebreaths` on a flow-bearing set,
+            # so the loop's own `if breath["ignored"]: continue` skips them) -- extract
+            # their manoeuvre values here instead, straight from the raw breath dict.
+            # EMG-only breaths have no inspiration/expiration split (`has_phases=False`,
+            # empty flow/volume/pressure arrays) for `extract` to read, so this is
+            # flow-bearing only, same guard as the boundary-notice/vefactor block above.
+            # Runs UNCHANGED for a reference-only file too: `extract()` (and the
+            # `_low_effort`/`_ic_eelv_pre`/`_boundary` helpers it calls) is already a pure
+            # function of one breath plus `tidal_breaths` and degrades gracefully when
+            # that list is empty (falls back to the breath's own pre-inspiratory sample,
+            # flags every manoeuvre BOUNDARY -- there is no tidal context to judge low
+            # effort or eelv stability against, which is the honest answer, not a bug).
             fr_manoeuvres: dict = {}
             if not emg_only:
-                tidal = [b for b in breaths.values() if not b["ignored"]]
                 for breathno in breaths:
                     breath = breaths[breathno]
                     kind = breath.get("kind")
@@ -979,7 +1010,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                         continue
                     try:
                         fr_manoeuvres[breathno] = manoeuvreslib.extract(
-                            breath, kind, tidal, s.capabilities, s)
+                            breath, kind, tidal_breaths, s.capabilities, s)
                     except Exception as e:
                         _msg = (f"breath #{breathno} ({kind}) manoeuvre extraction failed: "
                                f"{type(e).__name__}: {e}")
@@ -989,7 +1020,14 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                     manoeuvreslib.apply_repeatability(fr_manoeuvres, s.processing.lung_volume.ic)
             manoeuvres_table = build_manoeuvre_table(fr_manoeuvres)
 
-            breaths_table, average_row = build_breath_table(filename, breaths, s)
+            # M-30: a reference-only file has no tidal breath table or average row to
+            # build at all -- skip build_breath_table (which would otherwise raise
+            # NoBreathsError, correctly, for a set with nothing tidal in it) rather than
+            # feed it a set it will always refuse.
+            if reference_only:
+                breaths_table, average_row = None, None
+            else:
+                breaths_table, average_row = build_breath_table(filename, breaths, s)
             processed = None
             if s.output.data.saveprocesseddata:
                 processed = build_processed_data(breaths, s)
@@ -1030,9 +1068,18 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                 file=filename, breaths_table=breaths_table, average_row=average_row,
                 processed=processed, breaths=breaths, ecg=ecg_diag, signals=signals,
                 manoeuvres=fr_manoeuvres, manoeuvres_table=manoeuvres_table,
+                role="reference" if reference_only else "tidal",
                 notices=file_notices)
-            average_rows.append(average_row)
-            _emit(progress, ProgressEvent("file_done", file=filename, message=f"{total} breaths"))
+            # M-30: average_rows feeds result.average_table (the cross-file "Average
+            # breathdata" concat below) -- a reference-only file's average_row is always
+            # None (there is no tidal average to contribute), so it is left out rather
+            # than appended as a row of NaNs.
+            if average_row is not None:
+                average_rows.append(average_row)
+            done_message = (f"{len(fr_manoeuvres)} reference manoeuvre"
+                            f"{'s' if len(fr_manoeuvres) != 1 else ''}" if reference_only
+                            else f"{total} breaths")
+            _emit(progress, ProgressEvent("file_done", file=filename, message=done_message))
 
         except Exception as e:
             result.files[filename] = FileResult(file=filename, error=f"{type(e).__name__}: {e}",

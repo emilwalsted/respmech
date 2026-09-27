@@ -275,6 +275,44 @@ def test_emg_normalization_reference_file_falls_back_when_absent():
     assert reference_values_for_batch(result, settings_unset) is None
 
 
+def test_resolve_emg_reference_notices_when_the_reference_file_has_no_breath_table():
+    """M-30: ``resolve_emg_reference`` is a thin wrapper around
+    ``reference_values_for_batch`` (unchanged, see the test above) that ALSO returns a
+    notice for the one case that function itself cannot distinguish from "not
+    configured" -- the reference file IS present in the batch, but has nothing to read
+    (a reference-only file, M-30, has no ``breaths_table``). Every other
+    None-returning case stays silent, exactly as before."""
+    from respmech.core.summary import resolve_emg_reference
+
+    result = SimpleNamespace(ok_files={
+        "manoeuvre.csv": SimpleNamespace(breaths_table=None),
+        "subject_a.csv": SimpleNamespace(breaths_table=pd.DataFrame({"rms_max": [2.0]})),
+    })
+    settings = SimpleNamespace(processing=SimpleNamespace(emg=SimpleNamespace(
+        normalization="per_file_max", normalization_reference_file="manoeuvre.csv")))
+    values, notice = resolve_emg_reference(result, settings)
+    assert values is None
+    assert notice is not None and "manoeuvre.csv" in notice
+
+    settings_missing = SimpleNamespace(processing=SimpleNamespace(emg=SimpleNamespace(
+        normalization="per_file_max", normalization_reference_file="missing.csv")))
+    assert resolve_emg_reference(result, settings_missing) == (None, None)
+
+    settings_off = SimpleNamespace(processing=SimpleNamespace(emg=SimpleNamespace(
+        normalization="none", normalization_reference_file="manoeuvre.csv")))
+    assert resolve_emg_reference(result, settings_off) == (None, None)
+
+    settings_unset = SimpleNamespace(processing=SimpleNamespace(emg=SimpleNamespace(
+        normalization="per_file_max", normalization_reference_file=None)))
+    assert resolve_emg_reference(result, settings_unset) == (None, None)
+
+    settings_ok = SimpleNamespace(processing=SimpleNamespace(emg=SimpleNamespace(
+        normalization="per_file_max", normalization_reference_file="subject_a.csv")))
+    values_ok, notice_ok = resolve_emg_reference(result, settings_ok)
+    assert values_ok == {"rms_max": 2.0}
+    assert notice_ok is None
+
+
 # --------------------------------------------------------------------------- #
 # M-29 — Manoeuvres sheet (typed IC/FVC/max_insp/sniff breaths)
 # --------------------------------------------------------------------------- #
@@ -700,6 +738,31 @@ def test_run_report_accounts_for_excluded_and_failed(tmp_path):
     assert "[FAIL] bad.csv   ERROR: boom while loading" in report
 
 
+def test_run_report_files_line_distinguishes_typed_from_plainly_excluded_breaths(tmp_path):
+    """M-30: the FILES line's accounting must tell a manually-excluded breath apart
+    from a TYPED manoeuvre breath (both are ``ignored`` for the tidal average, but
+    only one names what it actually is) -- lightweight fakes again, no full batch."""
+    from types import SimpleNamespace
+    from respmech.core.io.writers import _write_run_report
+
+    ok = SimpleNamespace(breaths={
+        1: {"ignored": True, "kind": None},          # a plain manual exclusion
+        2: {"ignored": True, "kind": "ic"},
+        3: {"ignored": True, "kind": "ic"},
+        4: {"ignored": False, "kind": None},
+        5: {"ignored": False, "kind": None},
+        6: {"ignored": False, "kind": None},
+        7: {"ignored": False, "kind": None},
+        8: {"ignored": False, "kind": None},
+        9: {"ignored": False, "kind": None},
+    }, error=None)
+    result = SimpleNamespace(ok_files={"mixed.csv": ok}, failed_files={})
+    s = synth_settings(tmp_path)
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "9 breaths (1 excluded, 2 typed: IC #2,#3 → 6 used)" in report
+
+
 def test_run_report_lists_unknown_settings_keys(tmp_path):
     """K-113: a misspelled/renamed TOML key was collected in Settings.unknown but read
     nowhere — not respmech validate, not run-report.txt, not the GUI. The run silently
@@ -750,6 +813,27 @@ def test_run_report_processing_block_lists_overrides_exclusions_and_grouping(tmp
     assert r"Cohort grouping:         ^(P\d+)" in report
 
 
+def test_run_report_processing_block_lists_breath_types(tmp_path):
+    """M-30: which breaths are typed as a manoeuvre is a study-level setting like
+    breath-count overrides/exclusions above -- 'rest' (an EMG-only background segment,
+    M-28) is deliberately left out, since it names a segment to discard, not a
+    manoeuvre a reader would want counted here."""
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.core.io.writers import _write_run_report
+
+    result = SimpleNamespace(ok_files={}, failed_files={})
+    s = synth_settings(tmp_path)
+    s.processing.breath_types = [
+        BreathTypeEntry(file="P02.csv", breath=4, kind="ic"),
+        BreathTypeEntry(file="P02.csv", breath=5, kind="fvc"),
+        BreathTypeEntry(file="P03.csv", breath=1, kind="rest"),
+    ]
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "Breath types:            P02.csv: #4 IC, #5 FVC" in report
+    assert "P03.csv" not in report.split("Breath types:")[1].split("\n")[0]
+
+
 def test_run_report_processing_block_names_none_when_unset(tmp_path):
     from respmech.core.io.writers import _write_run_report
 
@@ -759,6 +843,7 @@ def test_run_report_processing_block_names_none_when_unset(tmp_path):
     report = open(path, encoding="utf-8").read()
     assert "Breath-count overrides:  none" in report
     assert "Excluded breaths:        none" in report
+    assert "Breath types:            none" in report
     assert "Cohort grouping:         leading filename token" in report
 
 

@@ -3,6 +3,7 @@ every existing consumer (check_breaths/calculateaveragebreaths/build_breath_tabl
 plots._breaths all filter on ``ignored`` alone, unchanged by this ticket), plus carries
 a ``kind`` and, in ``results.build_processed_data``, an opt-in ``Breathkind`` column.
 """
+import os
 from collections import OrderedDict
 
 import numpy as np
@@ -11,6 +12,7 @@ import pytest
 from respmech.core import compute, results
 from respmech.core._legacy_ns import to_legacy_ns
 from respmech.core.settings import BreathTypeEntry, ExcludeEntry, Settings, SettingsError
+from _helpers import requires_synth, synth_settings
 
 FS = 200
 
@@ -334,4 +336,103 @@ def test_a_typed_breath_is_renumbered_by_remap_segment_number_like_any_other_seg
     entry = s.processing.breath_types[0]
     entry.breath = remap_segment_number(old_bounds, new_bounds, entry.breath)
     assert entry.breath == 4                    # follows the insertion, like ExcludeEntry
+
+
+# --------------------------------------------------------------------------------- #
+# M-30 — reference-only files (every breath in a file is typed, none tidal)
+# --------------------------------------------------------------------------------- #
+
+@requires_synth()
+def test_a_file_with_every_breath_typed_runs_as_reference_only(tmp_path):
+    """M-30's own acceptance criterion: a batch with a file where ALL breaths are
+    typed IC runs without error, and the rest of the batch (a normal tidal file) is
+    unaffected — its average table gets no row (and no NaN row) from the
+    reference-only file."""
+    from respmech.core.pipeline import run_batch
+
+    s = synth_settings(str(tmp_path))
+    # synth_case_B.csv has 6 breaths (1..6) -- type every one of them, so it has NO
+    # tidal breathing at all; synth_case_A.csv (8 breaths) is left entirely alone.
+    for n in range(1, 7):
+        s.processing.breath_types.append(
+            BreathTypeEntry(file="synth_case_B.csv", breath=n, kind="ic"))
+    s.validate()
+    result = run_batch(s)
+
+    assert not result.failed_files
+    fr_a = result.ok_files["synth_case_A.csv"]
+    assert fr_a.role == "tidal"
+    assert fr_a.breaths_table is not None and len(fr_a.breaths_table) > 0
+
+    fr_b = result.ok_files["synth_case_B.csv"]
+    assert fr_b.error is None
+    assert fr_b.role == "reference"
+    assert fr_b.breaths_table is None
+    assert fr_b.average_row is None
+    assert set(fr_b.manoeuvres) == set(range(1, 7))
+    assert fr_b.manoeuvres_table is not None and len(fr_b.manoeuvres_table) == 6
+    assert any("no tidal breaths" in n for n in fr_b.notices)
+
+    # the reference-only file contributes no row (not even a NaN one) to the average
+    assert list(result.average_table["file"]) == ["synth_case_A.csv"]
+
+
+@requires_synth()
+def test_reference_only_file_writes_a_workbook_with_the_manoeuvres_table_as_data(tmp_path):
+    """write_batch (M-30): a reference-only file's breathdata workbook has no tidal
+    Data sheet to write, so the Manoeuvres table takes its place, with a Provenance
+    row explaining why -- rather than crashing on a None DataFrame or writing an
+    empty one with no explanation."""
+    import openpyxl
+    import pandas as pd
+
+    from respmech.core.io.writers import write_batch
+    from respmech.core.pipeline import run_batch
+
+    s = synth_settings(str(tmp_path))
+    for n in range(1, 7):
+        s.processing.breath_types.append(
+            BreathTypeEntry(file="synth_case_B.csv", breath=n, kind="ic"))
+    s.validate()
+    result = run_batch(s)
+    write_batch(result, s, str(tmp_path))
+
+    path = os.path.join(str(tmp_path), "data", "synth_case_B.csv.breathdata.xlsx")
+    assert os.path.isfile(path)
+    wb = openpyxl.load_workbook(path)
+    assert "Manoeuvres" not in wb.sheetnames        # not duplicated as an extra sheet too
+    data = pd.read_excel(path, sheet_name="Data")
+    assert len(data) == 6
+    assert "vol_ic" in data.columns and "kind" in data.columns
+
+    prov = pd.read_excel(path, sheet_name="Provenance")
+    note_row = prov.loc[prov["Key"] == "INCOMPLETE", "Value"]
+    assert len(note_row) == 1
+    assert "reference manoeuvres only" in note_row.iloc[0]
+
+    # a run-report.txt is still written and names the file's typed breakdown
+    report = open(os.path.join(str(tmp_path), "run-report.txt"), encoding="utf-8").read()
+    assert "synth_case_B.csv" in report
+    assert "6 typed: IC #1,#2,#3,#4,#5,#6" in report
+
+
+@requires_synth()
+def test_cli_dry_run_reports_reference_manoeuvres_not_zero_breaths(tmp_path, capsys):
+    """CLI dry run (M-30): a reference-only file must not read as a bare, misleading
+    '0 breaths' -- it says how many reference manoeuvres it actually has."""
+    from respmech.cli.__main__ import main as cli_main
+    from respmech.settingsio.toml_io import save_toml
+
+    s = synth_settings(str(tmp_path))
+    for n in range(1, 7):
+        s.processing.breath_types.append(
+            BreathTypeEntry(file="synth_case_B.csv", breath=n, kind="ic"))
+    s.validate()
+    toml = tmp_path / "s.toml"
+    save_toml(s, toml)
+    rc = cli_main(["run", str(toml), "--dry-run"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "synth_case_B.csv: 0 tidal breaths, 6 reference manoeuvres" in out
+    assert "synth_case_A.csv: 8 breaths" in out
     s.validate()                                # still a well-formed entry afterwards
