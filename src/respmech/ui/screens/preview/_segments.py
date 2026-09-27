@@ -413,14 +413,14 @@ class _SegmentsMixin:
             at = t
         self._set_separators(name, new_times)
         self.settings_edited.emit()
-        # The wide, all-files _sync_rail_exclusions() rather than the per-file
-        # _sync_excluded_badge(name) _set_breath_type uses for its own single-file
-        # mutation: unlike an ordinary exclude/type toggle, _set_separators can change
-        # the EXCLUSION COUNT for this file by renumbering/merging entries (see its own
-        # docstring), and _sync_rail_exclusions is the funnel that already recomputes
-        # every file's badge from the current exclude_breaths correctly; a narrower,
+        # The wide, all-files _sync_rail_breath_state() (M-32; formerly the
+        # exclusion-only _sync_rail_exclusions()): unlike an ordinary exclude/type
+        # toggle, _set_separators can change the EXCLUSION COUNT for this file by
+        # renumbering/merging entries (see its own docstring) AND always changes this
+        # file's own segment COUNT — and since M-32, this is the one funnel that already
+        # recomputes every file's exclusion/typed/segment badges correctly; a narrower,
         # single-file version of that recompute does not exist today.
-        self._sync_rail_exclusions()
+        self._sync_rail_breath_state()
         # Wide, not just {"segments", "batch"}: _kinds_for_settings_path treats every
         # processing.segmentation.* field (this one included) as needing the full
         # _AUTO_KINDS recompute, deliberately -- it feeds segment_file/the noise
