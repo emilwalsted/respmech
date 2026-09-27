@@ -236,7 +236,6 @@ _CASES = [
                s.processing.segmentation.separators.append(
                     SeparatorEntry(file="x.txt", times_s=[2.0]))),
      ["separator", "duplicat"]),
-    # M-34
     ("eelv_tracking is not a valid enum value",
      lambda s: setattr(s.processing.lung_volume.ic, "eelv_tracking", "always"),
      ["eelv", "subject"]),

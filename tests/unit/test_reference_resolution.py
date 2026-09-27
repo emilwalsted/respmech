@@ -1,4 +1,4 @@
-"""``core.analysis.references`` (M-34): resolution order and ``check_links`` cautions.
+"""``core.analysis.references``: resolution order and ``check_links`` cautions.
 
 Pure, Qt-free — no file I/O, no ``core.compute``. See that module's own docstring for
 the exact resolution order and caution kinds this pins.
@@ -184,3 +184,133 @@ def test_check_links_baseline_ic_link_is_not_checked_for_own_typed_kind():
     # P03_rest.txt's breath 1 is never typed at all
     cautions = check_links(s, ["P03_peak.txt", "P03_rest.txt"])
     assert cautions == []
+
+
+def test_check_links_flags_a_reference_naming_no_breaths_at_all():
+    """A BreathRef whose source file IS in the batch but whose breaths list is empty
+    names nothing usable -- silently accepting it would let a hand-edited or
+    programmatically-built empty reference look fully resolved."""
+    s = _settings()
+    s.processing.references.append(ReferenceEntry(
+        file="P03_peak.txt", ic=BreathRef(file="P03_IC.txt", breaths=[])))
+    cautions = check_links(s, ["P03_peak.txt", "P03_IC.txt"])
+    assert len(cautions) == 1
+    assert "P03_IC.txt" in cautions[0] and "no breaths" in cautions[0]
+
+
+def test_check_links_reports_only_the_actually_mistyped_breath_in_a_mixed_breathref():
+    """A multi-breath BreathRef where only SOME breaths are correctly typed must
+    report exactly the mismatching one(s) -- not stop after the first breath, and not
+    flag a breath that resolves cleanly."""
+    s = _settings()
+    s.processing.references.append(ReferenceEntry(
+        file="P03_peak.txt", ic=BreathRef(file="P03_IC.txt", breaths=[2, 3])))
+    s.processing.breath_types.append(BreathTypeEntry(file="P03_IC.txt", breath=2, kind="ic"))
+    # breath 3 is never typed
+    cautions = check_links(s, ["P03_peak.txt", "P03_IC.txt"])
+    assert len(cautions) == 1
+    assert "breath 3" in cautions[0] and "breath 2" not in cautions[0]
+
+
+def test_check_links_reports_only_the_actually_excluded_breath_in_a_mixed_breathref():
+    s = _settings()
+    s.processing.references.append(ReferenceEntry(
+        file="P03_peak.txt", ic=BreathRef(file="P03_IC.txt", breaths=[2, 3])))
+    s.processing.breath_types.append(BreathTypeEntry(file="P03_IC.txt", breath=2, kind="ic"))
+    s.processing.breath_types.append(BreathTypeEntry(file="P03_IC.txt", breath=3, kind="ic"))
+    s.processing.exclude_breaths.append(ExcludeEntry(file="P03_IC.txt", breaths=[3]))
+    cautions = check_links(s, ["P03_peak.txt", "P03_IC.txt"])
+    assert len(cautions) == 1
+    assert "breath 3" in cautions[0] and "excluded" in cautions[0]
+
+
+def test_check_links_full_path_filenames_resolve_group_keys_correctly():
+    """Regression: check_links must basename EVERY filename before deriving group
+    keys, not just before matching per-file reference sources -- otherwise a caller
+    passing match_input_files' own full-path result (the documented convention) would
+    always see reference_defaults/subjects group keys as mismatched."""
+    s = _settings()
+    s.processing.reference_defaults.append(GroupReferenceEntry(
+        group="P03", ic=BreathRef(file="P03_IC.txt", breaths=[2])))
+    s.processing.breath_types.append(BreathTypeEntry(file="P03_IC.txt", breath=2, kind="ic"))
+    cautions = check_links(s, ["/data/study/P03_120W.txt", "/data/study/P03_IC.txt"])
+    assert cautions == []
+
+
+# --------------------------------------------------------------------------- #
+# missing_reference_sources / ui.validation.path_problem's require_references gate
+# --------------------------------------------------------------------------- #
+
+def test_missing_reference_sources_lists_only_sources_not_in_the_batch():
+    from respmech.core.analysis.references import missing_reference_sources
+
+    s = _settings()
+    s.processing.references.append(ReferenceEntry(
+        file="P03_peak.txt", ic=BreathRef(file="P03_IC.txt", breaths=[2])))
+    assert missing_reference_sources(s, ["P03_peak.txt"]) == ["P03_IC.txt"]
+    assert missing_reference_sources(s, ["P03_peak.txt", "P03_IC.txt"]) == []
+
+
+def test_missing_reference_sources_is_empty_with_no_references_at_all():
+    from respmech.core.analysis.references import missing_reference_sources
+    assert missing_reference_sources(_settings(), ["a.txt"]) == []
+
+
+def test_path_problem_is_a_soft_caution_by_default_when_a_reference_source_is_missing(
+        tmp_path):
+    from respmech.ui.validation import path_problem
+
+    inp = tmp_path / "input"
+    inp.mkdir()
+    (inp / "P03_peak.txt").write_text("x")
+    out = tmp_path / "output"
+    out.mkdir()
+    s = _settings()
+    s.input.folder = str(inp)
+    s.input.files = "*.txt"
+    s.output.folder = str(out)
+    s.processing.references.append(ReferenceEntry(
+        file="P03_peak.txt", ic=BreathRef(file="P03_IC.txt", breaths=[2])))
+    assert path_problem(s) is None
+
+
+def test_path_problem_blocks_on_a_missing_reference_source_once_required(tmp_path):
+    from respmech.ui.validation import path_problem
+
+    inp = tmp_path / "input"
+    inp.mkdir()
+    (inp / "P03_peak.txt").write_text("x")
+    out = tmp_path / "output"
+    out.mkdir()
+    s = _settings()
+    s.input.folder = str(inp)
+    s.input.files = "*.txt"
+    s.output.folder = str(out)
+    s.processing.references.append(ReferenceEntry(
+        file="P03_peak.txt", ic=BreathRef(file="P03_IC.txt", breaths=[2])))
+    s.processing.lung_volume.require_references = True
+    msg = path_problem(s)
+    assert msg is not None and "P03_IC.txt" in msg
+
+
+# --------------------------------------------------------------------------- #
+# references/subjects are never sent into core.compute
+# --------------------------------------------------------------------------- #
+
+def test_references_and_subjects_never_reach_to_legacy_ns():
+    from respmech.core._legacy_ns import to_legacy_ns
+
+    s = _settings()
+    s.input.channels.flow = 1
+    s.input.folder = "input"
+    s.processing.references.append(ReferenceEntry(
+        file="P03_peak.txt", ic=BreathRef(file="P03_IC.txt", breaths=[2])))
+    s.processing.reference_defaults.append(GroupReferenceEntry(group="P03"))
+    s.input.subjects.append(SubjectEntry(key="P03", tlc_l=6.0))
+
+    ns = to_legacy_ns(s)
+    ns_fields = vars(ns)
+    for name in ("references", "reference_defaults", "subjects"):
+        assert name not in ns_fields, (
+            f"to_legacy_ns must never carry {name!r} -- referenced breaths are never "
+            "sent into core.compute")

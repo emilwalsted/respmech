@@ -32,9 +32,9 @@ from respmech.core.analysis.signals import SINGLE_SIGNALS, Capabilities
 #: an analysis switch between the flow/volume family and the EMG-only family of
 #: methods. Kept as one constant so the two messages below can never drift apart.
 _SIGNAL_SET_CHANGE_LOCATION = "Setup ▸ Signals ▸ Change…"
-#: M-34: the one location string every reference/subject/lung-volume message points at —
-#: a later ticket's (M-37) new Setup card, not built yet. Kept as a constant for the same
-#: reason as ``_SIGNAL_SET_CHANGE_LOCATION`` above.
+#: the one location string every reference/subject/lung-volume message points at — a
+#: future new Setup card, not built yet. Kept as a constant for the same reason as
+#: ``_SIGNAL_SET_CHANGE_LOCATION`` above.
 _SUBJECTS_LOCATION = "Setup ▸ Subjects && lung volumes"
 
 _FRIENDLY_SETTINGS_ERRORS = {
@@ -96,8 +96,7 @@ _FRIENDLY_SETTINGS_ERRORS = {
         "Automatic noise-reduction strength is not available for an EMG-only signal "
         "set yet — set the noise-reduction strength manually (Preview & QC ▸ EMG – "
         "noise reduction)",
-    # M-34: reference/subject/lung-volume settings — all point at the same screen
-    # location, a later ticket's (M-37) new Setup card.
+    # reference/subject/lung-volume settings — all point at the same, future Setup card.
     'processing.lung_volume.ic.eelv_tracking must be "none" or "within_file"':
         "EELV tracking must be 'none' or 'within file' "
         f"({_SUBJECTS_LOCATION})",
@@ -167,7 +166,7 @@ _SEPARATOR_ENTRY_FORM_RE = re.compile(
     r"increasing))$")
 _SEPARATOR_ENTRY_DUPLICATE_RE = re.compile(
     r"^processing\.segmentation\.separators: .+ has more than one entry$")
-#: M-34: ReferenceEntry/GroupReferenceEntry's own "malformed"/"conflict" messages — same
+#: ReferenceEntry/GroupReferenceEntry's own "malformed"/"conflict" messages — same
 #: two-message split as SeparatorEntry above (form vs. duplicate), one pair per table.
 _REFERENCE_ENTRY_FORM_RE = re.compile(
     r"^processing\.references\[\d+\] must be a table with file$")
@@ -177,9 +176,9 @@ _GROUP_REFERENCE_ENTRY_FORM_RE = re.compile(
     r"^processing\.reference_defaults\[\d+\] must be a table with group$")
 _GROUP_REFERENCE_ENTRY_DUPLICATE_RE = re.compile(
     r"^processing\.reference_defaults: group .+ appears more than once$")
-#: M-34: SubjectEntry's three checks (malformed, duplicate key, out-of-range volumes) all
-#: point at the same not-yet-built Setup card, so they share ONE friendly sentence per
-#: the plan's own translation table (section 5.2) rather than three separate ones.
+#: SubjectEntry's three checks (malformed, duplicate key, out-of-range volumes) all
+#: point at the same not-yet-built Setup card, so they share ONE friendly sentence
+#: rather than three separate ones.
 _SUBJECT_ENTRY_RE = re.compile(
     r"^input\.subjects\[\d+\](?: must be a table with key|\.(?:tlc_l must be between 0 "
     r"and 15 L|rv_l must be below tlc_l))$")
@@ -319,6 +318,12 @@ def path_problem(settings, probe_write: bool = False, matches: list | None = Non
         if not os.path.isfile(ref):
             return (f"rest reference recording not found: {n.reference_file} "
                     "(Preview & QC ▸ EMG – noise reduction)")
+    if s.processing.lung_volume.require_references:
+        from respmech.core.analysis.references import missing_reference_sources
+        missing = missing_reference_sources(s, matches)
+        if missing:
+            return (f"reference source not found: {missing[0]} "
+                    f"({_SUBJECTS_LOCATION})")
     if probe_write:
         from respmech.core.io.plan import probe_write_folder
         probe = probe_write_folder(out)
