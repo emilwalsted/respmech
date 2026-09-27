@@ -35,6 +35,7 @@ import os
 import numpy as np
 
 from respmech.core import plot_style
+from respmech.core.analysis.signals import Capabilities
 
 _BRAND = "#2C6E9B"
 _ACCENT = "#5CA9DD"
@@ -103,7 +104,7 @@ def _pv_limits(breaths, vkey, pkey):
 # --------------------------------------------------------------------------- #
 def _pv_average(fr, fname, path):
     bs = _breaths(fr)
-    if not bs:
+    if not bs or not len(bs[0].get("poes", [])):
         return None
     fig = _canvas((5.6, 5.8))
     ax = fig.add_subplot(111)
@@ -163,7 +164,7 @@ def _pv_grid(breaths, title_prefix, path, cols, rows, vkey, pkey, ekey_i, ekey_e
 
 def _pv_individual(fr, fname, path, cols, rows):
     bs = _ordered(fr)
-    if not bs:
+    if not bs or not len(bs[0].get("poes", [])):
         return None
     return _pv_grid(bs, f"{fname} — Campbell diagrams", path, cols, rows,
                     "volume", "poes", "eilv", "eelv",
@@ -176,7 +177,8 @@ def _pv_cohort(result, path, cols, rows):
     reps = []
     for fname, fr in result.ok_files.items():
         bs = _breaths(fr)
-        if bs and bs[0].get("volumeavg") is not None and len(bs[0]["volumeavg"]):
+        if (bs and bs[0].get("volumeavg") is not None and len(bs[0]["volumeavg"])
+                and len(bs[0].get("poes", []))):
             reps.append(bs[0])
     if not reps:
         return None
@@ -197,9 +199,14 @@ def _signals_trimmed(fr, fname, path):
         return np.concatenate([np.asarray(b[key], float) for b in bs])
     panels = [("Flow (L/s)", "flow"), ("Volume (L)", "volume"), ("Poes (cmH₂O)", "poes"),
               ("Pgas (cmH₂O)", "pgas"), ("Pdi (cmH₂O)", "pdi")]
-    panels = [(lbl, k) for lbl, k in panels if k in bs[0]]
-    # cumulative breath boundaries in the concatenated sample axis
-    bounds = np.cumsum([0] + [len(np.asarray(b["flow"], float)) for b in bs])
+    # A channel absent from the declared signal set is still a KEY (compute.py leaves it as
+    # an empty array, never removes it) — `k in bs[0]` alone no longer tells present from
+    # absent, so this checks LENGTH instead.
+    panels = [(lbl, k) for lbl, k in panels if len(bs[0].get(k, []))]
+    # cumulative breath boundaries in the concatenated sample axis, taken from `time` (always
+    # non-empty for a phased breath) rather than `flow` (not guaranteed once a future signal
+    # set can omit it, e.g. an EMG-only whole-file segment)
+    bounds = np.cumsum([0] + [len(np.asarray(b["time"], float)) for b in bs])
     fig = _canvas((11.0, 1.8 * len(panels)))
     for i, (lbl, key) in enumerate(panels):
         ax = fig.add_subplot(len(panels), 1, i + 1)
@@ -378,7 +385,11 @@ def _emg_overview(fr, fname, path, ylim, stage_key, stage_label):
     if data.ndim == 1:
         data = data[:, None]
     t = np.asarray(sig.get("time"), float)
-    flow = np.asarray(sig.get("flow"), float)
+    # Forward-compat guard: today `sig["flow"]` is always an array (core/pipeline.py sets it
+    # unconditionally), but if a future signal set without flow ever leaves it None, guard here
+    # before np.asarray(None) turns it into an unsized 0-d array and `len(flow)` below raises.
+    flow_raw = sig.get("flow")
+    flow = np.asarray(flow_raw, float) if flow_raw is not None else np.asarray([])
     peaks = np.asarray(sig.get("emg_peaks", []), float)
     cols = sig.get("emg_cols") or list(range(1, data.shape[1] + 1))
     nch = data.shape[1]
@@ -481,20 +492,26 @@ def per_file_figure_jobs(settings):
     detectable anchors) — the JOB existing is settings-driven and static; whether it
     actually produces a file for a particular recording is data-driven and is not decided
     here. Callers that need a ceiling, not a promise, must treat this list's length as an
-    upper bound per file, never an exact count."""
+    upper bound per file, never an exact count.
+
+    Channel-aware since this ticket: the Campbell jobs need Poes (``Capabilities.poes``) and
+    the volume-correction/trend/drift jobs need a volume trace (``Capabilities.volume``) —
+    a signal set without one of those never gets the job added at all, so it never shows up
+    in ``core.io.plan.plan_outputs``' ceiling either (the two read this exact list)."""
     dg = settings.output.diagnostics
     cols, rows = dg.pv_columns, dg.pv_rows
+    caps = Capabilities.from_settings(settings)
     jobs = []
-    if dg.save_pv_average:
+    if dg.save_pv_average and caps.poes:
         jobs.append(("PV average", _pv_average, "Campbell (average).pdf"))
-    if dg.save_pv_individual:
+    if dg.save_pv_individual and caps.poes:
         jobs.append(("PV individual", lambda fr, fn, p: _pv_individual(fr, fn, p, cols, rows),
                      "Campbell (breaths).pdf"))
     if dg.save_raw:
         jobs.append(("raw signals", _signals_raw, "signals (raw).pdf"))
     if dg.save_trimmed:
         jobs.append(("trimmed signals", _signals_trimmed, "signals (trimmed).pdf"))
-    if dg.save_drift:
+    if dg.save_drift and caps.volume:
         jobs.append(("volume correction", _volume_correction, "volume correction.pdf"))
         jobs.append(("trend", lambda fr, fn, p: _trend(fr, fn, p, settings), "volume trend.pdf"))
         jobs.append(("drift", _drift, "volume endpoints.pdf"))
@@ -556,6 +573,7 @@ def _write_figures_impl(result, settings, outputfolder: str, progress=None,
 
     jobs = per_file_figure_jobs(settings)
     cols, rows = dg.pv_columns, dg.pv_rows
+    caps = Capabilities.from_settings(settings)
 
     figdir = os.path.join(outputfolder, "diagnostics")
     written, failures = [], []
@@ -598,8 +616,10 @@ def _write_figures_impl(result, settings, outputfolder: str, progress=None,
                 failures.append((f"{fname}/EMG audio", str(e)))
 
     # one cohort "all-files average" Campbell across the whole batch — never built from a
-    # subset (A05): a 2+-file re-run/single-file write is still not the whole study.
-    if dg.save_pv_individual and len(result.ok_files) > 1 and cohort_outputs:
+    # subset (A05): a 2+-file re-run/single-file write is still not the whole study. Gated
+    # on Capabilities.poes too (this ticket): a signal set without Poes has no Campbell loop
+    # to average across files, per-file or cohort.
+    if dg.save_pv_individual and len(result.ok_files) > 1 and cohort_outputs and caps.poes:
         path = os.path.join(figdir, "All files – Campbell (average).pdf")
         try:
             p = _pv_cohort(result, path, cols, rows)

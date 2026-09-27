@@ -868,9 +868,9 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                     "raw_volume": np.asarray(volumeraw, float),
                     # An absent pressure channel (caps.poes/pgas/pdi False) is None here, not an
                     # empty array — R1's "documented absence, not a hidden empty/NaN" principle.
-                    # A future plots/plan consumer (M-16, out of scope here) needs its own guard
-                    # for None; every existing (full-channel) consumer sees an array unchanged,
-                    # since caps.poes/pgas/pdi are always True on that path.
+                    # The plots/plan consumers guard against None themselves (core/plots.py); every
+                    # existing (full-channel) consumer sees an array unchanged, since
+                    # caps.poes/pgas/pdi are always True on that path.
                     "raw_poes": np.asarray(poesraw, float) if s.capabilities.poes else None,
                     "raw_pgas": np.asarray(pgasraw, float) if s.capabilities.pgas else None,
                     "raw_pdi": np.asarray(pdiraw, float) if s.capabilities.pdi else None,
