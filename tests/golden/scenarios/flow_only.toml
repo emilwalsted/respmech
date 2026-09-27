@@ -1,0 +1,64 @@
+# V2_SCENARIOS golden fixture: 'flow_only'. Declares only the 'flow' signal --
+# no oesophageal/gastric/transdiaphragmatic pressure, no EMG -- over the SAME committed
+# synthetic recordings every other golden scenario uses (tests/golden/input). This has
+# no legacy-dict shape (analysis.signals is a v2-only field), so it is baked directly
+# from the v2 core (golden_newcore.py --write) rather than run through the frozen v1
+# oracle -- see make_golden.py's V2_SCENARIOS / LEGACY_SCENARIOS split and
+# tests/golden/README.md. Do not hand-edit golden_reference.json's "flow_only" entry;
+# regenerate it with golden_newcore.py --write after a deliberate change here.
+schema_version = 2
+
+[analysis]
+signals = ["flow"]
+
+[input]
+folder = "../input"
+files  = "synth_case_*.csv"
+
+[input.format]
+sampling_frequency = 1000
+decimal            = "."
+
+[input.channels]
+flow    = 5
+volume  = 6
+entropy = [10, 11, 12]   # kept: proves entropy is signal-set-independent -- computed
+                        # here exactly as in the other synthetic scenarios, even
+                        # though this analysis declares no pressure signal at all.
+# poes/pgas/pdi/emg deliberately unset -- this is the flow-only shape.
+
+[processing.segmentation]
+method = "flow"
+buffer = 200
+
+[processing.segmentation.peak]
+height     = 0.1
+distance_s = 0.1
+width_s    = 0.2
+
+[processing.volume]
+integrate_from_flow = false
+correct_drift       = true
+correct_trend       = false
+
+[processing.wob]
+calc_from          = "average"
+avg_resampling_obs = 300
+
+[processing.entropy]
+# Pinned to match the LEGACY_SCENARIOS' own fixed configuration (make_golden.py's
+# base_settings()), not the live GUI default (EntropySettings.epochs = 3 since the
+# 05-09-2026 content review) -- this scenario characterises a fixed configuration,
+# like every other golden scenario, not "whatever the app currently defaults to".
+# Self-review caught this: leaving it unset silently pulled in the GUI default and
+# changed every sample_entropy_* column against flow_wob_average's matching columns.
+epochs    = 2
+tolerance = 0.1
+
+[output]
+folder = "output"
+
+[output.data]
+save_average          = true
+save_breath_by_breath = true
+save_processed        = false

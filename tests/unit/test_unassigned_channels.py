@@ -71,13 +71,35 @@ def test_a_valid_mapping_still_loads(tmp_path):
 
 
 # -- the preview gates EVERY job on the mapping, not just the test run --------
-def test_every_preview_job_is_gated_on_a_valid_mapping(qapp, tmp_path):
+
+# -- The preview gate reads Settings.validate(), which is itself generic over
+# the DECLARED signal set (core.analysis.signals) so it must gate
+# correctly whichever shape an analysis declares, not only the historical "full" set
+# with every channel assigned. Every test below is parametrized over the three shapes
+# a real analysis can currently declare (``signals=None`` derives 'full' from the
+# synthetic default's fully-assigned channels, exactly as before this ticket) and
+# always breaks 'flow' -- the one channel every one of the three shapes requires --
+# so the SAME assertions the original, unparametrized tests made are now proven to
+# hold for flow-only and flow+poes as well, not just for the full set.
+_SIGNAL_SETS = pytest.mark.parametrize(
+    "signals", [None, ["flow"], ["flow", "poes"]], ids=["full", "flow_only", "poes_only"])
+
+
+def _gated_settings(tmp_path, signals):
+    s = synth_settings(str(tmp_path), data_out={"saveaveragedata": True,
+                                                "savebreathbybreathdata": True})
+    if signals is not None:
+        s.analysis.signals = list(signals)
+    return s
+
+
+@_SIGNAL_SETS
+def test_every_preview_job_is_gated_on_a_valid_mapping(qapp, tmp_path, signals):
     """Regression: only "batch" consulted _settings_ok, so an unassigned channel left the
     other five kinds to launch, load, and paint a raw traceback into their panels."""
     from respmech.ui.main_window import MainWindow
     from respmech.ui.state import AppState
-    s = synth_settings(str(tmp_path), data_out={"saveaveragedata": True,
-                                                "savebreathbybreathdata": True})
+    s = _gated_settings(tmp_path, signals)
     win = MainWindow(AppState(s))
     pv = win.preview_screen
     pv._refresh_files()
@@ -91,15 +113,21 @@ def test_every_preview_job_is_gated_on_a_valid_mapping(qapp, tmp_path):
         assert kind not in pv._jobs, f"{kind} launched a worker with no flow channel"
     assert not pv._launch_queue, "a worker was queued with no flow channel"
     assert "incomplete" in pv.status.text().lower()
+    # a non-default (explicit) declared set names ITSELF as the reason (Settings.validate:
+    # "... is required by analysis.signals"), proving the gate actually consulted the
+    # declared set here rather than a hardcoded "flow" check that would read identically
+    # for every one of these three parametrizations
+    if signals is not None:
+        assert "analysis.signals" in pv.status.text()
     win.close()
 
 
-def test_a_valid_mapping_still_schedules(qapp, tmp_path):
-    """The gate must not be so wide that it blocks ordinary work."""
+@_SIGNAL_SETS
+def test_a_valid_mapping_still_schedules(qapp, tmp_path, signals):
+    """The gate must not be so wide that it blocks ordinary work, for any declared set."""
     from respmech.ui.main_window import MainWindow
     from respmech.ui.state import AppState
-    s = synth_settings(str(tmp_path), data_out={"saveaveragedata": True,
-                                                "savebreathbybreathdata": True})
+    s = _gated_settings(tmp_path, signals)
     win = MainWindow(AppState(s))
     pv = win.preview_screen
     pv._refresh_files()
@@ -111,17 +139,57 @@ def test_a_valid_mapping_still_schedules(qapp, tmp_path):
     win.close()
 
 
-def test_clearing_the_mapping_blanks_the_plots_not_just_the_spinners(qapp, tmp_path):
+@pytest.mark.parametrize("signals, poes_required", [
+    (["flow"], False),
+    (["flow", "poes"], True),
+], ids=["flow_only-poes_unused", "poes_only-poes_required"])
+def test_a_channel_not_required_by_the_declared_set_does_not_gate_the_preview(
+        qapp, tmp_path, signals, poes_required):
+    """The DECLARED set, not merely 'is every channel on the form filled in', decides
+    what the gate requires: a flow-only analysis still carries the synthetic default's
+    poes channel (nothing clears it when the set narrows), and clearing THAT channel
+    must not block the preview, since analysis.signals=['flow'] never required it in the
+    first place. Without this, gating on "every assigned channel must stay assigned"
+    would needlessly block a perfectly runnable flow-only analysis the moment poes was
+    dropped from Setup for an unrelated reason.
+
+    Parametrized against its own contrasting case (self-review finding): clearing the
+    SAME channel under signals=['flow','poes'] -- where poes IS required -- must still
+    block, or this test would pass just as well if the gate ignored the declared set
+    entirely and always let a narrow-enough state through."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.state import AppState
+    s = _gated_settings(tmp_path, signals)
+    assert s.input.channels.poes is not None, "nothing clears it -- the point is it's unused"
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files()
+    pv.file_rail.select_filename("synth_case_A.csv")
+    pv.state.settings.input.channels.poes = None
+    before = pv._tokens["mech"]
+    pv._schedule("mech")
+    if poes_required:
+        # NOT "the token did not move" -- gating cancels in-flight work, which bumps the
+        # token by design (see test_every_preview_job_is_gated_on_a_valid_mapping above);
+        # what must not happen is a worker being STARTED.
+        assert "mech" not in pv._jobs, "a required channel's removal was not gated"
+    else:
+        assert pv._tokens["mech"] == before + 1, "an irrelevant channel blocked the preview"
+        assert "mech" in pv._jobs
+        pv.shutdown()
+    win.close()
+
+
+@_SIGNAL_SETS
+def test_clearing_the_mapping_blanks_the_plots_not_just_the_spinners(qapp, tmp_path, signals):
     """Regression: the Mechanics tab is never removed the way the EMG sub-tabs are, and
     sync_from_settings does not clear panels — so clearing the channel mapping after a
     preview left the previous mapping's traces on screen, reading as a current result for
     settings that can no longer produce one."""
-    import os
     from respmech.ui.main_window import MainWindow
     from respmech.ui.state import AppState
     from respmech.ui.workers import stage_mechanics_preview
-    s = synth_settings(str(tmp_path), data_out={"saveaveragedata": True,
-                                                "savebreathbybreathdata": True})
+    s = _gated_settings(tmp_path, signals)
     win = MainWindow(AppState(s))
     pv = win.preview_screen
     pv._refresh_files()
@@ -138,13 +206,13 @@ def test_clearing_the_mapping_blanks_the_plots_not_just_the_spinners(qapp, tmp_p
     win.close()
 
 
-def test_the_blank_re_arms_when_the_settings_become_valid_again(qapp, tmp_path):
+@_SIGNAL_SETS
+def test_the_blank_re_arms_when_the_settings_become_valid_again(qapp, tmp_path, signals):
     """It blanks once on the way into an invalid state; a later invalid transition must
     blank again rather than being suppressed by a latched flag."""
     from respmech.ui.main_window import MainWindow
     from respmech.ui.state import AppState
-    s = synth_settings(str(tmp_path), data_out={"saveaveragedata": True,
-                                                "savebreathbybreathdata": True})
+    s = _gated_settings(tmp_path, signals)
     win = MainWindow(AppState(s))
     pv = win.preview_screen
     pv._refresh_files()
@@ -159,7 +227,8 @@ def test_the_blank_re_arms_when_the_settings_become_valid_again(qapp, tmp_path):
     win.close()
 
 
-def test_a_job_launched_while_valid_cannot_repaint_the_blanked_panels(qapp, tmp_path):
+@_SIGNAL_SETS
+def test_a_job_launched_while_valid_cannot_repaint_the_blanked_panels(qapp, tmp_path, signals):
     """Regression: blanking does not bump the kind tokens, so a worker started while the
     settings were still valid completed afterwards, passed the acceptance check in
     _on_job_done, and repainted the traces we had just cleared — over a status line claiming
@@ -169,8 +238,7 @@ def test_a_job_launched_while_valid_cannot_repaint_the_blanked_panels(qapp, tmp_
     from respmech.ui.state import AppState
     from respmech.ui.screens.preview_screen import _Job
     from respmech.ui.workers import stage_mechanics_preview
-    s = synth_settings(str(tmp_path), data_out={"saveaveragedata": True,
-                                                "savebreathbybreathdata": True})
+    s = _gated_settings(tmp_path, signals)
     win = MainWindow(AppState(s))
     pv = win.preview_screen
     pv._refresh_files()
@@ -192,7 +260,8 @@ def test_a_job_launched_while_valid_cannot_repaint_the_blanked_panels(qapp, tmp_
     win.close()
 
 
-def test_recovering_from_invalid_settings_rebuilds_every_panel(qapp, tmp_path):
+@_SIGNAL_SETS
+def test_recovering_from_invalid_settings_rebuilds_every_panel(qapp, tmp_path, signals):
     """The blank is global, so the recovery must be too. sync_from_settings scopes a rebuild
     to the kinds the repairing edit touched — right for an ordinary edit, wrong after a
     blank: repairing a field that scopes to {"batch"} alone would leave five panels empty
@@ -200,8 +269,7 @@ def test_recovering_from_invalid_settings_rebuilds_every_panel(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     from respmech.ui.state import AppState
     from respmech.ui.screens.preview_screen import _AUTO_KINDS
-    s = synth_settings(str(tmp_path), data_out={"saveaveragedata": True,
-                                                "savebreathbybreathdata": True})
+    s = _gated_settings(tmp_path, signals)
     win = MainWindow(AppState(s))
     pv = win.preview_screen
     pv._refresh_files()
