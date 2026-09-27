@@ -47,18 +47,17 @@ except Exception:  # pragma: no cover
 # sub-tab titles — a leading chevron marks the intended flow: Mechanics › ECG reduction ›
 # noise reduction. Kept as constants so the insert code and the tests share one source.
 _TAB_MECH = "Mechanics"
+_TAB_SEGMENTS = "EMG – segments"
 _TAB_ECG = "› EMG – ECG reduction"
 _TAB_NOISE = "› EMG – noise reduction"
 
 _PANELS = {"mech": ["channels", "raw"], "batch": ["table", "campbell"],
            "ecg": ["ecg_capture", "ecg_stack"],
            "emg_all": ["result"], "emg_detail": ["detail", "detail_psd"], "noise": ["fidelity"],
-           # No dedicated 'EMG - segments' tab/overlay exists yet (a later ticket's scope)
-           # -- the renderer draws provisionally in the existing raw EMG stack, so this job
-           # owns the SAME 'raw' overlay 'mech' does. The two never actually race for it:
-           # 'mech' only ever dispatches for a flow-bearing set and 'segments' only for an
-           # EMG-only one (see _schedule), so exactly one of them is ever in flight.
-           "segments": ["raw"]}
+           # M-26: the segments tab's own stack — no longer shared with 'mech's 'raw'
+           # panel (which lives on the ECG-reduction/noise-reduction tabs and has nothing
+           # to do with an EMG-only set, which never shows those raw channels there).
+           "segments": ["segstack"]}
 _SPIN_TEXT = {"mech": "Loading channels…", "batch": "Running test…",
               "ecg": "Removing ECG…",
               "emg_all": "Conditioning channels…", "emg_detail": "Staging detail…",
@@ -76,6 +75,25 @@ _AUTO_KINDS = ("mech", "batch", "ecg", "emg_all", "emg_detail", "noise", "segmen
 # fidelity/noise profile is test-wide (built from the reference file + the whole input set),
 # so switching the previewed file must NOT blank or rebuild it. See _begin_file_switch.
 _FILE_KINDS = ("mech", "batch", "ecg", "emg_all", "emg_detail", "segments")
+
+
+def panels_for(kind, caps=None):
+    """Which ``BusyOverlay`` panel keys ``kind``'s CURRENT dispatch owns, given the
+    shape's capabilities (M-26). Every kind's panel list is fixed except 'batch': an
+    EMG-only set renders its test run into the segments tab's own per-segment table
+    (``'segtable'``) rather than the Mechanics tab's table + Campbell diagram, which is
+    not even shown for that shape (``subtab_plan``) — the SAME test-run job
+    (``_schedule``'s 'batch' branch has always dispatched for every signal set), just a
+    different render target. ``caps=None`` (an unclassified shape, or every call site
+    that predates this ticket) reproduces the old, flow-bearing default unchanged.
+
+    Callers that already own a dispatched ``_Job`` should read ``job.panels`` instead
+    (frozen at dispatch time by ``PreviewScreen._launch``) rather than call this again —
+    settings can change while a job is in flight, and a stale job's own panels must stay
+    whatever they were WHEN IT STARTED, not whatever the caps say right now."""
+    if kind == "batch" and caps is not None and caps.mode == "emg_only":
+        return ["segtable"]
+    return _PANELS[kind]
 
 
 def _kinds_for_settings_path(path, caps=None):
@@ -189,6 +207,20 @@ class _Job:
     thread: object
     worker: object
     error: object = None
+    # the panel keys THIS dispatch owns, frozen at launch time (see panels_for) — never
+    # re-derived from current settings once the job is running, so a stale job's own
+    # spinner/error bookkeeping stays consistent with what it actually rendered into.
+    panels: tuple = ()
+
+    def __post_init__(self):
+        # A caller that hand-constructs a _Job without ``panels=`` (every call site that
+        # predates M-26, incl. several tests) gets the OLD, static default for its kind —
+        # ``_launch`` is the only caller that ever needs the capability-aware list, and it
+        # always passes ``panels=`` explicitly (see ``panels_for``). Without this, such a
+        # job's frozen panels would be an empty tuple, and _on_job_done's `for p in
+        # job.panels:` would silently paint no error card / stop no spinner at all.
+        if not self.panels:
+            self.panels = tuple(_PANELS.get(self.kind, ()))
 
 
 # threads that would not stop within the shutdown budget are parked here (kept
