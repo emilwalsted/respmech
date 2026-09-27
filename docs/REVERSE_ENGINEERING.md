@@ -335,18 +335,52 @@ byte-identical).
   this change the same `run_batch()` call raised inside `calculateaveragebreaths`;
   after it, `result.ok_files` contains the file with exactly the expected reduced
   column set). `tests/unit/test_flow_only.py::test_flow_only_reaches_run_batch_end_to_end`
-  pins this. What a *later* ticket still adds is explicitness, not reachability: an
-  absent pressure channel still travels through `run_batch`'s `BatchResult.signals`
-  and `ui/workers.py`'s preview `series` dict as an *empty* array rather than `None`
-  (harmless today — every downstream reader either ignores it or already guards on
-  the mechanics table's own columns — but not the explicit "None means absent"
-  contract a later ticket gives it).
+  pins this; `results.py::build_processed_data` was already generic too (its own
+  `if len(breath[key]) == 0: continue` per-channel guard, from an earlier ticket),
+  and entropy is a signal-set-independent capability (R8) that was never gated on
+  Poes/Pgas/Pdi in the first place — both pinned end to end by
+  `test_processed_csv_has_only_present_channels`/`test_entropy_columns_equal_full_channel_run`
+  in `tests/unit/test_flow_only.py`/`test_poes_only.py`.
+- **The "None means absent" contract is now explicit, not just harmless.** An absent
+  pressure channel travels through `run_batch`'s `BatchResult.signals` dict as
+  `None` (`raw_poes`/`raw_pgas`/`raw_pdi`, guarded on `s.capabilities.poes`/`pgas`/
+  `pdi`) rather than an empty array, and `ui/workers.py::stage_mechanics_preview`'s
+  `series` dict *omits* the `poes`/`pgas`/`pdi` key entirely instead of carrying an
+  empty one — on both the normal path and the `TrimError` fallback. Every existing
+  (full-channel) consumer is unaffected, since `capabilities.poes`/`pgas`/`pdi` are
+  always `True` there.
+  **A reduced signal set is already reachable today**, though — an earlier ticket's
+  channel-assignment dialog gates its OK button on the analysis's own *declared*
+  roles (`ui/channel_setup_dialog.py::_enabled_analyses`/`_refresh_info`), not a
+  hardcoded full set, so a Flow-only or Flow+Poes mapping can already be saved and
+  reach Preview & QC today, well before M-16/M-17's own UI work lands. Self-review
+  caught the consequence before this ticket closed: `ui/screens/preview/_mechanics.py`'s
+  channel-stack render loop indexed the now-narrower `series` dict unconditionally
+  over its hardcoded 5-row `_CHANNELS` list, so it would raise `KeyError` on exactly
+  that already-reachable configuration — a real regression, not a theoretical one,
+  reproduced and fixed in the same commit: the row list is now filtered to
+  `[c for c in _CHANNELS if c[0] in series]` before the loop, so it only ever
+  iterates keys the dict actually carries. `_update_mech_stack_floor` still sizes
+  the stack for a flat 5 rows regardless of how many are drawn — a cosmetic gap on a
+  reduced set, left for M-17's own relevance-driven layout, not a correctness issue.
+  `core/pipeline.py::segment_file`'s raw time axis (`timecolraw`) is built from the
+  first non-empty of flow/volume/poes/pgas/pdi/emg (`_first_present_length()`)
+  rather than assuming flow specifically — a no-op for today's E2 scope (flow is
+  always present, so always first and chosen) but forward-compatible groundwork for
+  M-21's flow-less EMG-only segmentation.
 - **Tests**: `tests/unit/test_flow_only.py` (flow only: no Poes/Pgas/Pdi) and
   `tests/unit/test_poes_only.py` (flow + Poes, no Pgas/Pdi) call
   `calculateaveragebreaths`/`calculatemechanics` directly on segments built from
   `synth_case_A.csv` (`tests/unit/_helpers.py::segment_synth_case`/
   `compute_all_breaths`), bypassing `core.pipeline.run_batch` for a narrower,
-  faster unit of test — not because `run_batch` itself fails (see above).
+  faster unit of test — not because `run_batch` itself fails (see above). Both
+  files also carry real `run_batch()` and `stage_mechanics_preview()` end-to-end
+  tests for the processed-CSV, entropy and preview-series claims above, plus a
+  `qapp`-backed `MainWindow`/`PreviewScreen` regression test each
+  (`test_mechanics_stack_renders_without_crashing_on_a_reduced_signal_set`) that
+  renders the real Mechanics channel stack and pins the `_CHANNELS`-filtering fix
+  above — confirmed to fail with the exact `KeyError` before that fix and pass
+  after it.
 
 ---
 
