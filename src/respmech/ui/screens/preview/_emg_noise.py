@@ -806,6 +806,15 @@ class _EmgNoiseMixin:
         # channels for an EMG-only set) places or removes a separator instead of
         # toggling a breath, checked FIRST — before the legend/noise-band checks below,
         # which exist for the ordinary toggle and have nothing to say about this mode.
+        # Known, accepted gap (self-review): SeparatorLinesItem is currently drawn only
+        # on the segments tab's own stack (_update_separator_lines) — arming here and
+        # then clicking on the raw/detail/result views still places/removes a separator
+        # correctly (same settings, same file), but those views show no marker for it,
+        # so a user working from one of them cannot SEE an existing separator or tell a
+        # click will do anything but the usual breath-exclude toggle. Left as is for this
+        # ticket's own scope (the segments tab is where this action lives); extending the
+        # marker to the other views is a candidate for a later ticket, not a correctness
+        # bug in this one.
         if getattr(self, "_separators_armed", False):
             self._place_or_remove_separator(ev, plot_items, offset)
             return
