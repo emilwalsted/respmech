@@ -59,7 +59,13 @@ def _slice_cols(cols, start: int, end: int):
 
 def _make_segment(number: int, start: int, end: int, timecol, emgcolumns, entropycolumns,
                   filename: str, ignored: bool, kind: str | None) -> OrderedDict:
-    time = np.asarray(timecol[start:end]).squeeze()
+    # reshape(-1), not squeeze(): squeeze collapses a genuine 1-SAMPLE segment's (1,)
+    # array to a 0-d scalar (no len(), no indexing), which every downstream consumer of
+    # breath["time"] (build_processed_data, the diagnostic plots, this module's own
+    # pipeline.py caller) assumes is at least 1-D. reshape(-1) still flattens an
+    # incoming (n, 1) column-vector shape the same way squeeze did, without that
+    # collapse at n=1.
+    time = np.asarray(timecol[start:end]).reshape(-1)
     empty = np.array([])
     return OrderedDict([
         ('number', number),
@@ -98,6 +104,14 @@ def _attach_whole_file_rms_diagnostics(segment: OrderedDict, rms_s: float, fs: f
 
     No-op when there are no EMG columns (nothing to diagnose) or the window is too
     short for the envelope to exist at all (``rolling_rms`` returns empty arrays).
+
+    nan-aware: ``rolling_rms``'s cumulative-sum grid means a single NaN sample poisons
+    every window from that sample ONWARD, not just the ones directly overlapping it
+    (a NaN in a cumulative sum propagates forward forever). A real peak earlier in the
+    recording is still recovered correctly; a channel with no NaN-free window left at
+    all reports NaN for all three values, in matching pairs — never a concrete-looking
+    ``t_rms_file_max`` alongside a NaN ``rms_file_max``, which is a wrong answer that
+    looks right and worse than one that is visibly missing.
     """
     emgcols = segment['emgcols']
     if len(emgcols) == 0:
@@ -106,15 +120,20 @@ def _attach_whole_file_rms_diagnostics(segment: OrderedDict, rms_s: float, fs: f
     rms_max, t_rms_max, rms_top3 = [], [], []
     for ch in range(n_ch):
         values, starts = emglib.rolling_rms(np.asarray(emgcols)[:, ch], rms_s, fs)
-        if values.size == 0:
+        # nan-aware throughout: a plain argmax/sort would let a single NaN window (e.g.
+        # from upstream noise reduction touching the edge of the recording) pick a NaN
+        # as the "peak" while still reporting a concrete, plausible-looking t_rms_max —
+        # a wrong answer that looks right, worse than a value that is visibly NaN.
+        if values.size == 0 or np.all(np.isnan(values)):
             rms_max.append(float('nan'))
             t_rms_max.append(float('nan'))
             rms_top3.append(float('nan'))
             continue
-        peak_ix = int(np.argmax(values))
+        peak_ix = int(np.nanargmax(values))
         rms_max.append(float(values[peak_ix]))
         t_rms_max.append(float(starts[peak_ix]) / fs)
-        top3 = np.sort(values)[-min(3, values.size):]
+        finite = values[~np.isnan(values)]
+        top3 = np.sort(finite)[-min(3, finite.size):]
         rms_top3.append(float(np.mean(top3)))
     # One value per EMG channel, no appended max/mean summary (unlike compute_segment_emg's
     # rms/intemg families) — results.py::build_breath_table expands each of these three

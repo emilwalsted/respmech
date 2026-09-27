@@ -7,7 +7,7 @@ for the installers themselves.
 
 ## Unreleased
 
-**EMG-only analyses: hele filen som ét segment eller manuelle separatorer.** A recording
+**EMG-only analyses: the whole file as one segment, or manual separators.** A recording
 with no flow channel at all — an EMG-only signal set — can now be split into segments
 RMS/integral-EMG/sample-entropy is computed on: `whole_file` treats the entire recording
 as one segment, or `separators` splits it at up to any number of user-placed times. This
