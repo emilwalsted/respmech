@@ -1751,18 +1751,23 @@ class _MechanicsMixin:
         long as the floor's own ``title_floor_chars`` cap (10), so ``min(len(title), 10)``
         is 10 either way and the floor this call inherits is identical regardless of which
         title built the panel. A THIRD title introduced later must satisfy the same check
-        (>= 10 characters) or recompute the floor explicitly."""
-        caps = Capabilities.from_settings(self.state.settings)
-        title = "Campbell diagram" if caps.poes else "Flow-volume loop"
+        (>= 10 characters) or recompute the floor explicitly. Uses
+        ``from_settings_or_none``: this runs on every settings sync, including
+        ``PreviewScreen`` construction on ``MainWindow``'s no-try/except open path, so a
+        malformed ``analysis.signals`` must degrade to the poes-less title rather than
+        crash — see ``Capabilities.from_settings_or_none``."""
+        caps = Capabilities.from_settings_or_none(self.state.settings)
+        poes = caps is not None and caps.poes
+        title = "Campbell diagram" if poes else "Flow-volume loop"
         panel = getattr(self, "_campbell_panel", None)
         if panel is not None:
             panel._title_label.setFullText(title)
         btn = getattr(self, "btn_export_fig", None)
         if btn is not None:
-            btn.setText("Export Campbell…" if caps.poes else "Export flow-volume…")
+            btn.setText("Export Campbell…" if poes else "Export flow-volume…")
             # Not title.lower(): "Campbell" is a proper noun (E.J.M. Campbell), so a bare
             # lower() would misspell it mid-sentence.
-            tooltip_noun = "Campbell diagram" if caps.poes else "flow-volume loop"
+            tooltip_noun = "Campbell diagram" if poes else "flow-volume loop"
             btn.setToolTip(f"Save the {tooltip_noun} as a PNG or PDF.")
 
     def _draw_campbell_or_loop(self, breaths, pal=None):
@@ -1770,9 +1775,12 @@ class _MechanicsMixin:
         show (M-17, R7): the Campbell (volume-vs-Poes) diagram when Poes is declared, or a
         tidal flow-volume loop when it is not — a Poes-less analysis has no pressure trace
         to plot work of breathing against. Same cached-breaths/export plumbing either way
-        (``_campbell_breaths``, ``btn_export_fig``), because both draw functions set it."""
+        (``_campbell_breaths``, ``btn_export_fig``), because both draw functions set it.
+        Same ``from_settings_or_none`` tolerance as ``_update_campbell_panel_title`` (a
+        malformed signal set degrades to the flow-volume loop rather than crashing)."""
         self._update_campbell_panel_title()
-        if Capabilities.from_settings(self.state.settings).poes:
+        caps = Capabilities.from_settings_or_none(self.state.settings)
+        if caps is not None and caps.poes:
             self._draw_campbell(breaths, pal=pal)
         else:
             self._draw_flow_volume_loop(breaths, pal=pal)
