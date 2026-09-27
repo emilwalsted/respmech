@@ -6,6 +6,20 @@ decision <date>" — never an internal ticket reference; this repo is public).
 
 ---
 
+**27-09-2026 — A typed breath counts toward `bcnt`/`vefactor` exactly like a manually
+excluded one: neither is scaled down when a breath is retyped as a manoeuvre (author's
+decision, 27-09-2026).** `bcnt` (the breath count used to scale breathing frequency and
+minute ventilation) is `len(breaths)` — every breath the segmenter DETECTED, whether or
+not it is later excluded or typed — and `vefactor` is a pure function of the recording's
+own duration, unrelated to which breaths are counted. Typing a breath as `ic`/`fvc`/
+`max_insp`/`sniff`/`rest`/`other` folds it into the same exclusion machinery a manual
+click already used (see `core._legacy_ns.to_legacy_ns`'s union of `exclude_breaths` and
+`breath_types`), so it is left out of the tidal average the same way, but the file's
+own breath count is not renormalised to pretend the manoeuvre breath was never there.
+This is not a new rule invented for breath typing: the codebase has never scaled the
+breath count by exclusion, and a typed breath is deliberately not made a special case
+of that existing behaviour.
+
 **27-09-2026 — Relevance-driven visibility (R7) is a permitted refinement of
 inverted gating, not an exception, and Sample entropy is never hidden by the
 signal set (R8) (author's decision, 27-09-2026).** A surface — a sub-tab, an
