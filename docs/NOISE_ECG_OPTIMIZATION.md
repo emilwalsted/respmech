@@ -278,3 +278,49 @@ _(Historical note — the milestone breakdown below is retained for provenance.)
 them; the new `processing.emg.noise` settings in TOML + migrator mapping and a GUI
 fidelity/noise preview; and regenerating the golden from this canonical code —
 everything non-EMG/non-PTP is held constant.
+
+## 6. EMG-only noise references
+
+A flow-bearing analysis has always resolved its rest reference from one of two saved
+choices: `use_expiration` (the reference file's own expiration, ~500 STFT frames,
+stable) or, when that is false, explicit `reference_intervals`. An EMG-only signal set
+(no flow channel — nothing to split into inspiration/expiration at all) needed its own
+rule, since neither concept means anything without a flow-derived breath.
+
+`core.settings.resolve_noise_reference_mode(settings)` is the one function that decides
+which source `_reference_noise_clip` actually builds from, returning `'expiration'` |
+`'intervals'` | `'rest_segments'` | `'interburst'` | `'unresolved'`. `processing.emg.
+noise.reference_mode` (default `'auto'`) drives it:
+
+* **With a flow channel declared**, `'auto'` reproduces the existing rule exactly —
+  `'expiration'` when `use_expiration` is true (or no intervals are set), `'intervals'`
+  otherwise. `use_expiration`/`reference_intervals` remain the two saved fields for this
+  case; `reference_mode` adds nothing new here.
+* **Without a flow channel**, `'auto'` looks for a segment typed `'rest'` in the
+  reference file (`BREATH_KINDS` — a right-clicked, or hand-edited, segment; segment
+  numbers are `whole_file`/`separators`' own segment numbers, not breaths). If one
+  exists, the mode is `'rest_segments'` and the clip is the concatenation of every
+  `'rest'`-typed segment's EMG. Otherwise, explicit `reference_intervals` still work
+  (`'intervals'`); with neither, the mode is `'unresolved'` and `Settings.validate()`
+  refuses to enable noise reduction at all, rather than let an unbuildable profile reach
+  the pipeline mid-batch.
+* `'rest_segments'`/`'interburst'` can also be set explicitly, but only for an EMG-only
+  set — `Settings.validate()` rejects either while a flow channel is declared. `
+  'interburst'` (an automatically detected inter-burst quiet period, for the automatic
+  EMG-burst segmentation a later addition builds) has no clip-building implementation
+  yet and is rejected too, for now, with a clear message rather than a bare error deep
+  in the pipeline.
+
+**Decision:** a typed breath (any manoeuvre kind — IC, FVC, a maximal effort, `'rest'`
+itself, or `'other'`) is excluded from the flow-bearing reference file's own expiration
+mask when building the `'expiration'`-mode clip: its expiration is not the
+diaphragm-quiet period the profile is trusted for. A no-op for the overwhelming common
+case (no typed breaths at all) — every existing scenario is unaffected. See
+`core.pipeline._emg_segmented`'s `exclude_typed_from_expiration` parameter.
+
+**Left for later:** automatically choosing the noise-reduction strength (`auto_prop`)
+has no EMG-only implementation yet — it is built on inspiration/expiration phases, and
+a genuine EMG-only active/quiet split (rest-typed segments against the rest, or bursts)
+needs its own design. `Settings.validate()` requires `auto_prop` off whenever noise
+reduction is enabled for an EMG-only set, so this is a clear, named restriction rather
+than an unguarded crash.
