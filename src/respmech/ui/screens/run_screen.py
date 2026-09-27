@@ -1647,9 +1647,12 @@ class RunScreen(QWidget):
         for fname, fr in files.items():
             err = getattr(fr, "error", None)
             bt = getattr(fr, "breaths_table", None)
+            # M-32: role rides along with the same result breaths/verdict already come
+            # from — see FileRailEntry.role's own docstring.
             self.file_rail.mark_result(fname, ok=err is None,
                                        breaths=None if err else (len(bt) if bt is not None else 0),
-                                       error=str(err) if err else None)
+                                       error=str(err) if err else None,
+                                       role=None if err else getattr(fr, "role", None))
         self.file_rail.sort_failed_first(self.file_rail.any_failed())
 
     def _rerun_failed(self):

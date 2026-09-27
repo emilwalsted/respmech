@@ -647,7 +647,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         # reproducible layout-race regression in test_window_fits_screen.py).
         self.file_rail.set_manifest(manifest)
         files = self.file_rail.filenames()
-        self._sync_rail_exclusions()
+        self._sync_rail_breath_state()
         if prev in files:
             self.file_rail.select_filename(prev)   # re-assert the highlight; identity unchanged
         elif files:
@@ -685,24 +685,51 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
             self._set_status(f"{len(files)} files — pick one; everything runs automatically.")
         self._update_actions()
 
-    def _sync_rail_exclusions(self):
-        """Reflect ``exclude_breaths`` as the rail's exclusion badge for EVERY file
-        currently in the rail — for every file it names, not only the one currently
-        previewed (ticket requirement: the badge must be visible without selecting the
-        file first), AND explicitly zeroed for a file the CURRENT analysis names no
-        exclusion for. The zeroing matters because ``set_manifest`` preserves a
-        persisting file's rail state across a rebuild: opening a second analysis over
-        the same folder/mask, with no exclusion for a file the FIRST analysis had
-        excluded breaths in, must not leave that first analysis's stale badge on
-        screen."""
+    def _sync_rail_breath_state(self):
+        """Reflect ``exclude_breaths``/``breath_types``/``segmentation`` as the rail's
+        badges for EVERY file currently in the rail — for every file it names, not only
+        the one currently previewed (ticket requirement: a badge must be visible without
+        selecting the file first), AND explicitly zeroed for a file the CURRENT analysis
+        names no exclusion/typing for. The zeroing matters because ``set_manifest``
+        preserves a persisting file's rail state across a rebuild: opening a second
+        analysis over the same folder/mask, with no exclusion/typing for a file the
+        FIRST analysis had, must not leave that first analysis's stale badge on screen.
+
+        M-32: replaces the exclusion-only ``_sync_rail_exclusions`` — called from the
+        same three places that one was (``refresh_files``, ``sync_from_settings``) PLUS
+        every breath-classification write funnel (M-20's ``_set_breath_type``, M-27's
+        ``_toggle_separator_at``), which used to call a file-rail sync of their own
+        (``_sync_excluded_badge``/this same wide function respectively) — now unified on
+        one function so a type/exclude/separator edit can never leave any of the THREE
+        state kinds it might affect (exclusion, typing, segment count) stale on any
+        OTHER row than the one just edited."""
         from respmech.core.settings import is_carried_folder
         current_folder = self.state.settings.input.folder
-        counts = {e.file: len(e.breaths) for e in self.state.settings.processing.exclude_breaths}
-        carried = {e.file: is_carried_folder(e.folder, current_folder)
-                  for e in self.state.settings.processing.exclude_breaths if e.breaths}
+        proc = self.state.settings.processing
+        excl_counts = {e.file: len(e.breaths) for e in proc.exclude_breaths}
+        excl_carried = {e.file: is_carried_folder(e.folder, current_folder)
+                        for e in proc.exclude_breaths if e.breaths}
+        typed_counts: dict[str, dict[str, int]] = {}
+        typed_carried: dict[str, bool] = {}
+        for t in proc.breath_types:
+            counts = typed_counts.setdefault(t.file, {})
+            counts[t.kind] = counts.get(t.kind, 0) + 1
+            if is_carried_folder(t.folder, current_folder):
+                typed_carried[t.file] = True
+        seg = proc.segmentation
+        seg_counts = ({e.file: 1 + len(e.times_s) for e in seg.separators}
+                     if seg.method == "separators" else {})
         for name in self.file_rail.filenames():
-            self.file_rail.set_excluded_count(name, counts.get(name, 0),
-                                              carried=carried.get(name, False))
+            self.file_rail.set_excluded_count(name, excl_counts.get(name, 0),
+                                              carried=excl_carried.get(name, False))
+            self.file_rail.set_typed_state(name, typed_counts.get(name, {}),
+                                           carried=typed_carried.get(name, False))
+            if seg.method == "whole_file":
+                self.file_rail.set_segments(name, 1)
+            elif seg.method == "separators":
+                self.file_rail.set_segments(name, seg_counts.get(name, 1))
+            else:
+                self.file_rail.set_segments(name, None)
 
     def _refresh_files(self):        # kept for existing wiring + tests
         self.refresh_files()
@@ -724,7 +751,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         self._update_campbell_panel_title()   # M-17 (R7): follows a signal-set change too
         self._update_mech_stack_floor()       # M-17 (R7): follows a channel-count change too
         self._update_separators_button()      # M-27: follows a segmentation.method change too
-        self._sync_rail_exclusions()   # a loaded analysis file can bring its own exclusions
+        self._sync_rail_breath_state()   # a loaded analysis file can bring its own exclusions/typing
         self._update_actions()
         # Dependency-scoped invalidation: diff the settings against the last-synced snapshot
         # and recompute ONLY the panels whose inputs actually changed. An EMG-only edit no
