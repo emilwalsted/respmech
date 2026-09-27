@@ -26,15 +26,19 @@ within a tight tolerance.
 | `flow_exclude_noemg`  | legacy | flow | average    | off | `excludebreaths` + `breathcounts` override + processed-data export |
 | `flow_only`           | v2     | flow | average    | off | `analysis.signals = ["flow"]`, no pressure channels — entropy columns [10,11,12] kept, to prove entropy stays signal-set-independent |
 | `poes_only`           | v2     | flow | average    | off | `analysis.signals = ["flow", "poes"]` — work of breathing, no Pgas/Pdi |
+| `emg_only_whole_file`  | v2     | n/a (EMG-only) | n/a | on | `analysis.signals = ["emg"]`, `processing.segmentation.method = "whole_file"` — each entire file is one segment, over a DEDICATED `input/synth_emgonly_*.csv` pair (own RNG stream, never `synth_case_*.csv`) |
+| `emg_only_separators`  | v2     | n/a (EMG-only) | n/a | on | same EMG-only input pair, `processing.segmentation.method = "separators"` — one manual boundary list PER FILE, giving a DIFFERENT segment count per file (4 and 3) |
 
 `Oracle` names which generator is authoritative for that scenario's committed
 numbers: `legacy` = the frozen v1 oracle (`make_golden.py --write`, cross-checked
 by `golden_newcore.py`); `v2` = bagt directly from the v2 core
 (`golden_newcore.py --write`), for a scenario whose settings the legacy dict/
-`migrate_dict` path has no shape at all. `flow_only`/`poes_only` are the
-first two `v2` rows — each a committed `tests/golden/scenarios/<name>.toml`, since
-`analysis.signals` has no legacy-dict shape to express it in; `V2_SCENARIOS` in
-`make_golden.py` is the table a feature ticket adds a `v2` row to.
+`migrate_dict` path has no shape at all. `flow_only`/`poes_only`/`emg_only_whole_file`/
+`emg_only_separators` are all `v2` rows — each a committed
+`tests/golden/scenarios/<name>.toml`, since `analysis.signals` (and, for the two
+EMG-only rows, `processing.segmentation.method`/`separators`) has no legacy-dict shape
+to express it in; `V2_SCENARIOS` in `make_golden.py` is the table a feature ticket adds
+a `v2` row to.
 
 **Regenerating `golden_reference.json` after adding a `v2` scenario merges, it never
 overwrites.** `golden_newcore.py --write` recomputes the ENTIRE `SCENARIOS` union
@@ -56,13 +60,14 @@ when every value is unchanged (these two new scenarios added ~34 KB combined and
 `git diff` still showed thousands of changed lines).
 
 **Golden job runtime:** measured locally (sandbox, `pytest tests/golden -q`,
-9 non-skipped + 5 skipped production tests) at ~8 s after adding the two new `v2`
-scenarios — the same order of magnitude as before, since each scenario is still one
-`run_batch` over the same two small synthetic files. `ci.yml`'s `golden` job
-(`timeout-minutes: 15`) was not itself re-measured on the real runner by this ticket
-(no Actions access from this environment) — confirm the actual CI duration on the
-merge commit that adds `flow_only`/`poes_only` and raise `timeout-minutes` in the
-same commit only if it is ever observed to exceed ~10 minutes.
+11 non-skipped + 5 skipped production tests) at ~11 s after adding
+`emg_only_whole_file`/`emg_only_separators` (up from ~8 s for the 9 non-skipped tests
+before them) — still the same order of magnitude, since each new scenario is one more
+`run_batch` over a small synthetic input pair, same as every other scenario here.
+`ci.yml`'s `golden` job (`timeout-minutes: 15`) was not itself re-measured on the real
+runner by this ticket (no Actions access from this environment) — confirm the actual CI
+duration on the merge commit that adds these two scenarios and raise `timeout-minutes`
+in the same commit only if it is ever observed to exceed ~10 minutes.
 
 For each scenario the reference stores: the merged **average** breath data, the
 **per-file** breath-by-breath tables, and a compact **processed-data** summary

@@ -151,6 +151,63 @@ def make_file(path, seed, n_breaths, period_s=3.0, vt_l=1.2, drift_l=0.15,
     return N
 
 
+def _emg_only_waveforms(rng, n_segments, period_s):
+    """Concatenated EMG-only bursts (no flow/pressure channel at all — there is
+    nothing to segment BY, unlike ``_breath_waveforms`` above, which is exactly the
+    shape the ``whole_file``/``separators`` EMG-only segmentation methods exist for).
+    One smooth burst per segment over a low tonic floor, on 3 channels, so RMS/integrated-
+    EMG have something non-trivial to measure. Returns the concatenated channels and
+    the ``n_segments - 1`` internal segment-to-segment boundaries (seconds, relative
+    to the start of THIS waveform — the caller adds the lead-in offset)."""
+    emg_all = [[], [], []]
+    onsets = []
+    t_cursor = 0.0
+    for b in range(n_segments):
+        T = period_s * (1.0 + 0.06 * np.sin(1.1 * b))
+        n = int(round(T * FS))
+        t = np.arange(n) / FS
+        env = np.sin(np.pi * t / T) ** 2                # smooth burst, peak mid-segment
+        for ch in range(3):
+            carrier = np.sin(2 * np.pi * (70 + 10 * ch) * t)
+            burst = (0.03 + 0.005 * ch) * env * carrier
+            tonic = (0.004 + 0.0005 * ch) * (1.0 - env) * carrier   # low floor between bursts
+            noise = rng.normal(0, 0.003 + 0.0005 * ch, n)
+            emg_all[ch].append(burst + tonic + noise)
+        t_cursor += T
+        if b < n_segments - 1:
+            onsets.append(t_cursor)
+    emg = [np.concatenate(c) for c in emg_all]
+    return emg, onsets
+
+
+def make_emgonly_file(path, seed, n_segments, period_s=2.0, lead_s=0.4):
+    """Write one EMG-only synthetic recording (time + 3 EMG channels, no flow/pressure
+    columns at all) — a DEDICATED input for the ``emg_only_whole_file``/
+    ``emg_only_separators`` golden scenarios, on its OWN RNG stream (``seed`` is never
+    one of ``make_file``'s own seeds above) and its own ``synth_emgonly_*.csv`` naming,
+    so it can never be mistaken for (or accidentally match the glob of) the flow-
+    bearing ``synth_case_*.csv`` files every other scenario uses.
+
+    A short quiet lead-in (noise only, no burst) precedes the first segment, mirroring
+    ``make_file``'s own lead-in convention above — though here it is not trimmed away
+    (EMG-only segmentation has no ``trim()`` step at all), it just makes the first
+    segment's own burst start visibly after silence, like a real recording's settling
+    period. Returns the sample count and the internal segment-boundary times (seconds,
+    already offset by the lead-in) for the caller to use as ``separators`` times."""
+    rng = np.random.default_rng(seed)
+    emg, onsets = _emg_only_waveforms(rng, n_segments, period_s)
+    nlead = int(round(lead_s * FS))
+    lead_emg = [rng.normal(0, 0.003 + 0.0005 * ch, nlead) for ch in range(3)]
+    emg = [np.concatenate([lead_emg[ch], emg[ch]]) for ch in range(3)]
+    onsets = [round(lead_s + o, 6) for o in onsets]
+    N = len(emg[0])
+    time = np.arange(N) / FS
+    header = "time,EMG1,EMG2,EMG3"
+    data = np.column_stack([time, emg[0], emg[1], emg[2]])
+    np.savetxt(path, data, delimiter=",", header=header, comments="", fmt="%.10g")
+    return N, onsets
+
+
 if __name__ == "__main__":
     here = os.path.dirname(os.path.abspath(__file__))
     indir = os.path.join(here, "input")
@@ -159,3 +216,10 @@ if __name__ == "__main__":
     n1 = make_file(os.path.join(indir, "synth_case_A.csv"), seed=12345, n_breaths=8)
     n2 = make_file(os.path.join(indir, "synth_case_B.csv"), seed=67890, n_breaths=6)
     print(f"Wrote synth_case_A.csv ({n1} samples), synth_case_B.csv ({n2} samples)")
+
+    n3, onsets_a = make_emgonly_file(
+        os.path.join(indir, "synth_emgonly_A.csv"), seed=13579, n_segments=4)
+    n4, onsets_b = make_emgonly_file(
+        os.path.join(indir, "synth_emgonly_B.csv"), seed=24680, n_segments=3)
+    print(f"Wrote synth_emgonly_A.csv ({n3} samples, separators {onsets_a}), "
+         f"synth_emgonly_B.csv ({n4} samples, separators {onsets_b})")

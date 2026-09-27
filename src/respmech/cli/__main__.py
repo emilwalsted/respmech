@@ -110,9 +110,16 @@ def cmd_validate(args) -> int:
     from respmech.core.pipeline import match_input_files
     from respmech.core.io.plan import probe_write_folder
     from respmech.core.io.loaders import probe_constant_channels, probe_merged_time_blocks
+    from respmech.core.analysis.signals import effective_signals
 
     settings = load_toml(args.settings)
     settings.validate()
+    # An EMG-only signal set has no flow channel for a constant one to ever be
+    # assigned against, so the flow-only hard-failure rule below is meaningless there —
+    # a constant EMG channel is EMG-only's equivalent hard failure instead (RMS/entropy
+    # on a dead channel is a meaningless number, not merely an unused pressure port).
+    declared = effective_signals(settings)
+    emg_only = "flow" not in declared and "emg" in declared
     pattern = os.path.join(settings.input.folder, settings.input.files)
     # match_input_files: the SAME matcher run_batch uses, so the reported count is exactly
     # what `respmech run` will process (case-insensitive; safe against folder metacharacters).
@@ -140,8 +147,13 @@ def cmd_validate(args) -> int:
             # OTHER constant channel is advisory only, same as Manifest.
             # constant_channel_files' own docstring promises the GUI's QC strip -- a
             # permanently unused pressure port (e.g. no Pdi balloon) is a legitimate
-            # real setup, and validate should not fail every time on it.
-            if any(name.startswith("Flow ") for name in constant):
+            # real setup, and validate should not fail every time on it. An EMG-only
+            # set has no flow channel at all -- a constant EMG channel there is the
+            # equivalent hard failure instead.
+            if emg_only:
+                if any(name.startswith("EMG #") for name in constant):
+                    ok = False
+            elif any(name.startswith("Flow ") for name in constant):
                 ok = False
     # Settings.unknown is collected by from_dict but was never read anywhere —
     # a misspelled key silently ran on the default it was meant to override, with no
