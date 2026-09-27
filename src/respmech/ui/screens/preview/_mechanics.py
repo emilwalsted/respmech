@@ -12,18 +12,18 @@ from dataclasses import dataclass
 
 import numpy as np
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
-                               QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton,
+                               QFrame, QHBoxLayout, QLabel, QMenu, QProgressBar, QPushButton,
                                QScrollArea, QSplitter, QTableView,
                                QTabWidget, QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt, QEvent, QObject, QSize, QThread, QTimer, Signal
-from PySide6.QtGui import QBrush, QFont, QFontMetrics
+from PySide6.QtGui import QBrush, QCursor, QFont, QFontMetrics
 
 import pyqtgraph as pg
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
 from respmech.core.analysis.signals import Capabilities
-from respmech.core.settings import ExcludeEntry
+from respmech.core.settings import BreathTypeEntry, ExcludeEntry, is_carried_folder
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
 from respmech.ui import plot_perf
@@ -49,6 +49,19 @@ from ._jobs import _FileRunError, _KIND_LABEL, _PANELS
 from ._plot_helpers import (BreathSpansItem, SciAxis, _CHANNELS, _pen, _plot_pal,
                             _restrict_body_wheel_to_x)
 
+
+#: A breath span's/BreathTypeEntry's kind -> the palette suffix _breath_brush/
+#: _breath_label_color reads (``breath_<suffix>_brush``/``_label``). 'excluded' is a
+#: UI-only pseudo-kind (processing.exclude_breaths, never a BREATH_KINDS member); any
+#: real BREATH_KINDS member without its own dedicated entry here (ic_fvc/max_insp/sniff
+#: — not reachable from the minimal type menu this ticket adds, only from M-31's fuller
+#: one) falls back to 'other' rather than raising on an unknown kind.
+_KIND_PALETTE_SUFFIX = {"excluded": "excl", "ic": "ic", "fvc": "fvc", "rest": "rest"}
+
+#: Minimal type-menu labels (M-20's scope only — Tidal / Excluded / Rest; the fuller
+#: manoeuvre menu is M-31). 'tidal' clears both exclusion and typing.
+_TYPE_MENU_KINDS = ("tidal", "excluded", "rest")
+_TYPE_MENU_LABELS = {"tidal": "Tidal", "excluded": "Excluded", "rest": "Rest"}
 
 
 def _short_boundary_note(notices):
@@ -1195,26 +1208,33 @@ class _MechanicsMixin:
         self._raw_label_y = self._safe_top(emg[:, 0])
         self._repaint_view_breaths("raw")
 
-    # -- feature A: breath overlays + include/exclude ----------------------
+    # -- feature A: breath overlays + include/exclude/type ------------------
     @staticmethod
-    def _breath_brush(ignored, carried=False):
-        """``carried``: this exclusion was recorded against a different (or unrecorded)
+    def _breath_brush(kind, carried=False):
+        """``kind``: ``None``/falsy for plain tidal breathing, the pseudo-kind
+        ``'excluded'`` for a manual exclusion, or a ``respmech.core.settings.
+        BREATH_KINDS`` member for a typed breath (M-20) — see ``_KIND_PALETTE_SUFFIX``.
+        ``carried``: this entry was recorded against a different (or unrecorded)
         recordings folder than the one now loaded — see ``_exclusion_carried_for``. Drawn
         HATCHED instead of solid, so an inherited exclusion reads differently from one made
         in the folder actually on screen without needing a second colour (which would
         collide with the included/excluded palette already in use elsewhere)."""
         pal = _plot_pal()
-        if not ignored:
+        if not kind:
             return pg.mkBrush(*pal["breath_incl_brush"])
-        colour = pg.mkColor(*pal["breath_excl_brush"])
+        suffix = _KIND_PALETTE_SUFFIX.get(kind, "other")
+        colour = pg.mkColor(*pal[f"breath_{suffix}_brush"])
         if carried:
             return QBrush(colour, Qt.BDiagPattern)
         return QBrush(colour, Qt.SolidPattern)
 
     @staticmethod
-    def _breath_label_color(ignored):
+    def _breath_label_color(kind):
         pal = _plot_pal()
-        return pg.mkColor(*(pal["breath_excl_label"] if ignored else pal["breath_incl_label"]))
+        if not kind:
+            return pg.mkColor(*pal["breath_incl_label"])
+        suffix = _KIND_PALETTE_SUFFIX.get(kind, "other")
+        return pg.mkColor(*pal[f"breath_{suffix}_label"])
 
     @staticmethod
     def _limit_x(plot, t):
@@ -1233,7 +1253,7 @@ class _MechanicsMixin:
         except Exception:                        # noqa: BLE001 — cosmetic
             pass
 
-    def _breath_text(self, num, ignored):
+    def _breath_text(self, num, kind):
         """A breath-number TextItem, sized for the SHORT stacked mechanics channel plots
         (~46 px of data area each): at the 13 pt app font the box is 23 px, so the headroom
         needed to show it swallows half the plot.
@@ -1242,7 +1262,7 @@ class _MechanicsMixin:
         almost entirely because QTextDocument adds a 4 px margin on every side — setting a
         smaller font ALONE leaves it at 23 px. Font 9 pt + documentMargin 0 gives ~15 px."""
         txt = pg.TextItem(self._breath_label(num),
-                          color=self._breath_label_color(ignored), anchor=(0.5, 0.0))
+                          color=self._breath_label_color(kind), anchor=(0.5, 0.0))
         f = QFont(); f.setPointSizeF(9.0)
         txt.setFont(f)
         txt.textItem.document().setDocumentMargin(0)
@@ -1332,23 +1352,25 @@ class _MechanicsMixin:
         BreathSpansItem PER PLOT carries every breath's region (D15) — the old
         per-breath pg.LinearRegionItem (plus its now-dropped redundant boundary
         line, see BreathSpansItem's docstring) is gone; only the label stays a
-        per-breath TextItem, same as before."""
+        per-breath TextItem, same as before. ``spans``: ``(n, t0, t1, kind)`` — see
+        ``_breath_brush``'s docstring for what ``kind`` may be."""
         self._mech_unpin()               # the old labels are torn down with their pin slot
-        self._breath_spans = {n: (t0, t1) for (n, t0, t1, _ig) in spans}
-        self._breath_regions = {n: [] for (n, _0, _1, _ig) in spans}   # n -> [(item, index), ...]
+        self._breath_spans = {n: (t0, t1) for (n, t0, t1, _k) in spans}
+        self._breath_regions = {n: [] for (n, _0, _1, _k) in spans}   # n -> [(item, index), ...]
         self._breath_texts = {}
-        brushes_by_index = [self._breath_brush(ignored, carried=carried) for _n, _t0, _t1, ignored in spans]
+        brushes_by_index = [self._breath_brush(kind, carried=carried) for _n, _t0, _t1, kind in spans]
         for plot in self._channel_plots:
             item = BreathSpansItem()
-            item.set_spans([(t0, t1, brushes_by_index[i])
-                            for i, (_n, t0, t1, _ig) in enumerate(spans)])
+            item.set_spans([(t0, t1, brushes_by_index[i], n)
+                            for i, (n, t0, t1, _k) in enumerate(spans)])
             item.setZValue(-10)
+            item.typeRequested.connect(self._handle_type_requested)
             plot.addItem(item)
-            for i, (n, _t0, _t1, _ig) in enumerate(spans):
+            for i, (n, _t0, _t1, _k) in enumerate(spans):
                 self._breath_regions[n].append((item, i))
         if self._channel_plots:
-            for n, t0, t1, ignored in spans:
-                txt = self._breath_text(n, ignored)
+            for n, t0, t1, kind in spans:
+                txt = self._breath_text(n, kind)
                 txt.setPos((t0 + t1) / 2.0, label_y)
                 self._channel_plots[0].addItem(txt, ignoreBounds=True)
                 self._breath_texts[n] = txt
@@ -1364,6 +1386,13 @@ class _MechanicsMixin:
         return None
 
     def _on_plot_clicked(self, ev):
+        # M-20: a right-click/Ctrl+left-click that landed on a breath is handled at
+        # item level (BreathSpansItem.mouseClickEvent -> typeRequested) and accepted
+        # there — this scene-level handler is for the plain left-click toggle only, and
+        # must ignore anything already accepted (including a right-click ViewBox itself
+        # accepted to raise its own menu, when the click missed every span).
+        if ev.isAccepted() or ev.button() != Qt.LeftButton:
+            return
         if not self._breath_spans:
             return
         try:
@@ -1378,14 +1407,35 @@ class _MechanicsMixin:
                     self._toggle_breath(bno)
                 return
 
-    def _toggle_breath(self, breath_no):
-        # D24: the single funnel both the Mechanics-stack click (_on_plot_clicked above)
-        # and every EMG plot's click handler (_emg_noise._toggle_from_emg_click) call
-        # through — one guard here covers both. A click during a run used to silently
-        # rewrite exclude_breaths without ever touching the batch that is already reading
-        # a frozen deepcopy of the settings taken at _start() (run_screen.py) — the click
-        # LOOKED like it worked (the overlay recoloured immediately) while the running
-        # batch, and the results it was about to write, never saw it.
+    def _set_breath_type(self, breath_no, kind):
+        """Single funnel for every breath-classification write: the plain include/
+        exclude toggle (``_toggle_breath``) and the type menu's Tidal/Excluded/Rest
+        (``_handle_type_requested``) all end here, so the run-lock guard, the
+        folder-stamp-only-on-creation rule and the one ``settings_edited`` emission
+        exist in exactly one place (D24's original reasoning for ``_toggle_breath``,
+        now shared). ``kind`` is one of:
+
+        - ``'tidal'`` — clear both exclusion and typing (plain tidal breathing);
+        - ``'excluded'`` — manually excluded, ``processing.exclude_breaths``;
+        - a ``respmech.core.settings.BREATH_KINDS`` member — typed,
+          ``processing.breath_types`` (M-19), storing ``t_onset_s``.
+
+        A breath is at all times in exactly one of these three states: setting one
+        clears whichever of the other two it may have carried, so the settings.
+        validate() invariants ('typed more than once', 'both typed and excluded')
+        can never actually be reached from this funnel.
+
+        Returns ``kind`` again on success (never ``None`` — 'tidal' is returned as the
+        literal string, so a caller can tell "applied, now tidal" apart from "did not
+        apply" unambiguously), or ``None`` if the write was blocked (a run in
+        progress) or the target is invalid (no file selected, or a breath number this
+        file's current render does not know about — e.g. a stale click, same guard
+        ``_toggle_breath`` has always had).
+
+        Does NOT itself write a status-bar message or the Mechanics caption: those
+        differ enough between the toggle's "N/M excluded" wording and the menu's
+        "set to <kind>" wording that each caller composes its own, after checking
+        the return value is not ``None``."""
         if self._run_active:
             # _set_status alone would be invisible here: MainWindow suppresses every
             # non-run_screen status while a run is active (see write_action_blocked's own
@@ -1398,75 +1448,206 @@ class _MechanicsMixin:
         name = self._selected_filename()
         if not name or breath_no not in self._breath_spans:
             return None
-        excl = self.state.settings.processing.exclude_breaths
-        entry = next((e for e in excl if e.file == name), None)
-        if entry is None:
-            # ONLY a brand-new entry gets stamped with the current folder here. An EXISTING
-            # entry's folder is deliberately left untouched by a plain toggle, even when the
-            # user is un-excluding one of ITS OWN breaths: entry.folder is one tag for the
-            # WHOLE file, but excl.breaths can hold a MIX of breaths the user just decided on
-            # and others still carried from a different folder that this click never looked
-            # at. Restamping on every touch (an earlier version of this fix did) would
-            # silently "confirm" those untouched breaths too — exactly the invisible
-            # application this ticket exists to stop, just moved one click later. Per the
-            # ticket, an entry only stops reading as carried via a fresh creation here or via
-            # the Setup banner's "Clear" (core.settings.clear_carried_over); "Keep" is a
-            # pure dismiss and — like this — never restamps either, matching "as long as the
-            # user has chosen to keep them, a carried exclusion is still drawn hatched", not
-            # "keeping it once makes it look native from then on". Known accepted
-            # imprecision: a genuinely NEW breath added to an EXISTING carried entry still
-            # reads as carried until the whole entry is cleared — ExcludeEntry.folder is one
-            # tag per FILE, not per breath, by the ticket's own design.
-            entry = ExcludeEntry(file=name, breaths=[], folder=self.state.settings.input.folder)
-            excl.append(entry)
-        now_excluded = breath_no not in entry.breaths
-        if now_excluded:
-            entry.breaths = sorted(set(entry.breaths) | {breath_no})
+        proc = self.state.settings.processing
+        excl = proc.exclude_breaths
+        types = proc.breath_types
+        excl_entry = next((e for e in excl if e.file == name), None)
+        type_entry = next((t for t in types if t.file == name and t.breath == breath_no), None)
+
+        if kind == "tidal":
+            if excl_entry is not None and breath_no in excl_entry.breaths:
+                excl_entry.breaths = [b for b in excl_entry.breaths if b != breath_no]
+                if not excl_entry.breaths:
+                    excl.remove(excl_entry)
+            if type_entry is not None:
+                types.remove(type_entry)
+            paint_kind = None
+        elif kind == "excluded":
+            if type_entry is not None:
+                types.remove(type_entry)
+            if excl_entry is None:
+                # ONLY a brand-new entry gets stamped with the current folder here. An
+                # EXISTING entry's folder is deliberately left untouched by a plain
+                # toggle, even when the user is un-excluding one of ITS OWN breaths:
+                # entry.folder is one tag for the WHOLE file, but excl.breaths can hold
+                # a MIX of breaths the user just decided on and others still carried
+                # from a different folder that this click never looked at. Restamping
+                # on every touch (an earlier version of this fix did) would silently
+                # "confirm" those untouched breaths too — exactly the invisible
+                # application B06 exists to stop, just moved one click later. An entry
+                # only stops reading as carried via a fresh creation here or via the
+                # Setup banner's "Clear" (core.settings.clear_carried_over); "Keep" is a
+                # pure dismiss and — like this — never restamps either, matching "as
+                # long as the user has chosen to keep them, a carried exclusion is
+                # still drawn hatched", not "keeping it once makes it look native from
+                # then on". Known accepted imprecision: a genuinely NEW breath added to
+                # an EXISTING carried entry still reads as carried until the whole
+                # entry is cleared — ExcludeEntry.folder is one tag per FILE, not per
+                # breath, by B06's own design.
+                excl_entry = ExcludeEntry(file=name, breaths=[],
+                                          folder=self.state.settings.input.folder)
+                excl.append(excl_entry)
+            excl_entry.breaths = sorted(set(excl_entry.breaths) | {breath_no})
+            paint_kind = "excluded"
         else:
-            entry.breaths = [b for b in entry.breaths if b != breath_no]
-            if not entry.breaths:
-                excl.remove(entry)
-        self.settings_edited.emit()      # exclude_breaths lands in the .toml -> mark dirty
+            if excl_entry is not None and breath_no in excl_entry.breaths:
+                excl_entry.breaths = [b for b in excl_entry.breaths if b != breath_no]
+                if not excl_entry.breaths:
+                    excl.remove(excl_entry)
+            # self._breath_spans is zero-based at the TRIMMED window's own start
+            # (stage_mechanics_preview's cum/fs); + _trim_offset_s recovers the
+            # recording's own clock, matching both breath['time'][0] (core) and the
+            # absolute time base the EMG views already align their spans to
+            # (_paint_breaths' own `t0 + offset`) — self-review finding: an earlier
+            # version stored the trimmed-window-relative t0 instead, which would have
+            # silently drifted from the recording's own clock whenever the trim
+            # settings changed.
+            t0_abs = self._breath_spans[breath_no][0] + self._trim_offset_s
+            if type_entry is None:
+                # same folder-stamp-only-on-creation rule as the exclude branch above.
+                type_entry = BreathTypeEntry(file=name, breath=breath_no, kind=kind,
+                                             t_onset_s=t0_abs,
+                                             folder=self.state.settings.input.folder)
+                types.append(type_entry)
+            else:
+                type_entry.kind = kind
+                type_entry.t_onset_s = t0_abs
+            paint_kind = kind
+
+        self.settings_edited.emit()      # exclude_breaths/breath_types land in the .toml
+        self._repaint_breath(breath_no, paint_kind)
+        self._sync_excluded_badge(name)
+        # a type/exclude change must update the AVERAGED result in lockstep with the
+        # overlay — otherwise the Campbell loop + per-breath table stay stale and the
+        # user tunes blind. Recompute the (mechanics-only) test run, debounced.
+        self._request_batch_recompute()
+        return kind
+
+    def _repaint_breath(self, breath_no, paint_kind):
+        """Recolour one breath's overlay everywhere it is currently painted (the
+        mechanics stack + every EMG view that has it) to ``paint_kind`` — the shared
+        repaint step both ``_set_breath_type`` and (indirectly, via it) ``_toggle_breath``
+        use. ``paint_kind``: ``None``/``'excluded'``/a BREATH_KINDS member, see
+        ``_breath_brush``. Never threads ``carried`` through: a live single-breath
+        repaint has never reflected it (only a full re-render via
+        ``_draw_breath_overlays``/``_paint_breaths`` does), unchanged by this ticket."""
         # each entry is (BreathSpansItem, index-into-that-item's-span-list) — one PAIR per
         # plot the breath is drawn on (5 for the mechanics stack), not one item per plot.
         for item, idx in self._breath_regions.get(breath_no, []):
-            item.set_brush(idx, self._breath_brush(now_excluded))
+            item.set_brush(idx, self._breath_brush(paint_kind))
         txt = self._breath_texts.get(breath_no)
         if txt is not None:
-            txt.setColor(self._breath_label_color(now_excluded))
-        # recolour the same breath in every EMG view that has it painted
+            txt.setColor(self._breath_label_color(paint_kind))
         for view in ("raw", "detail", "result"):
             rec = self._bov.get(view)
             if not rec:
                 continue
             for item, idx in rec["regions"].get(breath_no, []):
                 try:
-                    item.set_brush(idx, self._breath_brush(now_excluded))
+                    item.set_brush(idx, self._breath_brush(paint_kind))
                 except Exception:                      # noqa: BLE001
                     pass
             t = rec["texts"].get(breath_no)
             if t is not None:
                 try:
-                    t.setColor(self._breath_label_color(now_excluded))
+                    t.setColor(self._breath_label_color(paint_kind))
                 except Exception:                      # noqa: BLE001
                     pass
-        nexcl = len({b for e in excl if e.file == name for b in e.breaths} & set(self._breath_spans))
-        # the rail's badge is the raw exclusion count (matches _sync_rail_exclusions, which
-        # reads it the same way for every file the settings name — not the nexcl above,
-        # which is scoped to spans of the file CURRENTLY previewed). entry.breaths is []
-        # once excl.remove(entry) above has run, so this is correct even then. carried is
-        # always False here: the folder restamp just above means this entry, by
-        # definition, now matches the current folder.
-        self.file_rail.set_excluded_count(name, len(entry.breaths), carried=False)
-        # excluding/including a breath must update the AVERAGED result in lockstep with the
-        # overlay — otherwise the Campbell loop + per-breath table stay stale and the user
-        # tunes blind. Recompute the (mechanics-only) test run, debounced.
-        self._request_batch_recompute()
+
+    def _sync_excluded_badge(self, name):
+        """Refresh the rail's exclusion badge for ``name`` from the CURRENT
+        ``exclude_breaths`` (count + carried), the same computation
+        ``screen.py``'s ``_sync_rail_exclusions`` uses for every file — carried via
+        ``is_carried_folder(entry.folder, current_folder)``, never hardcoded, so an
+        existing entry that in fact carries a stale folder tag still reads as carried
+        after a click touches one of ITS breaths (B06's carried-fix, M-20): a plain
+        toggle deliberately never restamps an existing entry's folder (see
+        ``_set_breath_type``), so 'this entry now matches the current folder' was never
+        actually guaranteed just because a click happened."""
+        excl_entry = next((e for e in self.state.settings.processing.exclude_breaths
+                           if e.file == name), None)
+        carried = (is_carried_folder(excl_entry.folder, self.state.settings.input.folder)
+                  if excl_entry is not None else False)
+        self.file_rail.set_excluded_count(
+            name, len(excl_entry.breaths) if excl_entry is not None else 0, carried=carried)
+
+    def _toggle_breath(self, breath_no):
+        # D24: the single funnel both the Mechanics-stack click (_on_plot_clicked above)
+        # and every EMG plot's click handler (_emg_noise._toggle_from_emg_click) call
+        # through — one guard here covers both. A click during a run used to silently
+        # rewrite exclude_breaths without ever touching the batch that is already reading
+        # a frozen deepcopy of the settings taken at _start() (run_screen.py) — the click
+        # LOOKED like it worked (the overlay recoloured immediately) while the running
+        # batch, and the results it was about to write, never saw it. (M-20: reimplemented
+        # on top of the shared _set_breath_type funnel; the include/exclude toggle is a
+        # two-state special case of the three-state kind model, plain 'excluded' vs
+        # 'tidal', with its own status wording preserved exactly.)
+        name = self._selected_filename()
+        excl_entry = None
+        if name:
+            excl_entry = next((e for e in self.state.settings.processing.exclude_breaths
+                               if e.file == name), None)
+        was_excluded = excl_entry is not None and breath_no in excl_entry.breaths
+        result = self._set_breath_type(breath_no, "tidal" if was_excluded else "excluded")
+        if result is None:
+            return None
+        now_excluded = result == "excluded"
+        nexcl = len({b for e in self.state.settings.processing.exclude_breaths if e.file == name
+                    for b in e.breaths} & set(self._breath_spans))
         self._set_status(
             f"{name}: breath {breath_no} {'excluded' if now_excluded else 'included'} "
             f"({nexcl}/{len(self._breath_spans)} excluded). Recomputing the average…")
         self._set_mech_caption(len(self._breath_spans), nexcl)
         return now_excluded
+
+    def _build_type_menu(self, breath_no, kinds):
+        """The minimal breath-type context menu (Tidal / Excluded / Rest — M-20's
+        scope; the fuller manoeuvre menu with IC/FVC/etc. is M-31, which extends this
+        same function). Parented to ``self.plots`` so ``_lone_ampersands``'s QMenu scan
+        (``tests/unit/_helpers.py``) reaches it like every other menu in the window —
+        a menu with no such parent is invisible to that scan — and set to delete
+        itself on close so a right-click doesn't leak one QMenu per use."""
+        menu = QMenu(self.plots)
+        menu.setAttribute(Qt.WA_DeleteOnClose)
+        for kind in kinds:
+            action = menu.addAction(_TYPE_MENU_LABELS.get(kind, kind.capitalize()))
+            action.triggered.connect(
+                lambda _checked=False, k=kind: self._apply_breath_type_choice(breath_no, k))
+        return menu
+
+    def _apply_breath_type_choice(self, breath_no, kind):
+        result = self._set_breath_type(breath_no, kind)
+        if result is None:
+            return
+        name = self._selected_filename()
+        # .get(), mirroring _build_type_menu's own fallback: a future menu offering a
+        # kind not in _TYPE_MENU_LABELS (M-31) must not KeyError here AFTER the
+        # settings write above has already happened (self-review finding).
+        label = _TYPE_MENU_LABELS.get(kind, kind.capitalize())
+        self._set_status(f"{name}: breath {breath_no} set to {label.lower()}.")
+
+    def _handle_type_requested(self, breath_no, scene_pos):
+        """Slot for ``BreathSpansItem.typeRequested`` (right-click/Ctrl+left-click on a
+        span): resolve the emitting item's own scene to a global point (the item does
+        not know which widget it is embedded in — it can be any plot on the mechanics
+        stack or any EMG view) and pop the type menu up there."""
+        item = self.sender()
+        view = None
+        if item is not None:
+            sc = item.scene()
+            if sc is not None and sc.views():
+                view = sc.views()[0]
+        if view is not None:
+            # QGraphicsView.mapFromScene(QPointF) returns a QPoint in PySide6, which
+            # has no .toPoint() (only QPointF does) — a real right-click crashed this
+            # slot every time (self-review finding), silently: PySide6 prints the
+            # AttributeError to stderr from inside the signal emission and swallows
+            # it, so the only visible symptom was "nothing happens".
+            global_pos = view.mapToGlobal(view.mapFromScene(scene_pos))
+        else:                                          # pragma: no cover — defensive only
+            global_pos = QCursor.pos()
+        menu = self._build_type_menu(breath_no, _TYPE_MENU_KINDS)
+        menu.popup(global_pos)
 
     def _request_batch_recompute(self):
         """Debounced recompute of the mechanics test run (Campbell + per-breath table) after
@@ -1482,12 +1663,26 @@ class _MechanicsMixin:
         self._schedule("batch")
 
     # -- breath overlays on the EMG views ----------------------------------
-    def _excluded_now(self):
-        """Live set of excluded 1-based breath numbers for the current file — the
-        single source of truth for overlay colour (matches what the core ignores)."""
+    def _breath_kind_now(self, breath_no):
+        """Live 3-way kind for one breath of the CURRENT file — the single source of
+        truth for the EMG views' overlay colour (mirrors ``core.compute``'s own
+        ignorebreaths+breathkinds union, see M-19's ``compute.breathkinds`` docstring).
+        A BREATH_KINDS member if typed (``processing.breath_types``), the pseudo-kind
+        ``'excluded'`` if only manually excluded (``processing.exclude_breaths``), else
+        ``None`` (plain tidal breathing). Used by ``_paint_breaths``, which redraws
+        from ``self._breaths`` rather than a fresh ``stage_mechanics_preview`` call and
+        so cannot read the ``kind`` that call already baked into the mechanics stack's
+        own spans."""
         name = self._selected_filename()
-        entry = next((e for e in self.state.settings.processing.exclude_breaths if e.file == name), None)
-        return set(entry.breaths) if entry else set()
+        proc = self.state.settings.processing
+        type_entry = next((t for t in proc.breath_types
+                           if t.file == name and t.breath == breath_no), None)
+        if type_entry is not None:
+            return type_entry.kind
+        excl_entry = next((e for e in proc.exclude_breaths if e.file == name), None)
+        if excl_entry is not None and breath_no in excl_entry.breaths:
+            return "excluded"
+        return None
 
     def _exclusion_carried_for(self, name):
         """True iff ``name``'s exclusion entry was recorded against a DIFFERENT (or
@@ -1522,22 +1717,23 @@ class _MechanicsMixin:
         self._bov[view] = {"items": [], "regions": {}, "texts": {}, "unpin": lambda: None}
         if not plot_items or not self._breaths:
             return
-        excl = self._excluded_now()
         carried = self._exclusion_carried_for(self._selected_filename())
         reg_map = self._bov[view]["regions"]; txt_map = self._bov[view]["texts"]
         items = self._bov[view]["items"]
-        spans = [(num, t0 + offset, t1 + offset, num in excl) for (num, t0, t1, _ig) in self._breaths]
+        spans = [(num, t0 + offset, t1 + offset, self._breath_kind_now(num))
+                for (num, t0, t1, _k) in self._breaths]
         for p in plot_items:
             item = BreathSpansItem()
-            item.set_spans([(a, b, self._breath_brush(ignored, carried=carried))
-                            for _num, a, b, ignored in spans])
+            item.set_spans([(a, b, self._breath_brush(kind, carried=carried), num)
+                            for num, a, b, kind in spans])
             item.setZValue(-10)
+            item.typeRequested.connect(self._handle_type_requested)
             p.addItem(item)
             items.append((p, item))
-            for i, (num, _a, _b, _ig) in enumerate(spans):
+            for i, (num, _a, _b, _k) in enumerate(spans):
                 reg_map.setdefault(num, []).append((item, i))
-        for num, a, b, ignored in spans:
-            txt = self._breath_text(num, ignored)
+        for num, a, b, kind in spans:
+            txt = self._breath_text(num, kind)
             txt.setPos((a + b) / 2.0, label_y)
             plot_items[0].addItem(txt, ignoreBounds=True)
             items.append((plot_items[0], txt)); txt_map[num] = txt

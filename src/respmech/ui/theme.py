@@ -72,6 +72,18 @@ _PLOT_LIGHT = {
                   (125, 91, 166), (14, 124, 123), (180, 80, 122), (92, 107, 122)],
     "breath_incl_brush": (44, 110, 155, 32), "breath_excl_brush": (180, 50, 42, 70),
     "breath_incl_label": (90, 107, 122), "breath_excl_label": (180, 50, 42),
+    # M-20: one brush/label pair per breath-type kind the type-menu can set (see the
+    # matching comment in _plot_helpers.py's _FALLBACK_PAL for the full reasoning).
+    # Self-review: an earlier draft reused the "channels"/"emg_cycle" hues verbatim
+    # (ic=volume's green, fvc=pgas's amber, rest=pdi's purple) — a typed breath then
+    # shaded the exact same colour as the trace running through it on the very stack
+    # that colour already names a channel on. These are deliberately DIFFERENT hues
+    # (olive/plum/slate-blue), checked to be no closer than ~40 units of Euclidean RGB
+    # distance from every channel/emg_cycle/incl/excl colour in both tables.
+    "breath_ic_brush": (110, 120, 40, 70), "breath_ic_label": (110, 120, 40),
+    "breath_fvc_brush": (120, 60, 110, 70), "breath_fvc_label": (120, 60, 110),
+    "breath_rest_brush": (80, 90, 160, 70), "breath_rest_label": (80, 90, 160),
+    "breath_other_brush": (140, 100, 60, 70), "breath_other_label": (140, 100, 60),
     "separator": (150, 165, 180), "noise_region": (44, 110, 155, 45),
     "raw_trace": (150, 165, 180), "noise_trace": (90, 150, 200),
     # Legend backing, kept for any future pyqtgraph legend: the EMG working views that
@@ -95,6 +107,13 @@ _PLOT_DARK = {
                   (180, 152, 226), (74, 200, 198), (230, 140, 182), (150, 166, 182)],
     "breath_incl_brush": (110, 172, 224, 42), "breath_excl_brush": (214, 92, 82, 62),
     "breath_incl_label": (150, 166, 182), "breath_excl_label": (234, 122, 112),
+    # M-20: dark-theme brightened equivalents of the light table's breath-kind keys —
+    # olive/plum/slate-blue, chosen (see _PLOT_LIGHT) to stay distinct from every
+    # channel/emg_cycle colour rather than reuse them.
+    "breath_ic_brush": (178, 190, 90, 62), "breath_ic_label": (178, 190, 90),
+    "breath_fvc_brush": (200, 130, 190, 62), "breath_fvc_label": (200, 130, 190),
+    "breath_rest_brush": (150, 160, 230, 62), "breath_rest_label": (150, 160, 230),
+    "breath_other_brush": (206, 168, 120, 62), "breath_other_label": (206, 168, 120),
     "separator": (98, 112, 128), "noise_region": (110, 172, 224, 55),
     "raw_trace": (128, 140, 156), "noise_trace": (118, 176, 224),
     "legend_bg": (22, 27, 33, 220),   # near-opaque dark backing so legend text stays legible over fills
