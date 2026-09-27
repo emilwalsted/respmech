@@ -29,7 +29,7 @@ import pandas as pd
 from respmech import __version__
 from respmech.core import quantities as _units
 from respmech.core.settings import resolve_noise_reference_mode
-from respmech.core.summary import build_cohort_summary, normalize_emg_table, reference_values_for_batch
+from respmech.core.summary import build_cohort_summary, normalize_emg_table, resolve_emg_reference
 
 _CREATED = f"Created with RespMech v{__version__} (github.com/emilwalsted/respmech)"
 
@@ -280,16 +280,35 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
 
     if settings.output.data.save_breath_by_breath:
         _emit("writing breath-by-breath data")
-        ref_values = reference_values_for_batch(result, settings)   # None -> per-file default
+        # M-30: a notice (never silent) when the configured reference file resolved to
+        # a real batch file that has nothing to read a reference from — attached to
+        # THAT file's own notices, so it surfaces through the SAME run-report.txt
+        # DIAGNOSTICS -> Quality notices path every other per-file notice already uses.
+        ref_values, ref_notice = resolve_emg_reference(result, settings)   # None -> per-file default
+        if ref_notice:
+            ref_fr = result.ok_files.get(settings.processing.emg.normalization_reference_file)
+            if ref_fr is not None:
+                ref_fr.notices.append(ref_notice)
         for fname, fr in result.ok_files.items():
             p = os.path.join(datadir, f"{fname}.breathdata.xlsx")
             extra = {}
-            norm = normalize_emg_table(fr.breaths_table, settings, reference_values=ref_values)   # P14
-            if norm is not None and len(norm):
-                extra["EMG normalised"] = norm
-            if getattr(fr, "manoeuvres_table", None) is not None and len(fr.manoeuvres_table):
-                extra["Manoeuvres"] = fr.manoeuvres_table                                          # M-29
-            _write_xlsx(fr.breaths_table, p, settings=settings, when=when, extra_sheets=extra)
+            if getattr(fr, "role", "tidal") == "reference":
+                # M-30: no tidal breathdata to be the Data sheet — the Manoeuvres table
+                # (this file's whole reason for being in the batch) takes its place,
+                # and the Provenance sheet says why via the same incomplete_note
+                # mechanism a partial/incomplete cohort run already uses.
+                data_df = fr.manoeuvres_table if fr.manoeuvres_table is not None else pd.DataFrame()
+                note = "This file has no tidal breaths — reference manoeuvres only."
+            else:
+                data_df = fr.breaths_table
+                note = None
+                norm = normalize_emg_table(fr.breaths_table, settings, reference_values=ref_values)   # P14
+                if norm is not None and len(norm):
+                    extra["EMG normalised"] = norm
+                if getattr(fr, "manoeuvres_table", None) is not None and len(fr.manoeuvres_table):
+                    extra["Manoeuvres"] = fr.manoeuvres_table                                          # M-29
+            _write_xlsx(data_df, p, settings=settings, when=when, extra_sheets=extra,
+                       incomplete_note=note)
             written.append(p)
 
     if settings.output.data.save_processed:
@@ -496,6 +515,38 @@ def _breath_counts(fr) -> tuple[int, int]:
     return total, excluded
 
 
+#: display label per BREATH_KINDS entry (core.settings) for the FILES-line/PROCESSING
+#: "Breath types" text (M-30) — 'rest' is deliberately absent: an EMG-only background
+#: segment (M-28) is not a manoeuvre a reader of this report would want counted here.
+_KIND_LABELS = {
+    "ic": "IC", "fvc": "FVC", "ic_fvc": "IC+FVC",
+    "max_insp": "Max insp", "sniff": "Sniff", "other": "Other",
+}
+
+
+def _typed_breath_numbers(fr) -> dict:
+    """{kind: [breath_no, ...]} for every MANOEUVRE-typed, EXCLUDED breath in a file
+    result (M-30), in first-encountered order — 'rest' is excluded (see
+    ``_KIND_LABELS``), and so, self-review finding, is a typed breath that is NOT
+    itself ``ignored``: on a flow-bearing set every typed kind is always also
+    ignored (``_legacy_ns._merged_exclude_breaths``), but on an EMG-only set only
+    ``rest`` is -- a non-``rest``-typed EMG-only breath is a manoeuvre effort kept
+    IN the used count, not one of the excluded breaths this function's caller
+    subtracts FROM ``excl``. Without this guard the caller's
+    ``plain_excl = excl - n_typed`` could go negative for such a file, since
+    ``n_typed`` would then count a breath that was never in ``excl`` at all."""
+    if not fr.breaths:
+        return {}
+    out: dict = {}
+    for no, b in fr.breaths.items():
+        kind = b.get("kind")
+        if kind and kind != "rest" and b.get("ignored"):
+            out.setdefault(kind, []).append(no)
+    for nos in out.values():
+        nos.sort()
+    return out
+
+
 def _yn(flag) -> str:
     return "yes" if flag else "no"
 
@@ -598,7 +649,20 @@ def _write_run_report(result, settings, outputfolder: str,
     for fname, fr in ok.items():
         total, excl = _breath_counts(fr)
         used = total - excl
-        note = f" ({excl} excluded → {used} used)" if excl else ""
+        # M-30: distinguish a plain manual exclusion from a TYPED manoeuvre breath —
+        # both are "ignored" for the tidal average, but only one names what it is.
+        typed = _typed_breath_numbers(fr)
+        n_typed = sum(len(nos) for nos in typed.values())
+        plain_excl = excl - n_typed
+        bits = []
+        if plain_excl:
+            bits.append(f"{plain_excl} excluded")
+        if typed:
+            kinds_text = ", ".join(
+                f"{_KIND_LABELS.get(k, k)} " + ",".join(f"#{n}" for n in nos)
+                for k, nos in typed.items())
+            bits.append(f"{n_typed} typed: {kinds_text}")
+        note = f" ({', '.join(bits)} → {used} used)" if bits else ""
         L.append(f"  [ok]   {fname}   {total} breaths{note}")
     for fname, fr in failed.items():
         L.append(f"  [FAIL] {fname}   ERROR: {fr.error}")
@@ -645,6 +709,22 @@ def _write_run_report(result, settings, outputfolder: str,
                  + ", ".join(f"{e.file}: " + ", ".join(str(b) for b in e.breaths) for e in ex))
     else:
         L.append("  Excluded breaths:        none")
+    # M-30: which breaths are typed as a manoeuvre (IC/FVC/max effort/sniff) rather
+    # than tidal — a study-level setting like the two blocks above, so it belongs in
+    # the same place, not only inferred from a single file's own FILES line.
+    bt_by_file: dict = {}
+    for e in settings.processing.breath_types:
+        if e.kind != "rest":
+            bt_by_file.setdefault(e.file, []).append((e.breath, e.kind))
+    if bt_by_file:
+        parts = []
+        for f, entries in bt_by_file.items():
+            entries.sort()
+            parts.append(f"{f}: " + ", ".join(
+                f"#{b} {_KIND_LABELS.get(k, k)}" for b, k in entries))
+        L.append("  Breath types:            " + "; ".join(parts))
+    else:
+        L.append("  Breath types:            none")
     L.append(f"  PTP baseline window:     {settings.processing.ptp.baseline_window_s:g} s")
     L.append(f"  Work of breathing:       from {_wob_mode_text(settings)}")
     L.append(f"  Cohort grouping:         "

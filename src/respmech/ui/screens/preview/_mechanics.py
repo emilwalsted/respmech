@@ -547,6 +547,19 @@ class _MechanicsMixin:
         per-breath value (so a suspect run is obvious without reading the table).
         ``chip`` (M-26): see ``_qc_overview_not_assessed``."""
         chip = chip if chip is not None else self.qc_overview
+        if getattr(fr, "role", "tidal") == "reference":
+            # M-30: every breath here was deliberately TYPED as a manoeuvre, not
+            # excluded — self-review finding: the ordinary "N used, M excluded" framing
+            # below would misreport a fully successful reference-only file as if QC had
+            # quietly dropped every breath, directly contradicting the success status
+            # line shown alongside it.
+            n_typed = len(getattr(fr, "manoeuvres", None) or {})
+            chip.setText(f"QC:  {n_typed} typed manoeuvre breath"
+                        f"{'s' if n_typed != 1 else ''}, no tidal breathing")
+            chip.setProperty("status", "ok")
+            chip.style().unpolish(chip)
+            chip.style().polish(chip)
+            return
         bt = getattr(fr, "breaths_table", None)
         total = len(fr.breaths) if getattr(fr, "breaths", None) else (len(bt) if bt is not None else 0)
         used = len(bt) if bt is not None else 0
@@ -1960,8 +1973,26 @@ class _MechanicsMixin:
             # raise so _on_job_done paints a copyable "Test run failed" error card
             raise _FileRunError(err)
         if cur:
-            self.file_rail.mark_result(cur, ok=True, breaths=len(fr.breaths_table))
-        if emg_only:
+            n_breaths = 0 if fr.breaths_table is None else len(fr.breaths_table)
+            self.file_rail.mark_result(cur, ok=True, breaths=n_breaths)
+        is_reference_only = getattr(fr, "role", "tidal") == "reference"
+        if is_reference_only:
+            # M-30: no tidal breaths at all in this file — nothing for the Campbell
+            # diagram/breath table to draw, but the Manoeuvres table (this file's whole
+            # reason for being typed) has real content, so show that instead of an
+            # empty or error-looking mechanics view. Falls through to the noise-report
+            # handling below like every other shape (self-review finding: an EARLIER
+            # version of this branch returned immediately here, which for a
+            # reference-only file that ALSO carries EMG channels in a noise-reduction
+            # test silently dropped the batch's auto-tuned prop_decrease and skipped
+            # re-conditioning the EMG views — result.noise_report is built once per
+            # whole test, independent of any one file's role).
+            self._fill_table(fr.manoeuvres_table)
+            self._table_panel._title_label.setFullText("Manoeuvres (reference-only file)")
+            self.campbell.figure.clear(); self.campbell.draw()
+            self._forget_campbell()
+            self._update_qc_overview(fr)
+        elif emg_only:
             self._fill_segtable(fr.breaths_table)
             self._update_qc_overview(fr, chip=self.segments_qc_overview)
         else:
@@ -1985,6 +2016,11 @@ class _MechanicsMixin:
             if noise.enabled and noise.auto_prop and self.state.settings.input.channels.emg:
                 self._schedule("emg_all")
                 self._schedule("emg_detail")
+        elif is_reference_only:
+            n_typed = len(fr.manoeuvres or {})
+            self._set_status(
+                f"Reference manoeuvres only — {n_typed} typed breath"
+                f"{'s' if n_typed != 1 else ''}, no tidal table")
         else:
             n = len(fr.breaths_table)
             self._set_status(f"Test run OK: {n} breaths (nothing written)")
