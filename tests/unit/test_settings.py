@@ -1,8 +1,9 @@
 import pytest
 
 from respmech.core.settings import (
-    SCHEMA_VERSION, BreathCountEntry, CarriedOverState, ExcludeEntry, Settings,
-    SettingsError, _CARRIED_KINDS, carried_over_state, clear_carried_over, is_carried_folder,
+    SCHEMA_VERSION, BreathCountEntry, CarriedOverState, ExcludeEntry, SeparatorEntry,
+    Settings, SettingsError, _CARRIED_KINDS, carried_over_state, clear_carried_over,
+    is_carried_folder,
 )
 
 
@@ -408,6 +409,69 @@ def test_a_legacy_zero_trend_threshold_is_not_rejected():
         Settings.from_dict(_trend_settings(trend_peak_min_height=-0.5)).validate()
 
 
+# -- SeparatorEntry (EMG-only "separators" segmentation) form/conflict checks --
+
+def test_separator_entry_that_is_not_even_a_table_is_rejected():
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.separators.append(1)          # hand-edited `separators = [1]`
+    with pytest.raises(SettingsError, match=r"separators\[0\] must be a table"):
+        s.validate()
+
+
+def test_separator_entry_times_s_must_be_a_list_of_numbers():
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.separators.append(
+        SeparatorEntry(file="x.txt", times_s=[1.0, "two", 3.0]))
+    with pytest.raises(SettingsError, match=r"times_s must be a list of numbers"):
+        s.validate()
+
+
+@pytest.mark.parametrize("bad_times", [
+    [1.0, float("nan"), 3.0],
+    [1.0, float("inf")],
+    [float("-inf"), 2.0],
+], ids=["nan", "inf", "-inf"])
+def test_separator_entry_times_s_rejects_non_finite_values(bad_times):
+    """NaN/Inf ARE instances of float (so a bare isinstance check lets them through),
+    but neither compares meaningfully against 0 or a neighbour -- a malformed
+    hand-edited TOML (which has nan/inf literals) must not silently pass validate()
+    only to raise a bare ValueError/OverflowError later in core.analysis.segments."""
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.separators.append(SeparatorEntry(file="x.txt", times_s=bad_times))
+    with pytest.raises(SettingsError, match=r"times_s must be a list of numbers"):
+        s.validate()
+
+
+def test_separator_entry_times_s_must_be_strictly_increasing_and_non_negative():
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.separators.append(
+        SeparatorEntry(file="x.txt", times_s=[3.0, 1.0]))
+    with pytest.raises(SettingsError, match=r"non-negative and strictly increasing"):
+        s.validate()
+
+    s2 = Settings.from_dict(_minimal())
+    s2.processing.segmentation.separators.append(
+        SeparatorEntry(file="x.txt", times_s=[-1.0, 2.0]))
+    with pytest.raises(SettingsError, match=r"non-negative and strictly increasing"):
+        s2.validate()
+
+
+def test_separator_entry_duplicate_file_is_rejected():
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.separators.append(SeparatorEntry(file="x.txt", times_s=[1.0]))
+    s.processing.segmentation.separators.append(SeparatorEntry(file="x.txt", times_s=[2.0]))
+    with pytest.raises(SettingsError, match=r"has more than one entry"):
+        s.validate()
+
+
+def test_separator_entry_zero_times_and_valid_settings_pass():
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.separators.append(SeparatorEntry(file="x.txt", times_s=[]))
+    s.processing.segmentation.separators.append(
+        SeparatorEntry(file="y.txt", times_s=[1.0, 2.5, 4.0]))
+    s.validate()                                              # must not raise
+
+
 # -- carried-over per-folder state (ticket B06) -------------------------------
 # exclude_breaths/breath_counts/the noise reference key on the bare filename, which is
 # ambiguous the moment two recordings folders share a filename (the common multi-subject
@@ -618,6 +682,13 @@ def _setup_breath_type_files(s, folder):
     return "x.txt"
 
 
+def _setup_separator_files(s, folder):
+    from respmech.core.settings import SeparatorEntry
+    s.processing.segmentation.separators.append(
+        SeparatorEntry(file="x.txt", times_s=[1.0, 2.0], folder=folder))
+    return "x.txt"
+
+
 _ROW_SETUP = {
     "exclude_files": _setup_exclude_files,
     "breath_count_files": _setup_breath_count_files,
@@ -625,6 +696,7 @@ _ROW_SETUP = {
     "ecg_reference": _setup_ecg_reference,
     "normalization_reference": _setup_normalization_reference,
     "breath_type_files": _setup_breath_type_files,
+    "separator_files": _setup_separator_files,
 }
 
 

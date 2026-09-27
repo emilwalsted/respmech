@@ -97,6 +97,36 @@ def _units_df(columns, settings=None):
                          "Note": [note.get(c, "") for c in um.keys()]})
 
 
+def _segmentation_provenance_key(settings) -> str:
+    """'Breath separation' names a flow/volume breath split; an EMG-only method (no
+    flow channel, so no breath to separate anything FROM) is reported as 'Segmentation'
+    instead -- shared between the Provenance sheet row and the run-report's PROCESSING
+    line so the two can never say something different about the same run."""
+    method = settings.processing.segmentation.method
+    return "Breath separation" if method in ("flow", "volume") else "Segmentation"
+
+
+def _segmentation_provenance_value(settings) -> str:
+    """The value paired with :func:`_segmentation_provenance_key`. 'buffer N' is a
+    flow/volume-only concept (the debounce ``compute.separateintobreathsbyflow`` walks
+    with) -- an EMG-only method never mentions it, so a whole_file run's report cannot
+    misleadingly claim a buffer that was never read."""
+    seg = settings.processing.segmentation
+    if seg.method in ("flow", "volume"):
+        return f"{seg.method}, buffer {seg.buffer}"
+    if seg.method == "whole_file":
+        return "whole file"
+    if seg.method == "separators":
+        counts = [len(e.times_s) for e in seg.separators]
+        if not counts:
+            return "separators (none configured)"
+        if len(set(counts)) == 1:
+            return f"separators ({counts[0]} per file)"
+        return "separators (" + ", ".join(
+            f"{e.file}: {len(e.times_s)}" for e in seg.separators) + ")"
+    return seg.method                          # fixed_windows/emg_burst: a later ticket's scope
+
+
 def _provenance_rows(settings, when, incomplete_note: str | None = None):
     ts = (when or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
     ip = settings.input
@@ -106,8 +136,7 @@ def _provenance_rows(settings, when, incomplete_note: str | None = None):
             ("Input folder", ip.folder),
             ("Input pattern", ip.files),
             ("Sampling frequency (Hz)", ip.format.sampling_frequency),
-            ("Breath separation", f"{settings.processing.segmentation.method}, "
-                                  f"buffer {settings.processing.segmentation.buffer}"),
+            (_segmentation_provenance_key(settings), _segmentation_provenance_value(settings)),
             # D22 (UI-overhaul): the same "average vs individual" choice that makes the
             # Preview & QC table's wob* columns either one repeated value or real
             # per-breath variation — named here so it survives into the written file,
@@ -557,7 +586,10 @@ def _write_run_report(result, settings, outputfolder: str,
         L.append("  Trend correction:        No")
     L.append(f"  Resample:                {_yn(samp.resample)}"
              + (f" (→ {samp.resample_to_frequency} Hz)" if samp.resample else ""))
-    L.append(f"  Breath separation:       by {seg.method}, buffer {seg.buffer}")
+    if seg.method in ("flow", "volume"):
+        L.append(f"  Breath separation:       by {seg.method}, buffer {seg.buffer}")
+    else:
+        L.append(f"  Segmentation:            {_segmentation_provenance_value(settings)}")
     L.append(f"  ECG removal:             {_yn(emg.remove_ecg)}")
     L.append(f"  EMG noise removal:       {_yn(emg.noise.enabled)}")
     L.append(f"  EMG normalisation:       {emg.normalization}")
