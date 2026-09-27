@@ -12,7 +12,8 @@ import re
 import pytest
 
 from respmech.core.settings import (
-    BreathTypeEntry, ExcludeEntry, SeparatorEntry, Settings, SettingsError)
+    BreathTypeEntry, ExcludeEntry, GroupReferenceEntry, ReferenceEntry, SeparatorEntry,
+    Settings, SettingsError, SubjectEntry)
 from respmech.ui.validation import blockers, friendly_settings_error
 
 #: what every SettingsError message's technical key looks like — the same pattern
@@ -235,6 +236,37 @@ _CASES = [
                s.processing.segmentation.separators.append(
                     SeparatorEntry(file="x.txt", times_s=[2.0]))),
      ["separator", "duplicat"]),
+    # M-34
+    ("eelv_tracking is not a valid enum value",
+     lambda s: setattr(s.processing.lung_volume.ic, "eelv_tracking", "always"),
+     ["eelv", "subject"]),
+    ("a reference entry is not even a table",
+     lambda s: s.processing.references.append(1),
+     ["reference"]),
+    ("a reference entry is duplicated for the same file",
+     lambda s: (s.processing.references.append(ReferenceEntry(file="x.txt")),
+               s.processing.references.append(ReferenceEntry(file="x.txt"))),
+     ["reference", "duplicat"]),
+    ("a group reference entry is not even a table",
+     lambda s: s.processing.reference_defaults.append(1),
+     ["reference"]),
+    ("a group reference entry is duplicated for the same group",
+     lambda s: (s.processing.reference_defaults.append(GroupReferenceEntry(group="P03")),
+               s.processing.reference_defaults.append(GroupReferenceEntry(group="P03"))),
+     ["reference", "duplicat"]),
+    ("a subject entry is not even a table",
+     lambda s: s.input.subjects.append(1),
+     ["subject"]),
+    ("a subject key is duplicated",
+     lambda s: (s.input.subjects.append(SubjectEntry(key="P03")),
+               s.input.subjects.append(SubjectEntry(key="P03"))),
+     ["subject", "duplicat"]),
+    ("a subject's tlc_l is out of range",
+     lambda s: s.input.subjects.append(SubjectEntry(key="P03", tlc_l=20.0)),
+     ["subject"]),
+    ("a subject's rv_l is not below tlc_l",
+     lambda s: s.input.subjects.append(SubjectEntry(key="P03", tlc_l=5.0, rv_l=5.0)),
+     ["subject"]),
 ]
 
 

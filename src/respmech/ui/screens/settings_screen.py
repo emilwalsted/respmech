@@ -68,6 +68,12 @@ _CARRIED_PHRASES = {
         f"breath types for {SettingsScreen._named_by_filename(names)}"),
     "separator_files": lambda names: (
         f"separators for {SettingsScreen._named_by_filename(names)}"),
+    "reference_files": lambda names: (
+        f"reference manoeuvres for {SettingsScreen._named_by_filename(names)}"),
+    "group_reference_groups": lambda names: (
+        f"group reference defaults for {SettingsScreen._named_by_filename(names)}"),
+    "subject_keys": lambda names: (
+        f"lung volumes for {SettingsScreen._named_by_filename(names)}"),
 }
 
 

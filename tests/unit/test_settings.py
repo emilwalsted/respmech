@@ -1,9 +1,9 @@
 import pytest
 
 from respmech.core.settings import (
-    SCHEMA_VERSION, BreathCountEntry, CarriedOverState, ExcludeEntry, SeparatorEntry,
-    Settings, SettingsError, _CARRIED_KINDS, carried_over_state, clear_carried_over,
-    is_carried_folder,
+    SCHEMA_VERSION, BreathCountEntry, BreathRef, CarriedOverState, ExcludeEntry,
+    GroupReferenceEntry, ReferenceEntry, SeparatorEntry, Settings, SettingsError,
+    SubjectEntry, _CARRIED_KINDS, carried_over_state, clear_carried_over, is_carried_folder,
 )
 
 
@@ -74,6 +74,159 @@ def test_ic_settings_negative_fractions_are_rejected():
         Settings.from_dict(d).validate()
 
 
+def test_ic_settings_eelv_tracking_enum_is_validated():
+    d = _minimal()
+    d["processing"] = {"lung_volume": {"ic": {"eelv_tracking": "always"}}}
+    with pytest.raises(SettingsError, match=r'eelv_tracking must be "none" or "within_file"'):
+        Settings.from_dict(d).validate()
+
+
+def test_ic_settings_eelv_tracking_defaults_to_none():
+    assert Settings().processing.lung_volume.ic.eelv_tracking == "none"
+
+
+# --------------------------------------------------------------------------- #
+# M-34: ReferenceEntry / GroupReferenceEntry / SubjectEntry / LungVolumeSettings
+# --------------------------------------------------------------------------- #
+
+def test_breath_ref_nested_optional_round_trips_via_toml(tmp_path):
+    """Acceptance criterion: a nested ``BreathRef | None`` field on a REAL production
+    dataclass (not the throwaway one in test_nested_optional_dataclass_round_trips)
+    round-trips through a save/load cycle, all four slots at once."""
+    from respmech.settingsio.toml_io import load_toml, save_toml
+
+    s = Settings()
+    s.input.format.sampling_frequency = 2000
+    s.input.folder = str(tmp_path)
+    s.processing.references.append(ReferenceEntry(
+        file="P03_peak.txt",
+        ic=BreathRef(file="P03_IC.txt", breaths=[2, 3, 4]),
+        fvc=BreathRef(file="P03_MFVL.txt", breaths=[1]),
+        baseline_ic=BreathRef(file="P03_rest.txt", breaths=[7]),
+        max_insp=BreathRef(file="P03_IC.txt", breaths=[4]),
+    ))
+    path = tmp_path / "a.toml"
+    save_toml(s, path)
+    loaded = load_toml(path)
+    r = loaded.processing.references[0]
+    assert r.file == "P03_peak.txt"
+    assert isinstance(r.ic, BreathRef) and r.ic.file == "P03_IC.txt" and r.ic.breaths == [2, 3, 4]
+    assert isinstance(r.fvc, BreathRef) and r.fvc.breaths == [1]
+    assert isinstance(r.baseline_ic, BreathRef) and r.baseline_ic.breaths == [7]
+    assert isinstance(r.max_insp, BreathRef) and r.max_insp.breaths == [4]
+
+
+def test_reference_entry_with_all_slots_unset_round_trips_to_none():
+    d = _minimal()
+    d["processing"] = {"references": [{"file": "P03_peak.txt"}]}
+    s = Settings.from_dict(d).validate()
+    r = s.processing.references[0]
+    assert r.file == "P03_peak.txt"
+    assert r.ic is None and r.fvc is None and r.baseline_ic is None and r.max_insp is None
+
+
+def test_group_reference_entry_round_trips():
+    d = _minimal()
+    d["processing"] = {"reference_defaults": [
+        {"group": "P03", "ic": {"file": "P03_IC.txt", "breaths": [2, 3, 4]}}]}
+    s = Settings.from_dict(d).validate()
+    g = s.processing.reference_defaults[0]
+    assert g.group == "P03"
+    assert g.ic == BreathRef(file="P03_IC.txt", breaths=[2, 3, 4])
+
+
+def test_subject_entry_round_trips():
+    d = _minimal()
+    d["input"] = {**d["input"], "subjects": [
+        {"key": "P03", "tlc_l": 6.12, "vc_l": 4.30, "fev1_l": 3.10, "mvv_lpm": 124.0}]}
+    s = Settings.from_dict(d).validate()
+    subj = s.input.subjects[0]
+    assert subj.key == "P03"
+    assert subj.tlc_l == 6.12
+    assert subj.vc_l == 4.30
+    assert subj.rv_l is None
+    assert subj.fev1_l == 3.10
+    assert subj.mvv_lpm == 124.0
+
+
+def test_lung_volume_settings_require_references_and_baseline_pattern_round_trip():
+    d = _minimal()
+    d["processing"] = {"lung_volume": {"require_references": True, "baseline_pattern": "rest"}}
+    s = Settings.from_dict(d).validate()
+    assert s.processing.lung_volume.require_references is True
+    assert s.processing.lung_volume.baseline_pattern == "rest"
+
+
+def test_lung_volume_settings_defaults():
+    lv = Settings().processing.lung_volume
+    assert lv.require_references is False
+    assert lv.baseline_pattern == r"(?i)baseline|rest"
+
+
+def test_reference_entry_duplicate_file_is_rejected():
+    d = _minimal()
+    d["processing"] = {"references": [{"file": "a.txt"}, {"file": "a.txt"}]}
+    with pytest.raises(SettingsError, match=r"processing\.references: a\.txt appears more "
+                        r"than once"):
+        Settings.from_dict(d).validate()
+
+
+def test_reference_entry_malformed_raises_settings_error_not_attribute_error():
+    """Self-review finding, same reasoning as breath_types/separators: a hand-edited
+    ``references = [1, 2]`` (a bare list of numbers, not tables) passes `_coerce`
+    through unchanged, so this must be the first code to reject it cleanly."""
+    d = _minimal()
+    d["processing"] = {"references": [1]}
+    with pytest.raises(SettingsError, match=r"processing\.references\[0\] must be a table "
+                        r"with file"):
+        Settings.from_dict(d).validate()
+
+
+def test_group_reference_entry_duplicate_group_is_rejected():
+    d = _minimal()
+    d["processing"] = {"reference_defaults": [{"group": "P03"}, {"group": "P03"}]}
+    with pytest.raises(SettingsError, match=r"processing\.reference_defaults: group P03 "
+                        r"appears more than once"):
+        Settings.from_dict(d).validate()
+
+
+def test_subject_entry_duplicate_key_is_rejected():
+    d = _minimal()
+    d["input"] = {**d["input"], "subjects": [{"key": "P03"}, {"key": "P03"}]}
+    with pytest.raises(SettingsError, match=r"input\.subjects: key P03 must be unique"):
+        Settings.from_dict(d).validate()
+
+
+@pytest.mark.parametrize("tlc_l", [-0.1, 15.1])
+def test_subject_entry_tlc_l_out_of_range_is_rejected(tlc_l):
+    d = _minimal()
+    d["input"] = {**d["input"], "subjects": [{"key": "P03", "tlc_l": tlc_l}]}
+    with pytest.raises(SettingsError, match=r"tlc_l must be between 0 and 15 L"):
+        Settings.from_dict(d).validate()
+
+
+@pytest.mark.parametrize("tlc_l", [0.0, 15.0, 6.0])
+def test_subject_entry_tlc_l_at_or_within_bounds_is_accepted(tlc_l):
+    d = _minimal()
+    d["input"] = {**d["input"], "subjects": [{"key": "P03", "tlc_l": tlc_l}]}
+    Settings.from_dict(d).validate()          # must not raise
+
+
+def test_subject_entry_rv_l_must_be_below_tlc_l():
+    d = _minimal()
+    d["input"] = {**d["input"], "subjects": [{"key": "P03", "tlc_l": 6.0, "rv_l": 6.0}]}
+    with pytest.raises(SettingsError, match=r"rv_l must be below tlc_l"):
+        Settings.from_dict(d).validate()
+
+
+def test_subject_entry_rv_l_alone_without_tlc_l_is_not_checked():
+    """rv_l < tlc_l is only meaningful once BOTH are known -- a subject who only ever
+    had RV measured must not be rejected for a comparison that cannot be made."""
+    d = _minimal()
+    d["input"] = {**d["input"], "subjects": [{"key": "P03", "rv_l": 1.5}]}
+    Settings.from_dict(d).validate()          # must not raise
+
+
 def test_unknown_keys_are_captured_not_fatal():
     d = _minimal()
     d["processing"] = {"sampling": {"resample": True}, "totally_new_section": {"x": 1}}
@@ -127,10 +280,13 @@ def test_nested_optional_dataclass_round_trips():
                  id="unknown_toplevel_table"),
     pytest.param({"processing": {"lung_volumes": {"foo": 1}}}, "processing.lung_volumes",
                  id="unknown_nested_table"),
-    # "processing.breath_types" is no longer an unknown list of tables as of M-19
-    # (ProcessingSettings.breath_types: list[BreathTypeEntry]) -- "processing.references"
-    # (a still-not-yet-implemented M-34 field) covers the same archived shape instead.
-    pytest.param({"processing": {"references": [{"id": 1}]}}, "processing.references",
+    # "processing.breath_types" is no longer an unknown list of tables as of M-19, and
+    # "processing.references"/"reference_defaults" are no longer unknown as of M-34
+    # (ProcessingSettings.references/reference_defaults: list[ReferenceEntry/
+    # GroupReferenceEntry]) -- "processing.fixed_windows" (a still-not-yet-implemented
+    # M-48 field; "fixed_windows" is already a valid segmentation.method value, but no
+    # settings list backs it yet) covers the same archived shape instead.
+    pytest.param({"processing": {"fixed_windows": [{"id": 1}]}}, "processing.fixed_windows",
                  id="unknown_list_of_tables"),
     pytest.param(
         {"processing": {"exclude_breaths": [
@@ -740,6 +896,23 @@ def _setup_separator_files(s, folder):
     return "x.txt"
 
 
+def _setup_reference_files(s, folder):
+    s.processing.references.append(
+        ReferenceEntry(file="x.txt", ic=BreathRef(file="x.txt", breaths=[1]), folder=folder))
+    return "x.txt"
+
+
+def _setup_group_reference_groups(s, folder):
+    s.processing.reference_defaults.append(
+        GroupReferenceEntry(group="P03", ic=BreathRef(file="x.txt", breaths=[1]), folder=folder))
+    return "P03"
+
+
+def _setup_subject_keys(s, folder):
+    s.input.subjects.append(SubjectEntry(key="P03", tlc_l=6.0, folder=folder))
+    return "P03"
+
+
 _ROW_SETUP = {
     "exclude_files": _setup_exclude_files,
     "breath_count_files": _setup_breath_count_files,
@@ -748,6 +921,10 @@ _ROW_SETUP = {
     "normalization_reference": _setup_normalization_reference,
     "breath_type_files": _setup_breath_type_files,
     "separator_files": _setup_separator_files,
+    # M-34
+    "reference_files": _setup_reference_files,
+    "group_reference_groups": _setup_group_reference_groups,
+    "subject_keys": _setup_subject_keys,
 }
 
 
