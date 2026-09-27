@@ -190,6 +190,34 @@ calling `close_plots()`, never re-fetch it after (see the `close_plots()`-adjace
 in `test_column_stack.py`/`test_channel_summary.py`/`test_channel_setup.py`/
 `test_preview_screen.py` for the pattern).
 
+### A test-built `QMenu`/popup whose action closure captures the widget under test needs `shiboken6.delete()`, not just `close()`
+
+M-32's own context-menu test (`test_file_rail.py`) built a `QMenu` via a factory method
+whose action connects a `lambda: self.referencesRequested.emit(name)` — `self` there is the
+`FileRail` widget under test, captured by the closure. `menu.close()` +
+`Qt.WA_DeleteOnClose` is the established pattern for a transient popup menu (see
+`ui/CLAUDE.md`'s "A transient popup QMenu needs Qt.WA_DeleteOnClose", used successfully by
+`test_breath_typing_ui.py`'s `_build_type_menu` tests) and DOES work in isolation — but
+paired with this specific test in the same file, it segfaulted `_close_top_level_windows`'s
+own reaper on Python 3.11, the exact "unreferenced window's C++ half may be mid-destruction"
+hazard that reaper's comment already documents for a DIFFERENT cause.
+
+Root cause: the widget-under-test's own pre-existing internal signal wiring (`self.view.
+…connect(self._on_view_current_changed)` — a bound method, capturing `self`) already forms
+a Python reference cycle through the widget's children. Adding the test's own closure over
+`self` via the menu action gives that cycle an EXTRA path to hang off, so the widget is no
+longer freed by plain refcounting the instant the test function returns — it now needs
+`gc`'s cyclic collector to notice it, and reclaiming a still-parented top-level QObject
+during a cyclic collection pass (rather than deterministic refcounting) is exactly the
+timing the reaper's comment warns is unsafe. `close()`'s `deleteLater()` is a QUEUED
+request — it depends on the event loop draining it before the NEXT test's reaper scans
+`topLevelWidgets()`, and that ordering is what a reference cycle can perturb.
+
+Fix: `shiboken6.delete(menu)` deletes the C++ object immediately and deterministically, with
+no event-loop/GC-timing dependency at all — use it (not `close()`) for any test-built popup
+whose own action/signal closures capture the widget under test itself, rather than debugging
+which specific timing window made `close()` insufficient this time.
+
 If the suite's macOS wall time or sandbox OOM recur, re-measure with `RESPMECH_NET_CENSUS`/
 `RESPMECH_NET_PROFILE` before assuming this is the same class of bug — the population
 this ticket targeted is gone.

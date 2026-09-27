@@ -19,11 +19,13 @@ already uses for the per-breath/averages tables.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from PySide6.QtCore import QAbstractListModel, QModelIndex, QSortFilterProxyModel, Qt, Signal
 from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import (QAbstractItemView, QLineEdit, QListView, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QLineEdit, QListView, QMenu,
+                               QStyle, QStyledItemDelegate, QStyleOptionViewItem,
+                               QVBoxLayout, QWidget)
 
 try:
     from respmech.ui import theme as _theme
@@ -57,18 +59,82 @@ class FileRailEntry:
     # core.settings.carried_over_state. Meaningless (and always False) when
     # excluded_count is 0: there is nothing to have carried over.
     excluded_carried: bool = False
+    # M-32: kind -> count of this file's typed manoeuvre breaths (core.settings.
+    # BreathTypeEntry), e.g. {"ic": 2, "fvc": 1}. Empty dict (never None) when the file
+    # has no typed breaths at all, so `if e.typed_counts:` is the one truthiness check
+    # every caller needs.
+    typed_counts: dict = field(default_factory=dict)
+    # same carried-over-folder provenance as excluded_carried, but for breath_types:
+    # true if ANY of this file's typed breaths carries a stale folder tag. Meaningless
+    # (and always False) when typed_counts is empty.
+    typed_carried: bool = False
+    # 'self' | 'linked' | 'missing' | None — whether a typed manoeuvre's reference (its
+    # baseline EELV, say) resolves within this file, is linked from another file, or is
+    # unresolved. Resolution itself is M-34's scope; M-32 only owns the field and its
+    # rendering, so this stays None until a later ticket starts calling set_reference().
+    reference: str | None = None
+    # number of EMG segments this file will produce under the CURRENT segmentation
+    # settings — meaningful (an int) only for the EMG-only 'whole_file'/'separators'
+    # methods, which are pure functions of settings alone (no signal data needed: N
+    # separator times always make N+1 segments). None for 'flow'/'volume' segmentation
+    # (breath-based, not segment-based) or when nothing has computed it yet.
+    segments: int | None = None
+    # 'tidal' | 'reference' | None — this file's core.pipeline.FileResult.role from the
+    # most recent successful preview/run (M-30: a file with typed manoeuvres but no
+    # tidal breaths at all runs as 'reference'-only). None until mark_result(ok=True)
+    # has actually reported one, exactly like `breaths`.
+    role: str | None = None
 
 
-def _row_text(e: FileRailEntry) -> str:
+def _row_prefix(e: FileRailEntry) -> str:
+    """The leading, never-elided glyph cluster: the plain ok/failed/unknown verdict,
+    plus single-character badges for state a long filename must never be allowed to
+    push off the visible rail — ``◆`` for a file carrying at least one typed manoeuvre
+    breath, ``⇢``/``⇢?`` for a resolved/unresolved cross-file reference (M-34/M-37 own
+    setting ``reference``; M-32 only owns rendering it). Kept a two-space-padded STRING
+    (not a list the caller joins) so ``_row_text``/the eliding delegate agree byte-for-
+    byte on what counts as "the fixed part" of a row."""
     glyph = {"ok": "✓", "failed": "✗", "unknown": "•"}[e.verdict]
-    bits = [f"{glyph}  {e.filename}"]
+    lead = [glyph]
+    if e.typed_counts:
+        lead.append("◆")
+    if e.reference == "linked":
+        lead.append("⇢")
+    elif e.reference == "missing":
+        lead.append("⇢?")
+    return " ".join(lead) + "  "
+
+
+def _row_suffix(e: FileRailEntry) -> str:
+    """The trailing badges — exclusion count and manifest caveat — unchanged in shape
+    from before M-32, just split out of ``_row_text`` so the eliding delegate can keep
+    them intact while shortening only the filename between prefix and suffix."""
+    bits = []
     if e.excluded_count:
         n = e.excluded_count
         mark = " ↺" if e.excluded_carried else ""
         bits.append(f"[{n} excl{mark}]")
     if e.caveat:
         bits.append("⚠")
-    return "   ".join(bits)
+    return ("   " + "   ".join(bits)) if bits else ""
+
+
+def _row_text(e: FileRailEntry) -> str:
+    return f"{_row_prefix(e)}{e.filename}{_row_suffix(e)}"
+
+
+def _elided_row_text(e: FileRailEntry, fm, avail_px: float) -> str:
+    """``_row_text(e)`` with ONLY the filename segment elided (middle-elided, so both a
+    long prefix and a long suffix survive) to fit ``avail_px`` pixels under font metrics
+    ``fm``. The prefix/suffix glyphs are the whole reason a rail row exists at a glance
+    — a badge is a handful of characters, cheap in pixels, and the one thing a maximally
+    -shortened row still has to show — so they are never touched, even if that leaves
+    less than ``avail_px`` worth of room for the filename (down to zero, "…" alone)."""
+    prefix, suffix = _row_prefix(e), _row_suffix(e)
+    fixed_w = fm.horizontalAdvance(prefix) + fm.horizontalAdvance(suffix)
+    name_avail = max(avail_px - fixed_w, 0)
+    elided = fm.elidedText(e.filename, Qt.TextElideMode.ElideMiddle, name_avail)
+    return f"{prefix}{elided}{suffix}"
 
 
 def _row_tooltip(e: FileRailEntry) -> str:
@@ -84,6 +150,19 @@ def _row_tooltip(e: FileRailEntry) -> str:
         n = e.excluded_count
         note = " — carried over from a previous recordings folder" if e.excluded_carried else ""
         lines.append(f"{n} breath{'s' if n != 1 else ''} manually excluded{note}")
+    if e.typed_counts:
+        n = sum(e.typed_counts.values())
+        kinds = ", ".join(f"{k} ×{c}" for k, c in sorted(e.typed_counts.items()))
+        note = " — carried over from a previous recordings folder" if e.typed_carried else ""
+        lines.append(f"{n} breath{'s' if n != 1 else ''} typed as a manoeuvre ({kinds}){note}")
+    if e.reference == "linked":
+        lines.append("⇢ reference resolved from another file")
+    elif e.reference == "missing":
+        lines.append("⇢? reference not resolved")
+    if e.segments is not None:
+        lines.append(f"{e.segments} EMG segment{'s' if e.segments != 1 else ''}")
+    if e.role == "reference":
+        lines.append("Reference manoeuvres only — no tidal breaths")
     if e.caveat:
         lines.append(f"⚠ {e.caveat}")
     if not e.seen:
@@ -139,7 +218,9 @@ class FileRailModel(QAbstractListModel):
                 new_entries.append(FileRailEntry(
                     filename=f.filename, caveat=caveat, seen=prev.seen, verdict=prev.verdict,
                     breaths=prev.breaths, error=prev.error, excluded_count=prev.excluded_count,
-                    excluded_carried=prev.excluded_carried))
+                    excluded_carried=prev.excluded_carried, typed_counts=dict(prev.typed_counts),
+                    typed_carried=prev.typed_carried, reference=prev.reference,
+                    segments=prev.segments, role=prev.role))
             else:
                 new_entries.append(FileRailEntry(filename=f.filename, caveat=caveat))
         self.beginResetModel()
@@ -166,10 +247,16 @@ class FileRailModel(QAbstractListModel):
         idx = self.index(i)
         self.dataChanged.emit(idx, idx)
 
-    def mark_result(self, filename: str, *, ok: bool, breaths=None, error=None) -> None:
+    def mark_result(self, filename: str, *, ok: bool, breaths=None, error=None,
+                    role=None) -> None:
         """Record the verdict of the latest dry run / batch run FOR THIS FILE. A file
         that is not currently a row (filtered out of an old manifest, say) is silently
-        ignored — the caller does not have to check membership first."""
+        ignored — the caller does not have to check membership first.
+
+        ``role`` (M-32) is ``core.pipeline.FileResult.role`` ('tidal'/'reference') from
+        the SAME result the caller already has ``breaths`` from — like ``breaths``, only
+        meaningful on success, so it is cleared to ``None`` on failure exactly the same
+        way."""
         i = self._by_name.get(filename)
         if i is None:
             return
@@ -177,6 +264,7 @@ class FileRailModel(QAbstractListModel):
         e.verdict = "ok" if ok else "failed"
         e.breaths = breaths if ok else None
         e.error = None if ok else error
+        e.role = role if ok else None
         idx = self.index(i)
         self.dataChanged.emit(idx, idx)
 
@@ -205,6 +293,41 @@ class FileRailModel(QAbstractListModel):
             return
         e.excluded_count = count
         e.excluded_carried = carried
+        idx = self.index(i)
+        self.dataChanged.emit(idx, idx)
+
+    def set_typed_state(self, filename: str, counts: dict, carried: bool = False) -> None:
+        """Same shape as :meth:`set_excluded_count`, for ``breath_types`` — ``counts`` is
+        a fresh ``kind -> count`` mapping (an empty dict, never ``None``, for "no typed
+        breaths"). Compared by value, not identity, so a caller recomputing the SAME
+        counts every sync (the common case) never triggers a spurious repaint."""
+        i = self._by_name.get(filename)
+        if i is None:
+            return
+        e = self._entries[i]
+        if e.typed_counts == counts and e.typed_carried == carried:
+            return
+        e.typed_counts = dict(counts)
+        e.typed_carried = carried
+        idx = self.index(i)
+        self.dataChanged.emit(idx, idx)
+
+    def set_reference(self, filename: str, reference: str | None) -> None:
+        """Plumbing for M-34/M-37: nothing in M-32 itself calls this with a non-``None``
+        value, but the field, its rendering (``_row_prefix``/``_row_tooltip``) and this
+        setter all exist now so a later ticket only has to start calling it."""
+        i = self._by_name.get(filename)
+        if i is None or self._entries[i].reference == reference:
+            return
+        self._entries[i].reference = reference
+        idx = self.index(i)
+        self.dataChanged.emit(idx, idx)
+
+    def set_segments(self, filename: str, segments: int | None) -> None:
+        i = self._by_name.get(filename)
+        if i is None or self._entries[i].segments == segments:
+            return
+        self._entries[i].segments = segments
         idx = self.index(i)
         self.dataChanged.emit(idx, idx)
 
@@ -280,6 +403,55 @@ class _FileRailProxy(QSortFilterProxyModel):
         return left.row() < right.row()
 
 
+#: rough allowance for the style's own item padding/margins around the text rect
+#: (icon area, focus frame, left/right insets) — a fixed style-independent constant
+#: rather than reading it from the delegate's own QStyle at paint time, since erring a
+#: few pixels wide (eliding a touch earlier than strictly necessary) is harmless, while
+#: erring narrow risks clipping a badge, the one thing this delegate exists to prevent.
+_RAIL_ITEM_PADDING_PX = 10
+
+
+class _RailItemDelegate(QStyledItemDelegate):
+    """Elides ONLY the filename segment of a row's display text — never the leading
+    verdict/typed/reference glyphs, nor the trailing exclusion/caveat badges — so a long
+    recording name shortens where a reader least needs the full text, while the state
+    glyphs a maximally-narrow 280 px rail exists to show stay fully visible regardless of
+    filename length (M-32's own acceptance criterion). Reimplemented rather than relying
+    on ``QAbstractItemView.setTextElideMode()``: that mode elides the row's single opaque
+    display string as a whole, with no notion of where the filename starts/ends within
+    it, so a plain ``Qt.ElideMiddle`` can (depending on how long the badges happen to be)
+    still eat into a glyph instead of the filename."""
+
+    def _prepare_option(self, option, index) -> QStyleOptionViewItem:
+        """The actual per-row decision, split out of :meth:`paint` so a test can drive
+        REAL delegate code (not just the standalone ``_elided_row_text`` pure function)
+        without needing a live painter/``drawControl`` call. Returns an option whose
+        ``text`` is already correctly elided and whose ``textElideMode`` is forced to
+        ``ElideNone`` — see the inline comment below for why that second part matters."""
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        entry = index.data(EntryRole)
+        if entry is not None:
+            avail = opt.rect.width() - _RAIL_ITEM_PADDING_PX
+            opt.text = _elided_row_text(entry, opt.fontMetrics, avail)
+            # _RAIL_ITEM_PADDING_PX is a guessed, style-independent allowance for the
+            # style's own content-rect margins (icon area, focus frame, selection
+            # insets), which genuinely vary by style/theme/platform. If the real margin
+            # ever exceeds the guess, CE_ItemViewItem's default Qt.ElideRight would
+            # re-elide the string we already hand-shortened — cutting into the trailing
+            # badges, the one thing this whole delegate exists to prevent. Disabling the
+            # style's own elision makes that failure mode structurally impossible instead
+            # of dependent on how good the padding guess is: worst case a row overflows
+            # its cell by a few px, never a lost badge.
+            opt.textElideMode = Qt.TextElideMode.ElideNone
+        return opt
+
+    def paint(self, painter, option, index):
+        opt = self._prepare_option(option, index)
+        style = opt.widget.style() if opt.widget is not None else QApplication.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
+
+
 class FileRail(QWidget):
     """The filterable, stateful file list itself: a filter field over a
     :class:`FileRailModel`/``QListView`` pair.
@@ -297,6 +469,10 @@ class FileRail(QWidget):
     #: plain single-click selection, for a caller that wants to "open" rather than just
     #: preview-select (Run & results drilling back into Preview & QC).
     fileActivated = Signal(str)
+    #: M-32: a row's context menu asked to manage its cross-file reference. Unconnected
+    #: by anything today — M-37 wires this up once reference resolution (M-34) exists —
+    #: but the rail emits it now so that later ticket only has to add a slot.
+    referencesRequested = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -328,8 +504,15 @@ class FileRail(QWidget):
         self.view.setAlternatingRowColors(True)
         self.view.setToolTip("One row per file. Click to preview; ◀/▶ or "
                              "PageUp/PageDown also move the selection.")
+        # M-32: an eliding delegate replaces the default one so a long filename shortens
+        # in the MIDDLE of the filename specifically, never into the leading/trailing
+        # state glyphs — see _RailItemDelegate's own docstring.
+        self._delegate = _RailItemDelegate(self.view)
+        self.view.setItemDelegate(self._delegate)
         self.view.selectionModel().currentChanged.connect(self._on_view_current_changed)
         self.view.doubleClicked.connect(self._on_double_clicked)
+        self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.view.customContextMenuRequested.connect(self._on_context_menu)
         root.addWidget(self.view, 1)
 
     # -- manifest / rows --------------------------------------------------
@@ -416,14 +599,24 @@ class FileRail(QWidget):
     def mark_seen(self, filename: str) -> None:
         self._model.mark_seen(filename)
 
-    def mark_result(self, filename: str, *, ok: bool, breaths=None, error=None) -> None:
-        self._model.mark_result(filename, ok=ok, breaths=breaths, error=error)
+    def mark_result(self, filename: str, *, ok: bool, breaths=None, error=None,
+                    role=None) -> None:
+        self._model.mark_result(filename, ok=ok, breaths=breaths, error=error, role=role)
 
     def set_caveat(self, filename: str, caveat: str | None) -> None:
         self._model.set_caveat(filename, caveat)
 
     def set_excluded_count(self, filename: str, count: int, carried: bool = False) -> None:
         self._model.set_excluded_count(filename, count, carried=carried)
+
+    def set_typed_state(self, filename: str, counts: dict, carried: bool = False) -> None:
+        self._model.set_typed_state(filename, counts, carried=carried)
+
+    def set_reference(self, filename: str, reference: str | None) -> None:
+        self._model.set_reference(filename, reference)
+
+    def set_segments(self, filename: str, segments: int | None) -> None:
+        self._model.set_segments(filename, segments)
 
     def sort_failed_first(self, on: bool) -> None:
         self._proxy.set_failed_first(on)
@@ -466,3 +659,32 @@ class FileRail(QWidget):
         name = index.data(NameRole)
         if name:
             self.fileActivated.emit(name)
+
+    def _build_row_context_menu(self, name: str) -> QMenu:
+        """Construction only, no ``exec()`` — split out so a test can build the menu and
+        trigger its action directly (the same pattern ``PreviewScreen._build_type_menu``
+        already uses) without ever popping a real modal loop under offscreen Qt. Today's
+        single action emits :attr:`referencesRequested`; left enabled unconditionally,
+        since "no reference exists to manage yet" is a question M-34/M-37's own handler
+        answers, not this menu."""
+        menu = QMenu(self.view)
+        # a transient popup QMenu is never destroyed on its own once closed — see
+        # ui/CLAUDE.md's "A transient popup QMenu needs Qt.WA_DeleteOnClose" (the same
+        # fix _MechanicsMixin._build_type_menu already applies for its own menu).
+        menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        action = menu.addAction("Reference manoeuvres…")
+        action.triggered.connect(lambda: self.referencesRequested.emit(name))
+        return menu
+
+    def _on_context_menu(self, pos):
+        """A row's right-click menu (M-32). Acts on the row under the cursor — NOT
+        necessarily the current selection, matching how a context menu is expected to
+        act on whatever it was opened over."""
+        index = self.view.indexAt(pos)
+        if not index.isValid():
+            return
+        name = index.data(NameRole)
+        if not name:
+            return
+        menu = self._build_row_context_menu(name)
+        menu.exec(self.view.viewport().mapToGlobal(pos))

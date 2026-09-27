@@ -1004,6 +1004,9 @@ def test_reference_only_test_run_shows_manoeuvres_not_not_processed(qapp, tmp_pa
     assert pv._table_panel._title_label.fullText() == "Manoeuvres (reference-only file)"
     assert "excluded" not in pv.qc_overview.text().lower()   # not a QC dropout — every breath was typed
     assert "6 typed manoeuvre" in pv.qc_overview.text()
+    # M-32: fr.role rides through mark_result into the rail's own badge/tooltip state —
+    # not just re-derived from the bare FileResult this test already checked above.
+    assert pv.file_rail.entry("synth_case_B.csv").role == "reference"
     win.close()
 
 
