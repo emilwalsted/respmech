@@ -11,7 +11,9 @@ import os
 
 import pyqtgraph as pg
 import pytest
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtGui import QMouseEvent
+from PySide6.QtWidgets import QApplication
 
 from respmech.ui.screens.preview._plot_helpers import BreathSpansItem
 from respmech.ui.state import AppState
@@ -76,9 +78,22 @@ class _FakeClick:
 
 
 def _two_span_item():
+    """A BreathSpansItem attached to a real (viewless) pyqtgraph scene — not a bare
+    construction. mouseClickEvent bails out for an item with no scene at all (the
+    same guard that protects against a stale, torn-down item — see
+    test_a_click_on_an_item_detached_from_its_scene_is_ignored), which a bare item
+    would trip for the wrong reason. Nothing else in this module holds a Python
+    reference to the scene a plain QGraphicsScene().addItem(item) would create —
+    QGraphicsScene owns its items, not the other way round, so an unreferenced
+    scene is garbage-collected almost immediately and takes the (Python-wrapped)
+    item down with it (measured: 'libshiboken: Internal C++ object already
+    deleted' on the very next call). Stash the scene ON the item so it stays
+    alive exactly as long as the item does."""
     item = BreathSpansItem()
     item.set_spans([(0.0, 1.0, pg.mkBrush(0, 0, 0), 1),
                     (2.0, 3.0, pg.mkBrush(0, 0, 0), 2)])   # a real gap between 1.0 and 2.0
+    item._test_scene = pg.GraphicsScene()
+    item._test_scene.addItem(item)
     return item
 
 
@@ -150,6 +165,27 @@ def test_ctrl_left_click_in_a_gap_is_ignored(qapp):
     assert ev.accepted is False and ev.ignored is True
 
 
+def test_a_click_on_an_item_detached_from_its_scene_is_ignored(qapp):
+    """Self-review finding: pyqtgraph's acceptClicks() claim lives on the SCENE and
+    only refreshes on a later mouse move, not on this item leaving the scene — a
+    re-render that tears this exact item down between a hover and its following
+    click can otherwise still deliver the click to now-detached, meaningless
+    geometry. A real pg.PlotWidget is needed here: a bare BreathSpansItem never had
+    a scene at all, which would pass this guard for the wrong reason."""
+    pw = pg.PlotWidget()
+    pi = pw.getPlotItem()
+    item = BreathSpansItem()
+    item.set_spans([(0.0, 1.0, pg.mkBrush(0, 0, 0), 1)])
+    pi.addItem(item)
+    assert item.scene() is not None
+    pi.removeItem(item)
+    assert item.scene() is None
+
+    ev = _FakeClick(0.5, Qt.RightButton)
+    item.mouseClickEvent(ev)
+    assert ev.accepted is False and ev.ignored is True
+
+
 # --------------------------------------------------------------------------- #
 # The _set_breath_type funnel (run-lock, mutual exclusivity, t_onset_s)
 # --------------------------------------------------------------------------- #
@@ -199,8 +235,11 @@ def test_typing_a_breath_removes_any_existing_exclusion_and_stores_onset(qapp, t
     entry = next(t for t in s.processing.breath_types
                 if t.file == pv.file_rail.current_filename() and t.breath == a_breath)
     assert entry.kind == "rest"
+    # t_onset_s is stored in the RECORDING's own clock, not the trimmed window's —
+    # self._breath_spans is zero-based at the trim start, so + _trim_offset_s
+    # recovers the same absolute clock breath['time'][0]/the EMG views already use.
     t0, _t1 = pv._breath_spans[a_breath]
-    assert entry.t_onset_s == pytest.approx(t0)
+    assert entry.t_onset_s == pytest.approx(t0 + pv._trim_offset_s)
     win.close()
 
 
@@ -288,8 +327,13 @@ def test_build_type_menu_has_the_minimal_labels_and_no_lone_ampersand(qapp, tmp_
     _render_mech(pv, s)
     a_breath = next(iter(pv._breath_spans))
 
+    from PySide6.QtWidgets import QMenu
     menu = pv._build_type_menu(a_breath, ("tidal", "excluded", "rest"))
     assert [a.text() for a in menu.actions()] == ["Tidal", "Excluded", "Rest"]
+    # Self-review finding: an unparented menu with these exact (ampersand-free) labels
+    # would pass an "offenders is empty" check for the wrong reason. Prove the menu is
+    # actually IN the tree _lone_ampersands walks, not just that its own text is clean.
+    assert menu in win.findChildren(QMenu), "the menu must be parented under the window"
     assert not _lone_ampersands(win), "the type menu must be reachable from the window's own scan"
     menu.close()
     win.close()
@@ -324,3 +368,186 @@ def test_handle_type_requested_pops_the_menu_without_a_view(qapp, tmp_path):
     from PySide6.QtCore import QPointF as _QPointF
     pv._handle_type_requested(a_breath, _QPointF(0.0, 0.0))   # must not raise
     win.close()
+
+
+# --------------------------------------------------------------------------- #
+# End-to-end through a REAL pyqtgraph scene (self-review finding: the fake-event
+# tests above prove the item's own logic, but not that pyqtgraph's real dispatch
+# actually reaches it ahead of ViewBox, or that a gap click actually still reaches
+# ViewBox's own menu).
+# --------------------------------------------------------------------------- #
+def _send_click(widget, view_pt, global_pt, button):
+    press = QMouseEvent(QEvent.Type.MouseButtonPress, view_pt, global_pt,
+                        button, button, Qt.NoModifier)
+    QApplication.sendEvent(widget, press)
+    release = QMouseEvent(QEvent.Type.MouseButtonRelease, view_pt, global_pt,
+                          button, Qt.NoButton, Qt.NoModifier)
+    QApplication.sendEvent(widget, release)
+
+
+def _hover_then_click(pw, vb, x, button):
+    """Move the mouse to the scene x-coordinate ``x`` (arranging the hover pyqtgraph's
+    own click resolution depends on, see ui/CLAUDE.md), then click ``button`` there."""
+    scene_pt = vb.mapViewToScene(pg.Point(x, vb.viewRect().center().y()))
+    view_pt = pw.mapFromScene(scene_pt)
+    global_pt = pw.mapToGlobal(view_pt)
+    move = QMouseEvent(QEvent.Type.MouseMove, view_pt, global_pt,
+                       Qt.NoButton, Qt.NoButton, Qt.NoModifier)
+    QApplication.sendEvent(pw.viewport(), move)
+    _send_click(pw.viewport(), view_pt, global_pt, button)
+
+
+def test_a_real_right_click_on_a_span_reaches_the_item_and_viewbox_never_raises(qapp):
+    """The mechanism ui/CLAUDE.md documents, proven end to end rather than only at
+    the fake-event level: a real pyqtgraph PlotWidget, a real mouse move + click
+    delivered through Qt, with ViewBox.raiseContextMenu instrumented to prove it
+    was never called even though menuEnabled() (and hence the ordinary z-order
+    race BreathSpansItem would otherwise lose) is left completely untouched."""
+    pw = pg.PlotWidget()
+    pw.resize(400, 300)
+    pw.show()
+    pi = pw.getPlotItem()
+    vb = pi.getViewBox()
+    assert vb.menuEnabled()
+    item = BreathSpansItem()
+    item.set_spans([(0.0, 1.0, pg.mkBrush(0, 0, 0), 7)])
+    item.setZValue(-10)                    # the real, paint-order zValue — not raised for the test
+    received = []
+    item.typeRequested.connect(lambda n, pos: received.append(n))
+    pi.addItem(item)
+    vb.setXRange(0, 1); vb.setYRange(0, 1)
+    qapp.processEvents()
+
+    raised = []
+    vb.raiseContextMenu = lambda ev: raised.append(ev)
+
+    _hover_then_click(pw, vb, 0.5, Qt.RightButton)
+    qapp.processEvents()
+
+    assert received == [7], "the real scene must deliver the right-click to the item"
+    assert raised == [], "ViewBox's own context menu must never raise for a hit span"
+    assert vb.menuEnabled(), "the mechanism must not work by disabling the menu"
+    pw.close()
+
+
+def test_a_real_right_click_in_a_gap_still_reaches_viewboxs_own_menu(qapp):
+    """Acceptance criterion, end to end: a right-click that hits no span must still
+    open pyqtgraph's own context menu, unmodified — proving the hover claim really
+    is conditional on hitting a span, through the real dispatch path."""
+    pw = pg.PlotWidget()
+    pw.resize(400, 300)
+    pw.show()
+    pi = pw.getPlotItem()
+    vb = pi.getViewBox()
+    item = BreathSpansItem()
+    item.set_spans([(0.0, 0.3, pg.mkBrush(0, 0, 0), 1),
+                    (0.7, 1.0, pg.mkBrush(0, 0, 0), 2)])   # a real gap at 0.3-0.7
+    item.setZValue(-10)
+    received = []
+    item.typeRequested.connect(lambda n, pos: received.append(n))
+    pi.addItem(item)
+    vb.setXRange(0, 1); vb.setYRange(0, 1)
+    qapp.processEvents()
+
+    raised = []
+    vb.raiseContextMenu = lambda ev: raised.append(ev)
+
+    _hover_then_click(pw, vb, 0.5, Qt.RightButton)         # 0.5 is inside the gap
+    qapp.processEvents()
+
+    assert received == []
+    assert len(raised) == 1, "a gap click must still reach ViewBox's own menu"
+    pw.close()
+
+
+def test_a_real_ctrl_left_click_on_a_span_reaches_the_item_without_any_hover_claim(qapp):
+    """Ctrl+left-click needs no acceptClicks trick (ViewBox never accepts the left
+    button regardless of modifiers), so it must work even with NO prior hover at
+    all — a direct press at a fresh position."""
+    pw = pg.PlotWidget()
+    pw.resize(400, 300)
+    pw.show()
+    pi = pw.getPlotItem()
+    vb = pi.getViewBox()
+    item = BreathSpansItem()
+    item.set_spans([(0.0, 1.0, pg.mkBrush(0, 0, 0), 3)])
+    item.setZValue(-10)
+    received = []
+    item.typeRequested.connect(lambda n, pos: received.append(n))
+    pi.addItem(item)
+    vb.setXRange(0, 1); vb.setYRange(0, 1)
+    qapp.processEvents()
+
+    scene_pt = vb.mapViewToScene(pg.Point(0.5, vb.viewRect().center().y()))
+    view_pt = pw.mapFromScene(scene_pt)
+    global_pt = pw.mapToGlobal(view_pt)
+    press = QMouseEvent(QEvent.Type.MouseButtonPress, view_pt, global_pt,
+                        Qt.LeftButton, Qt.LeftButton, Qt.ControlModifier)
+    QApplication.sendEvent(pw.viewport(), press)
+    release = QMouseEvent(QEvent.Type.MouseButtonRelease, view_pt, global_pt,
+                          Qt.LeftButton, Qt.NoButton, Qt.ControlModifier)
+    QApplication.sendEvent(pw.viewport(), release)
+    qapp.processEvents()
+
+    assert received == [3]
+    pw.close()
+
+
+# --------------------------------------------------------------------------- #
+# The EMG views' own overlay must also reflect a typed breath's kind, not just a
+# plain exclusion (self-review finding: _paint_breaths' _breath_kind_now path was
+# only reachable via the live _repaint_breath update, never via a fresh repaint).
+# --------------------------------------------------------------------------- #
+def test_emg_raw_view_colours_a_typed_breath_on_a_fresh_repaint(qapp, tmp_path):
+    """_repaint_view_breaths -> _paint_breaths -> _breath_kind_now must resolve a
+    typed breath's kind from settings on a FRESH repaint, not just carry forward
+    whatever the live _set_breath_type repaint already set on the SAME item."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path), remove_ecg=True)
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    assert pv._bov.get("raw", {}).get("regions"), "fixture must have painted the raw EMG view"
+
+    assert pv._set_breath_type(a_breath, "rest") == "rest"
+    pv._repaint_view_breaths("raw")            # force a FRESH _paint_breaths, not the live update
+    item, idx = pv._bov["raw"]["regions"][a_breath][0]
+    assert item._spans[idx][2].color().getRgb() == pv._breath_brush("rest").color().getRgb()
+    win.close()
+
+
+def test_a_typed_breath_survives_a_fresh_mechanics_restage(qapp, tmp_path):
+    """workers.stage_mechanics_preview's kind computation (b['kind'] or the
+    'excluded' pseudo-kind or None) must actually reflect a persisted
+    BreathTypeEntry when the file is re-staged from scratch — not just when the
+    live overlay is incrementally repainted."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import stage_mechanics_preview
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    assert pv._set_breath_type(a_breath, "rest") == "rest"
+
+    fresh = stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv"))
+    kind = next(k for (n, _t0, _t1, k) in fresh["spans"] if n == a_breath)
+    assert kind == "rest"
+    win.close()
+
+
+# --------------------------------------------------------------------------- #
+# _exclude_key's new breath_types half (self-review finding: only the
+# pre-existing exclude_breaths half had a cache-key regression test).
+# --------------------------------------------------------------------------- #
+def test_exclude_key_changes_when_breath_types_changes(qapp, tmp_path):
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.ui.screens._preview_cache import _exclude_key
+    s = synth_settings(str(tmp_path))
+    before = _exclude_key(s)
+    s.processing.breath_types.append(BreathTypeEntry(file="a.csv", breath=1, kind="rest"))
+    after_add = _exclude_key(s)
+    assert after_add != before, "adding a breath_types entry must change the cache key"
+
+    s.processing.breath_types[0].kind = "ic"
+    after_kind_change = _exclude_key(s)
+    assert after_kind_change != after_add, "changing a typed breath's kind must change the cache key"

@@ -273,13 +273,15 @@ _FALLBACK_PAL = {
     "breath_incl_brush": (44, 110, 155, 32), "breath_excl_brush": (180, 50, 42, 70),
     "breath_incl_label": (90, 107, 122), "breath_excl_label": (180, 50, 42),
     # M-20: one brush/label pair per breath-type kind this ticket's minimal type menu
-    # (and M-31's fuller one) can set. 'ic'/'fvc' get their own hue so a manoeuvre reads
-    # differently from a plain exclusion at a glance; 'other' is the fallback for any
-    # BREATH_KINDS member without a dedicated entry here (ic_fvc/max_insp/sniff — not
-    # reachable from the UI until M-31/M-47).
-    "breath_ic_brush": (31, 122, 77, 70), "breath_ic_label": (31, 122, 77),
-    "breath_fvc_brush": (183, 121, 31, 70), "breath_fvc_label": (183, 121, 31),
-    "breath_rest_brush": (125, 91, 166, 70), "breath_rest_label": (125, 91, 166),
+    # (and M-31's fuller one) can set. 'other' is the fallback for any BREATH_KINDS
+    # member without a dedicated entry here (ic_fvc/max_insp/sniff — not reachable
+    # from the UI until M-31/M-47). Deliberately DISTINCT hues from every channel/
+    # emg_cycle colour (an earlier draft reused volume/pgas/pdi's own greens/ambers/
+    # purples verbatim, which shaded a typed breath the same colour as the trace
+    # running through it) — kept in sync with theme.py's _PLOT_LIGHT/_PLOT_DARK.
+    "breath_ic_brush": (110, 120, 40, 70), "breath_ic_label": (110, 120, 40),
+    "breath_fvc_brush": (120, 60, 110, 70), "breath_fvc_label": (120, 60, 110),
+    "breath_rest_brush": (80, 90, 160, 70), "breath_rest_label": (80, 90, 160),
     "breath_other_brush": (140, 100, 60, 70), "breath_other_label": (140, 100, 60),
     "separator": (150, 165, 180), "noise_region": (44, 110, 155, 45),
     "raw_trace": (150, 165, 180), "noise_trace": (90, 150, 200),
@@ -440,6 +442,18 @@ class BreathSpansItem(pg.GraphicsObject):
             ev.acceptClicks(Qt.RightButton)
 
     def mouseClickEvent(self, ev):
+        # Self-review finding: pyqtgraph caches a hover's acceptClicks() claim on the
+        # SCENE (GraphicsScene.lastHoverEvent), refreshed only by a later mouse move —
+        # not by this item leaving the scene. A re-render that tears this exact item
+        # down (a new BreathSpansItem replaces it on the very next paint) between a
+        # hover and the click that follows it can therefore still deliver the click
+        # here, against now-meaningless geometry (an identity mapFromScene once
+        # detached). Bail out rather than resolve a breath from stale coordinates —
+        # the click is lost (self-heals on the next mouse move), which is safer than
+        # emitting a breath number this render no longer owns.
+        if self.scene() is None:
+            ev.ignore()
+            return
         button = ev.button()
         mods = ev.modifiers()
         wants_type = (button == Qt.RightButton
