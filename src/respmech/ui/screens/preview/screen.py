@@ -909,7 +909,11 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         self._table_model.set_dataframe(None)
         self.campbell.figure.clear(); self.campbell.draw()
         self._forget_campbell()      # the export must not resurrect a cleared diagram
-        self.segments_plots.clear(); self._segments_subplots = []   # M-26
+        # M-27: segments_plots.clear() above already destroys every SeparatorLinesItem
+        # (children of the plots it just tore down) — reset the Python-side list too,
+        # matching the _segments_subplots reset right beside it (never READ stale today,
+        # but a dangling reference to a torn-down C++ object should not linger regardless).
+        self.segments_plots.clear(); self._segments_subplots = []; self._separator_items = []   # M-26
         self._segtable_model.set_dataframe(None)
         self.segments_caption.setFullText("")
         self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []
@@ -956,7 +960,11 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         self._table_model.set_dataframe(None)
         self.campbell.figure.clear(); self.campbell.draw()
         self._forget_campbell()      # the export must not resurrect a cleared diagram
-        self.segments_plots.clear(); self._segments_subplots = []   # M-26
+        # M-27: segments_plots.clear() above already destroys every SeparatorLinesItem
+        # (children of the plots it just tore down) — reset the Python-side list too,
+        # matching the _segments_subplots reset right beside it (never READ stale today,
+        # but a dangling reference to a torn-down C++ object should not linger regardless).
+        self.segments_plots.clear(); self._segments_subplots = []; self._separator_items = []   # M-26
         self._segtable_model.set_dataframe(None)
         self.segments_caption.setFullText("")
         self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []

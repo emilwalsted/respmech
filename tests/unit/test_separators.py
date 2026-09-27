@@ -283,6 +283,54 @@ def test_a_merge_collision_between_two_typed_breaths_keeps_exactly_one_entry(qap
     win.close()
 
 
+def test_a_merge_collision_between_an_exclusion_and_a_typed_breath_keeps_the_typed_one(qapp, tmp_path):
+    """The other half of Settings.validate()'s invariant ('both typed and excluded'):
+    a removal that merges a previously EXCLUDED segment and a previously TYPED one onto
+    the same new number must resolve that too, not just a typed-vs-typed collision.
+    A typed breath already carries the same tidal-average exclusion a plain exclusion
+    does (plus a kind), so the typed entry wins and the plain exclusion is dropped."""
+    from respmech.ui.main_window import MainWindow
+
+    s = _emg_only_settings(tmp_path, method="separators", separator_times=[1.0, 2.0, 3.5])
+    s.processing.exclude_breaths.append(ExcludeEntry(file=FILENAME, breaths=[2]))
+    s.processing.breath_types.append(
+        BreathTypeEntry(file=FILENAME, breath=3, kind="rest", t_onset_s=2.0))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+
+    pv._set_separators(FILENAME, [1.0, 3.5])             # 2.0 removed -> 2 and 3 merge
+    excl_entries = [e for e in pv.state.settings.processing.exclude_breaths if e.file == FILENAME]
+    typed_entries = [t for t in pv.state.settings.processing.breath_types if t.file == FILENAME]
+    assert excl_entries == [], "the plain exclusion must be dropped, not left colliding"
+    assert len(typed_entries) == 1
+    assert typed_entries[0].breath == 2
+    assert typed_entries[0].kind == "rest"
+    pv.state.settings.validate()          # must not raise ("both typed and excluded")
+    win.close()
+
+
+def test_an_exclusion_untouched_by_any_merge_survives_alongside_an_unrelated_typed_breath(qapp, tmp_path):
+    """The new exclusion/typed collision guard must not over-trigger: an exclusion and a
+    typed breath that do NOT collide (different segments throughout) must both survive
+    a separator edit unchanged in kind, only renumbered as normal."""
+    from respmech.ui.main_window import MainWindow
+
+    s = _emg_only_settings(tmp_path, method="separators", separator_times=[1.0, 2.0, 3.5])
+    s.processing.exclude_breaths.append(ExcludeEntry(file=FILENAME, breaths=[1]))
+    s.processing.breath_types.append(
+        BreathTypeEntry(file=FILENAME, breath=4, kind="rest", t_onset_s=3.5))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+
+    pv._set_separators(FILENAME, [1.0, 1.5, 2.0, 3.5])   # inserted at 1.5, no merge at all
+    excl_entry = next(e for e in pv.state.settings.processing.exclude_breaths if e.file == FILENAME)
+    typed_entry = next(t for t in pv.state.settings.processing.breath_types if t.file == FILENAME)
+    assert excl_entry.breaths == [1]
+    assert typed_entry.breath == 5 and typed_entry.kind == "rest"
+    pv.state.settings.validate()
+    win.close()
+
+
 def test_set_separators_never_restamps_an_existing_entrys_folder(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
 
@@ -319,6 +367,10 @@ def test_place_or_remove_separator_is_locked_while_a_run_is_active_and_says_why(
             return QPointF(0.0, 0.0)
 
     pv.set_run_active(True)
+    # The button itself must ALSO visually disable, not just the click-level guard below
+    # (belt-and-braces): set_run_active routes through _update_separators_button, and a
+    # regression that dropped that call would leave the button clickable-LOOKING.
+    assert pv.btn_place_separators.isEnabled() is False
     pv._place_or_remove_separator(_Ev(), [], 0.0)
     assert s.processing.segmentation.separators[0].times_s == [1.0]   # unchanged
     bar_msg = win.statusBar().currentMessage().lower()
@@ -384,4 +436,121 @@ def test_an_armed_click_on_the_segments_stack_places_a_separator_not_an_exclusio
     assert pv.state.settings.processing.exclude_breaths == [], (
         "armed mode must place a separator, never fall through to the exclude toggle"
     )
+    win.close()
+
+
+# --------------------------------------------------------------------------- #
+# _update_separator_lines / _render_segments_stack: the drawn markers themselves
+# --------------------------------------------------------------------------- #
+
+def test_a_real_render_draws_one_separator_line_item_per_subplot_with_the_right_times(tmp_path):
+    from respmech.ui.main_window import MainWindow
+
+    s = _emg_only_settings(tmp_path, method="separators", separator_times=[1.0, 2.0])
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files()
+    pv.file_rail.select_filename(FILENAME)
+    _render(pv, s)
+
+    assert pv._separator_items, "no SeparatorLinesItem drawn at all"
+    assert len(pv._separator_items) == len(pv._segments_subplots)
+    for item in pv._separator_items:
+        assert item._times == [1.0, 2.0]
+    win.close()
+
+
+def test_a_file_with_no_separator_entry_draws_empty_separator_lines(tmp_path):
+    from respmech.ui.main_window import MainWindow
+
+    s = _emg_only_settings(tmp_path, method="separators")   # no SeparatorEntry at all
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files()
+    pv.file_rail.select_filename(FILENAME)
+    _render(pv, s)
+
+    assert pv._separator_items
+    for item in pv._separator_items:
+        assert item._times == []
+    win.close()
+
+
+def test_the_empty_emg_early_return_leaves_no_stale_separator_items(qapp, tmp_path):
+    """_render_segments_stack's own early return (no/degenerate EMG data) must reset
+    _separator_items rather than leave a previous render's now-torn-down items behind
+    — segments_plots.clear() already destroys the underlying graphics items, but the
+    Python-side bookkeeping list must not go on naming them."""
+    import numpy as np
+    from respmech.ui.main_window import MainWindow
+
+    s = _emg_only_settings(tmp_path, method="separators", separator_times=[1.0])
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files()
+    pv.file_rail.select_filename(FILENAME)
+    _render(pv, s)
+    assert pv._separator_items                     # a real render populated it first
+
+    pv._render_segments_stack(np.array([]), 200.0, None, FILENAME)
+    assert pv._separator_items == []
+    win.close()
+
+
+# --------------------------------------------------------------------------- #
+# A file switch must unarm/disable immediately, synchronously — self-review finding:
+# without this, a click during the (async) window before the new file's own 'segments'
+# job completes could resolve _selected_filename() to the NEW file while still hit-
+# testing the OLD file's now-torn-down plot geometry.
+# --------------------------------------------------------------------------- #
+
+def test_a_file_switch_unarms_and_disables_the_button_synchronously(tmp_path):
+    from respmech.ui.main_window import MainWindow
+
+    s = _emg_only_settings(tmp_path, method="separators", separator_times=[1.0])
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._refresh_files()
+    pv.file_rail.select_filename(FILENAME)
+    _render(pv, s)
+    pv.btn_place_separators.setChecked(True)
+    assert pv._separators_armed is True
+
+    pv.file_rail.select_filename("synth_case_B.csv")   # _begin_file_switch runs synchronously
+    assert pv._separators_armed is False, (
+        "a file switch must unarm immediately, before the new file's own 'segments' "
+        "job (if any) has even been dispatched, let alone completed"
+    )
+    assert pv.btn_place_separators.isChecked() is False
+    assert pv.btn_place_separators.isEnabled() is False
+    win.close()
+
+
+def test_an_already_accepted_click_is_ignored_even_while_armed(qapp, tmp_path):
+    """The Ctrl+left-click/right-click breath-typing primitive (M-20) accepts its click
+    at ITEM level (BreathSpansItem.mouseClickEvent), before the scene-level funnel this
+    ticket's own armed check lives in ever runs — so a right-click landing on an
+    existing breath still opens the type menu while armed, never places a separator.
+    _place_or_remove_separator mirrors _toggle_from_emg_click's own
+    ``if ev.isAccepted(): return`` guard for exactly this reason; this pins it."""
+    from respmech.ui.main_window import MainWindow
+
+    s = _emg_only_settings(tmp_path, method="separators", separator_times=[1.0])
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv.btn_place_separators.setChecked(True)
+    assert pv._separators_armed is True
+
+    class _AcceptedEv:
+        def isAccepted(self):
+            return True          # already claimed by an item (e.g. the type menu)
+
+        def button(self):
+            return Qt.LeftButton
+
+        def scenePos(self):
+            return QPointF(0.0, 0.0)
+
+    pv._place_or_remove_separator(_AcceptedEv(), [], 0.0)
+    assert s.processing.segmentation.separators[0].times_s == [1.0]   # unchanged
     win.close()
