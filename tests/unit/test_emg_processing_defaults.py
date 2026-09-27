@@ -4,7 +4,7 @@ Two requirements that pull in opposite directions, so they are tested together.
 
 "Off by default" is a NEGATIVE requirement: the dataclass defaults already say False, so the
 work is to make sure nothing quietly turns them on when EMG channels appear. The tempting
-hook — _update_emg_tab_visibility, which runs on every settings change — would flip a saved
+hook — _update_subtabs, which runs on every settings change — would flip a saved
 analysis's remove_ecg from true to false the moment it was opened, and persist that on the
 next Save: a change to computed output the user never made.
 

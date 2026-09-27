@@ -11,7 +11,7 @@ import pytest
 from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QApplication
 
-from _helpers import INPUT  # noqa: F401  (qapp fixture comes from conftest)
+from _helpers import INPUT, synth_settings  # noqa: F401  (qapp fixture comes from conftest)
 
 
 def _viewbox_lefts(plots):
@@ -197,6 +197,52 @@ def test_mechanics_channel_stack_labels_fit_or_hide_for_cause_in_windows_metrics
                 f"{name}: hidden although the name alone at the smallest allowed font needs "
                 f"only {floor_need:.0f} px of the {have:.0f} px axis")
     assert shown >= 1, "every label hidden — the fit assertions above never ran"
+    win.close()
+
+
+@pytest.mark.skipif(not os.path.exists(os.path.join(INPUT, "synth_case_A.csv")),
+                    reason="synthetic input absent")
+def test_mechanics_channel_stack_with_two_rows_does_not_overlap_in_windows_metrics(
+        windows_metrics):
+    """M-17 (R7): a Flow-only signal set (Poes/Pgas/Pdi never assigned) draws just two
+    channel rows (flow, volume) instead of the usual five, and this pins that the SAME
+    windows_metrics label-fit/no-overlap contracts the 5-row sibling test above guards
+    also hold for a 2-row stack — a shape that reduced-signal-set rendering had never
+    been checked against under the Windows font-metrics model before this ticket. Note
+    what this test does NOT cover: ``setFixedSize`` below fixes the container's actual
+    pixel height regardless of ``_update_mech_stack_floor``'s computed minimum, so it
+    cannot tell a correctly-sized floor from an oversized one — that regression guard is
+    ``test_mech_stack_floor_uses_the_actual_channel_count_not_a_fixed_five`` in
+    test_flow_only.py, which asserts on the floor value directly, unconstrained by a
+    fixed size."""
+    from respmech.ui.workers import stage_mechanics_preview
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.state import AppState
+    from respmech.ui.screens.preview_screen import _CHANNELS
+    _channels_flow_volume = _CHANNELS[:2]         # flow, volume — the two rows this draws
+    s = synth_settings("", channels={"poes": None, "pgas": None, "pdi": None, "emg": []})
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
+    pv._render_preview(stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv")))
+    pv.plots.setFixedSize(640, 540)
+    assert len(pv._channel_plots) == 2, "a Flow-only stack must draw exactly flow + volume"
+    QApplication.processEvents(); QApplication.processEvents()
+    scene_rects = [p.getViewBox().sceneBoundingRect() for p in pv._channel_plots]
+    tops = [r.top() for r in scene_rects]
+    assert tops == sorted(tops), "rows are not stacked top-to-bottom in channel order"
+    for i in range(len(scene_rects) - 1):
+        assert scene_rects[i].bottom() <= scene_rects[i + 1].top() + 0.5, (
+            f"row {i} overlaps row {i + 1}: bottom {scene_rects[i].bottom():.1f} vs "
+            f"next top {scene_rects[i + 1].top():.1f}")
+    for p, (_key, expected_label, _colour) in zip(pv._channel_plots, _channels_flow_volume):
+        axis = p.getAxis("left")
+        name = expected_label.partition(" (")[0]
+        assert axis.labelText == name
+        have = axis.height()
+        if axis.label.isVisible():
+            assert axis.label.boundingRect().width() <= have
+        else:
+            assert _smallest_name_width(axis) > have
     win.close()
 
 

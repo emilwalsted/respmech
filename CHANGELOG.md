@@ -7,18 +7,27 @@ for the installers themselves.
 
 ## Unreleased
 
-**A new analysis now starts with a choice of signal set.** 'New analysis' (from the
-startup chooser, 'Get started…' and File/Analysis > New) opens a picker naming which
-signals the analysis will use before anything else is set up; 'New from last rig'
-carries its previous analysis's signal set forward automatically and skips the
-picker. Today the picker's only reachable door is the complete set (Flow + Poes +
-Pgas + Pdi, today's shape), with or without an 'Also EMG' toggle — the reduced
-presets (Flow only, Flow + Poes, EMG only, Custom…) are shown, so the picker's
-final shape is visible now, but they stay disabled until a later release's compute and
-UI changes actually support running an analysis on a reduced set. Changing the set
-after that point always goes through one funnel that keeps `input.channels`
-consistent with it: a channel whose role leaves the set is cleared, never silently
-left assigned to a role the analysis no longer declares.
+**A new analysis now starts with a choice of signal set, and two reduced presets are
+usable end to end: Flow only, and Flow + Poes.** 'New analysis' (from the startup
+chooser, 'Get started…' and File/Analysis > New) opens a picker naming which signals
+the analysis will use before anything else is set up; 'New from last rig' carries its
+previous analysis's signal set forward automatically and skips the picker. Three
+presets are reachable now — Flow only, Flow + Poes, and the complete set (Flow + Poes
++ Pgas + Pdi, still the default) — each with or without an 'Also EMG' toggle; EMG only
+and Custom… are shown, so the picker's final shape is visible now, but stay disabled
+until a later release's recording-content question and checkbox picker actually
+support those two shapes. Preview & QC follows the chosen set: with Poes absent, the
+EMG sub-tabs still track EMG channels alone, the Mechanics channel stack draws only
+the present channels, the Campbell panel draws a flow-volume loop instead of a
+Campbell diagram (nothing to plot work of breathing against without Poes), and the
+Advanced… dialog drops the Work-of-breathing and Pressure–time-product groups — all of
+it purely a function of the declared signal set, never of how far a run has
+progressed, and all of it returns the moment Poes is added back in Setup. Sample
+entropy is never affected by any of this; it is shown whenever a column is assigned to
+it, in every signal set. Changing the set after that point always goes through one
+funnel that keeps `input.channels` consistent with it: a channel whose role leaves the
+set is cleared, never silently left assigned to a role the analysis no longer
+declares.
 
 **Poes, Pgas and Pdi are no longer mandatory in `Settings.validate()`.** A new,
 optional `[analysis] signals` table names which of Flow/Poes/Pgas/Pdi/EMG an analysis

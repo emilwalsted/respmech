@@ -1,7 +1,8 @@
 """SignalSetDialog: the new-analysis signal-set picker.
 
-Only the full preset (with or without the 'Also EMG' toggle) is reachable in this
-milestone — see the module's own docstring for why the other doors exist on screen
+Three of the five presets — Flow only, Flow + Poes, and the full set (each with or
+without the 'Also EMG' toggle) — are reachable now (M-17, R7); EMG only and Custom…
+are not yet — see the module's own docstring for why those two doors exist on screen
 but disabled. These tests cover: which doors are enabled/disabled and what they say,
 the outcome of accepting/cancelling, and the same cross-cutting checks every other
 top-level window/dialog in this app carries (dark mode, no lone '&', fits under the
@@ -17,10 +18,11 @@ def _dlg(qapp):
     return SignalSetDialog()
 
 
-def test_only_the_full_preset_is_enabled(qapp):
+def test_the_three_flow_family_presets_are_enabled(qapp):
     dlg = _dlg(qapp)
-    assert dlg.full_btn.isEnabled() is True
-    for btn in (dlg.flow_only_btn, dlg.flow_poes_btn, dlg.emg_only_btn, dlg.custom_btn):
+    for btn in (dlg.flow_only_btn, dlg.flow_poes_btn, dlg.full_btn):
+        assert btn.isEnabled() is True
+    for btn in (dlg.emg_only_btn, dlg.custom_btn):
         assert btn.isEnabled() is False
     dlg.close()
 
@@ -29,9 +31,10 @@ def test_disabled_presets_say_available_later(qapp):
     """Every disabled door names WHY it's disabled, on the door itself — the app's own
     gating convention (the reason hangs on the action, not a separate label)."""
     dlg = _dlg(qapp)
-    for btn in (dlg.flow_only_btn, dlg.flow_poes_btn, dlg.emg_only_btn, dlg.custom_btn):
+    for btn in (dlg.emg_only_btn, dlg.custom_btn):
         assert "later step" in btn.description().lower()
-    assert "later step" not in dlg.full_btn.description().lower()
+    for btn in (dlg.flow_only_btn, dlg.flow_poes_btn, dlg.full_btn):
+        assert "later step" not in btn.description().lower()
     dlg.close()
 
 
@@ -47,12 +50,12 @@ def test_custom_door_is_rejected_in_this_milestone(qapp):
 def test_disabled_presets_produce_no_outcome_even_if_clicked(qapp):
     """Qt's own quirk: QAbstractButton.click() bypasses isEnabled() and fires 'clicked'
     regardless — so being disabled alone does not guarantee inertness; what actually
-    protects these four doors today is that NONE of them has a connected slot. Pin that,
-    so a future ticket that wires one up without also flipping isEnabled(True) is caught
-    by THIS test going red, rather than shipping a door that silently 'works' while still
+    protects these two doors today is that NEITHER has a connected slot. Pin that, so a
+    future ticket that wires one up without also flipping isEnabled(True) is caught by
+    THIS test going red, rather than shipping a door that silently 'works' while still
     looking disabled."""
     dlg = _dlg(qapp)
-    for btn in (dlg.flow_only_btn, dlg.flow_poes_btn, dlg.emg_only_btn, dlg.custom_btn):
+    for btn in (dlg.emg_only_btn, dlg.custom_btn):
         btn.click()
         assert dlg.signals is None
         assert dlg.result() != QDialog.Accepted
@@ -72,6 +75,36 @@ def test_choosing_full_with_also_emg(qapp):
     dlg.full_btn.click()
     assert dlg.result() == QDialog.Accepted
     assert dlg.signals == ["flow", "poes", "pgas", "pdi", "emg"]
+
+
+def test_choosing_flow_only_without_emg(qapp):
+    dlg = _dlg(qapp)
+    dlg.flow_only_btn.click()
+    assert dlg.result() == QDialog.Accepted
+    assert dlg.signals == ["flow"]
+
+
+def test_choosing_flow_only_with_also_emg(qapp):
+    dlg = _dlg(qapp)
+    dlg.also_emg.setChecked(True)
+    dlg.flow_only_btn.click()
+    assert dlg.result() == QDialog.Accepted
+    assert dlg.signals == ["flow", "emg"]
+
+
+def test_choosing_flow_poes_without_emg(qapp):
+    dlg = _dlg(qapp)
+    dlg.flow_poes_btn.click()
+    assert dlg.result() == QDialog.Accepted
+    assert dlg.signals == ["flow", "poes"]
+
+
+def test_choosing_flow_poes_with_also_emg(qapp):
+    dlg = _dlg(qapp)
+    dlg.also_emg.setChecked(True)
+    dlg.flow_poes_btn.click()
+    assert dlg.result() == QDialog.Accepted
+    assert dlg.signals == ["flow", "poes", "emg"]
 
 
 def test_cancel_leaves_signals_none(qapp):

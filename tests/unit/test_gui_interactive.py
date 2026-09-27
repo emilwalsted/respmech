@@ -220,6 +220,7 @@ def test_emg_subtab_visibility_tracks_channels(qapp, tmp_path):
     # with EMG channels -> all three sub-tabs, in the pipeline order (Mechanics › ECG › noise)
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
+    mech_tab, ecg_tab, emg_tab = pv._mech_tab, pv._ecg_tab, pv._emg_tab
     titles = [pv.subtabs.tabText(i) for i in range(pv.subtabs.count())]
     assert titles == ["Mechanics", "› EMG – ECG reduction", "› EMG – noise reduction"]
     # remove the EMG channels and re-sync -> both EMG sub-tabs disappear, Mechanics stays
@@ -229,6 +230,58 @@ def test_emg_subtab_visibility_tracks_channels(qapp, tmp_path):
     assert titles == ["Mechanics"]
     # the widgets still exist (just not shown), so nothing referencing them breaks
     assert pv.emg_channel.count() == 0
+    # M-17: rebuilding the sub-tab bar (subtab_plan) never recreates a tab widget — the
+    # same three objects back every plan, only inserted/removed (emg_channel/cleanup-
+    # contract tests rely on this).
+    assert (pv._mech_tab, pv._ecg_tab, pv._emg_tab) == (mech_tab, ecg_tab, emg_tab)
+    # add the EMG channels back and re-sync -> same objects reappear, not new ones
+    win.state.settings.input.channels.emg = [10, 11]
+    pv.sync_from_settings()
+    titles = [pv.subtabs.tabText(i) for i in range(pv.subtabs.count())]
+    assert titles == ["Mechanics", "› EMG – ECG reduction", "› EMG – noise reduction"]
+    assert (pv._mech_tab, pv._ecg_tab, pv._emg_tab) == (mech_tab, ecg_tab, emg_tab)
+    # M-17: a genuine Flow-only signal set (Poes/Pgas/Pdi never assigned, not merely
+    # cleared after the fact) reaches the same result through Capabilities rather than the
+    # old bare has-EMG-channels boolean.
+    flow_only = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT,
+                               channels={"poes": None, "pgas": None, "pdi": None, "emg": []})
+    win2 = MainWindow(AppState(flow_only))
+    titles = [win2.preview_screen.subtabs.tabText(i)
+             for i in range(win2.preview_screen.subtabs.count())]
+    assert titles == ["Mechanics"]
+    win2.close()
+
+
+def test_subtab_plan_per_preset(qapp, tmp_path):
+    """subtab_plan(caps) itself, independent of any rebuild — the ordered (widget, title)
+    pairs a Capabilities shape maps to, for the two presets M-17 activates plus the default
+    full family. Widget IDENTITY is asserted too: the same three tab objects back every
+    plan, never rebuilt (the whole point of building the bar from a plan instead of
+    recreating widgets)."""
+    from respmech.core.analysis.signals import Capabilities
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    full_caps = Capabilities.from_settings(win.state.settings)
+    assert full_caps.emg is True
+    plan = pv.subtab_plan(full_caps)
+    assert [t for _w, t in plan] == ["Mechanics", "› EMG – ECG reduction", "› EMG – noise reduction"]
+    assert [w for w, _t in plan] == [pv._mech_tab, pv._ecg_tab, pv._emg_tab]
+
+    flow_only_caps = Capabilities.from_settings(
+        synth_settings(str(tmp_path), channels={"poes": None, "pgas": None, "pdi": None,
+                                                 "emg": []}))
+    assert flow_only_caps.mode == "flow_only"
+    plan = pv.subtab_plan(flow_only_caps)
+    assert [t for _w, t in plan] == ["Mechanics"]
+    assert [w for w, _t in plan] == [pv._mech_tab]
+
+    poes_caps = Capabilities.from_settings(
+        synth_settings(str(tmp_path), channels={"pgas": None, "pdi": None, "emg": []}))
+    assert poes_caps.mode == "poes_only"
+    plan = pv.subtab_plan(poes_caps)
+    assert [t for _w, t in plan] == ["Mechanics"]      # Poes alone still carries no EMG
+    win.close()
 
 
 # -- Moved noise-window options live on the EMG tab, gated on a reference ----
