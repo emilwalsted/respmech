@@ -66,6 +66,14 @@ reference for…", "Reference manoeuvres…") are visible but disabled — a lat
      typed-breath count on EMG-only); folded, same as 9329db1 above. -->
 <!-- changelog-skip a1c0245 merge commit for 9329db1/950447d; same fold as 9329db1
      above. -->
+<!-- changelog-skip 578c691 test-infrastructure only: a new golden/characterisation
+     scenario (typed_ic_fvc_same_file) locks the IC/FVC manoeuvre extraction feature
+     already described in the bullet above against a dedicated synthetic recording,
+     with its own analytical vol_ic == 3.0 L check -- no user-visible behaviour change,
+     the feature itself already shipped via 1bde775/9329db1/f380c02 above. Also fixes a
+     latent int-vs-string JSON key mismatch in the test harness (golden_newcore.py),
+     never reachable before this ticket since no prior scenario emitted a "manoeuvres"
+     key at all. -->
 
 **Explore with sample data follows the signal set.** The startup chooser's own
 'Explore with sample data' door still always opens the complete demo recording, but
