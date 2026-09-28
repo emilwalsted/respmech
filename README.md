@@ -86,9 +86,21 @@ shortcuts, live in the window's **File** menu, alongside **View** (jump to a tab
 respmech run settings.toml            # process a batch  (--dry-run computes without writing)
 respmech validate settings.toml       # check the settings and the input files
 respmech migrate old_settings.py -o settings.toml   # convert a v1 settings file (runs no v1 code)
+respmech init new_settings.toml --signals flow,poes,emg [--folder DIR --files MASK --fs 1000]
 ```
 
 `migrate` prints a report of every field moved, renamed or dropped.
+
+`init` writes a commented starting TOML file with only the `[input.channels]` entries
+your chosen signal set needs — e.g. `--signals flow,poes` omits Pgas/Pdi entirely.
+`--folder`/`--files`/`--fs` are written as real values when given, or left as commented
+placeholders you fill in by hand; `respmech validate` (see above) tells you what, if
+anything, is still missing. `respmech validate` and the run report both name the signal
+set an analysis actually uses and what it computes, e.g.:
+
+```
+Signals: flow, poes (derived) · Entropy: 3 columns · Analyses: Breath timing, Work of breathing, Sample entropy · off: Pgas/Pdi (not in signal set)
+```
 
 ---
 
