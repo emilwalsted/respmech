@@ -154,7 +154,8 @@ def _check_one_ref(cautions: list[str], label: str, slot: str, ref: BreathRef | 
                 f"typed {slot}")
 
 
-def check_links(settings: Settings, filenames: list[str]) -> list[str]:
+def check_links(settings: Settings, filenames: list[str], *,
+                outlier_reference_names: frozenset[str] | None = None) -> list[str]:
     """Every reason a reference/subject link in ``settings`` might not work once the
     batch's real file list is known -- one plain-English caution per unresolved link,
     never an exception (a caution is advisory; ``Settings.validate()`` is the only thing
@@ -170,7 +171,14 @@ def check_links(settings: Settings, filenames: list[str]) -> list[str]:
     a column-count vote would exclude from the "main" batch display while ``run_batch``
     still processes it.
 
-    Four caution kinds:
+    ``outlier_reference_names`` (M-38, optional): basenames the CALLER already knows are
+    both a column-count outlier (``ui.manifest.Manifest.outliers``) and a named
+    reference source (``reference_source_names``) -- this function stays Qt-free and
+    does no column probing of its own, so it never builds this set itself; pass
+    ``ui.manifest.Manifest.outlier_reference_names`` (or ``None``/omit when no manifest
+    is available, e.g. from the CLI, which never raises this caution kind).
+
+    Five caution kinds:
 
     * a reference source (``ic``/``fvc``/``baseline_ic``/``max_insp`` on either a
       ``ReferenceEntry`` or a ``GroupReferenceEntry``) not among ``filenames``;
@@ -179,7 +187,12 @@ def check_links(settings: Settings, filenames: list[str]) -> list[str]:
       own, see :data:`_OWN_TYPED_KINDS`);
     * a linked breath that is excluded (``processing.exclude_breaths``);
     * a ``reference_defaults``/``input.subjects`` group key matching no analysed file
-      (via ``core.summary.group_key``).
+      (via ``core.summary.group_key``);
+    * (M-38) a reference source whose column count disagrees with the batch's majority
+      layout -- informational, never a reason to doubt the link: ``run_batch`` has no
+      column-count filter, and a reference source is loaded and segmented on its own
+      (in-batch main loop, or the out-of-batch forepass) regardless of how its column
+      count compares to the rest of the batch.
     """
     names = {os.path.basename(f) for f in filenames}
     cautions: list[str] = []
@@ -205,7 +218,34 @@ def check_links(settings: Settings, filenames: list[str]) -> list[str]:
             cautions.append(
                 f"input.subjects: key {subj.key!r} matches no analysed file")
 
+    for name in sorted(outlier_reference_names or ()):
+        cautions.append(
+            f"reference source {name!r} has a different column layout than the batch")
+
     return cautions
+
+
+def reference_source_names(settings: Settings) -> set[str]:
+    """Every basename named as a ``BreathRef.file`` for ANY slot, on ANY
+    ``processing.references``/``reference_defaults`` entry -- the raw ingredient
+    :func:`missing_reference_sources`, :func:`external_reference_sources` and
+    :func:`predicted_reference_only` each filter differently (against the batch's own
+    file list, the current run's file list, and a typed-breath check, respectively).
+    Not itself a caution or a prediction -- just "what does this analysis name as a
+    reference source, anywhere, regardless of whether that name resolves to a real
+    file"."""
+    sources: set[str] = set()
+    for r in settings.processing.references:
+        for slot in REFERENCE_SLOTS:
+            ref = getattr(r, slot)
+            if ref is not None:
+                sources.add(ref.file)
+    for g in settings.processing.reference_defaults:
+        for slot in REFERENCE_SLOTS:
+            ref = getattr(g, slot)
+            if ref is not None:
+                sources.add(ref.file)
+    return sources
 
 
 def missing_reference_sources(settings: Settings, filenames: list[str]) -> list[str]:
@@ -222,18 +262,7 @@ def missing_reference_sources(settings: Settings, filenames: list[str]) -> list[
     free-text caution strings.
     """
     names = {os.path.basename(f) for f in filenames}
-    missing: set[str] = set()
-    for r in settings.processing.references:
-        for slot in REFERENCE_SLOTS:
-            ref = getattr(r, slot)
-            if ref is not None and ref.file not in names:
-                missing.add(ref.file)
-    for g in settings.processing.reference_defaults:
-        for slot in REFERENCE_SLOTS:
-            ref = getattr(g, slot)
-            if ref is not None and ref.file not in names:
-                missing.add(ref.file)
-    return sorted(missing)
+    return sorted(reference_source_names(settings) - names)
 
 
 def external_reference_sources(settings: Settings, files: list[str]) -> list[str]:
@@ -252,18 +281,70 @@ def external_reference_sources(settings: Settings, files: list[str]) -> list[str
     batch's forepass to load and segment it separately.
     """
     names = {os.path.basename(f) for f in files}
-    sources: set[str] = set()
-    for r in settings.processing.references:
-        for slot in REFERENCE_SLOTS:
-            ref = getattr(r, slot)
-            if ref is not None:
-                sources.add(ref.file)
-    for g in settings.processing.reference_defaults:
-        for slot in REFERENCE_SLOTS:
-            ref = getattr(g, slot)
-            if ref is not None:
-                sources.add(ref.file)
-    return sorted(sources - names)
+    return sorted(reference_source_names(settings) - names)
+
+
+def predicted_reference_only(filenames: list[str], settings: Settings) -> frozenset[str]:
+    """Basenames among ``filenames`` that LOOK reference-only (``core.pipeline.
+    FileResult.role == "reference"``, M-30 -- a file with typed manoeuvre breaths but
+    no tidal breaths at all) from ``settings`` ALONE, before a single sample has been
+    loaded or segmented (M-38).
+
+    Settings holds no total breath count for a file -- ``processing.breath_types``
+    only ever records the breaths someone has EXPLICITLY typed -- so this can never be
+    more than a conservative guess: a file with one typed IC breath among twenty
+    untyped tidal ones is, from settings alone, indistinguishable from a dedicated
+    three-breath IC-only recording. Two conditions both have to hold before a file is
+    guessed reference-only, to keep false positives rare:
+
+    1. the file has at least one entry in ``processing.breath_types`` typed a kind
+       OTHER than ``"rest"`` -- matching ``core.pipeline.run_batch``'s own ``has_typed``
+       exactly (a rest-typed breath is an EMG noise-reference marker, never a manoeuvre,
+       and never by itself makes the real pipeline treat a file as reference-only);
+    2. the file is named as the reference SOURCE (``BreathRef.file``, see
+       :func:`reference_source_names`) of some slot on some ``processing.references``/
+       ``reference_defaults`` entry -- something in this analysis actually RELIES on it
+       purely for its manoeuvre values.
+
+    An incidentally-typed file nobody references stays counted as an ordinary tidal
+    batch file: the common scenario this exists to catch is the dedicated
+    per-participant reference recording (e.g. ``P03_IC.txt``), which is always
+    explicitly linked from elsewhere.
+
+    **Known, accepted false-positive (found by self-review, not fully closeable
+    without a real breath count):** a file can ALSO be an ordinary tidal recording
+    that merely has ONE embedded, explicitly-typed manoeuvre breath which a DIFFERENT
+    file's ``processing.references`` entry cross-references as ITS source (e.g.
+    ``P03_120W.csv`` has twenty tidal breaths, breath 5 is typed ``ic``, and
+    ``P03_recovery.csv`` names ``P03_120W.csv`` breath 5 as its own IC reference) --
+    both conditions above are satisfied, so this function guesses ``P03_120W.csv``
+    reference-only even though ``core.pipeline.run_batch`` will give it a normal
+    tidal role and a normal cohort-summary row. Settings has no way to see the
+    nineteen OTHER, untyped tidal breaths ahead of a real run, so this cannot be told
+    apart from the true reference-only case without a known total breath count
+    (``processing.breath_counts``, itself only ever a manual, rarely-populated
+    override -- see its own docstring). Left as a documented, pinned limitation
+    (``tests/unit/test_reference_resolution.py::
+    test_predicted_reference_only_can_false_positive_on_a_tidal_file_used_as_a_cross_file_source``)
+    rather than guessed at with an arbitrary breath-count threshold: the readout this
+    feeds is informational only (it never changes what ``run_batch`` actually
+    computes or writes), so a rare, self-correcting-after-one-run mismatch here is
+    preferable to a magic-number heuristic with no real basis.
+
+    Used by :func:`respmech.ui.manifest.group_readout` (Setup's live cohort read-out,
+    so its "N files -> M groups" prediction stays truthful to what
+    ``core.summary.build_cohort_summary`` will actually write -- a reference-only
+    file's ``average_row`` is always ``None``, M-30, so it never contributes a row to
+    the written cohort summary either) and by ``ui.manifest.Manifest.reference_only``.
+    NEVER by ``core.pipeline.run_batch`` itself, which always knows the real answer
+    (``FileResult.role``) from the actual segmented breaths and must never defer to a
+    settings-only guess."""
+    names = {os.path.basename(f) for f in filenames}
+    typed_files = {bt.file for bt in settings.processing.breath_types if bt.kind != "rest"}
+    if not typed_files:
+        return frozenset()
+    sources = reference_source_names(settings)
+    return frozenset(n for n in names if n in typed_files and n in sources)
 
 
 def lookup_manoeuvre(result, filename: str, breath_no: int) -> dict | None:
