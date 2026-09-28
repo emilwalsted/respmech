@@ -532,3 +532,85 @@ def test_units_of_every_new_column():
         "max_in_flow_pct_mfvl_peak": "%", "ve_pct_cap": "%", "ve_reserve_pct": "%",
         "ve_pct_mvv": "%", "br_mvv_pct": "%",
     })
+
+
+# --------------------------------------------------------------------------- #
+# placed_tidal_loops / fvc_typed_in_settings (flow-volume figure geometry)
+# --------------------------------------------------------------------------- #
+
+def _loop_breath(vt=0.5, n=101, flow_amp=0.4, vol_endexp=0.1):
+    """Inspiration then expiration (the order ``core.compute._make_breath`` uses),
+    one sine-shaped breath of tidal volume ``vt`` starting/ending at ``vol_endexp``."""
+    t = np.linspace(0.0, 1.0, n)
+    ins_v = vol_endexp + vt * np.sin(np.pi * t / 2) ** 2
+    exp_v = vol_endexp + vt * np.cos(np.pi * t / 2) ** 2
+    ins = {"volume": ins_v, "flow": np.full(n, -flow_amp), "time": t}
+    exp = {"volume": exp_v, "flow": np.full(n, flow_amp), "time": t + 1.0}
+    return {"expiration": exp, "inspiration": ins, "ignored": False, "kind": None,
+            "volume": np.concatenate([ins_v, exp_v]),
+            "flow": np.concatenate([ins["flow"], exp["flow"]])}
+
+
+def _placed_inputs(with_ic=True):
+    fvc_breath = _analytical_fvc_breath(v_tlc=4.0, pef=2.0)
+    fvc_breath["ignored"] = True
+    breaths = {1: fvc_breath, 2: _loop_breath(vt=0.5, vol_endexp=0.1)}
+    manoeuvres = {1: {"kind": "fvc", "fvc": 4.0, "mfvl_peak_ex_flow": 2.0, "quality": []}}
+    if with_ic:
+        manoeuvres[3] = {"kind": "ic", "vol_ic": 3.0, "quality": []}
+    return breaths, manoeuvres
+
+
+def test_placed_tidal_loops_anchors_the_loop_on_the_tlc_axis():
+    breaths, manoeuvres = _placed_inputs()
+    placed = m.placed_tidal_loops(breaths, manoeuvres, _cfg(), IcSettings())
+    assert placed["ic_op"] == pytest.approx(3.0)
+    assert placed["v_tlc"] == pytest.approx(4.0)
+    assert len(placed["loops"]) == 1                      # the typed FVC breath is not tidal
+    x, flow = placed["loops"][0]
+    # end of expiration (EELV) sits at ic_op; end of inspiration (EILV) one Vt closer to TLC
+    assert x[-1] == pytest.approx(3.0)
+    assert x.min() == pytest.approx(3.0 - 0.5, abs=1e-6)
+    assert placed["eelv"] == pytest.approx(3.0)
+    assert placed["eilv"] == pytest.approx(2.5, abs=1e-6)
+    assert placed["mean"] is not None and placed["mean"][0].size == 200
+    assert placed["mefv_v"][-1] == pytest.approx(4.0)       # the envelope is the FVC curve
+
+
+def test_placed_tidal_loops_without_ic_keeps_only_the_envelope():
+    breaths, manoeuvres = _placed_inputs(with_ic=False)
+    placed = m.placed_tidal_loops(breaths, manoeuvres, _cfg(), IcSettings())
+    assert placed["ic_op"] is None
+    assert placed["loops"] == [] and placed["mean"] is None
+    assert placed["eelv"] is None and placed["eilv"] is None
+    assert placed["mefv_v"].size > 0
+
+
+def test_placed_tidal_loops_is_none_without_fvc_or_tidal_breaths():
+    breaths, manoeuvres = _placed_inputs()
+    assert m.placed_tidal_loops(breaths, {}, _cfg(), IcSettings()) is None
+    assert m.placed_tidal_loops(breaths, None, _cfg(), IcSettings()) is None
+    only_ic = {3: manoeuvres[3]}
+    assert m.placed_tidal_loops(breaths, only_ic, _cfg(), IcSettings()) is None
+    assert m.placed_tidal_loops({1: breaths[1]}, manoeuvres, _cfg(), IcSettings()) is None
+
+
+def test_placed_tidal_loops_skips_ignored_tidal_breaths():
+    breaths, manoeuvres = _placed_inputs()
+    extra = _loop_breath()
+    extra["ignored"] = True
+    breaths[4] = extra
+    placed = m.placed_tidal_loops(breaths, manoeuvres, _cfg(), IcSettings())
+    assert len(placed["loops"]) == 1
+
+
+def test_fvc_typed_in_settings_only_counts_fvc_kinds():
+    from respmech.core.settings import BreathTypeEntry
+    st = Settings()
+    assert m.fvc_typed_in_settings(st) is False
+    st.processing.breath_types.append(BreathTypeEntry(file="a.csv", breath=2, kind="ic"))
+    assert m.fvc_typed_in_settings(st) is False
+    st.processing.breath_types.append(BreathTypeEntry(file="a.csv", breath=5, kind="ic_fvc"))
+    assert m.fvc_typed_in_settings(st) is True
+    st.processing.breath_types[:] = [BreathTypeEntry(file="a.csv", breath=5, kind="fvc")]
+    assert m.fvc_typed_in_settings(st) is True

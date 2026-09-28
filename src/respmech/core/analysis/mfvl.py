@@ -632,3 +632,89 @@ def attach(*, fr_manoeuvres: dict, breaths: dict, tidal_breaths: list, filename:
                  "te_min_mfvl/ve_cap/ve_pct_cap/ve_reserve_pct are NaN for that breath")
 
     return notice, fev1_source
+
+
+# --------------------------------------------------------------------------- #
+# Tidal loops placed inside the MFVL (figure geometry; no new calculation)
+# --------------------------------------------------------------------------- #
+#: ``processing.breath_types`` kinds that carry a forced vital capacity.
+_FVC_KINDS = ("fvc", "ic_fvc")
+#: Points a breath is resampled to for the average tidal loop.
+_MEAN_LOOP_POINTS = 200
+
+
+def fvc_typed_in_settings(settings) -> bool:
+    """``True`` when ``settings`` declares at least one breath typed ``fvc``/``ic_fvc``:
+    the settings-only test for "this analysis uses the FVC family", so a figure that needs
+    an MEFV curve can be planned before any data is loaded. It is a ceiling, not a promise
+    -- a file without such a breath still gets no figure (:func:`placed_tidal_loops`
+    returns ``None`` for it). Only breaths typed in the file that is analysed count,
+    because :func:`attach` builds the curve from the file's own typed breaths."""
+    return any(getattr(e, "kind", None) in _FVC_KINDS
+               for e in getattr(settings.processing, "breath_types", ()))
+
+
+def _mean_loop(loops: list[tuple[np.ndarray, np.ndarray]]):
+    """Point-wise mean of several ``(x, flow)`` loops, each resampled onto
+    ``_MEAN_LOOP_POINTS`` points by its own sample index (breath fraction), so breaths of
+    different length average without a common time base. A display construct only."""
+    if not loops:
+        return None
+    grid = np.linspace(0.0, 1.0, _MEAN_LOOP_POINTS)
+    xs, fs_ = [], []
+    for x, flow in loops:
+        if x.size < 2:
+            continue
+        frac = np.linspace(0.0, 1.0, x.size)
+        xs.append(np.interp(grid, frac, x))
+        fs_.append(np.interp(grid, frac, flow))
+    if not xs:
+        return None
+    return np.mean(xs, axis=0), np.mean(fs_, axis=0)
+
+
+def placed_tidal_loops(breaths, manoeuvres, mfvl_cfg, ic_cfg) -> dict | None:
+    """Everything a flow-volume figure needs to draw this file's tidal loops inside its
+    own MFVL, or ``None`` when the file has no usable typed FVC breath (or no tidal
+    breath to draw against it).
+
+    Reuses the resolved pieces :func:`attach` already builds the numbers from --
+    :func:`resolve_same_file_curve` (which curve, ``source='single'|'envelope'``) and
+    :func:`resolve_same_file_ic_op` -- so the picture can never place a loop differently
+    from the ``efl_pct`` column. The x axis is "volume below TLC" (0 at TLC, the MEFV
+    curve's own axis): ``x(t) = ic_op - (V(t) - vol_endexp)`` for a tidal breath, so the
+    end of expiration (EELV) sits at ``ic_op`` and the end of inspiration (EILV) at
+    ``ic_op - vt``.
+
+    Returns a dict: ``mefv_v``/``mefv_flow`` (the expiratory envelope), ``v_tlc``,
+    ``ic_op`` (``None`` without an IC reference: loops cannot be anchored to the TLC axis,
+    so ``loops`` is then empty and only the envelope is drawn), ``loops`` (one
+    ``(x, flow)`` per non-ignored tidal breath), ``mean`` (``(x, flow)`` or ``None``),
+    ``eelv``/``eilv`` (mean end-expiratory/end-inspiratory position on the x axis, or
+    ``None``)."""
+    if not manoeuvres or not breaths:
+        return None
+    curve = resolve_same_file_curve(manoeuvres, breaths, mfvl_cfg)
+    if curve is None:
+        return None
+    mefv_v, mefv_flow, v_tlc, _rows = curve
+    tidal = [b for b in breaths.values() if not b.get("ignored")]
+    if not tidal:
+        return None
+    ic_op = resolve_same_file_ic_op(manoeuvres, ic_cfg)
+    loops: list[tuple[np.ndarray, np.ndarray]] = []
+    eelv = eilv = None
+    if ic_op is not None:
+        for b in tidal:
+            vol = _arr(b["volume"])
+            flow = _arr(b["flow"])
+            if vol.size < 2 or vol.size != flow.size:
+                continue
+            vol_endexp = float(_arr(b["expiration"]["volume"])[-1])
+            loops.append((ic_op - (vol - vol_endexp), flow))
+        if loops:
+            eelv = float(ic_op)
+            eilv = float(np.mean([x.min() for x, _f in loops]))
+    return {"mefv_v": mefv_v, "mefv_flow": mefv_flow, "v_tlc": float(v_tlc),
+            "ic_op": ic_op, "loops": loops, "mean": _mean_loop(loops),
+            "eelv": eelv, "eilv": eilv}

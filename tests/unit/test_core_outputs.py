@@ -1752,3 +1752,91 @@ def test_outlier_filter_skips_when_poes_mininsp_absent():
     assert len(per_breath) == 3
     assert "rms_col_2" in per_breath.columns
     assert average_row["file"].iloc[0] == "x.csv"
+
+
+# --------------------------------------------------------------------------- #
+# flow-volume (tidal in MFVL).pdf
+# --------------------------------------------------------------------------- #
+def _mfvl_settings(tmp_path, *, ic=True, fvc=True, **kw):
+    """The dedicated manoeuvre recording (tidal breathing + one IC + one FVC breath)."""
+    from respmech.core.settings import BreathTypeEntry
+    s = synth_settings(str(tmp_path), **kw)
+    s.input.files = "synth_manoeuvre_*.csv"
+    if ic:
+        s.processing.breath_types.append(
+            BreathTypeEntry(file="synth_manoeuvre_A.csv", breath=4, kind="ic"))
+    if fvc:
+        s.processing.breath_types.append(
+            BreathTypeEntry(file="synth_manoeuvre_A.csv", breath=7, kind="fvc"))
+    s.validate()
+    return s
+
+
+def test_mfvl_figure_job_is_planned_only_with_a_typed_fvc(tmp_path):
+    from respmech.core import plots
+    plain = synth_settings(str(tmp_path))
+    assert not any("MFVL" in label for label, _f, _s in plots.per_file_figure_jobs(plain))
+    with_fvc = _mfvl_settings(tmp_path)
+    jobs = plots.per_file_figure_jobs(with_fvc)
+    assert [sfx for label, _f, sfx in jobs if "MFVL" in label] == [
+        "flow-volume (tidal in MFVL).pdf"]
+    with_fvc.output.diagnostics.save_flow_volume = False
+    assert not any("MFVL" in label for label, _f, _s in plots.per_file_figure_jobs(with_fvc))
+    only_ic = _mfvl_settings(tmp_path, fvc=False)
+    assert not any("MFVL" in label for label, _f, _s in plots.per_file_figure_jobs(only_ic))
+
+
+def test_mfvl_figure_job_needs_flow_and_volume(tmp_path):
+    from respmech.core import plots
+    s = _mfvl_settings(tmp_path, channels={"poes": None, "pgas": None, "pdi": None,
+                                           "emg": [], "entropy": []})
+    assert any("MFVL" in label for label, _f, _s in plots.per_file_figure_jobs(s))
+    s.input.channels.flow = None
+    s.input.channels.volume = None
+    assert not any("MFVL" in label for label, _f, _s in plots.per_file_figure_jobs(s))
+
+
+@requires_synth()
+def test_mfvl_figure_is_in_the_plan_and_actually_written(tmp_path):
+    from respmech.core import plots
+    from respmech.core.io.plan import plan_outputs
+    from respmech.core.pipeline import run_batch
+
+    s = _mfvl_settings(tmp_path)
+    for flag in ("save_pv_average", "save_pv_individual", "save_raw", "save_trimmed",
+                 "save_drift", "save_emg"):
+        setattr(s.output.diagnostics, flag, False)
+    plan = plan_outputs(s, [os.path.join(INPUT, "synth_manoeuvre_A.csv")])
+    name = "synth_manoeuvre_A.csv – flow-volume (tidal in MFVL).pdf"
+    assert any(p.endswith(name) for p in plan.all_paths())
+
+    result = run_batch(s)
+    written, failures = plots.write_figures(result, s, str(tmp_path))
+    assert not failures
+    pdfs = [p for p in written if p.endswith(name)]
+    assert len(pdfs) == 1 and os.path.getsize(pdfs[0]) > 0
+    assert _rel(pdfs, tmp_path) <= set(plan.all_paths())
+
+
+@requires_synth()
+def test_mfvl_figure_without_an_ic_reference_still_draws_the_envelope(tmp_path):
+    from respmech.core import plots
+    from respmech.core.pipeline import run_batch
+
+    s = _mfvl_settings(tmp_path, ic=False)
+    fr = run_batch(s).files["synth_manoeuvre_A.csv"]
+    out = str(tmp_path / "fv.pdf")
+    assert plots._flow_volume_mfvl(fr, "synth_manoeuvre_A.csv", out, s) == out
+    assert os.path.getsize(out) > 0
+
+
+@requires_synth()
+def test_mfvl_figure_is_none_for_a_file_without_a_resolved_fvc(tmp_path):
+    from respmech.core import plots
+    from respmech.core.pipeline import run_batch
+
+    s = _mfvl_settings(tmp_path)
+    s.input.files = "synth_case_A.csv"                 # typed entries name another file
+    fr = run_batch(s).files["synth_case_A.csv"]
+    assert plots._flow_volume_mfvl(fr, "synth_case_A.csv", str(tmp_path / "x.pdf"), s) is None
+    assert not (tmp_path / "x.pdf").exists()
