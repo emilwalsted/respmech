@@ -511,11 +511,36 @@ def segment_file(settings: Settings, s, path, *, cache=None, cancel_check=None,
     return breaths, trimmed
 
 
-def _emg_segmented(path, s, cache=None, cancel_check=None, *, exclude_typed_from_expiration=False):
-    """Load a file, ECG-remove + trim its EMG, and segment breaths (by flow).
-    Returns (emg_ecg_trimmed, insp_mask, exp_mask). Used to build the noise
-    reference (expiration) and to gather active/quiet EMG for prop selection.
-    ``cache`` (Wave 2.4) memoises the load + ECG removal across the run.
+def _emg_segmented(settings, s, path, cache=None, cancel_check=None, *, exclude_typed_from_expiration=False):
+    """Segment a file through ``segment_file`` (M-23) and return (emg, insp_mask,
+    exp_mask) over that segmentation's own EMG -- ECG-removed but never noise-reduced
+    (``segment_file``'s ``noise_set=None`` default), exactly as before. Used to build
+    the noise reference (expiration) and to gather active/quiet EMG for prop selection.
+
+    Before M-23 this hardcoded flow-method segmentation and never trend-corrected the
+    volume (``separateintobreaths('flow', ...)``, ``compute.zero(vT)`` with no
+    ``correcttrend``, regardless of ``processing.mechanics.separateby``/
+    ``processing.volume.correct_trend``), so a volume-segmented or trend-corrected
+    analysis built its noise masks from breaths it never actually used for the
+    analysis itself. Routing through ``segment_file`` (M-06) makes the
+    mask follow the SAME configured method/trend every other consumer of that
+    trim/zero/drift/trend/segment sequence already uses -- a deliberate, documented
+    numerical change for exactly those settings combinations (this ticket); every
+    existing (flow-method, no-trend) scenario is unaffected, since ``segment_file``
+    then reduces to byte-identical behaviour.
+
+    ``cache`` (Wave 2.4): ``segment_file``'s own cache lookup is CONSUMING
+    (``cache.pop``), one-shot by design for the main loop's single pass over each file
+    -- but this function must not drain the SHARED cache, or the main loop's own later
+    ``segment_file`` call for the same file (the reference file always; every batch
+    file too, under ``auto_prop``) would miss and reload/re-remove-ECG from scratch,
+    breaking the very "each file loaded/ECG-removed at most once per run" invariant
+    Wave 2.4 exists for (``test_load_cache.py`` pins it). So: read (or, on a miss,
+    compute and prime) the snapshot from the REAL shared ``cache`` via the same
+    non-consuming ``_load_and_ecg`` the old code called directly, then hand
+    ``segment_file`` a throwaway one-entry cache of its own to pop from -- it gets its
+    guaranteed hit, the real ``cache`` is never touched by the pop, and the main loop
+    finds the entry still there later.
 
     ``exclude_typed_from_expiration`` (M-22, decision 11): when true, a breath typed
     via ``processing.breath_types`` (any kind -- an IC/FVC/sniff/max_insp/other
@@ -529,19 +554,14 @@ def _emg_segmented(path, s, cache=None, cancel_check=None, *, exclude_typed_from
     merely sampling activity across the batch (``_build_noise_set``'s ``auto_prop``
     gather, the OTHER caller, intentionally keeps the pre-existing, unfiltered
     behaviour -- see that function's own docstring)."""
-    (flow, vol, poes, pgas, pdi, ent, emg), emgcols_ecg, _diag = _load_and_ecg(
-        path, s, cache=cache, cancel_check=cancel_check)
-    tc = np.arange(len(flow)) / s.input.format.samplingfrequency
-    tcT, fT, vT, pT, gT, dT, _e, si, ei = compute.trim(
-        tc, flow, vol, poes, pgas, pdi, np.array(emg) if len(emg) else np.array([]), s)
-    emg_full = emgcols_ecg[si:ei]                 # ECG-removed (cached) then trimmed, as before
-    volc = compute.correctdrift(compute.zero(vT), s) if s.processing.mechanics.correctvolumedrift else compute.zero(vT)
+    snap = _load_and_ecg(path, s, cache=cache, cancel_check=cancel_check)
+    seg_cache = {os.path.abspath(path): snap}
+    breaths, trimmed = segment_file(settings, s, path, cache=seg_cache, cancel_check=cancel_check)
+    emg_full = trimmed.emgcolumns
     filename = os.path.basename(path)
-    br = compute.separateintobreaths("flow", filename, tcT, fT, volc,
-                                     pT, gT, dT, [], emg_full, s)
     kinds = compute.breathkinds(filename, s) if exclude_typed_from_expiration else {}
-    ins = np.zeros(len(fT), bool); ex = np.zeros(len(fT), bool); p = 0
-    for breathno, b in br.items():
+    ins = np.zeros(len(trimmed.flow), bool); ex = np.zeros(len(trimmed.flow), bool); p = 0
+    for breathno, b in breaths.items():
         ni = len(b["inspiration"]["time"]); ne = len(b["expiration"]["time"])
         ins[p:p + ni] = True
         if kinds.get(breathno) is None:
@@ -604,7 +624,7 @@ def _reference_noise_clip(settings, s, cache=None, cancel_check=None):
     mode = resolve_noise_reference_mode(settings)
     try:
         if mode == "expiration":
-            emg_full, ins, ex = _emg_segmented(path, s, cache=cache, cancel_check=cancel_check,
+            emg_full, ins, ex = _emg_segmented(settings, s, path, cache=cache, cancel_check=cancel_check,
                                                exclude_typed_from_expiration=True)
             clip = emg_full[ex]   # diaphragm-quiet expiration of the rest reference
         elif mode == "intervals":
@@ -649,14 +669,15 @@ def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=
 
     if cfg.auto_prop:
         # Gather active/quiet EMG across the test (capped) to choose prop ONCE. Built on
-        # inspiration/expiration PHASES (_emg_segmented, flow-only) -- an EMG-only signal
-        # set has no phases to gather by, and Settings.validate() (M-22) already refuses
-        # auto_prop=True for one before a batch can reach here, so this loop never needs
-        # to handle that case; it stays exactly as it was pre-M-22.
+        # inspiration/expiration PHASES (_emg_segmented, now via segment_file -- follows
+        # the configured separateby/trend since M-23, no longer hardcoded to flow) -- an
+        # EMG-only signal set has no phases to gather by, and Settings.validate() (M-22)
+        # already refuses auto_prop=True for one before a batch can reach here, so this
+        # loop never needs to handle that case; it stays exactly as it was pre-M-22.
         act, qui, cap, unreadable, last_exc = [], [], 40000, [], None
         for fi in files:
             try:
-                emg_full, ins, ex = _emg_segmented(os.path.abspath(fi), s, cache=cache,
+                emg_full, ins, ex = _emg_segmented(settings, s, os.path.abspath(fi), cache=cache,
                                                    cancel_check=cancel_check)
             except Exception as e:
                 # D18 point 2: a file that cannot be read cannot contribute to a profile
