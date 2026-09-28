@@ -145,13 +145,33 @@ def test_validate_accepts_a_resolved_emg_only_rest_reference():
     s.validate()                                       # must not raise
 
 
-def test_validate_rejects_interburst_while_noise_enabled():
+def test_validate_rejects_interburst_outside_an_emg_burst_segmentation():
+    """The periods between bursts exist only when the recording was segmented on its
+    bursts; under any other EMG-only method there is nothing to cut a reference from."""
     s = _emg_only_settings(reference_mode="interburst")
     s.processing.emg.remove_ecg = True
     s.processing.emg.noise.enabled = True
     s.processing.emg.noise.auto_prop = False
-    with pytest.raises(SettingsError, match="not yet implemented"):
+    with pytest.raises(SettingsError, match="needs processing.segmentation.method='emg_burst'"):
         s.validate()
+
+
+def test_validate_accepts_interburst_under_emg_burst_segmentation():
+    s = _emg_only_settings(method="emg_burst", reference_mode="interburst")
+    s.processing.emg.remove_ecg = True
+    s.processing.emg.noise.enabled = True
+    s.processing.emg.noise.auto_prop = False
+    s.validate()                                       # must not raise
+
+
+def test_validate_accepts_auto_prop_under_emg_burst_segmentation():
+    """Bursts against the periods between them IS an active/quiet split, so the
+    auto_prop gather has something to pool for an EMG-only set segmented on bursts."""
+    s = _emg_only_settings(method="emg_burst", reference_mode="interburst")
+    s.processing.emg.remove_ecg = True
+    s.processing.emg.noise.enabled = True
+    assert s.processing.emg.noise.auto_prop is True
+    s.validate()                                       # must not raise
 
 
 def test_validate_rejects_auto_prop_for_an_emg_only_set():

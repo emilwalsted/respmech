@@ -35,6 +35,7 @@ from respmech.core.analysis import manoeuvres as manoeuvreslib
 from respmech.core.analysis import mfvl as mfvllib
 from respmech.core.analysis import pressure as pressurelib
 from respmech.core.analysis import references as referenceslib
+from respmech.core.analysis import segments as segments_lib
 from respmech.core.analysis.signals import Capabilities
 from respmech.core.io.loaders import load
 from respmech.core.results import build_breath_table, build_manoeuvre_table, build_processed_data
@@ -419,7 +420,10 @@ def _process_emg(s, emgcolumnsraw, startix, endix, noise_set=None, ecg_precomput
         emgcols = noise_set.apply_columns(ecg_trim)
     stages = {"raw": raw_trim,
               "ecg_removed": ecg_trim if s.processing.emg.remove_ecg else None,
-              "noise_reduced": emgcols if noise_set is not None else None}
+              "noise_reduced": emgcols if noise_set is not None else None,
+              # what an ``emg_burst`` segmentation detects on: always the ECG-stage signal
+              # (equal to raw when ECG removal is off), never the noise-reduced one
+              "detect": ecg_trim}
     return emgcols, ecg_diag, stages
 
 
@@ -538,7 +542,8 @@ def segment_file(settings: Settings, s, path, *, cache=None, cancel_check=None,
     _emit(progress, ProgressEvent("stage", file=filename, message="segmenting breaths"))
     breaths = compute.separateintobreaths(
         s.processing.mechanics.separateby, filename, timecol, flow, volume,
-        poes, pgas, pdi, entropycolumns, emgcolumns, s)
+        poes, pgas, pdi, entropycolumns, emgcolumns, s,
+        detect_emg=emg_stages["detect"] if emg_stages is not None else None)
 
     # Repair the automatic segmentation from processing.segmentation.overrides,
     # if this file has an entry AND actually names a cut/join (an entry with both
@@ -626,6 +631,20 @@ def _emg_segmented(settings, s, path, cache=None, cancel_check=None, *, exclude_
     breaths, trimmed = segment_file(settings, s, path, cache=seg_cache, cancel_check=cancel_check)
     emg_full = trimmed.emgcolumns
     filename = os.path.basename(path)
+    if getattr(s, "capabilities", Capabilities.FULL).mode == "emg_only":
+        # No inspiration/expiration phases to build masks from: an EMG-only signal set
+        # has an active/quiet split only when it was segmented on its bursts (M-48), where
+        # "active" is the bursts and "quiet" the periods between them. Any other method
+        # is refused by Settings.validate() before a batch reaches here (auto_prop and
+        # 'interburst' both require emg_burst); reaching it anyway is a caller bug.
+        if settings.processing.segmentation.method != "emg_burst":
+            raise ValueError(
+                "an active/quiet EMG split needs processing.segmentation.method='emg_burst' "
+                "for an EMG-only signal set")
+        burst, inter = segments_lib.burst_masks(
+            breaths, len(emg_full), s.input.format.samplingfrequency,
+            settings.processing.segmentation.emg.burst_smooth_s)
+        return emg_full, burst, inter
     kinds = compute.breathkinds(filename, s) if exclude_typed_from_expiration else {}
     ins = np.zeros(len(trimmed.flow), bool); ex = np.zeros(len(trimmed.flow), bool); p = 0
     for breathno, b in breaths.items():
@@ -676,9 +695,8 @@ def _reference_noise_clip(settings, s, cache=None, cancel_check=None):
     fall through both (self-review finding, 10-08-2026).
 
     M-22: which of the four buildable sources (``resolve_noise_reference_mode``'s
-    ``'expiration'``/``'intervals'``/``'rest_segments'`` -- ``'interburst'`` has no
-    implementation yet, and ``'unresolved'`` never reaches here, both rejected by
-    ``Settings.validate()`` first) is now decided by that ONE resolver, not by
+    ``'expiration'``/``'intervals'``/``'rest_segments'``/``'interburst'`` -- ``'unresolved'``
+    never reaches here, rejected by ``Settings.validate()`` first) is now decided by that ONE resolver, not by
     re-deriving the same predicate here. For a flow-bearing analysis this reproduces
     the exact rule this codebase has always used (``use_expiration or not
     reference_intervals``) byte-for-byte -- see the resolver's own docstring."""
@@ -700,11 +718,23 @@ def _reference_noise_clip(settings, s, cache=None, cancel_check=None):
             clip = np.concatenate(parts, axis=0)
         elif mode == "rest_segments":
             clip = _rest_segments_clip(settings, s, path, cache=cache, cancel_check=cancel_check)
+        elif mode == "interburst":
+            # The reference file's own periods between two bursts (guard bands at both
+            # ends left out, see segments.burst_masks), ECG-removed but not noise-reduced.
+            emg_full, _burst, inter = _emg_segmented(settings, s, path, cache=cache,
+                                                     cancel_check=cancel_check)
+            clip = emg_full[inter]
+            if len(clip) == 0:
+                raise ValueError(
+                    "no period between two bursts is long enough to serve as a noise "
+                    "reference (it must exceed twice processing.segmentation.emg."
+                    "burst_smooth_s)")
         else:
-            # 'interburst' and 'unresolved' are both rejected by Settings.validate()
-            # while noise reduction is enabled -- reachable here only via a settings
-            # object that skipped validate() (a hand-built test double, a future caller
-            # that forgot to validate first). Fail loudly rather than guess.
+            # 'unresolved' is rejected by Settings.validate() while noise reduction is
+            # enabled, and 'interburst' outside an 'emg_burst' segmentation likewise --
+            # reachable here only via a settings object that skipped validate() (a
+            # hand-built test double, a future caller that forgot to validate first).
+            # Fail loudly rather than guess.
             raise ValueError(
                 f"processing.emg.noise.reference_mode={mode!r} cannot be built into a "
                 "reference clip yet")
@@ -737,10 +767,11 @@ def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=
     if cfg.auto_prop:
         # Gather active/quiet EMG across the test (capped) to choose prop ONCE. Built on
         # inspiration/expiration PHASES (_emg_segmented, now via segment_file -- follows
-        # the configured separateby/trend since M-23, no longer hardcoded to flow) -- an
-        # EMG-only signal set has no phases to gather by, and Settings.validate() (M-22)
-        # already refuses auto_prop=True for one before a batch can reach here, so this
-        # loop never needs to handle that case; it stays exactly as it was pre-M-22.
+        # the configured separateby/trend since M-23, no longer hardcoded to flow). An
+        # EMG-only signal set has no phases; for one segmented on its bursts
+        # (``emg_burst``) _emg_segmented returns the burst / between-burst masks instead,
+        # so "active" and "quiet" below are bursts and the periods between them, and
+        # Settings.validate() refuses auto_prop for any other EMG-only method.
         act, qui, cap, unreadable, last_exc = [], [], 40000, [], None
         for fi in files:
             try:
@@ -1199,6 +1230,10 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                             ("seg_end_s", seg_start_s + seg_duration_s),
                             ("seg_duration_s", seg_duration_s),
                         ])
+                        # emg_burst only: the segment's own neural timing and its file's
+                        # burst QC (fixed_windows/whole_file/separators carry neither)
+                        breath["mechanics"].update(breath.get("neural_timing", {}))
+                        breath["mechanics"].update(breath.get("emg_seg_qc", {}))
                     else:
                         compute.calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, s,
                                                    cancel_check=cancel_check, peaks_s=gate_peaks,

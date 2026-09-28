@@ -206,6 +206,9 @@ V2_SCENARIOS: dict = {
     # boundary list, exercising a DIFFERENT segment count per file: 4 and 3).
     "emg_only_whole_file": os.path.join("scenarios", "emg_only_whole_file.toml"),
     "emg_only_separators": os.path.join("scenarios", "emg_only_separators.toml"),
+    # Tidal EMG-only, segmented automatically on the EMG bursts (over the dedicated
+    # synth_emgburst_*.csv pair) with an inter-burst noise reference.
+    "emg_only_burst": os.path.join("scenarios", "emg_only_burst.toml"),
     # Two breaths typed as manoeuvres (IC #4, FVC #7) in the SAME file, over the
     # dedicated synth_manoeuvre_*.csv input (own RNG stream, never synth_case_*.csv).
     "typed_ic_fvc_same_file": os.path.join("scenarios", "typed_ic_fvc_same_file.toml"),
