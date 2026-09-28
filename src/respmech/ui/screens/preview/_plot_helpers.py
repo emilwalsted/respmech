@@ -284,6 +284,7 @@ _FALLBACK_PAL = {
     "breath_rest_brush": (80, 90, 160, 70), "breath_rest_label": (80, 90, 160),
     "breath_other_brush": (140, 100, 60, 70), "breath_other_label": (140, 100, 60),
     "separator": (150, 165, 180), "noise_region": (44, 110, 155, 45),
+    "segmentation_override": (200, 40, 140),
     "raw_trace": (150, 165, 180), "noise_trace": (90, 150, 200),
     "legend_bg": (255, 255, 255, 0),
     "mpl_bg": "#FFFFFF",
@@ -485,11 +486,17 @@ class SeparatorLinesItem(pg.GraphicsObject):
     ``_place_or_remove_separator``, before this item — or the breath-span fill behind
     it — ever sees the event): ``setAcceptedMouseButtons(Qt.NoButton)`` keeps it a
     pure painter, matching how a breath span's own gaps already let a click fall
-    through to the scene."""
+    through to the scene.
 
-    def __init__(self):
+    ``pen_key``: which ``_plot_pal()`` colour to paint with — ``"separator"``
+    (the default, the EMG-only manual separators) or ``"segmentation_override"`` (the
+    Mechanics tab's manual cut/join markers), so the two never look alike even though
+    both reuse this same aggregate-item shape."""
+
+    def __init__(self, pen_key: str = "separator"):
         super().__init__()
         self._times = []
+        self._pen_key = pen_key
         self.setAcceptedMouseButtons(Qt.NoButton)
 
     def set_times(self, times):
@@ -513,7 +520,7 @@ class SeparatorLinesItem(pg.GraphicsObject):
         vr = self.viewRect()
         full = QRectF(vr) if vr is not None else self.boundingRect()
         top, bottom = full.top(), full.bottom()
-        p.setPen(pg.mkPen(_plot_pal()["separator"], width=1, style=Qt.DashLine))
+        p.setPen(pg.mkPen(_plot_pal()[self._pen_key], width=1, style=Qt.DashLine))
         for t in self._times:
             p.drawLine(QPointF(t, top), QPointF(t, bottom))
 

@@ -180,6 +180,13 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         self._breaths = []               # last mech spans [(num, t0, t1, ignored), ...] (TRIMMED s)
         self._suggested_fvc = None       # M-31: manoeuvres.suggest_fvc's breath number, or None
         self._trim_offset_s = 0.0        # startix/fs — maps a trimmed span to absolute EMG time
+        # whether Mechanics' own 'Place separators' (manual segmentation
+        # repair) is currently armed, and the SeparatorLinesItem drawn on each
+        # channel-stack plot — mirrors _segments.py's _separators_armed/_separator_items
+        # for the EMG-only separators list, but keyed on processing.segmentation.overrides
+        # instead of processing.segmentation.separators.
+        self._overrides_armed = False
+        self._override_items = []
         self._bov = {}                   # view -> {'items':[(plot,item)], 'regions':{num:[reg]}, 'texts':{num:txt}}
         self._emg_raw_subplots = []      # per-channel PlotItems of the raw stack (hit-testing)
         self._raw_label_y = None
@@ -725,6 +732,11 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         seg = proc.segmentation
         seg_counts = ({e.file: 1 + len(e.times_s) for e in seg.separators}
                      if seg.method == "separators" else {})
+        # cut_s + join_s combined, per file — mirrors exclude/typed's own
+        # "nothing worth reporting" guard (an entry with both lists empty counts as 0,
+        # same as core.settings' own _CARRIED_KINDS row for this field).
+        override_counts = {e.file: len(e.cut_s) + len(e.join_s)
+                           for e in seg.overrides if e.cut_s or e.join_s}
         # M-37: the 'reference' badge FileRailEntry has carried since M-32 (comment there:
         # "stays None until a later ticket starts calling set_reference()") — this is that
         # ticket. ``matched`` is the batch's OWN glob (ui.validation.matching_files), never
@@ -743,6 +755,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
                                               carried=excl_carried.get(name, False))
             self.file_rail.set_typed_state(name, typed_counts.get(name, {}),
                                            carried=typed_carried.get(name, False))
+            self.file_rail.set_overrides_count(name, override_counts.get(name, 0))
             if seg.method == "whole_file":
                 self.file_rail.set_segments(name, 1)
             elif seg.method == "separators":

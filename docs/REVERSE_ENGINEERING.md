@@ -179,6 +179,49 @@ coordinates — see §6 latent issue (2).
 - `excludebreaths` marks named breaths `ignored` (kept in plots, dropped from
   averages). `breathcounts` overrides the detected breath count per file for
   per-minute scaling.
+- **Manual segmentation repair (v2-only)** — `processing.segmentation.overrides`
+  (`SegmentationOverrideEntry`, one per file): `cut_s`/`join_s` REPAIR the automatic
+  flow-/volume-based boundary list above, they never replace it (contrast the
+  EMG-only `separators` method in §5.12, which has no automatic detection to repair
+  at all). Applied by `compute.apply_segmentation_overrides`, called from
+  `core.pipeline.segment_file` right after the automatic segmentation call above and
+  BEFORE `ignorebreaths`/`breathkinds`/numbering/`trim_boundary_notices` — so every
+  downstream consumer (exclusions, typed breaths, references, `t_onset_s` anchors,
+  boundary notices) sees one finished boundary list, same as the automatic
+  segmenters already give their own consumers.
+  - `join_s`: removes the nearest AUTOMATIC breath-start boundary to the named time
+    (within `max(2/fs, 0.05 s)`), merging the two breaths on either side into one —
+    the fix for a flow wobble that over-split one real breath into two.
+  - `cut_s`: inserts a new boundary at the named time, splitting whatever breath
+    currently spans it — the fix for a flat/leaky expiration that under-split two
+    real breaths into one.
+  - Each resulting segment gets its own inspiration/expiration split via
+    `_walk_insp_end` — the SAME mean-buffered flow-sign criterion `separateintobreathsbyflow`'s
+    own inspiration loop uses, bounded to the segment's own `[start, end)` instead of
+    the whole recording, so a residual wobble already absorbed by a `join_s` cannot
+    re-trigger a second split within that one segment. Everything after the found
+    transition is that segment's expiration, however the flow signal behaves later in
+    it — by construction a segment produced by the override list is meant to be
+    exactly one breath.
+  - **One-sample transition drop, reproduced exactly**: `separateintobreathsbyflow`'s
+    own `inend = i - 1` / `exend = min(i - 1, j)` drops the sample AT every transition
+    it finds (never assigned to either phase) — a real, existing property of this
+    ported algorithm. `apply_segmentation_overrides` reproduces this drop at a
+    segment's inspiration end ONLY when that end is a genuine transition
+    `_walk_insp_end` found, OR the segment's own end is itself a NATURAL boundary
+    (an untouched automatic breath start, or the file's own end) reached without
+    finding one; a `cut_s`-inserted boundary is not a flow transition, so a segment
+    that runs straight into its OWN cut without ever finding a transition gets no
+    drop there — inventing one would silently lose the sample the two resulting
+    breaths' Ti+Te otherwise sum back to the original breath's exactly. The
+    expiration end follows the same natural-vs-cut rule independently.
+  - An out-of-range/colliding cut, or a join with no automatic boundary nearby, is a
+    soft per-file `SegmentationOverrideNotice` (never a hard failure), the same
+    "advisory, never fails a file" posture §5's K-035 boundary-truncation notice has.
+  - Empty `cut_s`/`join_s` (or no entry for a file at all) is never even passed to
+    `apply_segmentation_overrides` — `segment_file` calls it only when at least one
+    list is non-empty, which is what makes every existing analysis byte-identical by
+    construction, not by this function happening to be a no-op on empty input.
 
 ### 5.4 Per-breath timing, volume, ventilation — `calculatemechanics()`
 - `Ti = n_insp/fs`, `Te = n_exp/fs`, `Ttot = n_total/fs` (seconds); `Ti/Ttot`.
