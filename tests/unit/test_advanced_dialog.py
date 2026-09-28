@@ -1188,7 +1188,7 @@ def test_the_live_count_explains_when_the_thresholds_cannot_be_evaluated(
 
 
 def test_mechanics_advanced_offers_and_commits_the_mfvl_fields(qapp, tmp_path, monkeypatch):
-    """M-43: Lung volumes carries the four MFVL fields (source, EFL tolerances, MVV
+    """Lung volumes carries the four MFVL fields (source, EFL tolerances, MVV
     multiplier); an accepted edit lands on ``processing.mfvl`` and a Cancel changes nothing.
     Every field names its settings path in its tooltip (the shared help_text contract)."""
     pv = _preview(qapp, tmp_path)

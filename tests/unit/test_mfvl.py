@@ -614,3 +614,60 @@ def test_fvc_typed_in_settings_only_counts_fvc_kinds():
     assert m.fvc_typed_in_settings(st) is True
     st.processing.breath_types[:] = [BreathTypeEntry(file="a.csv", breath=5, kind="fvc")]
     assert m.fvc_typed_in_settings(st) is True
+
+
+def test_placed_tidal_loops_mean_averages_several_breaths():
+    """Two breaths with constant flows of different size: the mean's flow is their average
+    in BOTH phases (the phases are resampled separately, so the corner stays a corner)."""
+    breaths, manoeuvres = _placed_inputs()
+    breaths[4] = _loop_breath(vt=0.5, flow_amp=0.8, n=151, vol_endexp=0.1)
+    placed = m.placed_tidal_loops(breaths, manoeuvres, _cfg(), IcSettings())
+    assert len(placed["loops"]) == 2
+    mean_x, mean_flow = placed["mean"]
+    assert mean_flow[:100] == pytest.approx(-0.6)      # inspiration: (-0.4 + -0.8) / 2
+    assert mean_flow[100:] == pytest.approx(0.6)       # expiration
+    assert mean_x[99] == pytest.approx(2.5, abs=1e-6)  # the corner: end of inspiration
+    assert mean_x[100] == pytest.approx(2.5, abs=1e-6)
+
+
+def test_placed_tidal_loops_skips_breaths_with_nan_or_missing_parts():
+    breaths, manoeuvres = _placed_inputs()
+    bad = _loop_breath()
+    bad["volume"] = bad["volume"].copy()
+    bad["volume"][5] = np.nan
+    broken = _loop_breath()
+    del broken["expiration"]
+    breaths[4], breaths[5] = bad, broken
+    placed = m.placed_tidal_loops(breaths, manoeuvres, _cfg(), IcSettings())
+    assert len(placed["loops"]) == 1                   # only the clean breath survives
+    assert np.isfinite(placed["eilv"]) and placed["mean"] is not None
+    assert np.isfinite(placed["mean"][0]).all()
+
+
+def test_placed_tidal_loops_reports_loops_outside_the_envelope_range():
+    breaths, manoeuvres = _placed_inputs()
+    inside = m.placed_tidal_loops(breaths, manoeuvres, _cfg(), IcSettings())
+    assert inside["in_domain_pct"] == pytest.approx(100.0)
+    short = _analytical_fvc_breath(v_tlc=2.0, pef=2.0)   # domain [0, 2] L, loops sit at 2.5-3
+    short["ignored"] = True
+    breaths[1] = short
+    manoeuvres[1] = {"kind": "fvc", "fvc": 2.0, "mfvl_peak_ex_flow": 2.0, "quality": []}
+    outside = m.placed_tidal_loops(breaths, manoeuvres, _cfg(), IcSettings())
+    assert outside["in_domain_pct"] == pytest.approx(0.0)
+
+
+def test_placed_tidal_loops_follows_the_envelope_source_setting():
+    breaths, manoeuvres = _placed_inputs()
+    second = _analytical_fvc_breath(v_tlc=3.0, pef=1.0)
+    second["ignored"] = True
+    breaths[6] = second
+    manoeuvres[6] = {"kind": "fvc", "fvc": 3.0, "mfvl_peak_ex_flow": 1.0, "quality": []}
+    single = m.placed_tidal_loops(breaths, manoeuvres, _cfg(source="single"), IcSettings())
+    env = m.placed_tidal_loops(breaths, manoeuvres, _cfg(source="envelope"), IcSettings())
+    assert single["mefv_v"][-1] == pytest.approx(4.0)         # the larger-FVC attempt only
+    assert single["mefv_flow"].max() == pytest.approx(2.0)
+    # the composite takes the per-volume maximum: the 2.0 L/s attempt everywhere it exists
+    assert env["mefv_flow"].max() == pytest.approx(2.0)
+    assert not np.array_equal(single["mefv_v"], env["mefv_v"])
+    ref = m.resolve_same_file_curve(manoeuvres, breaths, _cfg(source="envelope"))
+    assert np.array_equal(env["mefv_v"], ref[0])

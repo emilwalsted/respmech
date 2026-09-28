@@ -215,13 +215,23 @@ def draw_flow_volume_mfvl(ax, placed, *, loop=_MUTED, mean=_BRAND, envelope="bla
         ax.text(placed["eilv"], 0.02, "EILV ", transform=ax.get_xaxis_transform(),
                 va="bottom", ha="right", fontsize=8, color=label)
     ax.axhline(0, color=marker, lw=0.8, zorder=0)
+    note = None
+    if placed["ic_op"] is None:
+        note = "No inspiratory-capacity reference: tidal loops cannot be placed"
+    elif placed.get("in_domain_pct") is not None and placed["in_domain_pct"] < 99.5:
+        note = (f"{100.0 - placed['in_domain_pct']:.0f}% of the tidal loop lies outside the "
+                "MFVL's volume range")
+    if note:
+        ax.text(0.5, 0.04, note, transform=ax.transAxes, ha="center", va="bottom",
+                fontsize=7, color=label)
 
 
 def _flow_volume_mfvl(fr, fname, path, settings):
     """Tidal flow-volume loops placed inside the file's own maximal flow-volume loop
     (MFVL). ``None`` for a file without a resolved FVC reference; with an FVC but no IC
     reference only the envelope is drawn (the loops cannot be anchored to the TLC axis),
-    with a note saying so."""
+    and loops that fall outside the envelope's volume range are flagged, both by a note
+    on the figure (see ``draw_flow_volume_mfvl``)."""
     placed = mfvllib.placed_tidal_loops(
         fr.breaths, getattr(fr, "manoeuvres", None), settings.processing.mfvl,
         settings.processing.lung_volume.ic)
@@ -233,9 +243,6 @@ def _flow_volume_mfvl(fr, fname, path, settings):
     ax.set_xlabel("Volume below TLC (L)")
     ax.set_ylabel("Flow (L/s)")
     ax.grid(True, color=_MUTED, alpha=0.2)
-    if placed["ic_op"] is None:
-        ax.text(0.5, 0.06, "No inspiratory-capacity reference: tidal loops cannot be placed",
-                transform=ax.transAxes, ha="center", fontsize=9, color=_MUTED)
     ax.set_title(f"{fname} — tidal breathing in the MFVL")
     ax.legend(loc="upper right", frameon=False, fontsize=8)
     return _save(fig, path)
