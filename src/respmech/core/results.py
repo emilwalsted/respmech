@@ -60,6 +60,11 @@ def build_breath_table(file, breaths, settings):
         if "mfvl_ext" in breath:
             dfmfvl = pd.DataFrame(breath["mfvl_ext"], index=[0])
             dfmech = dfmech.join(dfmfvl, how="outer", sort=False)
+        # core.analysis.pressure.attach (opt-in PEEPi): threshold-work columns stamped on
+        # every tidal breath, joined after wob like the block above.
+        if "pressure_ext" in breath:
+            dfpress = pd.DataFrame(breath["pressure_ext"], index=[0])
+            dfmech = dfmech.join(dfpress, how="outer", sort=False)
 
         has_phases = breath.get("has_phases", True)
 

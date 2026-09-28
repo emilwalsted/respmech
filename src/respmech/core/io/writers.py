@@ -28,6 +28,7 @@ import pandas as pd
 
 from respmech import __version__
 from respmech.core import quantities as _units
+from respmech.core.analysis import pressure as pressurelib
 from respmech.core.analysis import references as referenceslib
 from respmech.core.analysis.signals import Capabilities, off_signals_text, signals_text
 from respmech.core.settings import resolve_noise_reference_mode
@@ -216,6 +217,16 @@ def _provenance_rows(settings, when, incomplete_note: str | None = None,
         # added when entropy is actually computed (an empty channel list means it is not).
         ent = settings.processing.entropy
         rows.append(("Sample entropy", f"m = {ent.epochs - 1}, r = {ent.tolerance:g} × SD"))
+    peepi = getattr(getattr(settings.processing, "pressure", None), "peepi", None)
+    if peepi is not None and peepi.enabled and caps.poes:
+        # Which PEEPi value fed the threshold work depends on the signal set (Pgas
+        # present -> gastric-corrected, else dynamic); named here because the two are
+        # different quantities under the same column names (wob_in_thr etc.).
+        rows.append(("PEEPi threshold work",
+                     f"from {pressurelib.peepi_source(caps)} PEEPi "
+                     f"(search window {peepi.search_window_s:g} s, smoothing {peepi.smooth_s:g} s, "
+                     f"onset slope {peepi.onset_slope_frac:g}, minimum deflection "
+                     f"{peepi.min_deflection:g} cmH₂O)"))
     if reference_note:
         # M-35: only present for a file whose IC reference actually resolved -- an
         # unresolved one is reported as a Quality notice instead (run-report.txt's
