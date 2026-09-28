@@ -84,6 +84,12 @@ class FileRailEntry:
     # tidal breaths at all runs as 'reference'-only). None until mark_result(ok=True)
     # has actually reported one, exactly like `breaths`.
     role: str | None = None
+    # This file's processing.segmentation.overrides entry's cut_s + join_s
+    # count combined (a manual repair of the automatic flow-/volume-based
+    # segmentation) — 0 when the file has no entry, or an entry with both lists
+    # empty, same "nothing worth reporting" guard as core.settings' own
+    # _CARRIED_KINDS row for this field.
+    overrides_count: int = 0
 
 
 def _row_prefix(e: FileRailEntry) -> str:
@@ -114,6 +120,8 @@ def _row_suffix(e: FileRailEntry) -> str:
         n = e.excluded_count
         mark = " ↺" if e.excluded_carried else ""
         bits.append(f"[{n} excl{mark}]")
+    if e.overrides_count:
+        bits.append(f"[{e.overrides_count} ovr]")
     if e.caveat:
         bits.append("⚠")
     return ("   " + "   ".join(bits)) if bits else ""
@@ -159,6 +167,10 @@ def _row_tooltip(e: FileRailEntry) -> str:
         lines.append("⇢ reference resolved from another file")
     elif e.reference == "missing":
         lines.append("⇢? reference not resolved")
+    if e.overrides_count:
+        lines.append(
+            f"{e.overrides_count} segmentation override{'s' if e.overrides_count != 1 else ''} "
+            "(manual cut/join)")
     if e.segments is not None:
         lines.append(f"{e.segments} EMG segment{'s' if e.segments != 1 else ''}")
     if e.role == "reference":
@@ -293,6 +305,21 @@ class FileRailModel(QAbstractListModel):
             return
         e.excluded_count = count
         e.excluded_carried = carried
+        idx = self.index(i)
+        self.dataChanged.emit(idx, idx)
+
+    def set_overrides_count(self, filename: str, count: int) -> None:
+        """Same shape as :meth:`set_excluded_count`, for
+        ``processing.segmentation.overrides`` — no carried-folder flag (unlike
+        exclude/typed): this count is compared by value so a caller recomputing the
+        SAME count every sync never triggers a spurious repaint."""
+        i = self._by_name.get(filename)
+        if i is None:
+            return
+        e = self._entries[i]
+        if e.overrides_count == count:
+            return
+        e.overrides_count = count
         idx = self.index(i)
         self.dataChanged.emit(idx, idx)
 
@@ -608,6 +635,9 @@ class FileRail(QWidget):
 
     def set_excluded_count(self, filename: str, count: int, carried: bool = False) -> None:
         self._model.set_excluded_count(filename, count, carried=carried)
+
+    def set_overrides_count(self, filename: str, count: int) -> None:
+        self._model.set_overrides_count(filename, count)
 
     def set_typed_state(self, filename: str, counts: dict, carried: bool = False) -> None:
         self._model.set_typed_state(filename, counts, carried=carried)

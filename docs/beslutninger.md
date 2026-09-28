@@ -6,6 +6,38 @@ decision <date>" — never an internal ticket reference; this repo is public).
 
 ---
 
+**28-09-2026 — Manual segmentation overrides repair the automatic detector, they
+never replace it; applied after automatic segmentation, before trim (boundary
+notices), breath numbering and phase re-splitting; an empty override list is
+byte-identical to today (author's decision, 26-09-2026).**
+`processing.segmentation.overrides` (`SegmentationOverrideEntry`: `cut_s`/`join_s`,
+one entry per file) exists to repair a mis-detected breath boundary on a
+flow-/volume-bearing recording — a flow wobble that over-splits one real breath, or a
+flat/leaky expiration that under-splits two real breaths into one — never to
+introduce a second, competing segmentation method. This is the reason it is a small
+adjustment list layered on top of the existing automatic detector
+(`compute.apply_segmentation_overrides`, called from `segment_file` right after
+`separateintobreathsbyflow`/`...byvolume`), not a parallel mechanism the way the
+EMG-only `separators` method is (that method has no automatic detection at all to
+repair, since an EMG-only signal set has no flow channel to detect boundaries on).
+Considered and rejected: exposing overrides as a third `processing.segmentation.method`
+value alongside `flow`/`volume`/`whole_file`/`separators` — rejected because a
+repair is meaningless without the automatic detection it repairs, so coupling it to
+whichever of `flow`/`volume` is already selected (rather than letting it stand alone)
+is the only shape that keeps "overrides describe adjustments to THIS file's automatic
+result" true by construction. Applying it AFTER automatic segmentation but BEFORE
+`trim_boundary_notices` (the K-035 truncation check), breath numbering and
+ignore/kind assignment means every downstream consumer sees one finished boundary
+list — a cut near a file's own edge legitimately CAN trigger a boundary-truncation
+notice, and that is correct, not a bug to special-case around. An empty
+`cut_s`/`join_s` (or no entry for a file at all) is never even passed to
+`apply_segmentation_overrides` — `segment_file` calls it only when at least one list
+is non-empty — so every existing analysis stays byte-identical by construction,
+never by the repair function happening to be a no-op on empty input. Source: author's
+decision, 26-09-2026.
+
+---
+
 **27-09-2026 — Cross-file `ic` reference aggregation excludes `reject_flags`-flagged
 breaths; the column family is settings-wide, and an unresolved link once the family
 exists is a caution on EVERY non-resolving file, not only an explicitly linked one

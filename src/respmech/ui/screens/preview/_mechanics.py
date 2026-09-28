@@ -23,9 +23,11 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
 from respmech.core.analysis.references import resolve_reference
+from respmech.core.analysis.segments import remap_segment_number
 from respmech.core.analysis.signals import Capabilities
 from respmech.core.settings import (BreathRef, BreathTypeEntry, ExcludeEntry,
-                                    GroupReferenceEntry, ReferenceEntry)
+                                    GroupReferenceEntry, ReferenceEntry,
+                                    SegmentationOverrideEntry)
 from respmech.core.summary import group_key
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
@@ -50,8 +52,8 @@ except Exception:  # pragma: no cover
 
 from ._figure_fit import _CompactFigureFitter, _fit_compact_figure
 from ._jobs import _FileRunError, _KIND_LABEL, _PANELS
-from ._plot_helpers import (BreathSpansItem, SciAxis, _CHANNELS, _pen, _plot_pal,
-                            _restrict_body_wheel_to_x)
+from ._plot_helpers import (BreathSpansItem, SciAxis, SeparatorLinesItem, _CHANNELS,
+                            _pen, _plot_pal, _restrict_body_wheel_to_x)
 
 
 #: A breath span's/BreathTypeEntry's kind -> the palette suffix _breath_brush/
@@ -571,6 +573,15 @@ class _MechanicsMixin:
         self.btn_export_fig.setEnabled(False)          # enabled once a diagram is drawn
         self.btn_export_fig.setToolTip("Save the Campbell diagram as a PNG or PDF.")
         self.btn_export_fig.clicked.connect(self._export_campbell)
+        # Mechanics' own 'Place separators' — repairs the AUTOMATIC flow-/
+        # volume-based segmentation (processing.segmentation.overrides) by cut/join,
+        # reusing the exact button label and checkable-is-armed pattern _segments.py's
+        # own button already established for the EMG-only separators list. Checkable,
+        # so its own pressed state IS the armed flag _on_plot_clicked reads, same
+        # reasoning as the segments tab's own button.
+        self.btn_place_overrides = QPushButton("Place separators")
+        self.btn_place_overrides.setCheckable(True)
+        self.btn_place_overrides.toggled.connect(self._on_place_overrides_toggled)
         # P19: process AND write just this file, so a tuned file can be produced without
         # re-running the whole batch (reuses the Run screen's write machinery).
         self.btn_process_file = QPushButton("Process && write this file")
@@ -580,7 +591,9 @@ class _MechanicsMixin:
         bar.addWidget(self.qc_overview)
         bar.addSpacing(10)
         bar.addWidget(self.mech_window_label, 1)   # takes the stretch the plain addStretch(1) used to
+        bar.addWidget(self.btn_place_overrides)
         bar.addWidget(self.btn_process_file); bar.addWidget(self.btn_export_fig)
+        self._update_overrides_button()
         return band
 
     _MECH_WINDOW_TOOLTIP = (
@@ -637,6 +650,13 @@ class _MechanicsMixin:
             if self.btn_place_separators.isChecked():
                 self.btn_place_separators.setChecked(False)   # also clears _separators_armed
             self.btn_place_separators.setEnabled(False)
+        # Same discipline for Mechanics' own 'Place separators' (segmentation
+        # overrides) -- unarm and disable it on every file switch, for the identical
+        # stale-geometry reason the comment above documents for that button.
+        if hasattr(self, "btn_place_overrides"):
+            if self.btn_place_overrides.isChecked():
+                self.btn_place_overrides.setChecked(False)   # also clears _overrides_armed
+            self.btn_place_overrides.setEnabled(False)
 
     def _qc_overview_not_assessed(self, detail, chip=None):
         """The chip's honest state while the test run itself failed or was skipped —
@@ -1274,6 +1294,7 @@ class _MechanicsMixin:
         t = data["t"]
         series = data["series"]
         self._trim_offset_s = data["startix"] / data["fs"]  # trimmed span -> absolute EMG time
+        self._update_overrides_button()   # re-sync for the CURRENT method/run state
         self._set_analysis_window(data)                      # D23: persistent trim-window label
         self._breaths = list(data["spans"])
         # M-31: the type menu's 'Suggested: FVC' hint — .get() so a stale suggestion from
@@ -1361,6 +1382,7 @@ class _MechanicsMixin:
         individual QGraphicsItems."""
         self._draw_breath_overlays(data["spans"], data["label_y"],
                                    carried=self._exclusion_carried_for(data["name"]))
+        self._update_override_lines(data["name"])   # cut markers, own pen
 
     def _render_preview_stage3(self, data):
         """The raw EMG stack, the detail/result overlay repaint, and the status
@@ -1648,6 +1670,15 @@ class _MechanicsMixin:
         return None
 
     def _on_plot_clicked(self, ev):
+        # While 'Place separators' (Mechanics' own manual segmentation-repair
+        # toggle) is armed, EVERY click on this stack places or removes an override
+        # instead of toggling a breath — checked FIRST, mirroring _emg_noise.py's
+        # _toggle_from_emg_click (the same armed-click precedence used for the
+        # EMG-only segments tab). _place_or_remove_override does its own
+        # accepted/button checks.
+        if self._overrides_armed:
+            self._place_or_remove_override(ev, self._channel_plots)
+            return
         # M-20: a right-click/Ctrl+left-click that landed on a breath is handled at
         # item level (BreathSpansItem.mouseClickEvent -> typeRequested) and accepted
         # there — this scene-level handler is for the plain left-click toggle only, and
@@ -1856,6 +1887,226 @@ class _MechanicsMixin:
             f"({nexcl}/{len(self._breath_spans)} excluded). Recomputing the average…")
         self._set_mech_caption(len(self._breath_spans), nexcl)
         return now_excluded
+
+    # -- Manual segmentation overrides (cut/join), Mechanics tab -----------
+
+    def _update_overrides_button(self):
+        """Enable/disable + tooltip Mechanics' own 'Place separators' for the
+        CURRENT segmentation method and run state — mirrors ``_segments.py``'s
+        ``_update_separators_button`` exactly, but for
+        ``processing.segmentation.overrides``: only 'flow'/'volume' segmentation has
+        an automatic detector this repairs (``whole_file``/``separators`` are
+        EMG-only and already have their own manual-boundary mechanism,
+        ``SeparatorEntry``, consulted only for THOSE methods — see
+        ``SegmentationSettings.overrides``' own comment)."""
+        method = self.state.settings.processing.segmentation.method
+        if method not in ("flow", "volume"):
+            if self.btn_place_overrides.isChecked():
+                self.btn_place_overrides.setChecked(False)   # also clears _overrides_armed
+            self.btn_place_overrides.setEnabled(False)
+            self.btn_place_overrides.setToolTip(
+                "Segmentation repair applies to flow-/volume-based breath detection "
+                "only.")
+        else:
+            self.btn_place_overrides.setEnabled(not self._run_active)
+            self.btn_place_overrides.setToolTip(
+                "Click a channel trace to cut a new breath boundary there, or click "
+                "an existing cut (within a few pixels) to remove it. Click near an "
+                "automatic breath boundary to join the two breaths either side of it.")
+
+    def _on_place_overrides_toggled(self, checked):
+        self._overrides_armed = checked
+
+    def _update_override_lines(self, filename):
+        """(Re)draw the cut markers on every current Mechanics channel-stack plot
+        from ``processing.segmentation.overrides``' ``cut_s`` — mirrors
+        ``_segments.py``'s own ``_update_separator_lines``, with this feature's own
+        ``"segmentation_override"`` pen so the two never look alike. ``join_s`` names
+        an AUTOMATIC boundary to REMOVE, so it has no marker of its own to draw:
+        joining one leaves nothing at that instant for a marker to point at."""
+        entry = next((e for e in self.state.settings.processing.segmentation.overrides
+                     if e.file == filename), None)
+        cut_times = list(entry.cut_s) if entry is not None else []
+        self._override_items = []
+        for p in self._channel_plots:
+            item = SeparatorLinesItem(pen_key="segmentation_override")
+            item.set_times(cut_times)
+            item.setZValue(-5)          # above BreathSpansItem's fill (-10), below the trace
+            p.addItem(item)
+            self._override_items.append(item)
+
+    def _set_segmentation_overrides(self, file, cut_s, join_s, old_bounds, new_bounds):
+        """Rewrite ``file``'s ``cut_s``/``join_s`` and renumber every existing
+        ``ExcludeEntry``/``BreathTypeEntry`` for it in lockstep — the counterpart
+        of ``_segments.py``'s ``_set_separators``, reusing the SAME
+        ``remap_segment_number`` rule: it is already generic over WHERE a boundary
+        list came from (an explicit ``separators`` list there, an
+        auto-plus-override-adjusted one here).
+
+        ``cut_s``/``join_s``: the FULL new lists (absolute recording-clock seconds,
+        the same convention ``SeparatorEntry.times_s``/``ExcludeEntry``/
+        ``BreathTypeEntry`` already use). ``old_bounds``/``new_bounds``: the ACTUAL
+        breath-start boundary lists in effect before/after this one edit, supplied by
+        the caller (``_toggle_override_at``) — NOT derived from ``cut_s`` alone here,
+        because a JOIN changes which breaths merge (and therefore every later
+        breath's number) WITHOUT touching ``cut_s`` at all; only the caller, which
+        already knows the file's currently rendered breath spans, can name the real
+        before/after boundaries. Folder is stamped ONLY when a brand-new
+        ``SegmentationOverrideEntry`` is created here, never on an edit of an
+        existing one — the same carried-over-state rule every other tagged kind
+        already follows (see ``_set_breath_type``)."""
+        proc = self.state.settings.processing
+        seg = proc.segmentation
+        entry = next((e for e in seg.overrides if e.file == file), None)
+        new_cut = sorted(cut_s)
+
+        def remap(old_number):
+            return remap_segment_number(old_bounds, new_bounds, old_number)
+
+        excl_entry = next((e for e in proc.exclude_breaths if e.file == file), None)
+        if excl_entry is not None and excl_entry.breaths:
+            excl_entry.breaths = sorted({remap(b) for b in excl_entry.breaths})
+
+        for t in proc.breath_types:
+            if t.file != file:
+                continue
+            t.breath = remap(t.breath)
+            idx = min(max(t.breath - 1, 0), len(new_bounds) - 1)
+            t.t_onset_s = new_bounds[idx]
+        # A cut can fold two previously distinct typed breaths onto the SAME new
+        # number (same collision ``_set_separators`` already guards against) —
+        # keep the first one this file's own list still holds, drop the rest.
+        seen = set()
+        deduped = []
+        for t in proc.breath_types:
+            key = (t.file, t.breath)
+            if t.file == file:
+                if key in seen:
+                    continue
+                seen.add(key)
+            deduped.append(t)
+        proc.breath_types[:] = deduped
+        # …and the exclusion/typed cross-kind collision that function also guards
+        # against: typed wins over a plain exclusion on the same new number.
+        if excl_entry is not None and excl_entry.breaths:
+            typed_here = {t.breath for t in proc.breath_types if t.file == file}
+            excl_entry.breaths = sorted(set(excl_entry.breaths) - typed_here)
+            if not excl_entry.breaths:
+                proc.exclude_breaths.remove(excl_entry)
+
+        if entry is None:
+            seg.overrides.append(SegmentationOverrideEntry(
+                file=file, cut_s=new_cut, join_s=sorted(join_s),
+                folder=self.state.settings.input.folder))
+        else:
+            entry.cut_s = new_cut
+            entry.join_s = sorted(join_s)
+
+    def _toggle_override_at(self, name, t, vb):
+        """Decide join/cut/remove-cut for an armed click at absolute-recording-time
+        ``t`` on ``name`` — the counterpart of ``_segments.py``'s
+        ``_toggle_separator_at``. Three outcomes:
+
+        - ``t`` is within tolerance of an EXISTING cut this override already placed
+          -> remove that cut (undo).
+        - ``t`` is within tolerance of one of the file's CURRENTLY RENDERED breath
+          boundaries (an untouched automatic one — a breath's own start in
+          ``self._breath_spans``) and not already named in ``join_s`` -> request a
+          JOIN there (remove that automatic boundary).
+        - otherwise -> add a new CUT at ``t``.
+
+        Tolerance uses ``vb``'s own current pixel scale, same as the EMG-only
+        separators list's own tolerance (a fixed-seconds tolerance would feel wildly
+        different zoomed in vs out). Never validates ``t`` against the recording's
+        own duration: ``compute.apply_segmentation_overrides`` already turns an
+        out-of-range cut into a soft per-file notice, exactly like
+        ``segments.separators()`` does for its own boundaries."""
+        proc = self.state.settings.processing
+        entry = next((e for e in proc.segmentation.overrides if e.file == name), None)
+        existing_cuts = list(entry.cut_s) if entry is not None else []
+        existing_joins = list(entry.join_s) if entry is not None else []
+        tol = abs(vb.viewPixelSize()[0]) * 6
+        # The boundary list ACTUALLY in effect right now (whatever the last
+        # successful segment_file computed for this file — auto detection, minus
+        # any joined-away boundaries, plus any cuts already placed), read directly
+        # off the rendered breath spans (window-relative + the trim offset ->
+        # absolute, same conversion _set_breath_type already uses for t_onset_s).
+        # This is what a JOIN actually changes for renumbering purposes, which
+        # cut_s/join_s individually do NOT capture (a join changes numbering
+        # without touching cut_s at all).
+        old_bounds = sorted(t0 + self._trim_offset_s for (t0, _t1) in self._breath_spans.values())
+
+        nearest_cut = min(existing_cuts, key=lambda s: abs(s - t)) if existing_cuts else None
+        if nearest_cut is not None and abs(nearest_cut - t) <= tol:
+            new_cuts = [s for s in existing_cuts if s != nearest_cut]
+            new_bounds = [b for b in old_bounds if abs(b - nearest_cut) > tol]
+            self._set_segmentation_overrides(name, new_cuts, existing_joins, old_bounds, new_bounds)
+            verb, at = "cut removed at", nearest_cut
+        else:
+            nearest_boundary = (min(old_bounds, key=lambda s: abs(s - t))
+                                if old_bounds else None)
+            if (nearest_boundary is not None and abs(nearest_boundary - t) <= tol
+                    and not any(abs(nearest_boundary - j) <= tol for j in existing_joins)):
+                new_joins = sorted(existing_joins + [nearest_boundary])
+                new_bounds = [b for b in old_bounds if abs(b - nearest_boundary) > tol]
+                self._set_segmentation_overrides(name, existing_cuts, new_joins, old_bounds, new_bounds)
+                verb, at = "breaths joined at", nearest_boundary
+            else:
+                new_cuts = sorted(existing_cuts + [t])
+                new_bounds = sorted(old_bounds + [t])
+                self._set_segmentation_overrides(name, new_cuts, existing_joins, old_bounds, new_bounds)
+                verb, at = "cut placed at", t
+        self.settings_edited.emit()
+        # Wide, all-files sync — a segmentation-override edit can change this file's
+        # own exclusion/typed/segment counts exactly like a separator edit can
+        # (the same reasoning ``_toggle_separator_at`` has for using this instead of
+        # a narrower, single-file version, which does not exist).
+        self._sync_rail_breath_state()
+        # Wide, not just {"mech", "batch"}: _kinds_for_settings_path treats every
+        # processing.segmentation.* field as needing the full _AUTO_KINDS recompute
+        # (same rule ``_toggle_separator_at`` itself relies on) — an override can
+        # renumber a rest-typed BreathTypeEntry too, on an EMG-only-adjacent mixed
+        # signal set, and feeds segment_file/the noise reference exactly like buffer
+        # does.
+        self._request_autorun()
+        self._set_status(f"Segmentation {verb} {at:.2f} s in {name}.")
+
+    def _place_or_remove_override(self, ev, plot_items):
+        """The armed counterpart of the plain breath-exclude click — mirrors
+        ``_segments.py``'s ``_place_or_remove_separator`` exactly (same
+        best-effort button check, same scene-position lookup, same per-plot ViewBox
+        hit test), differing only in what the click then does
+        (``_toggle_override_at``) and in reading the click position via
+        ``self._trim_offset_s`` directly rather than a passed-in offset: unlike the
+        EMG-only views the shared funnel there serves (all effectively untrimmed,
+        offset always 0.0), the Mechanics stack's own x-axis is deliberately
+        zero-based AT the trimmed window's start (``_MECH_WINDOW_TOOLTIP``), so a
+        click there must be shifted FORWARD by the trim offset to reach the
+        recording's absolute clock, the same conversion ``_set_breath_type`` already
+        performs for ``t_onset_s``."""
+        if self._run_active:
+            msg = "Segmentation repair is locked while a run is in progress."
+            self._set_status(msg)
+            self.write_action_blocked.emit(msg)
+            return
+        name = self._selected_filename()
+        if not name:
+            return
+        try:
+            if ev.isAccepted():
+                return
+            button = getattr(ev, "button", None)
+            if button is not None and button() != Qt.LeftButton:
+                return
+            pos = ev.scenePos()
+        except Exception:                              # noqa: BLE001
+            return
+        for p in plot_items:
+            vb = p.getViewBox()
+            if vb is not None and vb.sceneBoundingRect().contains(pos):
+                t = vb.mapSceneToView(pos).x() + self._trim_offset_s
+                self._toggle_override_at(name, t, vb)
+                return
 
     def _build_type_menu(self, breath_no, kinds):
         """The breath-type context menu (M-20's minimal Tidal/Excluded/Rest, extended by
