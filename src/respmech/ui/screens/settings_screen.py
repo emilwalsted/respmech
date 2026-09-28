@@ -346,6 +346,7 @@ class SettingsScreen(QWidget):
                   "A smaller drop than this is reported as no PEEPi (0). A starting value, "
                   "not yet measured on real recordings.")
         self.peepi_enabled.toggled.connect(self._sync_peepi_fields)
+        self._peepi_shown = {}
 
         # Subjects & lung volumes ---------------------------------------------
         # M-37: read-only -- input.subjects (SubjectEntry: TLC/VC/RV/FEV1/MVV per
@@ -757,6 +758,10 @@ class SettingsScreen(QWidget):
             self.peepi_smooth.setValue(_pp.smooth_s)
             self.peepi_slope.setValue(_pp.onset_slope_frac)
             self.peepi_min.setValue(_pp.min_deflection)
+            # what the four boxes SHOW after loading: a hand-edited value outside a box's
+            # range or precision is clipped/rounded on display, so to_state() writes a box
+            # back only once it has actually been edited (never a silent change to a number)
+            self._peepi_shown = {n: getattr(self, n).value() for n in self._PEEPI_BOXES}
             self._sync_peepi_fields()
             _mi = self.matlab_variant.findData(s.input.format.matlab_variant)
             self.matlab_variant.setCurrentIndex(_mi if _mi >= 0 else 0)
@@ -807,10 +812,11 @@ class SettingsScreen(QWidget):
         s.processing.entropy.tolerance = self.ent_tol.value()
         _pp = s.processing.pressure.peepi
         _pp.enabled = self.peepi_enabled.isChecked()
-        _pp.search_window_s = self.peepi_window.value()
-        _pp.smooth_s = self.peepi_smooth.value()
-        _pp.onset_slope_frac = self.peepi_slope.value()
-        _pp.min_deflection = self.peepi_min.value()
+        for _name, _field in self._PEEPI_BOXES.items():
+            _v = getattr(self, _name).value()
+            if _v != self._peepi_shown.get(_name):
+                setattr(_pp, _field, _v)
+                self._peepi_shown[_name] = _v
         s.input.format.matlab_variant = self.matlab_variant.currentData()
         s.input.format.decimal = self.decimal_sep.currentData()
         if self.on_settings_changed:
@@ -966,6 +972,10 @@ class SettingsScreen(QWidget):
                     self.include_ignored, self.save_pv_avg, self.save_pv_ind, self.save_raw_fig,
                     self.save_trimmed_fig, self.save_drift_fig, self.save_emg_fig):
             chk.toggled.connect(self._on_field_changed)
+
+    #: Setup box -> ``PeepiSettings`` field
+    _PEEPI_BOXES = {"peepi_window": "search_window_s", "peepi_smooth": "smooth_s",
+                    "peepi_slope": "onset_slope_frac", "peepi_min": "min_deflection"}
 
     def _peepi_relevant(self):
         """The PEEPi card applies once oesophageal pressure is declared. A malformed

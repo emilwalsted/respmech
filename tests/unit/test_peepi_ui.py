@@ -41,6 +41,15 @@ def test_mean_height_ignores_breaths_without_one():
     assert plots.mean_peepi_rectangle_height([{}, {}]) is None
 
 
+def test_mean_height_counts_a_breath_with_nothing_to_add_as_zero():
+    """Two of ten breaths with 4 cmH2O and eight with none draw 0.8, matching the mean of
+    ``wob_in_thr``, not 4 (the mean over only the breaths that happen to have PEEPi)."""
+    bs = [{"peepi_added": 4.0}] * 2 + [{"peepi_added": 0.0}] * 8
+    assert plots.mean_peepi_rectangle_height(bs) == pytest.approx(0.8)
+    assert plots.mean_peepi_rectangle_height([{"peepi_added": 0.0}]) == 0.0
+    assert pressure.peepi_rectangle_height({"peepi_added": 0.0}) is None, "nothing to draw at 0"
+
+
 # -- drawing --------------------------------------------------------------------
 def test_rectangle_spans_the_tidal_volume_above_end_expiratory_poes():
     ax = Figure().add_subplot(111)
@@ -80,7 +89,7 @@ def test_recoil_and_polygon_is_unchanged_without_a_height_and_adds_the_rectangle
 
 # -- the written figure, end to end ----------------------------------------------
 @requires_synth()
-def test_figure_run_is_unaffected_with_the_feature_off_and_carries_the_rectangle_when_on(tmp_path):
+def test_figure_run_is_unaffected_with_the_feature_off_and_carries_the_rectangle_when_on(tmp_path, monkeypatch):
     from respmech.core.pipeline import run_batch
     s = synth_settings(tmp_path)
     off = run_batch(s)
@@ -98,13 +107,21 @@ def test_figure_run_is_unaffected_with_the_feature_off_and_carries_the_rectangle
                 assert h is not None and h >= 0
                 any_height = any_height or h > 0
     fname, fr = next(iter(on.ok_files.items()))
+    drawn = []
+    real = plots.draw_peepi_rectangle
+    monkeypatch.setattr(plots, "draw_peepi_rectangle",
+                        lambda ax, eilv, eelv, height, **kw: (drawn.append(height),
+                                                              real(ax, eilv, eelv, height, **kw)))
     p = plots._pv_average(fr, fname, str(tmp_path / "avg.pdf"))
     assert p and (tmp_path / "avg.pdf").stat().st_size > 0
-    # the mean-height rule, on the SAME breaths the figure draws
-    kept = plots._breaths(fr)
-    mean_h = plots.mean_peepi_rectangle_height(kept)
-    assert (mean_h is None) or mean_h > 0
-    assert any_height or mean_h is None
+    # the figure asked for exactly the mean height of the breaths it draws
+    mean_h = plots.mean_peepi_rectangle_height(plots._breaths(fr))
+    assert drawn == [mean_h]
+    # the individual grid asks once per drawn breath, each with that breath's own height
+    drawn.clear()
+    plots._pv_individual(fr, fname, str(tmp_path / "ind.pdf"), 2, 2)
+    kept = [b for b in plots._ordered(fr) if not b.get("ignored")]
+    assert drawn == [pressure.peepi_rectangle_height(b) for b in kept]
 
 
 # -- Preview re-dispatch ---------------------------------------------------------
@@ -148,7 +165,8 @@ def test_run_report_names_the_peepi_source_only_when_the_feature_is_on(tmp_path)
     assert "PEEPi source" not in _report(False)
     on = _report(True)
     assert "PEEPi source:" in on
-    assert ("corrected" in on) or ("dynamic" in on)
+    # the synthetic input carries Pgas, so the gastric-corrected value feeds the threshold work
+    assert "PEEPi source:            corrected" in on
 
 
 # -- the Setup card ---------------------------------------------------------------------
@@ -301,3 +319,37 @@ def test_advanced_ptp_names_the_preflow_column_only_while_peepi_is_on(qapp, tmp_
     else:
         assert seen["text"] is None
     pv.shutdown()
+
+
+@requires_synth()
+def test_an_untouched_hand_edited_value_is_never_rewritten_by_the_card(qapp, tmp_path):
+    """A value outside a box's range or precision (hand-edited TOML) is clipped/rounded on
+    DISPLAY. Editing some other field must not write that display back into the analysis."""
+    from respmech.ui.screens.settings_screen import SettingsScreen
+    s = synth_settings(str(tmp_path), data_out=_OUT)
+    pp = s.processing.pressure.peepi
+    pp.search_window_s, pp.onset_slope_frac, pp.min_deflection = 0.025, 0.005, 60.0
+    sc = SettingsScreen(AppState(s))
+    sc.group_regex.setText("case_(.)")
+    out = sc.to_state().processing.pressure.peepi
+    assert (out.search_window_s, out.onset_slope_frac, out.min_deflection) == (0.025, 0.005, 60.0)
+    sc.peepi_min.setValue(1.5)                     # an actual edit IS written
+    out = sc.to_state().processing.pressure.peepi
+    assert out.min_deflection == 1.5 and out.search_window_s == 0.025
+
+
+def test_cohort_grid_draws_each_files_own_mean_height(tmp_path, monkeypatch):
+    def _breath(name, h):
+        return {"ignored": False, "filename": name, "volume": np.linspace(0, 1, 5),
+                "poes": np.linspace(0, -5, 5), "volumeavg": np.linspace(0, 1, 5),
+                "poesavg": np.linspace(0, -5, 5), "eilvavg": [1.0, -5.0], "eelvavg": [0.0, 0.0],
+                "peepi_added": h}
+    frs = {n: type("FR", (), {"breaths": {1: _breath(n, h)}})() for n, h in (("a", 1.0), ("b", 3.0))}
+    result = type("R", (), {"ok_files": frs})()
+    drawn = []
+    real = plots.draw_peepi_rectangle
+    monkeypatch.setattr(plots, "draw_peepi_rectangle",
+                        lambda ax, eilv, eelv, height, **kw: (drawn.append(height),
+                                                              real(ax, eilv, eelv, height, **kw)))
+    assert plots._pv_cohort(result, str(tmp_path / "c.pdf"), 2, 1)
+    assert sorted(drawn) == [1.0, 3.0]
