@@ -1185,3 +1185,36 @@ def test_the_live_count_explains_when_the_thresholds_cannot_be_evaluated(
     pv._open_mech_advanced()
     assert seen["text"] == "Could not count breaths with these breath-detection thresholds."
     pv.shutdown()
+
+
+def test_mechanics_advanced_offers_and_commits_the_mfvl_fields(qapp, tmp_path, monkeypatch):
+    """Lung volumes carries the four MFVL fields (source, EFL tolerances, MVV
+    multiplier); an accepted edit lands on ``processing.mfvl`` and a Cancel changes nothing.
+    Every field names its settings path in its tooltip (the shared help_text contract)."""
+    pv = _preview(qapp, tmp_path)
+    s = pv.state.settings
+    seen = {}
+
+    def _edit(d):
+        for key, path in (("source", "processing.mfvl.source"),
+                          ("efl_rel_tol", "processing.mfvl.efl_rel_tol"),
+                          ("efl_abs_tol_lps", "processing.mfvl.efl_abs_tol_lps"),
+                          ("mvv_fev1_multiplier", "processing.mfvl.mvv_fev1_multiplier")):
+            seen[key] = path in d.widget(key).toolTip()
+        d.widget("source").setCurrentIndex(1)             # Envelope of all attempts
+        d.widget("efl_rel_tol").setValue(0.05)
+        d.widget("efl_abs_tol_lps").setValue(0.1)
+        d.widget("mvv_fev1_multiplier").setValue(35.0)
+
+    _mech_stub(monkeypatch, _edit, accept=False)
+    pv._open_mech_advanced()
+    assert all(seen.values()) and len(seen) == 4
+    assert s.processing.mfvl.source == "single" and s.processing.mfvl.efl_rel_tol == 0.0
+
+    _mech_stub(monkeypatch, _edit, accept=True)
+    pv._open_mech_advanced()
+    assert s.processing.mfvl.source == "envelope"
+    assert s.processing.mfvl.efl_rel_tol == pytest.approx(0.05)
+    assert s.processing.mfvl.efl_abs_tol_lps == pytest.approx(0.1)
+    assert s.processing.mfvl.mvv_fev1_multiplier == pytest.approx(35.0)
+    pv.shutdown()

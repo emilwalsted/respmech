@@ -385,3 +385,90 @@ def test_flow_volume_loop_renders_a_real_figure_without_crashing(qapp, tmp_path)
     assert pv.campbell.figure.axes, "no axes drawn"
     assert pv.btn_export_fig.isEnabled()
     win.close()
+
+
+def _flow_only_mfvl_settings(tmp_path, *, fvc=True):
+    from respmech.core.settings import BreathTypeEntry
+    s = synth_settings(str(tmp_path), channels={"poes": None, "pgas": None, "pdi": None,
+                                                "emg": [], "entropy": []})
+    s.input.files = "synth_manoeuvre_*.csv"
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_manoeuvre_A.csv", breath=4, kind="ic"))
+    if fvc:
+        s.processing.breath_types.append(
+            BreathTypeEntry(file="synth_manoeuvre_A.csv", breath=7, kind="fvc"))
+    s.validate()
+    return s
+
+
+@requires_synth()
+def test_campbell_panel_draws_tidal_loops_in_the_mfvl_with_a_typed_fvc(qapp, tmp_path):
+    """Flow only + a breath typed as FVC in the previewed file -> the panel draws the
+    tidal loops inside that file's own MFVL (real drawer, real run result); without a typed
+    FVC the plain flow-volume loop stays; with Poes it is still the Campbell diagram."""
+    from respmech.core.pipeline import run_batch
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.state import AppState
+
+    s = _flow_only_mfvl_settings(tmp_path)
+    fr = run_batch(s).files["synth_manoeuvre_A.csv"]
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._campbell_manoeuvres = fr.manoeuvres
+    pv._draw_campbell_or_loop(fr.breaths)
+    ax = pv.campbell.figure.axes[0]
+    assert "MFVL" in [t.get_text() for t in ax.get_legend().get_texts()]
+    assert ax.get_xlabel().startswith(("Volume below TLC", "Below TLC", "V ("))
+    n_tidal = sum(1 for b in fr.breaths.values() if not b["ignored"])
+    assert len(ax.lines) >= n_tidal + 2, "the tidal loops and the envelope must all be drawn"
+    assert pv.btn_export_fig.isEnabled()
+    assert pv._campbell_panel._title_label.fullText() == "Flow-volume loop"
+
+    # no manoeuvres (a file with nothing typed) -> the plain loop, not the MFVL picture
+    pv._campbell_manoeuvres = {}
+    pv._draw_campbell_or_loop(fr.breaths)
+    ax = pv.campbell.figure.axes[0]
+    assert ax.get_legend() is None
+    assert ax.get_xlabel().startswith(("Lung volume", "Volume (L)", "V (L)"))
+
+    # forgetting the diagram forgets the manoeuvres too (the export must not resurrect them)
+    pv._campbell_manoeuvres = fr.manoeuvres
+    pv._forget_campbell()
+    assert pv._campbell_manoeuvres is None
+    win.close()
+
+
+@requires_synth()
+def test_campbell_panel_without_a_typed_fvc_keeps_the_plain_flow_volume_loop(qapp, tmp_path):
+    from respmech.core.pipeline import run_batch
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.state import AppState
+
+    s = _flow_only_mfvl_settings(tmp_path, fvc=False)
+    fr = run_batch(s).files["synth_manoeuvre_A.csv"]
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._campbell_manoeuvres = fr.manoeuvres          # an IC alone resolves no MEFV curve
+    pv._draw_campbell_or_loop(fr.breaths)
+    assert pv.campbell.figure.axes[0].get_legend() is None
+    win.close()
+
+
+@requires_synth()
+def test_campbell_panel_says_why_no_tidal_loops_are_drawn_without_an_ic(qapp, tmp_path):
+    from respmech.core.pipeline import run_batch
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.state import AppState
+
+    s = _flow_only_mfvl_settings(tmp_path)
+    s.processing.breath_types[:] = [
+        BreathTypeEntry(file="synth_manoeuvre_A.csv", breath=7, kind="fvc")]
+    fr = run_batch(s).files["synth_manoeuvre_A.csv"]
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._campbell_manoeuvres = fr.manoeuvres
+    pv._draw_campbell_or_loop(fr.breaths)
+    ax = pv.campbell.figure.axes[0]
+    assert any("inspiratory-capacity reference" in t.get_text() for t in ax.texts)
+    win.close()
