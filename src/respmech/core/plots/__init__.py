@@ -17,6 +17,8 @@ figures (vector, paginated) under ``<out>/diagnostics/``, driven by the
 * ``save_drift``        → the staged volume-correction figure (uncorrected → zeroed →
   drift-corrected → trend-adjusted), the trend-adjustment diagnostic (when trend
   correction is on), and the end-expiratory/end-inspiratory endpoint trend check.
+* ``save_flow_volume``  → the file's tidal flow-volume loops placed inside its own maximal
+  flow-volume loop (MFVL), when a breath is typed as a forced vital capacity.
 * ``save_emg``          → per-channel EMG overviews at each conditioning stage (raw /
   ECG-removed / noise-reduced) with the flow reference, R-peak capture markers and
   breath boundaries; ``processing.emg.plot_yscale`` sets the y-range.
@@ -35,6 +37,7 @@ import os
 import numpy as np
 
 from respmech.core import plot_style
+from respmech.core.analysis import mfvl as mfvllib
 from respmech.core.analysis.signals import Capabilities
 
 _BRAND = "#2C6E9B"
@@ -185,6 +188,57 @@ def _pv_cohort(result, path, cols, rows):
     return _pv_grid(reps, "All files — average Campbell", path, cols, rows,
                     "volumeavg", "poesavg", "eilvavg", "eelvavg",
                     lambda b: str(b.get("filename", "?")))
+
+
+# --------------------------------------------------------------------------- #
+# Flow-volume: tidal loops inside the MFVL
+# --------------------------------------------------------------------------- #
+def draw_flow_volume_mfvl(ax, placed, *, loop=_MUTED, mean=_BRAND, envelope="black",
+                          marker=_MUTED, label=_MUTED):
+    """Draw ``mfvl.placed_tidal_loops``'s result onto ``ax``: grey tidal loops, a bold
+    mean loop, the MFVL envelope and dotted EELV/EILV markers. Volume runs from TLC on the
+    left. The colours are parameters so the Preview panel can draw the same picture in its
+    own theme; the defaults are the light-theme colours the PDF uses."""
+    for x, flow in placed["loops"]:
+        ax.plot(x, flow, color=loop, alpha=0.35, lw=0.8, zorder=1)
+    if placed["mean"] is not None:
+        ax.plot(placed["mean"][0], placed["mean"][1], color=mean, lw=2.4, zorder=3,
+                label="average tidal breath")
+    ax.plot(placed["mefv_v"], placed["mefv_flow"], color=envelope, lw=1.8, zorder=2,
+            label="MFVL")
+    if placed["eelv"] is not None:
+        ax.axvline(placed["eelv"], color=marker, ls=":", lw=1.0, zorder=0)
+        ax.text(placed["eelv"], 0.02, " EELV", transform=ax.get_xaxis_transform(),
+                va="bottom", ha="left", fontsize=8, color=label)
+    if placed["eilv"] is not None:
+        ax.axvline(placed["eilv"], color=marker, ls=":", lw=1.0, zorder=0)
+        ax.text(placed["eilv"], 0.02, "EILV ", transform=ax.get_xaxis_transform(),
+                va="bottom", ha="right", fontsize=8, color=label)
+    ax.axhline(0, color=marker, lw=0.8, zorder=0)
+
+
+def _flow_volume_mfvl(fr, fname, path, settings):
+    """Tidal flow-volume loops placed inside the file's own maximal flow-volume loop
+    (MFVL). ``None`` for a file without a resolved FVC reference; with an FVC but no IC
+    reference only the envelope is drawn (the loops cannot be anchored to the TLC axis),
+    with a note saying so."""
+    placed = mfvllib.placed_tidal_loops(
+        fr.breaths, getattr(fr, "manoeuvres", None), settings.processing.mfvl,
+        settings.processing.lung_volume.ic)
+    if placed is None:
+        return None
+    fig = _canvas((6.4, 5.4))
+    ax = fig.add_subplot(111)
+    draw_flow_volume_mfvl(ax, placed)
+    ax.set_xlabel("Volume below TLC (L)")
+    ax.set_ylabel("Flow (L/s)")
+    ax.grid(True, color=_MUTED, alpha=0.2)
+    if placed["ic_op"] is None:
+        ax.text(0.5, 0.06, "No inspiratory-capacity reference: tidal loops cannot be placed",
+                transform=ax.transAxes, ha="center", fontsize=9, color=_MUTED)
+    ax.set_title(f"{fname} — tidal breathing in the MFVL")
+    ax.legend(loc="upper right", frameon=False, fontsize=8)
+    return _save(fig, path)
 
 
 # --------------------------------------------------------------------------- #
@@ -528,6 +582,13 @@ def per_file_figure_jobs(settings):
         jobs.append(("raw signals", _signals_raw, "signals (raw).pdf"))
     if dg.save_trimmed and any_pressure_or_flow:
         jobs.append(("trimmed signals", _signals_trimmed, "signals (trimmed).pdf"))
+    # the MFVL figure needs a flow trace and a typed FVC breath (settings-only ceiling; a
+    # file with no resolvable FVC still returns None from the job itself)
+    if (getattr(dg, "save_flow_volume", True) and caps is not None and caps.flow
+            and caps.volume and mfvllib.fvc_typed_in_settings(settings)):
+        jobs.append(("flow-volume MFVL",
+                     lambda fr, fn, p: _flow_volume_mfvl(fr, fn, p, settings),
+                     "flow-volume (tidal in MFVL).pdf"))
     if dg.save_drift and volume:
         jobs.append(("volume correction", _volume_correction, "volume correction.pdf"))
         jobs.append(("trend", lambda fr, fn, p: _trend(fr, fn, p, settings), "volume trend.pdf"))
