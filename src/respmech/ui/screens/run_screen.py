@@ -68,9 +68,11 @@ _FIX_HINTS = {
                             "EMG – segments, or the settings file directly.",
     "ReferenceLinkError": "This file's IC reference could not be resolved (the source "
                           "file, its typed breaths, or its own breath typing) and "
-                          "processing.lung_volume.require_references is set — fix the "
-                          "reference, or untick 'Require references' to fall back to "
-                          "the softer NaN-plus-notice behaviour instead.",
+                          "'Require linked references' is on — fix the reference (Preview "
+                          "& QC ▸ Mechanics ▸ Reference manoeuvres…), or untick 'Require "
+                          "linked references' under Preview & QC ▸ Mechanics ▸ Advanced… "
+                          "▸ Lung volumes to fall back to the softer NaN-plus-notice "
+                          "behaviour instead.",
 }
 
 
@@ -452,7 +454,16 @@ class RunScreen(QWidget):
         file count/source, planned output count/destination — from the SAME planner
         (``core.io.plan.plan_outputs``) ``write_batch`` itself is measured against, never a
         second hand-rolled count; then every current blocker as a full sentence, or a
-        plain statement that the run can start."""
+        plain statement that the run can start.
+
+        M-37: a THIRD line, 'References: N/M linked', is inserted BETWEEN the head and the
+        blocker/ready line — never appended after it — so existing callers reading
+        ``.text().split("\\n")[-1]`` for the blocker/ready line are unaffected regardless
+        of whether this line is present. Shown only when this analysis actually declares
+        SOME reference/subject configuration (``processing.references``/
+        ``reference_defaults``/``input.subjects``) — an ordinary analysis using none of
+        this gets no extra line at all, matching the 'grows by at most one text line'
+        budget."""
         if blockers is None:
             blockers = self._blockers()
         s = self.state.settings
@@ -472,8 +483,19 @@ class RunScreen(QWidget):
                 head += f" — into {out or '(output not set)'}"
         else:
             head += f" — into {out or '(output not set)'}"
+        proc = s.processing
+        lines = [head]
+        if files and (proc.references or proc.reference_defaults or s.input.subjects):
+            from respmech.core.analysis.references import resolve_reference
+            names = {os.path.basename(f) for f in files}
+            linked = sum(
+                1 for n in names
+                if (ref := resolve_reference(n, "ic", s)) is not None
+                and ref.file in names and ref.breaths)
+            lines.append(f"References: {linked}/{len(names)} linked")
         tail = ("⚠ " + "  ·  ".join(blockers)) if blockers else "Ready to run."
-        self._commitment.setText(f"{head}\n{tail}")
+        lines.append(tail)
+        self._commitment.setText("\n".join(lines))
         self._commitment.setProperty("status", "warn" if blockers else "info")
         st = self._commitment.style()
         if st is not None:

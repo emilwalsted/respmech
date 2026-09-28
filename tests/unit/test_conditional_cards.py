@@ -137,3 +137,25 @@ def test_editing_them_still_marks_the_analysis_modified(qapp, tmp_path):
         sc._mark_clean()
         getattr(sc, name).setValue(value)
         assert sc.is_dirty(), f"{name} no longer marks the analysis modified"
+
+
+# -- Subjects && lung volumes (M-37) ------------------------------------------
+def _subjects_card(sc):
+    return _card(sc, "Subjects && lung volumes")
+
+
+def test_subjects_card_is_hidden_when_no_subjects_are_declared(qapp, tmp_path):
+    sc = _screen(qapp, tmp_path, entropy=())
+    assert not sc.state.settings.input.subjects
+    assert not _subjects_card(sc).isVisible()
+
+
+def test_subjects_card_appears_once_a_subject_is_added(qapp, tmp_path):
+    from respmech.core.settings import SubjectEntry
+    sc = _screen(qapp, tmp_path, entropy=())
+    card = _subjects_card(sc)
+    assert not card.isVisible()
+    sc.state.settings.input.subjects.append(SubjectEntry(key="synth_case", tlc_l=6.0))
+    sc._update_disclosure()
+    qapp.processEvents()
+    assert card.isVisible()

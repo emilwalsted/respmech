@@ -417,6 +417,10 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
             QTimer.singleShot(0, self._announce_noise_repair)
 
         self.file_rail.selectionChanged.connect(self._on_file_selected)
+        # M-37: the rail's own "Reference manoeuvres…" row action (M-32, unconnected
+        # until this ticket) opens the same full picker the Mechanics type menu does,
+        # for the ROW's file rather than the currently previewed one.
+        self.file_rail.referencesRequested.connect(self._open_reference_picker)
         # the chip's themed height isn't known until the EMG sub-tab is first laid out;
         # match the 'Set noise profile' button to it then, so the strip is one band.
         self.subtabs.currentChanged.connect(lambda *_: QTimer.singleShot(0, self._align_noise_strip))
@@ -704,6 +708,8 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         state kinds it might affect (exclusion, typing, segment count) stale on any
         OTHER row than the one just edited."""
         from respmech.core.settings import is_carried_folder
+        from respmech.core.analysis.references import resolve_reference
+        from respmech.ui.validation import matching_files
         current_folder = self.state.settings.input.folder
         proc = self.state.settings.processing
         excl_counts = {e.file: len(e.breaths) for e in proc.exclude_breaths}
@@ -719,6 +725,19 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         seg = proc.segmentation
         seg_counts = ({e.file: 1 + len(e.times_s) for e in seg.separators}
                      if seg.method == "separators" else {})
+        # M-37: the 'reference' badge FileRailEntry has carried since M-32 (comment there:
+        # "stays None until a later ticket starts calling set_reference()") — this is that
+        # ticket. ``matched`` is the batch's OWN glob (ui.validation.matching_files), never
+        # the manifest's majority-column-count subset (check_links' own doctrine: a
+        # reference source can be a differently-shaped, manoeuvre-only recording a column
+        # vote would exclude) — a resolved reference whose source is not even in the batch,
+        # or names no breaths at all, is reported 'missing' rather than 'linked', so a
+        # broken link shows up on the row instead of reading as quietly resolved. This does
+        # NOT reproduce every check_links caution (an excluded or mistyped source breath
+        # still shows 'linked'/'self') — a deliberately narrower, presentational summary;
+        # check_links itself (Setup's own science notes) is the exhaustive version.
+        matched = {os.path.basename(f) for f in matching_files(
+            self.state.settings.input.folder, self.state.settings.input.files)}
         for name in self.file_rail.filenames():
             self.file_rail.set_excluded_count(name, excl_counts.get(name, 0),
                                               carried=excl_carried.get(name, False))
@@ -730,6 +749,14 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
                 self.file_rail.set_segments(name, seg_counts.get(name, 1))
             else:
                 self.file_rail.set_segments(name, None)
+            ref = resolve_reference(name, "ic", self.state.settings)
+            if ref is None:
+                ref_status = None
+            elif ref.file not in matched or not ref.breaths:
+                ref_status = "missing"
+            else:
+                ref_status = "self" if ref.file == name else "linked"
+            self.file_rail.set_reference(name, ref_status)
 
     def _refresh_files(self):        # kept for existing wiring + tests
         self.refresh_files()
