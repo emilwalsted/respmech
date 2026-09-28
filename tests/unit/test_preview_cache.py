@@ -11,6 +11,7 @@ from _helpers import INPUT, requires_synth, synth_settings  # noqa: F401
 pytestmark = requires_synth()
 
 from respmech.ui.screens import _preview_cache as pc  # noqa: E402
+from respmech.core.settings import resolve_noise_reference_mode  # noqa: E402
 
 
 def _s(tmp_path):
@@ -93,10 +94,9 @@ def _emg_only_settings(tmp_path):
 
 
 def test_ref_clip_key_expiration_branch_tracks_segmentation_method(tmp_path):
-    """M-24: the expiration branch now carries segmentation.method too (a no-op TODAY —
-    _emg_segmented hardcodes 'flow' until M-23 — but keying on it now means a cache entry
-    built before that fix can never be served stale once the mask-building actually starts
-    reading it)."""
+    """The expiration branch carries segmentation.method: since M-23, _emg_segmented's
+    mask actually follows the configured method (it hardcoded 'flow' before), so a
+    settings change here must miss."""
     s = _s(tmp_path)
     s.processing.emg.noise.use_expiration = True
     ref = os.path.join(INPUT, "synth_case_A.csv")
@@ -104,6 +104,64 @@ def test_ref_clip_key_expiration_branch_tracks_segmentation_method(tmp_path):
     assert k0 is not None
     s.processing.segmentation.method = "volume"
     assert pc.ref_clip_key(s, ref) != k0
+
+
+def test_ref_clip_key_expiration_branch_tracks_volume_trend(tmp_path):
+    """M-23: _emg_segmented's mask now also follows processing.volume.correct_trend (it
+    never trend-corrected before), so toggling it -- or, once enabled, changing HOW it
+    corrects -- must miss instead of serving a preview cached under the old trend."""
+    s = _s(tmp_path)
+    s.processing.emg.noise.use_expiration = True
+    ref = os.path.join(INPUT, "synth_case_A.csv")
+    k0 = pc.ref_clip_key(s, ref)
+    assert k0 is not None
+    s.processing.volume.correct_trend = True
+    k1 = pc.ref_clip_key(s, ref)
+    assert k1 != k0
+    s.processing.volume.trend_method = "nearest"
+    assert pc.ref_clip_key(s, ref) != k1
+
+
+def test_ref_clip_key_expiration_branch_tracks_volume_drift_under_volume_method(tmp_path):
+    """M-23: with segmentation.method == 'volume', _emg_segmented's mask is built by
+    separateintobreathsbyvolume's peak search against the DRIFT-corrected volume (an
+    absolute-height threshold), so drift correction can change which samples are
+    detected as inspiratory/expiratory peaks even with trend correction untouched --
+    unlike the flow-method case, where drift only changes a breath's reported VOLUME
+    values, never its time boundaries. correct_drift and the peak thresholds must both
+    invalidate the cache here."""
+    s = _s(tmp_path)
+    s.processing.emg.noise.use_expiration = True
+    s.processing.segmentation.method = "volume"
+    ref = os.path.join(INPUT, "synth_case_A.csv")
+    k0 = pc.ref_clip_key(s, ref)
+    assert k0 is not None
+    s.processing.volume.correct_drift = False
+    k1 = pc.ref_clip_key(s, ref)
+    assert k1 != k0
+    s.processing.segmentation.peak.height = 0.5
+    assert pc.ref_clip_key(s, ref) != k1
+
+
+def test_noise_report_key_auto_prop_tracks_volume_trend_and_drift_in_intervals_mode(tmp_path):
+    """M-23: _build_noise_set's auto_prop gather segments EVERY batch file through
+    segment_file with the globally configured method/drift/trend/peak settings,
+    regardless of which mode the single reference CLIP resolves to. A test whose
+    reference resolves to 'intervals' (the schema default noise=True gives) must still
+    miss on a drift/trend edit once auto_prop is on, or the noise-fidelity report can be
+    served stale after an edit that has nothing to do with the interval span itself."""
+    s = _s(tmp_path)
+    assert resolve_noise_reference_mode(s) == "intervals"
+    s.processing.emg.noise.auto_prop = True
+    files = [os.path.join(INPUT, "synth_case_A.csv"), os.path.join(INPUT, "synth_case_B.csv")]
+    ref = os.path.join(INPUT, "synth_case_A.csv")
+    k0 = pc.noise_report_key(s, ref, files)
+    assert k0 is not None
+    s.processing.volume.correct_trend = True
+    k1 = pc.noise_report_key(s, ref, files)
+    assert k1 != k0
+    s.processing.volume.correct_drift = False
+    assert pc.noise_report_key(s, ref, files) != k1
 
 
 def test_ref_clip_key_rest_segments_branch_tracks_separators_and_a_rest_kind(tmp_path):

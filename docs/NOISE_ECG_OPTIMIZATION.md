@@ -324,3 +324,50 @@ a genuine EMG-only active/quiet split (rest-typed segments against the rest, or 
 needs its own design. `Settings.validate()` requires `auto_prop` off whenever noise
 reduction is enabled for an EMG-only set, so this is a clear, named restriction rather
 than an unguarded crash.
+
+## 7. The expiration mask now follows the analysis's own segmentation, not a hardcoded copy
+
+`core.pipeline._emg_segmented` builds the `'expiration'`-mode reference clip (and
+gathers the active/quiet EMG `auto_prop` samples from) by segmenting a file into
+breaths and reading each one's inspiration/expiration sample counts. Until now it did
+this with its own private, hardcoded copy of the trim/zero/drift/segment sequence:
+always flow-method breath separation, and volume drift correction only (never trend
+correction), regardless of what `processing.mechanics.separateby`/`processing.volume.
+correct_trend` actually said. A volume-segmented or trend-corrected analysis therefore
+built its noise masks from breaths that did not match the ones the analysis itself
+used — the mask and the analysis could quietly disagree about where inspiration ends
+and expiration begins.
+
+`_emg_segmented` now calls `core.pipeline.segment_file` (the same trim/zero/drift/
+trend/segment sequence `run_batch`'s main loop and `_rest_segments_clip` already use)
+instead of re-implementing a piece of it. The mask it returns is therefore always
+built from the SAME breaths the analysis itself will use, whatever the configured
+method or trend setting. This is a deliberate, documented numerical change for
+exactly the combinations that could previously disagree — noise reduction enabled AND
+(`separateby == 'volume'` OR `correct_trend` on) — every flow-method, no-trend
+scenario (every existing golden/synthetic scenario, and the overwhelming common case
+in practice) is unaffected, since `segment_file` reduces to byte-identical behaviour
+there. See `tests/unit/test_noise.py::test_emg_segmented_mask_equals_main_loop_mask`.
+
+A caching note for anyone touching this again: `segment_file`'s own per-file load/
+ECG-removal cache lookup is consuming (`cache.pop`), by design, for the main loop's
+single pass over each file. `_emg_segmented` is a SECOND, earlier caller of
+`segment_file` for the same file (during noise-profile building, before the main
+loop reaches it), so it must not let that pop drain the shared cache — see the
+function's own docstring for how it hands `segment_file` a throwaway one-entry cache
+instead, keeping the real one intact for the main loop's later call
+(`tests/unit/test_load_cache.py` pins the "loaded/ECG-removed at most once per run"
+invariant this preserves).
+
+A UI-cache note, for the same reason: `ui.screens._preview_cache.ref_clip_key`/
+`noise_report_key` (the Preview screen's memoisation of the reference-clip/
+noise-fidelity computation) previously excluded volume drift and trend correction
+from their keys on the stated grounds that the mask never depended on them. That was
+already only half true for `method == 'volume'` — `separateintobreathsbyvolume`
+searches for inspiratory/expiratory peaks by an absolute height threshold against the
+drift-(and, once configured, trend-)corrected volume, so drift correction alone can
+shift which samples are detected as peaks, independently of trend. Both keys now
+include drift, trend and the volume-peak thresholds (`_method_sensitive_key` in that
+module) wherever they already depend on the segmentation method, so a Preview panel
+can no longer keep showing a fidelity/reference-clip result computed under a
+volume-peak, drift or trend setting the user has since changed.
