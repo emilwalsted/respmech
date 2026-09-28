@@ -1,6 +1,7 @@
 """RespMech command-line interface.
 
     respmech run       settings.toml [--dry-run]
+    respmech breaths   settings.toml [FILE]
     respmech migrate   old_settings.py -o new_settings.toml
     respmech validate  settings.toml
     respmech init      new_settings.toml --signals flow,poes,emg [--folder DIR --files MASK --fs HZ]
@@ -84,6 +85,19 @@ def cmd_run(args) -> int:
         print(f"  Analyses: {', '.join(caps.analyses())}")
         print()
         unit_word = "segments" if caps.mode == "emg_only" else "breaths"
+        # Whether THIS analysis names an IC reference anywhere at all -- the
+        # same family flag core.analysis.references.attach() already computed while
+        # run_batch was building `result` above (never re-derived here), gating the
+        # whole per-file reference line the way attach() itself gates the vol_ic_ref
+        # column family: no IC reference named anywhere -> no lung-volume columns ->
+        # nothing useful to report per file. FVC has no consuming column yet (see
+        # references.attach's own docstring), so its ref (when the family IS present)
+        # is shown as purely informational extra context on the same line, resolved
+        # fresh via resolve_reference rather than a (non-existent) references_used
+        # entry.
+        ic_family = bool((result.analysis_plan or {}).get("ic", {}).get("family"))
+        if ic_family:
+            from respmech.core.analysis.references import resolve_reference
         for fname, fr in result.ok_files.items():
             if getattr(fr, "role", "tidal") == "reference":
                 # M-30: no tidal table for this file at all — say so plainly instead
@@ -94,6 +108,16 @@ def cmd_run(args) -> int:
             else:
                 n = 0 if fr.breaths_table is None else len(fr.breaths_table)
                 print(f"  {fname}: {n} {unit_word}")
+                if ic_family:
+                    ic_used = fr.references_used.get("ic")
+                    if ic_used is None:
+                        print("    no IC reference — lung-volume columns NaN")
+                    else:
+                        ic_label = _ref_label(fname, ic_used["source"], ic_used["breaths"])
+                        fvc_ref = resolve_reference(fname, "fvc", settings)
+                        fvc_label = (_ref_label(fname, fvc_ref.file, fvc_ref.breaths)
+                                    if fvc_ref is not None else "none")
+                        print(f"    IC ref: {ic_label} · FVC ref: {fvc_label}")
 
     if result.failed_files:
         print(f"\n{len(result.failed_files)} file(s) FAILED:", file=sys.stderr)
@@ -101,6 +125,90 @@ def cmd_run(args) -> int:
             print(f"  {fname}: {fr.error}", file=sys.stderr)
         return 1
     return 0
+
+
+def cmd_breaths(args) -> int:
+    """Number every breath/segment ``core.pipeline.segment_file`` would build for one
+    or all matched files -- the SAME step ``run_batch``'s main loop uses, so the
+    numbers this prints are exactly ``FileResult.breaths``' own keys for a real run of
+    the same settings (this command's own acceptance test pins that equality). Skips
+    the shared noise profile and cross-file reference forepass ``run_batch`` builds
+    (neither affects breath boundaries/numbering/kind -- only EMG *content* within a
+    breath, which this inspection tool never prints), so a single file's breaths can be
+    listed without a full batch's setup cost. Still applies
+    ``core.pipeline.apply_resample_override`` first (same call ``run_batch`` makes) --
+    without it, a pre-analysis-resample analysis would be segmented at the file's
+    native rate here instead of the resampled rate a real run actually uses.
+
+    The suggested-FVC breath (``core.analysis.manoeuvres.suggest_fvc`` -- the file's
+    longest untyped expiration) drives a ready-to-paste ``[[processing.breath_types]]``
+    snippet with real numbers filled in (not a ``<N>`` placeholder), including
+    ``folder`` so the entry is never mistaken for one carried over from a different
+    recordings folder (same convention ``respmech init``'s exclude-breaths example
+    already documents)."""
+    import os
+
+    import numpy as np
+
+    from respmech.settingsio.toml_io import load_toml
+    from respmech.core._legacy_ns import to_legacy_ns
+    from respmech.core.pipeline import apply_resample_override, match_input_files, segment_file
+    from respmech.core.analysis.manoeuvres import suggest_fvc
+
+    settings = load_toml(args.settings)
+    settings.validate()
+    allfiles = match_input_files(settings.input.folder, settings.input.files)
+    if args.file:
+        target = os.path.basename(args.file).lower()
+        files = [f for f in allfiles if os.path.basename(f).lower() == target]
+        if not files:
+            print(f"error: {args.file!r} does not match any file in "
+                 f"'{settings.input.folder}'", file=sys.stderr)
+            return 2
+    else:
+        files = allfiles
+    if not files:
+        print("error: no input files match.", file=sys.stderr)
+        return 2
+
+    s = to_legacy_ns(settings)
+    apply_resample_override(settings, s)
+    fs = s.input.format.samplingfrequency
+    ok = True
+    for fi in files:
+        path = os.path.abspath(fi)
+        filename = os.path.basename(path)
+        print(f"\n{filename}:")
+        try:
+            breaths, _trimmed = segment_file(settings, s, path, filename=filename)
+        except Exception as e:
+            print(f"  ERROR: {type(e).__name__}: {e}", file=sys.stderr)
+            ok = False
+            continue
+        hint = suggest_fvc(breaths)
+        for no, b in breaths.items():
+            # len(...)/fs, not time[-1]-time[0]: the same sample-count convention
+            # every other duration in this codebase uses (core/pipeline.py's own
+            # EMG-only seg_duration_s, calculatemechanics' ti/te/ttot).
+            t = np.asarray(b["time"]).reshape(-1)
+            onset = float(t[0]) if t.size else 0.0
+            duration = t.size / fs
+            kind = b.get("kind") or "tidal"
+            tail = " · excluded" if b.get("ignored") else ""
+            if no == hint:
+                tail += " · suggested FVC"
+            print(f"  {b['name']}: onset {onset:.2f}s · duration {duration:.2f}s · "
+                 f"kind={kind}{tail}")
+        if hint is None:
+            print("  (no suggested FVC breath)")
+        else:
+            print("  # ready to paste into settings.toml:")
+            print("  [[processing.breath_types]]")
+            print(f'  file = "{filename}"')
+            print(f"  breath = {hint}")
+            print('  kind = "fvc"')
+            print(f"  folder = {_toml_string(settings.input.folder)}")
+    return 0 if ok else 1
 
 
 def _toml_string(value: str) -> str:
@@ -134,6 +242,18 @@ def _toml_string(value: str) -> str:
         else:
             escaped.append(ch)
     return '"' + "".join(escaped) + '"'
+
+
+def _ref_label(filename: str, source: str, breaths) -> str:
+    """``'own #9'``/``'P03_IC.txt #2,#3'`` -- ``cmd_run``'s compact per-file IC/FVC
+    reference label for its ``--dry-run`` output. ``source`` is ``'own'`` rather than
+    repeating the filename when the reference resolved to a breath typed IN this same
+    file (``core.analysis.references.resolve_reference``'s "own typed" tier, or a
+    ``FileResult.references_used`` entry whose ``'source'`` equals ``filename``) -- the
+    common case for a single-file exercise test with its own pre-exercise IC/FVC
+    breath, where repeating the filename back at the user would be pure noise."""
+    label_source = "own" if source == filename else source
+    return f"{label_source} " + ",".join(f"#{b}" for b in breaths)
 
 
 def _init_template(signals: list, *, folder, files, fs: "int | None") -> str:
@@ -293,7 +413,25 @@ def cmd_validate(args) -> int:
     if off:
         summary += f" · off: {off} (not in signal set)"
     print(summary)
+    # Every reason a reference/subject link in this analysis might not work,
+    # computed over the SAME matched file list `files` above (check_links's own
+    # docstring: "whatever the caller's OWN file list is ... match_input_files's
+    # result for a real run") -- advisory only, never on their own a reason to fail
+    # `validate` (Settings.validate() is the only thing that ever BLOCKS a run, and
+    # only for require_references -- references.check_links's own docstring). The
+    # one exception mirrors the SAME hard-block condition ui.validation.path_problem
+    # already enforces before Setup lets a run start: a reference source genuinely
+    # missing from the matched files while lung_volume.require_references is set.
+    # Anything else check_links flags (an excluded/mistyped linked breath, a
+    # reference_defaults group matching no file, an outlier column layout) stays
+    # advisory here too -- validate has no equivalent hard block for those, and this
+    # command must not invent a stricter one of its own.
+    from respmech.core.analysis.references import check_links, missing_reference_sources
+    for caution in check_links(settings, files):
+        print(f"WARNING: {caution}", file=sys.stderr)
     ok = True
+    if settings.processing.lung_volume.require_references and missing_reference_sources(settings, files):
+        ok = False
     if not files:
         print("WARNING: no input files match.", file=sys.stderr)
         ok = False
@@ -355,6 +493,13 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("settings")
     pr.add_argument("--dry-run", action="store_true", help="compute but do not write output files")
     pr.set_defaults(func=cmd_run)
+
+    pb = sub.add_parser(
+        "breaths", help="number every detected breath/segment for one or all matched files")
+    pb.add_argument("settings")
+    pb.add_argument("file", nargs="?",
+                    help="only this file (basename); every matched file if omitted")
+    pb.set_defaults(func=cmd_breaths)
 
     pm = sub.add_parser("migrate", help="convert a legacy .py settings file to TOML")
     pm.add_argument("legacy")

@@ -31,6 +31,7 @@ class MigrationReport:
         lines = ["# Settings migration report", ""]
         for title, items in (("Mapped (renamed/moved)", self.mapped),
                              ("Normalised (drift fixed)", self.normalised),
+                             ("Defaulted (not present in the legacy file)", self.defaulted),
                              ("Dropped (not used by the code)", self.dropped)):
             lines.append(f"## {title}")
             lines += [f"- {i}" for i in items] or ["- (none)"]
@@ -102,6 +103,23 @@ def migrate_dict(legacy: dict) -> tuple[Settings, MigrationReport]:
     }
     m("input.inputfolder->input.folder; input.data.column_*->input.channels.*; "
       "columns_emg/entropy->channels.emg/entropy")
+    # The legacy format has no separate notion of "this channel was never
+    # configured" versus "column_pgas/pdi is simply absent from an older/hand-edited
+    # settings dict" -- `data.get(...)` above already treats either the same way
+    # (None, a legitimate "no gastric/transdiaphragmatic-pressure channel" value that
+    # migrates and validates cleanly today), but a silent None left the fact that
+    # THIS particular file never named the key at all invisible to a reader of the
+    # migration report. Named here as Defaulted, not Dropped (nothing was thrown
+    # away -- there was never a value to keep) and not Mapped (no legacy key maps to
+    # it), for exactly the two roles the legacy dict is missing.
+    if "column_pgas" not in data:
+        r.defaulted.append(
+            "input.channels.pgas: not present in the legacy file — left unset "
+            "(no gastric-pressure channel)")
+    if "column_pdi" not in data:
+        r.defaulted.append(
+            "input.channels.pdi: not present in the legacy file — left unset "
+            "(no transdiaphragmatic-pressure channel)")
 
     # --- processing.sampling (resampling-options line) ---
     new_proc: dict = {}
@@ -274,6 +292,20 @@ def migrate_dict(legacy: dict) -> tuple[Settings, MigrationReport]:
     # schema upgrades applied while building (e.g. the retired absolute trend threshold)
     # belong in the migration report too, not only in Settings.notices.
     r.normalised.extend(settings.notices)
+    # analysis.signals (R7) is a v2-only concept -- a legacy file names channel
+    # columns, never a signal SET, so this is unconditionally absent from every legacy
+    # dict, always derived. Report what it derives to (core.analysis.signals.
+    # derived_signals, over the channels this same migration just built above) so a
+    # reader of the report sees the effective signal set explicitly, rather than
+    # discovering it only later from `respmech validate`'s own Signals: line. Purely
+    # informational: `new["analysis"]` is deliberately left unset here (the empty-list
+    # default already means "derive it", per AnalysisSettings' own docstring, and
+    # settingsio.toml_io.save_toml drops an explicit signals list that merely repeats
+    # the derived one anyway), so this changes no behaviour of the migrated Settings.
+    from respmech.core.analysis.signals import derived_signals
+    derived = sorted(derived_signals(settings.input.channels))
+    r.defaulted.append(f"analysis.signals: not present in the legacy file — derived "
+                       f"from the migrated channels -> {derived}")
     return settings, r
 
 
