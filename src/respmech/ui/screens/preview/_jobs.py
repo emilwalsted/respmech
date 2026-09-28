@@ -177,6 +177,11 @@ def _kinds_for_settings_path(path, caps=None):
     # traces, ECG/EMG conditioning or the noise frontier (which is why this mirrors the
     # wob/ptp/entropy/breath_counts rule above rather than falling through to the wide
     # default).
+    # PEEPi (opt-in, core.analysis.pressure): runs in the same post-mechanics pass and only
+    # adds columns and the hatched rectangle on the Campbell panel -- like wob/ptp above,
+    # never a raw trace, so it must not fall through to the wide default.
+    if path.startswith("processing.pressure"):
+        return frozenset(("batch",))
     if (path.startswith("processing.references") or path.startswith("processing.reference_defaults")
             or path.startswith("processing.lung_volume") or path.startswith("processing.mfvl")
             or path.startswith("input.subjects")):
