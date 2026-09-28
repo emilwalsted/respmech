@@ -659,6 +659,8 @@ class DiagnosticsOutput:
     save_trimmed: bool = True
     save_drift: bool = True
     save_emg: bool = True                # per-channel EMG overviews (raw / ECG-removed / noise-reduced)
+    # tidal loops inside the file's own MFVL; only planned when a breath is typed fvc/ic_fvc
+    save_flow_volume: bool = True
 
 
 @dataclass
