@@ -78,6 +78,19 @@ class Manifest:
     narrowed_out_count: int = 0                 # how many matched files that narrowing excluded
     files: tuple = ()                           # every file the (narrowed) mask matched
     majority_columns: int | None = None
+    # M-38: the SAME Settings object build_manifest() was given, kept for two
+    # properties (reference_only/outlier_reference_sources) that predict from
+    # processing.breath_types/references -- state that changes independently of a
+    # folder/mask rescan (typing a breath happens on Preview & QC, a different screen,
+    # and does not rebuild the Setup manifest). A live reference, recomputed on every
+    # property access, is deliberate: baking the prediction into a plain field at
+    # build time would silently go stale the moment a caller typed a breath or added a
+    # reference AFTER this Manifest was built, without anything rebuilding it (caught
+    # by self-review: an outlier-reference-source test only passed once the property
+    # read live settings instead of a frozen field computed at build_manifest() time).
+    # ``None`` for a caller with no Settings at hand (manifest_from_filenames) --
+    # both properties degrade to empty rather than raising.
+    settings: object | None = None
 
     @property
     def included_files(self):
@@ -88,6 +101,49 @@ class Manifest:
         """Matched files excluded from the batch because their column count is not the
         majority (includes unreadable files, which are never counted as included)."""
         return tuple(f for f in self.files if not f.included)
+
+    @property
+    def reference_only(self):
+        """Files predicted reference-only (``core.pipeline.FileResult.role ==
+        "reference"``, M-30) from SETTINGS alone -- see
+        ``core.analysis.references.predicted_reference_only``'s own docstring for the
+        two-condition heuristic and its limits. Used by Setup's cohort read-out
+        (:func:`group_readout`) to keep "N files -> M groups" truthful to what
+        ``core.summary.build_cohort_summary`` will actually write: a reference-only
+        file's ``average_row`` is always ``None`` (M-30), so it never contributes a row
+        to the written cohort summary either."""
+        if self.settings is None:
+            return ()
+        from respmech.core.analysis.references import predicted_reference_only
+        names = predicted_reference_only([f.filename for f in self.files], self.settings)
+        return tuple(f for f in self.files if f.filename in names)
+
+    @property
+    def outlier_reference_names(self):
+        """Basenames among :attr:`outliers` also named as a reference SOURCE somewhere
+        in settings -- the plain ``frozenset[str]`` :func:`respmech.core.analysis.
+        references.check_links`'s own ``outlier_reference_names`` parameter expects.
+        See :attr:`outlier_reference_sources` for the ``FileEntry``-typed version."""
+        if self.settings is None:
+            return frozenset()
+        from respmech.core.analysis.references import reference_source_names
+        sources = reference_source_names(self.settings)
+        return frozenset(f.filename for f in self.outliers if f.filename in sources)
+
+    @property
+    def outlier_reference_sources(self):
+        """Outliers (column count disagrees with the batch majority) that are ALSO
+        named as a reference SOURCE somewhere in settings
+        (``core.analysis.references.reference_source_names``) -- e.g. a
+        per-participant IC-only recording with fewer channels than the main study
+        files. Unlike an ordinary outlier, such a file is not dropped from the run:
+        ``core.pipeline.run_batch`` has no column-count filter at all, and a reference
+        source is loaded and segmented (by its own forepass, or the ordinary main loop
+        if it also happens to be one of ``files``) regardless of how its column count
+        compares to the rest of the batch -- see
+        ``core.analysis.references.check_links``'s matching caution."""
+        names = self.outlier_reference_names
+        return tuple(f for f in self.outliers if f.filename in names)
 
     @property
     def freq_mismatches(self):
@@ -237,7 +293,22 @@ def group_readout(filenames, settings, file_limit=3, group_limit=6):
     is worth reporting even before any folder is chosen (self-review fix -- the reverse
     order left an invalid pattern silently unreported whenever nothing had matched yet,
     which is exactly the "typed something objectively wrong" case a live read-out should
-    not be quiet about)."""
+    not be quiet about).
+
+    **Reference-only files (M-38).** A file :func:`respmech.core.analysis.references.
+    predicted_reference_only` guesses reference-only (settings alone -- see that
+    function's own docstring for the two-condition heuristic) is EXCLUDED from ``n`` and
+    from the grouping itself, exactly like ``core.summary.build_cohort_summary`` already
+    excludes it (a reference-only file's ``average_row`` is always ``None``, M-30, so it
+    never contributes a row to the written cohort/by-group sheet at all). Its count is
+    still surfaced as a parenthetical, e.g. ``"4 files (1 reference-only) -> 2 groups ·
+    …"``, so the reader can tell "the study has 5 matched files, 1 of which is a
+    reference recording and never gets grouped" apart from "the study has 4 matched
+    files, none of them reference-only" -- the two would otherwise look identical.
+    A batch that is ENTIRELY reference-only files (unusual, but not disallowed) reports
+    ``"0 files (N reference-only) — nothing to group"`` rather than falling through to
+    the "nothing matched yet" empty string, which would wrongly look indistinguishable
+    from an unset folder."""
     from respmech.core.summary import group_key   # lazy (self-review fix, 10-08-2026): a
     # module-level import here would drag core.summary's pandas/numpy import onto this
     # Qt-free module's own import, and settings_screen.py imports THIS module at its own
@@ -245,16 +316,24 @@ def group_readout(filenames, settings, file_limit=3, group_limit=6):
     # synchronous GUI startup path, failing tests/unit/test_startup_imports.py (which
     # exists precisely to catch this). ui/workers.py is already deferred exactly the same
     # way, 150 lines below, for the identical reason -- see build_manifest's docstring.
+    from respmech.core.analysis.references import predicted_reference_only   # lazy, same
+    # reason: core.analysis.references imports numpy at module level.
     regex = getattr(getattr(settings, "output", None), "group_regex", None) if settings else None
     if regex:
         try:
             re.compile(regex)
         except re.error as e:
             return "error", f"Invalid pattern: {e}"
-    n = len(filenames)
-    if n == 0:
+    total = len(filenames)
+    if total == 0:
         return "muted", ""
-    keys = [group_key(f, settings) for f in filenames]
+    ref_only = predicted_reference_only(filenames, settings) if settings else frozenset()
+    grouped = [f for f in filenames if os.path.basename(f) not in ref_only]
+    ref_suffix = f" ({len(ref_only)} reference-only)" if ref_only else ""
+    n = len(grouped)
+    if n == 0:
+        return "info", f"0 files{ref_suffix} — nothing to group"
+    keys = [group_key(f, settings) for f in grouped]
     # Self-review fix (10-08-2026): gated on `regex` being set. group_key's DEFAULT
     # (blank-pattern) path is the leading filename token, returned verbatim -- it never
     # falls back to the literal string "(all)" itself. Only the regex branch's
@@ -262,7 +341,7 @@ def group_readout(filenames, settings, file_limit=3, group_limit=6):
     # whose own leading token happens to BE the string "(all)" (e.g. "(all)_rest.csv")
     # would wrongly trigger the warning below about a pattern that, under the default
     # grouping, does not even exist.
-    unmatched = [f for f, k in zip(filenames, keys) if k == "(all)"] if regex else []
+    unmatched = [f for f, k in zip(grouped, keys) if k == "(all)"] if regex else []
     if unmatched:
         verb = "does" if len(unmatched) == 1 else "do"
         return "warn", (f"{len(unmatched)} file{'s' if len(unmatched) != 1 else ''} {verb} not "
@@ -274,7 +353,7 @@ def group_readout(filenames, settings, file_limit=3, group_limit=6):
     extra = len(groups) - group_limit
     if extra > 0:
         parts.append(f"+{extra} more")
-    return "info", (f"{n} file{'s' if n != 1 else ''} → {len(groups)} group"
+    return "info", (f"{n} file{'s' if n != 1 else ''}{ref_suffix} → {len(groups)} group"
                     f"{'s' if len(groups) != 1 else ''} · " + " · ".join(parts))
 
 
@@ -436,4 +515,7 @@ def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=N
     return Manifest(folder=folder, mask=effective_mask, settings_fs=settings_fs,
                     mask_narrowed_from=narrowed_from,
                     narrowed_out_exts=tuple(sorted(dropped)), narrowed_out_count=narrowed_out_count,
-                    files=tuple(entries), majority_columns=majority)
+                    files=tuple(entries), majority_columns=majority,
+                    settings=settings)   # M-38: kept for reference_only/outlier_reference_sources,
+                    # recomputed live from THIS object on every access -- see Manifest's own
+                    # field docstring for why a build-time snapshot would go stale.
