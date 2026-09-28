@@ -117,6 +117,9 @@ def _all_windows(qapp, tmp_path):
     from respmech.ui.signal_set_dialog import EmgRecordingContentDialog, SignalSetDialog
     windows["SignalSetDialog"] = SignalSetDialog()
     windows["EmgRecordingContentDialog"] = EmgRecordingContentDialog()
+    from respmech.ui.reference_picker_dialog import ReferencePickerDialog
+    windows["ReferencePickerDialog"] = ReferencePickerDialog(
+        "synth_case_A.csv", s, ["synth_case_A.csv", "synth_case_B.csv"])
     return windows
 
 

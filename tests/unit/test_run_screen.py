@@ -1094,6 +1094,73 @@ def test_commitment_sheet_names_file_and_output_counts_matching_plan_outputs(qap
     win.close()
 
 
+def test_commitment_sheet_adds_a_references_line_only_when_references_are_configured(qapp, tmp_path):
+    """M-37: an ordinary analysis (no references/reference_defaults/subjects at all) gets
+    NO extra line -- the commitment sheet's two-line shape from before this ticket is
+    unchanged for the common case. Configuring one IC reference inserts exactly one line,
+    BETWEEN the head and the blocker/ready line (never after it, so ``.split("\\n")[-1]``
+    still means the same thing to every pre-existing test)."""
+    from respmech.core.settings import BreathTypeEntry, ReferenceEntry, BreathRef
+    win = _win(tmp_path); rn = win.run_screen
+    rn.refresh_actions()
+    before = rn._commitment.text()
+    assert before.count("\n") == 1
+    assert "References:" not in before
+
+    s = rn.state.settings
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=1, kind="ic", t_onset_s=0.1))
+    s.processing.references.append(ReferenceEntry(
+        file="synth_case_B.csv", ic=BreathRef(file="synth_case_A.csv", breaths=[1])))
+    rn.refresh_actions()
+    after = rn._commitment.text()
+    lines = after.split("\n")
+    assert len(lines) == 3
+    assert lines[1] == "References: 2/2 linked"   # A resolves to its own typed breath; B is explicit
+    assert lines[-1] == "Ready to run."            # unchanged tail, still the LAST line
+    win.close()
+
+
+def test_commitment_sheets_references_line_costs_at_most_one_text_line_on_windows_metrics(
+        qapp, tmp_path, windows_metrics):
+    """Acceptance criterion, verbatim: 'Kommitment-sheetet vokser højst én tekstlinje
+    (windows_metrics)'. The already-passing line-COUNT assertion above proves the
+    logical shape; this measures the label's own word-wrapped HEIGHT budget before/
+    after, AT A FIXED WIDTH (``heightForWidth``), under the wider font this codebase
+    models the Windows runner with. ``sizeHint()`` alone is not reliable for this: on
+    an unshown/unconstrained word-wrap QLabel it does not track the embedded-newline
+    count monotonically (measured directly — a first cut of this test using bare
+    ``sizeHint()`` on an unshown window saw height go DOWN when a line was ADDED), so
+    the window is shown and laid out first, and height is read for the SAME concrete
+    width both times."""
+    from respmech.core.settings import BreathTypeEntry, ReferenceEntry, BreathRef
+    win = _win(tmp_path); rn = win.run_screen
+    win.resize(1100, 760)
+    win.show()
+    for _ in range(6):
+        qapp.processEvents()
+    rn.refresh_actions()
+    width = rn._commitment.width()
+    assert width > 0
+    line_h = rn._commitment.fontMetrics().lineSpacing()
+    before_h = rn._commitment.heightForWidth(width)
+
+    s = rn.state.settings
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=1, kind="ic", t_onset_s=0.1))
+    s.processing.references.append(ReferenceEntry(
+        file="synth_case_B.csv", ic=BreathRef(file="synth_case_A.csv", breaths=[1])))
+    rn.refresh_actions()
+    after_h = rn._commitment.heightForWidth(width)
+
+    grew = after_h - before_h
+    assert 0 < grew <= line_h * 1.5, (
+        f"the references line cost {grew}px — more than one text line ({line_h}px) "
+        "under the Windows-modelled font")
+    win.close()
+    win.close()
+
+
 def test_commitment_sheet_names_a_channel_collision_before_a_path_problem(qapp, tmp_path):
     """_blockers() priority mirrors Setup's own former _first_blocker order (collision,
     then core validation, then path) via the SAME shared ui.validation helpers — so the
