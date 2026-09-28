@@ -110,8 +110,7 @@ _FRIENDLY_SETTINGS_ERRORS = {
 #: notation onto a translated sentence.
 _FRIENDLY_PREFIXES = (
     ("processing.pressure.peepi.",
-     "A PEEPi setting is out of range (no Setup control yet: fix processing.pressure.peepi "
-     "in the analysis file)"),
+     "A PEEPi setting is out of range (Setup ▸ Intrinsic PEEP (PEEPi))"),
     ("processing.mfvl.",
      "An MFVL setting must not be negative (Preview & QC ▸ Mechanics ▸ Advanced… ▸ "
      "Lung volumes; the presence threshold is in the analysis file)"),

@@ -1020,6 +1020,14 @@ real deflection; the pressures READ at `t_onset` and `t_flow` are the raw ones.
   ordinary PTP is already referenced to its own end-expiratory baseline, so adding the
   pre-flow area would subtract that baseline twice (`PTP_INVESTIGATION.md`).
 
+**The modified Campbell diagram.** With PEEPi on, the Campbell figures (the written PDFs and
+the Preview panel) draw a hatched rectangle UNDER the elastic-recoil polygon: it spans the tidal
+volume (EELV to EILV) and rises above the end-expiratory Poes by the amount added above, so its
+area is `wob_in_thr` before the unit change and the per-minute scaling. On the average loop the
+height is the mean over the breaths PEEPi was computed for (a breath with nothing to add counts
+as 0); the rectangle uses the breath's own end-expiratory volumes, so it can differ marginally
+from `vt` when the volume drifts within the breath. Nothing at all is drawn with the feature off.
+
 **Threshold work, and what the existing columns already hold.** `peepi_source` is
 `corrected` when Pgas exists, else `dynamic` (written to the Provenance sheet). The
 rectangle is `PEEPi × VT` in J·min⁻¹ with the same cmH₂O·L → J factor and scaling as §5.7
