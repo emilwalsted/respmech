@@ -501,3 +501,44 @@ def test_dumps_toml_never_crashes_on_a_malformed_signals_value():
     s.analysis.signals = "flow"           # malformed: bare string, not a list
     text = dumps_toml(s)                  # must not raise
     assert 'signals = "flow"' in text
+
+
+# ---------------------------------------------------------------------------------- #
+# M-13: signals_text/off_signals_text -- the shared formatting `respmech validate`,
+# run-report.txt, the Provenance sheet, the GUI commitment sheet and `respmech run
+# --dry-run` all reuse, tested here directly and in isolation (not only indirectly
+# through those five call sites' own tests).
+# ---------------------------------------------------------------------------------- #
+from respmech.core.analysis.signals import off_signals_text, signals_text  # noqa: E402
+
+
+def test_signals_text_says_derived_when_analysis_signals_is_unset():
+    s = _settings(_ch(flow=5, poes=7))
+    assert signals_text(s) == "flow, poes (derived)"
+
+
+def test_signals_text_says_declared_for_an_explicit_analysis_signals_list():
+    """The ONE case none of M-13's other (CLI/report/GUI) tests exercise: every one of
+    them builds settings via synth_settings/examples/settings.toml, which both leave
+    analysis.signals empty (derived)."""
+    s = _settings(_ch(flow=5, poes=7), analysis_signals=["flow", "poes"])
+    assert signals_text(s) == "flow, poes (declared)"
+
+
+def test_signals_text_orders_signals_canonically_regardless_of_list_order():
+    """SINGLE_SIGNALS order (flow, poes, pgas, pdi), emg always last -- never the
+    order analysis.signals happened to list them in."""
+    s = _settings(_ch(flow=5, poes=7, pgas=8, emg=[2]),
+                 analysis_signals=["emg", "pgas", "flow", "poes"])
+    assert signals_text(s) == "flow, poes, pgas, emg (declared)"
+
+
+def test_off_signals_text_names_only_the_core_signals_not_declared():
+    """emg is never listed as 'off' -- it is an orthogonal add-on, not one of the four
+    flow/pressure shapes (`_mode_for`'s own docstring)."""
+    assert off_signals_text(frozenset({"flow", "poes"})) == "Pgas/Pdi"
+    assert off_signals_text(frozenset({"flow"})) == "Poes/Pgas/Pdi"
+    assert off_signals_text(frozenset({"flow", "emg"})) == "Poes/Pgas/Pdi"
+    assert off_signals_text(frozenset({"flow", "poes", "pgas", "pdi"})) is None
+    assert off_signals_text(frozenset({"flow", "poes", "pgas", "pdi", "emg"})) is None
+    assert off_signals_text(frozenset({"emg"})) == "Flow/Poes/Pgas/Pdi"
