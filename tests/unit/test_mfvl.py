@@ -303,6 +303,49 @@ def test_mvv_falls_back_to_fev1_times_multiplier_without_an_override():
     assert out["mvv_est"] == pytest.approx(60.0)
 
 
+def test_tidal_mfvl_ext_never_returns_a_fev1_source_key():
+    """Self-review finding: fev1_source is a TEXT column, and joining it in via
+    breath['mfvl_ext'] (build_breath_table's mechanics.mean() reduction, same
+    join point as breath['wob']) broke that reduction for the WHOLE file. This
+    function must never emit it; attach() writes it directly onto
+    breaths_table/average_row AFTER build_breath_table has already run instead
+    (see test_attach_resolves_fev1_source_spirometry_over_recorded below)."""
+    breath = _tidal_breath(vt=1.0, ex_flow=1.0)
+    out = m.tidal_mfvl_ext(
+        breath, mefv_v=np.array([0.0, 5.0]), mefv_flow=np.array([2.0, 2.0]),
+        ic_op=3.0, pef=2.0, peak_in_flow=float("nan"), fev1_used=2.0, mfvl_cfg=_cfg())
+    assert "fev1_source" not in out
+    out_no_ic = m.tidal_mfvl_ext(
+        breath, mefv_v=None, mefv_flow=None, ic_op=None, pef=2.0,
+        peak_in_flow=float("nan"), fev1_used=2.0, mfvl_cfg=_cfg())
+    assert "fev1_source" not in out_no_ic
+
+
+def test_attach_resolves_fev1_source_spirometry_over_recorded():
+    from respmech.core.settings import SubjectEntry
+    breath = _analytical_fvc_breath(v_tlc=4.0, pef=2.0)
+    fr_manoeuvres = {1: {"kind": "fvc", "fvc": 4.0, "fev1": 1.5,
+                        "mfvl_peak_ex_flow": 2.0, "mfvl_peak_in_flow": float("nan")}}
+    breaths = {1: breath}
+    tidal = [_tidal_breath(vt=1.0, ex_flow=1.0)]
+
+    settings, s = _ns()
+    settings.input.subjects.append(SubjectEntry(key="x.csv", fev1_l=3.5))
+    _notice, fev1_source = m.attach(
+        fr_manoeuvres=fr_manoeuvres, breaths=breaths, tidal_breaths=tidal,
+        filename="x.csv", settings=settings, s=s)
+    assert fev1_source == "spirometry"
+    assert "fev1_source" not in tidal[0]["mfvl_ext"]     # never through this path
+
+    # Without a subject FEV1, the derived value (from the FVC row itself) is used.
+    settings2, s2 = _ns()
+    tidal2 = [_tidal_breath(vt=1.0, ex_flow=1.0)]
+    _notice2, fev1_source2 = m.attach(
+        fr_manoeuvres=fr_manoeuvres, breaths=breaths, tidal_breaths=tidal2,
+        filename="x.csv", settings=settings2, s=s2)
+    assert fev1_source2 == "recorded"
+
+
 # --------------------------------------------------------------------------- #
 # resolve_same_file_curve: single (largest FVC) vs envelope (per-volume max)
 # --------------------------------------------------------------------------- #
@@ -482,7 +525,7 @@ def test_units_of_every_new_column():
     assert_units({
         "fvc": "L", "fev1": "L", "fvc_bev": "L", "mfvl_tlc_consistency": "L",
         "fev1_fvc": "—", "fvc_fet": "s", "te_min_mfvl": "s", "fvc_eofe_ok": "",
-        "efl_present": "", "ve_cap": "L·min⁻¹", "mvv_est": "L·min⁻¹",
+        "efl_present": "", "fev1_source": "", "ve_cap": "L·min⁻¹", "mvv_est": "L·min⁻¹",
         "mfvl_peak_ex_flow": "L·s⁻¹", "mfvl_peak_in_flow": "L·s⁻¹",
         "efl_pct": "%", "efl_coverage_pct": "%", "ex_flow_pct_mfvl_max": "%",
         "in_flow_pct_mfvl_max": "%", "max_ex_flow_pct_mfvl_peak": "%",

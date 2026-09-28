@@ -886,7 +886,15 @@ derived FEV1 among this file's own resolved FVC attempts, the SAME preference
 `§5.14`'s VC-fallback comment already anticipated), `ve_pct_mvv`, `br_mvv_pct` —
 the last three independent of MEFV placement (MVV needs no placement at all), so
 they are NaN only when NO IC reference resolved, never merely for partial
-coverage.
+coverage. `fev1_source` (`'spirometry'` | `'recorded'`, the ticket's own explicit
+acceptance criterion) names which value fed `fev1_used` — a per-FILE constant,
+written directly onto `breaths_table`/`average_row` by `core.pipeline.run_batch`
+itself AFTER `build_breath_table` has already run (self-review finding: a text
+column joined in through `breath['mfvl_ext']`, `tidal_mfvl_ext`'s usual path,
+breaks `build_breath_table`'s own `mechanics.mean()` reduction for the WHOLE
+file — the same post-hoc column-assignment pattern `§5.13a`'s `ic_ref_source`
+(also text) already uses for exactly this reason, never `attach`'s own
+per-breath dict).
 
 **PEF used for the tidal ratio columns is the SAME smoothed value the Manoeuvres
 sheet shows** (self-review finding): an earlier version re-derived it from the

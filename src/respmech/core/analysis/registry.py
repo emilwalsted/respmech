@@ -264,6 +264,7 @@ _MFVL = (
     ColumnSpec(name="te_min_mfvl", requires=_TIMING, module="mfvl", unit="s"),
     ColumnSpec(name="fvc_eofe_ok", requires=_TIMING, module="mfvl", unit=""),
     ColumnSpec(name="efl_present", requires=_TIMING, module="mfvl", unit=""),
+    ColumnSpec(name="fev1_source", requires=_TIMING, module="mfvl", unit=""),
     ColumnSpec(name="ve_cap", requires=_TIMING, module="mfvl", unit="L·min⁻¹"),
     ColumnSpec(name="mvv_est", requires=_TIMING, module="mfvl", unit="L·min⁻¹"),
 )

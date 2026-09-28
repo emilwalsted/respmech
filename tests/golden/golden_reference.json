@@ -15315,6 +15315,9 @@
       "exp_pgas_rise": [
         2.996567996568
       ],
+      "fev1_source": [
+        "recorded"
+      ],
       "file": [
         "synth_manoeuvre_A.csv"
       ],
@@ -15846,6 +15849,15 @@
           2.996996996997,
           2.996996996997,
           2.993993993994
+        ],
+        "fev1_source": [
+          "recorded",
+          "recorded",
+          "recorded",
+          "recorded",
+          "recorded",
+          "recorded",
+          "recorded"
         ],
         "flow_midvolexp": [
           -0.5,
