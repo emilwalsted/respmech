@@ -47,9 +47,9 @@ def _settings(*, poes=True, pdi=True, emg=False, enabled=True, ref_breath=9, ref
 
 def _breath():
     poes = np.full(N_INSP, -12.0)
-    poes[:10] = -2.0                              # baseline window (0.05 s * 200 Hz = 10 samples)
+    poes[:10] = np.linspace(-1.0, -3.0, 10)       # baseline window (0.05 s * 200 Hz = 10 samples), mean -2, first -1
     pdi = np.full(N_INSP, 30.0)
-    pdi[:10] = 5.0                                # baseline 5, max 30 -> swing 25
+    pdi[:10] = np.linspace(3.0, 7.0, 10)          # baseline mean 5, first 3, max 30 -> swing 25
     return {"number": 1, "inspiration": {"flow": np.full(N_INSP, -1.0), "poes": poes, "pdi": pdi}}
 
 
@@ -567,3 +567,15 @@ def test_a_sniff_swing_is_taken_over_the_whole_typed_breath():
     s = SimpleNamespace()
     assert manoeuvreslib.max_effort_from_breath(breath, caps, s, "sniff")["poes_max_ref"] == pytest.approx(18.0)
     assert manoeuvreslib.max_effort_from_breath(breath, caps, s, "max_insp")["poes_max_ref"] == pytest.approx(2.0)
+
+
+def test_the_baseline_is_the_window_mean_not_the_first_sample():
+    s = _settings()
+    result, fr = _result(s)
+    norm.attach(result, s)
+    # default 0.05 s = 10 samples, mean of -1..-3 is -2 (the first sample would give 11)
+    assert fr.pressure_normalised.iloc[0]["poes_insp_swing"] == pytest.approx(10.0, abs=1e-9)
+    s.processing.ptp.baseline_window_s = 0.1                   # 20 samples: ten of -1..-3, ten of -12
+    result, fr = _result(s)
+    norm.attach(result, s)
+    assert fr.pressure_normalised.iloc[0]["poes_insp_swing"] == pytest.approx(5.0, abs=1e-9)
