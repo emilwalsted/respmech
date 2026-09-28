@@ -125,7 +125,7 @@ def resolve_emg_reference(result, settings) -> "tuple[dict | None, str | None]":
     emg = getattr(getattr(settings, "processing", None), "emg", None)
     ref_name = getattr(emg, "normalization_reference_file", None)
     mode = getattr(emg, "normalization", "none")
-    if ref_name and mode not in (None, "none"):
+    if ref_name and mode == "per_file_max":
         # A reference file that has typed max_insp/sniff breaths of its own is read at
         # THOSE breaths (the largest peak RMS reached in them, per channel), not at the
         # file's per-column maximum over all its breaths. Lazy import: references imports

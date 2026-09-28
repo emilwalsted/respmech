@@ -1134,9 +1134,25 @@ reference writes the same columns.
 
 **EMG-normalised sheet.** `processing.emg.normalization_reference_file` naming a file that
 has `max_insp`/`sniff` breaths typed in it is now read at those breaths: a `_col_<channel>`
-column against that channel's peak, every other RMS column against `rms_max_ref`. A file
-with no such breath keeps the earlier behaviour (each column's own maximum or mean over that
-file's breaths).
+column against that channel's peak (NaN if it has none), a `*_mean` column against the mean
+of the channel peaks, every other RMS column against `rms_max_ref`. This applies only with
+`normalization = "per_file_max"`; `per_file_mean`, and a file with no such breath, keep the
+earlier behaviour (each column's own maximum or mean over that file's breaths).
+
+**Sniff.** A nasal sniff has no mouth flow, so the inspiration/expiration boundary inside
+its typed breath is arbitrary; for `kind = sniff` the pressure swings are therefore taken over
+the whole typed breath (from the first sample's baseline), for `max_insp` over its inspiration.
+
+**Known properties, not corrected here.** (a) `calcptp` integrates over `linspace(0, n/fs, n)`,
+so every integral, and with it `tt_*` and `*_mean_insp`, is high by n/(n−1) (about 2 % at 50
+samples); the golden suite locks it. (b) `bf` counts every breath in the file, typed ones
+included, unless `breath_counts` is set, so `nrdi` is high in a tidal file with embedded
+maximal breaths. (c) `tt_di` uses baseline-referenced Pdi in numerator and denominator,
+where Bellemare & Grassino used absolute Pdi: it is lower than the classical index whenever
+end-expiratory Pdi is above zero, so do not read it against the classical 0.15 threshold.
+(d) An external reference source (outside the run's own files) is segmented without EMG
+noise reduction, so its `rms_max_ref` can differ from an in-batch source's; this predates
+normalisation and is not fixed here.
 
 ---
 

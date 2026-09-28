@@ -538,3 +538,32 @@ def test_the_emg_normalised_sheet_reads_a_named_files_typed_maximal_breath(tmp_p
     b_table = result.files["synth_case_B.csv"].breaths_table
     assert a["rms_col_2_pct"].to_numpy() == pytest.approx(
         100.0 * b_table["rms_col_2"].to_numpy() / row["rms_max_ref_col_2"])
+
+
+def test_a_mean_column_uses_the_mean_channel_peak_and_a_channel_without_a_peak_is_nan():
+    s, br = _emg_batch()
+    br.files["T.csv"].breaths_table["rms_mean"] = [1.0, 2.0]
+    br.files["T.csv"].breaths_table["rms_col_9"] = [1.0, 2.0]
+    values = norm.emg_reference_from_max_effort(br, s, "REF.csv")
+    assert values["rms_mean"] == pytest.approx(7.0)            # mean of 4 and 10
+    assert np.isnan(values["rms_col_9"])                       # no peak for channel 9
+
+
+def test_per_file_mean_mode_keeps_the_earlier_reference_path():
+    from respmech.core.summary import resolve_emg_reference
+    s, br = _emg_batch()
+    s.processing.emg.normalization = "per_file_mean"
+    values, notice = resolve_emg_reference(br, s)
+    assert values is None and "no breath table" in notice
+
+
+def test_a_sniff_swing_is_taken_over_the_whole_typed_breath():
+    from types import SimpleNamespace
+    from respmech.core.analysis.signals import Capabilities
+    caps = Capabilities(flow=True, volume=True, poes=True, pgas=False, pdi=False, emg=False,
+                        entropy=False, declared=frozenset({"flow", "poes"}), mode="custom")
+    breath = {"inspiration": {"poes": np.array([-2.0, -4.0])},
+              "expiration": {"poes": np.array([-20.0, -3.0])}}
+    s = SimpleNamespace()
+    assert manoeuvreslib.max_effort_from_breath(breath, caps, s, "sniff")["poes_max_ref"] == pytest.approx(18.0)
+    assert manoeuvreslib.max_effort_from_breath(breath, caps, s, "max_insp")["poes_max_ref"] == pytest.approx(2.0)
