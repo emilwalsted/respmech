@@ -208,6 +208,46 @@ def make_emgonly_file(path, seed, n_segments, period_s=2.0, lead_s=0.4):
     return N, onsets
 
 
+def make_emgburst_file(path, seed, n_bursts, period_s=4.0, burst_frac=0.36, lead_s=1.5,
+                       tail_s=1.5, ramp_s=0.15):
+    """Write one EMG-only TIDAL synthetic recording (time + 3 EMG channels, no flow/pressure
+    columns): a train of inspiratory-like EMG bursts with a QUIET GAP between every two of
+    them -- the shape the automatic ``emg_burst`` segmentation exists for, unlike
+    ``make_emgonly_file`` above, whose bursts run into each other with no gap at all.
+    A DEDICATED input for the ``emg_only_burst`` golden scenario, on its OWN RNG stream
+    and its own ``synth_emgburst_*.csv`` name (never matched by any other scenario's glob).
+
+    Each burst is a 70-90 Hz carrier under a Tukey-shaped envelope (``ramp_s`` cosine
+    ramps, flat between) on top of white noise; the period varies by a few percent from
+    breath to breath so the timing columns are not all equal. Returns the sample count
+    and the TRUE ``(onset_s, offset_s)`` of every burst (the ramps are inside the
+    interval), which the tests compare the detection against."""
+    rng = np.random.default_rng(seed)
+    total = lead_s + n_bursts * period_s * 1.06 + tail_s
+    N = int(round(total * FS))
+    t = np.arange(N) / FS
+    emg = [rng.normal(0, 0.003 + 0.0005 * ch, N) for ch in range(3)]
+    spans = []
+    cursor = lead_s
+    for b in range(n_bursts):
+        T = period_s * (1.0 + 0.06 * np.sin(1.3 * b))
+        dur = burst_frac * T
+        i0, i1 = int(round(cursor * FS)), int(round((cursor + dur) * FS))
+        tt = np.arange(i1 - i0) / FS
+        env = np.ones(i1 - i0)
+        nr = int(round(ramp_s * FS))
+        ramp = 0.5 - 0.5 * np.cos(np.pi * np.arange(nr) / nr)
+        env[:nr] = ramp
+        env[-nr:] = ramp[::-1]
+        for ch in range(3):
+            emg[ch][i0:i1] += (0.03 + 0.005 * ch) * env * np.sin(2 * np.pi * (70 + 10 * ch) * tt)
+        spans.append((float(round(cursor, 6)), float(round(cursor + dur, 6))))
+        cursor += T
+    data = np.column_stack([t, emg[0], emg[1], emg[2]])
+    np.savetxt(path, data, delimiter=",", header="time,EMG1,EMG2,EMG3", comments="", fmt="%.10g")
+    return N, spans
+
+
 def _manoeuvre_breath(*, insp_ramp_n, insp_ramp_flow, insp_plateau_n, insp_plateau_flow,
                       vol_base, vol_peak, exp_ramp_n, exp_ramp_flow,
                       exp_plateau_n, exp_plateau_flow, poes_swing, pgas_bump):
@@ -517,6 +557,13 @@ if __name__ == "__main__":
         os.path.join(indir, "synth_emgonly_B.csv"), seed=24680, n_segments=3)
     print(f"Wrote synth_emgonly_A.csv ({n3} samples, separators {onsets_a}), "
          f"synth_emgonly_B.csv ({n4} samples, separators {onsets_b})")
+
+    n9, spans_a = make_emgburst_file(
+        os.path.join(indir, "synth_emgburst_A.csv"), seed=31415, n_bursts=6)
+    n10, spans_b = make_emgburst_file(
+        os.path.join(indir, "synth_emgburst_B.csv"), seed=27182, n_bursts=5)
+    print(f"Wrote synth_emgburst_A.csv ({n9} samples, {len(spans_a)} bursts), "
+         f"synth_emgburst_B.csv ({n10} samples, {len(spans_b)} bursts)")
 
     n5 = make_manoeuvre_file(os.path.join(indir, "synth_manoeuvre_A.csv"), seed=90210)
     print(f"Wrote synth_manoeuvre_A.csv ({n5} samples, IC=breath #{MANOEUVRE_IC_BREATH_NO}, "

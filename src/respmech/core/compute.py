@@ -750,13 +750,30 @@ def _separator_times_for(curfile, settings):
     return d.get(curfile, [])
 
 
-def separateintobreaths(method, filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings):
+def separateintobreaths(method, filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings,
+                        detect_emg=None):
+    """``detect_emg`` (``emg_burst`` only): the signal the bursts are found on, when that
+    differs from ``emgcolumns`` -- the ECG-removed EMG before noise reduction. ``None``
+    (every other caller) detects on ``emgcolumns`` itself."""
     method = str.lower(method)
-    if method in ("whole_file", "separators"):
+    if method in ("whole_file", "separators", "fixed_windows", "emg_burst"):
         from respmech.core.analysis import segments as _segments
         ib = set(ignorebreaths(filename, settings))
         bk = breathkinds(filename, settings)
         fs = settings.input.format.samplingfrequency
+        if method == "fixed_windows":
+            es = settings.processing.mechanics.emgsegmentation
+            return _segments.fixed_windows(
+                filename, timecol, emgcolumns, entropycolumns, fs,
+                window_s=es.window_s, hop_s=es.hop_s, ignored_breaths=ib, kinds=bk)
+        if method == "emg_burst":
+            es = settings.processing.mechanics.emgsegmentation
+            return _segments.emg_burst(
+                filename, timecol, emgcolumns, entropycolumns,
+                emgcolumns if detect_emg is None else detect_emg, fs,
+                threshold_frac=es.burst_threshold_frac, min_s=es.burst_min_s,
+                smooth_s=es.burst_smooth_s, min_contrast=es.burst_min_contrast,
+                ignored_breaths=ib, kinds=bk)
         if method == "whole_file":
             return _segments.whole_file(
                 filename, timecol, emgcolumns, entropycolumns,
