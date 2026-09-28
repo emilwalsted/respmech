@@ -7,6 +7,20 @@ for the installers themselves.
 
 ## Unreleased
 
+**New `respmech breaths` command; `respmech validate` reports reference-link
+cautions; `respmech run --dry-run` and `respmech migrate` name more of what an
+analysis will actually do.** `respmech breaths settings.toml [FILE]` lists every
+detected breath (or, for an EMG-only signal set, segment) for one file or all matched
+files, with its onset, duration, kind and whether it is excluded — the same breath
+numbers a real run's output uses — and suggests which untyped breath looks like a
+forced vital capacity manoeuvre, with a ready-to-paste settings snippet for it.
+`respmech validate` now also reports any reference/subject link that will not resolve
+once the batch's real files are known (advisory, except a genuinely missing reference
+source when `require_references` is set, which now fails validation). `respmech run
+--dry-run` prints each file's resolved inspiratory-capacity/forced-vital-capacity
+reference. `respmech migrate`'s report now has a "Defaulted" section (an absent
+Pgas/Pdi channel, or the derived signal set — a legacy file never named either).
+
 **Repair a mis-detected breath boundary by hand (cut/join).** A flow wobble that
 splits one real breath into two, or a flat/leaky expiration that merges two real
 breaths into one, can now be fixed directly in Preview & QC ▸ Mechanics: click a

@@ -84,12 +84,34 @@ shortcuts, live in the window's **File** menu, alongside **View** (jump to a tab
 
 ```bash
 respmech run settings.toml            # process a batch  (--dry-run computes without writing)
+respmech breaths settings.toml [FILE] # list every detected breath/segment (one file, or all matched)
 respmech validate settings.toml       # check the settings and the input files
 respmech migrate old_settings.py -o settings.toml   # convert a v1 settings file (runs no v1 code)
 respmech init new_settings.toml --signals flow,poes,emg [--folder DIR --files MASK --fs 1000]
 ```
 
-`migrate` prints a report of every field moved, renamed or dropped.
+`breaths` numbers every breath (or, for an EMG-only signal set, segment) `respmech run`
+would build for the given file(s), with its onset, duration, kind and whether it is
+excluded from the tidal average — the same numbers a real run's output uses, so you can
+check them before running. It also suggests which untyped breath looks like a forced
+vital capacity manoeuvre (the longest untyped expiration in the file) and prints a
+ready-to-paste `[[processing.breath_types]]` snippet for it.
+
+`validate` also reports any reference/subject link that will not work once the batch's
+real file list is known (a reference source not among the analysed files, a linked
+breath that is excluded or mistyped, a group key matching no file) — advisory unless
+`processing.lung_volume.require_references` is set and a reference source is genuinely
+missing, which fails validation.
+
+`run --dry-run` prints each file's resolved inspiratory-capacity and forced-vital-
+capacity reference (`own` when the reference is the file's own typed breath, e.g.
+`IC ref: own #4 · FVC ref: own #7`) whenever this analysis names an IC reference
+anywhere, or `no IC reference — lung-volume columns NaN` for a file whose own reference
+did not resolve.
+
+`migrate` prints a report of every field moved, renamed, defaulted (not present in the
+legacy file — e.g. an absent Pgas/Pdi channel, or the derived `analysis.signals`, which
+the legacy format never had at all) or dropped.
 
 `init` writes a commented starting TOML file with only the `[input.channels]` entries
 your chosen signal set needs — e.g. `--signals flow,poes` omits Pgas/Pdi entirely.
