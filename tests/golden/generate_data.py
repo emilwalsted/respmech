@@ -376,11 +376,11 @@ def make_manoeuvre_file(path, seed, lead_expiration_s=0.3):
 
 
 #: The dedicated reference-only recording for the ``typed_ic_crossfile`` golden
-#: scenario (M-40): a SINGLE IC manoeuvre breath (the same ``_MANOEUVRE_IC`` recipe
+#: scenario: a SINGLE IC manoeuvre breath (the same ``_MANOEUVRE_IC`` recipe
 #: as ``make_manoeuvre_file`` above, so ``vol_ic`` is exactly ``3.0`` for the same
 #: reason — see ``_manoeuvre_breath``'s docstring), and NOTHING else — no leading,
 #: trailing or intervening tidal breaths. ``core.pipeline.run_batch``'s own
-#: reference-only detection (M-30: every breath typed, no tidal breathing at all)
+#: reference-only detection (every breath typed, no tidal breathing at all)
 #: needs no minimum breath count to fire; ``compute.trim()`` only needs the
 #: recording to START at the first flow<0 sample and END at the last flow>=0
 #: sample (see its own docstring), which a single lead-in + one full trapezoid
@@ -390,7 +390,7 @@ MANOEUVRE_CROSSFILE_IC_BREATH_NO = 1
 
 def make_ic_reference_file(path, seed, lead_expiration_s=0.3):
     """Write the dedicated, reference-only ``synth_crossfile_ic.csv`` input for the
-    ``typed_ic_crossfile`` golden scenario (M-40) — a participant's separate,
+    ``typed_ic_crossfile`` golden scenario — a participant's separate,
     stand-alone IC recording, referenced by a DIFFERENT file's
     ``processing.references`` entry rather than containing any tidal breathing of
     its own.
