@@ -118,6 +118,33 @@ def detect_peepi_onset(poes, t_flow: int, smooth_n: int, onset_slope_frac: float
     return j
 
 
+def _added_or_none(breath):
+    """The breath's stored rectangle height as a finite float (0 included), else ``None``."""
+    try:
+        h = float(breath.get("peepi_added"))
+    except (TypeError, ValueError):
+        return None
+    return h if np.isfinite(h) else None
+
+
+def peepi_rectangle_height(breath):
+    """Height (cmH2O) of the PEEPi rectangle the modified Campbell diagram adds for ONE breath,
+    or ``None`` when the breath has none to draw (PEEPi off, unlocatable, or nothing added).
+    The rectangle spans the breath's tidal volume and sits above the end-expiratory Poes, so
+    its area is the threshold work ``wob_in_thr`` (before the ``bcnt``/``vefactor`` scaling)."""
+    h = _added_or_none(breath)
+    return h if h is not None and h > 0 else None
+
+
+def mean_peepi_rectangle_height(breaths):
+    """Mean rectangle height over the breaths that PEEPi was computed for, a breath with nothing
+    to add counting as 0 (so the average loop's rectangle matches the mean of ``wob_in_thr``
+    rather than only the breaths that happen to have PEEPi). ``None`` when no breath was
+    computed at all, e.g. the feature is off."""
+    hs = [h for h in (_added_or_none(b) for b in breaths) if h is not None]
+    return float(np.mean(hs)) if hs else None
+
+
 def _nan_columns(caps, has_pdi_columns: bool) -> "OrderedDict[str, float]":
     names = ["peepi_dyn"]
     if getattr(caps, "pgas", False):
@@ -143,6 +170,8 @@ def attach(breath, prev_breath, bcnt, vefactor, settings):
     fs = float(settings.input.format.samplingfrequency)
     has_pdi_columns = bool(getattr(caps, "pgas", False) and getattr(caps, "pdi", False))
     cols = _nan_columns(caps, has_pdi_columns)
+
+    breath.pop("peepi_added", None)
 
     def _store(notice):
         breath["pressure_ext"] = cols
@@ -218,6 +247,9 @@ def attach(breath, prev_breath, bcnt, vefactor, settings):
     # polygon already holds (never negative: a corrected PEEPi smaller than the polygon's own
     # share adds nothing rather than subtracting).
     added = max(peepi_src - already_in_polygon, 0.0)
+    # the height of the rectangle the modified Campbell diagram draws over the tidal volume
+    # (its area is ``wob_in_thr``, up to the unit change and the per-minute scaling)
+    breath["peepi_added"] = float(added)
     wob_in_thr = added * mech["vt"] * WOBUNITCHANGEFACTOR * bcnt * vefactor
     values["wob_in_thr"] = wob_in_thr
     values["wob_in_total_thr"] = wob["wob_in_total"] + wob_in_thr

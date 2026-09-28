@@ -321,10 +321,11 @@ def test_the_mechanics_card_left_setup_for_the_preview_tab(qapp, tmp_path):
     # Setup is lean now: Input, Channels, Output, and the conditional Sample entropy and
     # Subjects && lung volumes cards (M-34/M-37; both built unconditionally and merely
     # hidden while empty via _cond_cards, so findChildren still sees them regardless of
-    # whether this settings object names any subjects).
+    # whether this settings object names any subjects) and, likewise conditional, the
+    # Intrinsic PEEP (PEEPi) card, shown once Poes is declared.
     assert "Mechanics" not in titles and "Advanced (rarely changed)" not in titles
     assert titles == {"Input", "Channels", "Output", "Sample entropy",
-                      "Subjects && lung volumes"}
+                      "Intrinsic PEEP (PEEPi)", "Subjects && lung volumes"}
     pv = _preview(qapp, tmp_path)
     assert hasattr(pv, "btn_mech_advanced"), "the Preview Mechanics tab hosts Advanced…"
     pv.shutdown()
