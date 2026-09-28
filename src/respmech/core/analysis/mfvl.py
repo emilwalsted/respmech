@@ -316,7 +316,20 @@ def tidal_mfvl_ext(tidal_breath, *, mefv_v: np.ndarray | None, mefv_flow: np.nda
     ``coverage_floor`` (default 100.0, i.e. every column requires FULL coverage --
     the ticket's own wording, "NaN + one notice when efl_coverage_pct < 100") is a
     parameter rather than a hard-coded literal purely so a test can probe the
-    boundary without constructing a breath that hits it exactly."""
+    boundary without constructing a breath that hits it exactly.
+
+    Self-review finding: ``fev1_source`` (the ticket's own text column) does NOT
+    live here, even though it is conceptually part of this dict. Every key
+    returned by this function is joined into ``breaths_table`` by
+    ``core.results.build_breath_table`` BEFORE that function's own
+    ``mechs.mean()`` reduction (the same join point ``breath['wob']`` already
+    uses) -- a STRING column there breaks that reduction outright
+    (``TypeError: Cannot perform reduction 'mean' with string dtype``) for the
+    whole file, not just this column. :func:`attach` instead sets
+    ``fev1_source`` directly on ``breaths_table``/``average_row`` AFTER
+    ``build_breath_table`` has already run, the same POST-hoc column-assignment
+    pattern ``core.analysis.references.attach``'s own ``ic_ref_source`` (also
+    text) already uses for exactly this reason."""
     out: dict = {}
     exp = tidal_breath["expiration"]
     insp = tidal_breath["inspiration"]
@@ -534,7 +547,7 @@ def _subject_mvv(settings, filename: str) -> float | None:
 
 
 def attach(*, fr_manoeuvres: dict, breaths: dict, tidal_breaths: list, filename: str,
-          settings, s) -> str | None:
+          settings, s) -> tuple[str | None, str | None]:
     """Stamps ``breath['mfvl_ext']`` on every tidal (non-ignored) breath of ONE
     file, for ``core.results.build_breath_table`` to join in exactly like
     ``breath['wob']``. Called from ``core.pipeline.run_batch``'s main loop, AFTER
@@ -542,19 +555,23 @@ def attach(*, fr_manoeuvres: dict, breaths: dict, tidal_breaths: list, filename:
     ``build_breath_table`` is called for this same file (see the module docstring
     for why this cannot be a `references.attach`-style post-loop pass).
 
-    Returns a single, per-FILE notice string (never per-breath) when this file has
-    a resolvable ``fvc`` reference but no ``ic`` reference (only the two
-    IC-independent peak-vs-peak ratios are filled -- the ticket's own acceptance
-    criterion), or ``None`` when either no ``fvc`` reference resolves at all (no
-    ``mfvl_ext`` is set on any breath -- there is nothing to report on a file that
-    never uses this family) or an IC reference DID resolve (nothing to warn about).
-    """
+    Returns ``(notice, fev1_source)``. ``notice`` is a single, per-FILE string
+    (never per-breath) when this file has a resolvable ``fvc`` reference but no
+    ``ic`` reference (only the two IC-independent peak-vs-peak ratios are filled
+    -- the ticket's own acceptance criterion), or ``None`` when either no ``fvc``
+    reference resolves at all (no ``mfvl_ext`` is set on any breath -- there is
+    nothing to report on a file that never uses this family) or an IC reference
+    DID resolve (nothing to warn about). ``fev1_source`` (``'spirometry'`` |
+    ``'recorded'`` | ``None``) is the CALLER's job to write onto
+    ``breaths_table``/``average_row`` itself, AFTER ``build_breath_table`` runs
+    (see :func:`tidal_mfvl_ext`'s own docstring for why a text column cannot go
+    through that function's dict)."""
     mfvl_cfg = s.processing.mfvl
     ic_cfg = s.processing.lung_volume.ic
 
     curve = resolve_same_file_curve(fr_manoeuvres, breaths, mfvl_cfg)
     if curve is None:
-        return None
+        return None, None
     mefv_v, mefv_flow, _v_tlc, curve_rows = curve
     # Self-review finding: mefv_flow.max() is a single-SAMPLE maximum of the
     # (interpolated) composite curve and can equal a spike _pef's own smoothing
@@ -575,12 +592,16 @@ def attach(*, fr_manoeuvres: dict, breaths: dict, tidal_breaths: list, filename:
     # Beslutning 26-09-2026 (plan §11): spirometry FEV1 is preferred over the
     # derived one whenever a subject entry supplies it; the derived value (the
     # largest across this file's own resolved FVC attempts, ATS/ERS 2019's own
-    # "report the largest" convention) is only the fallback.
+    # "report the largest" convention) is only the fallback. fev1_source records
+    # WHICH one was actually used (the ticket's own explicit acceptance criterion).
     fev1_used = _subject_fev1(settings, filename)
+    fev1_source = "spirometry" if fev1_used is not None else None
     if fev1_used is None:
         for row in fr_manoeuvres.values():
             if row.get("kind") in ("fvc", "ic_fvc") and _finite(row.get("fev1")):
                 fev1_used = row["fev1"] if fev1_used is None else max(fev1_used, row["fev1"])
+        if fev1_used is not None:
+            fev1_source = "recorded"
     mvv_override = _subject_mvv(settings, filename)
 
     notice = None
@@ -610,4 +631,4 @@ def attach(*, fr_manoeuvres: dict, breaths: dict, tidal_breaths: list, filename:
                  "efl_pct/efl_present/ex_flow_pct_mfvl_max/in_flow_pct_mfvl_max/"
                  "te_min_mfvl/ve_cap/ve_pct_cap/ve_reserve_pct are NaN for that breath")
 
-    return notice
+    return notice, fev1_source

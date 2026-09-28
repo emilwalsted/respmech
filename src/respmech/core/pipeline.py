@@ -1202,6 +1202,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
             # flags every manoeuvre BOUNDARY -- there is no tidal context to judge low
             # effort or eelv stability against, which is the honest answer, not a bug).
             fr_manoeuvres: dict = {}
+            mfvl_fev1_source: str | None = None
             if not emg_only:
                 for breathno in breaths:
                     breath = breaths[breathno]
@@ -1240,7 +1241,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                     # file down.
                     if not reference_only and tidal_breaths:
                         try:
-                            mfvl_notice = mfvllib.attach(
+                            mfvl_notice, mfvl_fev1_source = mfvllib.attach(
                                 fr_manoeuvres=fr_manoeuvres, breaths=breaths,
                                 tidal_breaths=tidal_breaths, filename=filename,
                                 settings=settings, s=s)
@@ -1261,6 +1262,17 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                 breaths_table, average_row = None, None
             else:
                 breaths_table, average_row = build_breath_table(filename, breaths, s)
+                # M-42: fev1_source is a TEXT column (unlike everything else
+                # mfvl.attach computed) -- self-review finding: joining a string
+                # column in via breath['mfvl_ext'] (build_breath_table's own
+                # mechanics.mean() reduction, same join point as breath['wob'])
+                # breaks that reduction for the WHOLE file, not just this column.
+                # Set directly on the already-built tables instead, the same
+                # post-hoc pattern core.analysis.references.attach's own
+                # ic_ref_source (also text) already uses.
+                if mfvl_fev1_source is not None:
+                    breaths_table["fev1_source"] = mfvl_fev1_source
+                    average_row["fev1_source"] = mfvl_fev1_source
             processed = None
             if s.output.data.saveprocesseddata:
                 processed = build_processed_data(breaths, s)
