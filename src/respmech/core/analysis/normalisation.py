@@ -128,7 +128,8 @@ def resolve_max_effort_values(result, ref) -> "tuple[dict, list, list, list]":
         notices.append(
             f"the maximal-effort reference of {ref.file!r} mixes {' and '.join(kinds)} "
             "breaths; sniff and maximal-inspiration pressures are different quantities, "
-            "so the largest value of each is used, but check that this is intended")
+            "so the largest value of each quantity across both kinds is used, but check "
+            "that this is intended")
     return values, kinds, [b for b, _row in rows], notices
 
 
@@ -148,10 +149,11 @@ def emg_reference_from_max_effort(result, settings, filename) -> "dict | None":
     maximum, as before).
 
     A column ending ``_col_<label>`` is a single channel and is normalised to THAT channel's
-    peak in the maximal breath; every other RMS column (``rms_max``, ``rms_insp_mean``, ...)
-    is a summary across channels and uses ``rms_max_ref``, the largest channel peak. Reading a
-    channel's percentage against another channel's peak would not be a percentage of its own
-    maximum."""
+    peak in the maximal breath (NaN when that channel has none: never another channel's
+    peak). A mean-across-channels column (``rms_mean``, ``rms_insp_mean``, ...) uses the mean
+    of the channel peaks, and every other summary (``rms_max``, ...) the largest one, so a
+    maximal effort reads 100 % in each. Only for ``normalization = "per_file_max"``, the
+    caller's business: a mean-based mode keeps reading the file's own column means."""
     breaths = typed_max_effort_breaths(settings, filename)
     if not breaths:
         return None
@@ -160,6 +162,8 @@ def emg_reference_from_max_effort(result, settings, filename) -> "dict | None":
     scalar = values.get("rms_max_ref")
     if scalar is None:
         return None
+    channel_refs = [v for k, v in values.items() if k.startswith(_CHANNEL_PREFIX)]
+    mean_ref = float(np.mean(channel_refs)) if channel_refs else scalar
     columns: list = []
     for fr in getattr(result, "ok_files", {}).values():
         table = getattr(fr, "breaths_table", None)
@@ -170,8 +174,14 @@ def emg_reference_from_max_effort(result, settings, filename) -> "dict | None":
                 columns.append(c)
     out: dict = {}
     for c in columns:
-        label = str(c).rsplit("_col_", 1)[1] if "_col_" in str(c) else None
-        out[c] = values.get(_CHANNEL_PREFIX + label, scalar) if label is not None else scalar
+        name = str(c)
+        if "_col_" in name:
+            # a channel with no reference of its own is NaN, never another channel's peak
+            out[c] = values.get(_CHANNEL_PREFIX + name.rsplit("_col_", 1)[1], float("nan"))
+        elif "_mean" in name:
+            out[c] = mean_ref            # a mean across channels against the mean channel peak
+        else:
+            out[c] = scalar
     return out
 
 
@@ -186,7 +196,7 @@ def _breath_row(breath_no, row, breath, caps, ref: dict, has_emg: bool) -> dict:
     insp = breath["inspiration"]
     # the analysis rate the breath was actually cut at (a resampled run differs from the
     # file's own), recovered exactly from how compute set ti = len(insp flow) / fs
-    fs = len(np.atleast_1d(insp["flow"])) / ti if ti > 0 else float("nan")
+    fs = round(len(np.atleast_1d(insp["flow"])) / ti, 6) if ti > 0 else float("nan")
 
     def _n_bw(window_s):
         return int(max(1, round(window_s * fs))) if np.isfinite(fs) else 1
