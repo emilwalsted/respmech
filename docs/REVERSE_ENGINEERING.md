@@ -1011,8 +1011,8 @@ real deflection; the pressures READ at `t_onset` and `t_flow` are the raw ones.
 - `peepi_lag = (t_flow − t_onset) / fs` (s); `0` below `min_deflection`.
 - `peepi_pgas_drop = max(Pgas[t_onset] − Pgas[t_flow], 0)` and `peepi_corr =
   max(peepi_dyn − peepi_pgas_drop, 0)` (only with Pgas): the expiratory-muscle
-  contribution is removed by the Pgas change over the SAME interval, which equals the
-  pre-flow Pdi rise (Zakynthinos 1997, 1999). With a constant Pgas the correction is
+  contribution is removed by the Pgas fall over the SAME interval (`peepi_corr`, before the clamp, equals the
+  pre-flow Pdi rise) (Zakynthinos 1997, 1999). With a constant Pgas the correction is
   the identity.
 - `int_oes_preflow` = the area of the deflection, `∫ (Poes[t_onset] − Poes) dt` over
   `[t_onset, t_flow]` (trapezoid, cmH₂O·s), and `ptp_oes_preflow = int_oes_preflow ·
@@ -1065,14 +1065,17 @@ which the Pgas correction is meant to remove); one separated from the fall by a 
 stretch is not. Without Pgas the `dynamic` value carries that overestimate. `peepi_pgas_drop`
 is clamped at 0, so the corrected value equals the Pdi rise before flow only when Pgas
 falls. With `wob.calc_from = "average"` the polygon is an average-breath value while
-PEEPi is per breath. A 0 (no deflection) cannot be told from a detection that found
+PEEPi is per breath. Breath #1 of a file is blank in every new column, and the per-file average skips blanks,
+so an averaged `wobtotal_thr` need not equal the averaged `wobtotal` plus the averaged
+`wob_in_thr` when breath #1 differs from the rest. A 0 (no deflection) cannot be told from a detection that found
 nothing; only an unlocatable window or a missing predecessor is NaN with a notice.
 
 **Thresholds are provisional.** `search_window_s = 1.0`, `smooth_s = 0.05`,
 `onset_slope_frac = 0.1` and `min_deflection = 0.5` are literature-informed starting
 values, not measured ones. Measured so far only on synthetic data: the analytical
-pause case (`tests/unit/test_peepi.py`: `peepi_dyn` equals the known fall to 1e-9 at
-`buffer` 500, 800 and 1200) and the built-in sample recording, which has no PEEPi at
+pause case (`tests/unit/test_peepi.py`: `peepi_dyn` equals the known fall to 1e-9 with the
+segment boundary 400 samples before flow; an exact-zero pause puts the boundary at the pause
+start for every workable `buffer`, so that test does not show buffer-independence beyond that) and the built-in sample recording, which has no PEEPi at
 all but a Poes cardiac ripple and wander of 1–2 cmH₂O: with the starting thresholds 3
 of its 8 measurable breaths report a 1.2–2.1 cmH₂O deflection, a wider smoothing
 window (0.2 s, 0.4 s) does not remove them, and `min_deflection = 2.5` reports zero

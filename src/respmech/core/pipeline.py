@@ -1198,7 +1198,17 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                                                    cancel_check=cancel_check, peaks_s=gate_peaks,
                                                    detection_ok=gate_ok, detection_reason=gate_reason)
                         if peepi_on:
-                            _note = pressurelib.attach(breath, _prev_of[breathno], bcnt, vefactor, s)
+                            try:
+                                _note = pressurelib.attach(breath, _prev_of[breathno], bcnt, vefactor, s)
+                            except Exception as e:
+                                # isolated like mfvl.attach: the new columns stay NaN for this
+                                # breath instead of one unexpected fault failing the file
+                                breath.pop("pressure_ext", None)
+                                _note = f"PEEPi failed: {type(e).__name__}: {e}"
+                            if _prev_of[breathno] is None:
+                                # the first breath of a recording never has a predecessor: blank
+                                # by design, so no notice (it would repeat on every file)
+                                _note = None
                             if _note:
                                 peepi_notes.append((breath["number"], _note))
                     done += 1
