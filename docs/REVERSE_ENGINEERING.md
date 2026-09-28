@@ -971,6 +971,87 @@ scenario exercises the "domain mismatch" branch, not the "full coverage" one.
 `tests/unit/test_mfvl.py` covers the full-coverage EFL/VEcap arithmetic instead,
 with purpose-built fixtures where the IC and FVC TLC agree.
 
+### 5.16 PEEPi and the modified Campbell diagram (v2-only, opt-in) — `core/analysis/pressure.py`
+
+Off by default (`processing.pressure.peepi.enabled = false`); enabling it only ADDS
+columns, so every existing output, and every golden scenario, is unchanged with it off.
+Needs Flow and Poes. The construction and its five design points are the decision record
+in [`beslutninger.md`](beslutninger.md) (28-09-2026); this section is the implementation.
+
+**`t_flow`, the true zero crossing.** `separateintobreathsbyflow` (§5.3) ends an
+expiration only when `flow > 0` OR the mean of the next `breathseparationbuffer`
+samples is `> 0`. During an end-expiratory pause (flow exactly zero) that forward mean
+turns negative first, so the breath boundary lands in the pause, up to `buffer` samples
+before flow actually starts (a pause LONGER than `buffer` is refused by the segmenter
+itself, as a flat-flow error). `t_flow` is the first sample of the breath's
+inspiratory phase with `flow < 0` whose predecessor has `flow >= 0`; a phase that
+already starts below zero, or never crosses, falls back to its first sample. It is a
+separate quantity from the golden-locked PTP baseline (§5.6, the mean of the first
+`ptp.baseline_window_s`), which is untouched. The phase slices are end-exclusive, so
+each phase is one sample short of its boundaries; `t_flow` is unaffected.
+
+**Search window and onset (`detect_peepi_onset`).** The window is the last
+`search_window_s` of the PRECEDING breath's expiration (the breath immediately before
+this one in the recording, ignored or not) followed by this breath's samples up to and
+including `t_flow`. It is smoothed with a centred moving average of `smooth_s`
+(ends averaged over the samples that exist, not padded), and differenced. Walking back
+from `t_flow`, the deflection lasts while the smoothed step is still steeper than
+`onset_slope_frac` times the steepest fall anywhere in the window; the sample where
+the walk stops is `t_onset`. Because the smoothed slope reaches the threshold before
+the raw corner does, `t_onset` sits a few samples early, in the flat stretch before a
+real deflection; the pressures READ at `t_onset` and `t_flow` are the raw ones.
+
+- `peepi_dyn = max(Poes[t_onset] − Poes[t_flow], 0)` (cmH₂O), and `0` when below
+  `min_deflection`. A window with no falling step at all has no deflection (`t_onset =
+  t_flow`, so `0`, not NaN). NaN, plus a per-file notice, only when the breath has no
+  preceding breath (breath #1), the predecessor does not directly precede it in the
+  recording, or the window is too short or not finite.
+- `peepi_lag = (t_flow − t_onset) / fs` (s); `0` below `min_deflection`.
+- `peepi_pgas_drop = max(Pgas[t_onset] − Pgas[t_flow], 0)` and `peepi_corr =
+  max(peepi_dyn − peepi_pgas_drop, 0)` (only with Pgas): the expiratory-muscle
+  contribution is removed by the Pgas change over the SAME interval, which equals the
+  pre-flow Pdi rise (Zakynthinos 1997, 1999). With a constant Pgas the correction is
+  the identity.
+- `int_oes_preflow` = the area of the deflection, `∫ (Poes[t_onset] − Poes) dt` over
+  `[t_onset, t_flow]` (trapezoid, cmH₂O·s), and `ptp_oes_preflow = int_oes_preflow ·
+  bcnt · vefactor`. **Reported separately and never added to any `*_peepi` column:** the
+  ordinary PTP is already referenced to its own end-expiratory baseline, so adding the
+  pre-flow area would subtract that baseline twice (`PTP_INVESTIGATION.md`).
+
+**Threshold work.** `peepi_source` is `corrected` when Pgas exists, else `dynamic`
+(written to the Provenance sheet). `wob_in_thr = peepi_source_value · vt · (98.0638 /
+1000) · bcnt · vefactor` — the rectangle `PEEPi × VT` in J·min⁻¹, the same
+cmH₂O·L → J factor and scaling as §5.7. `wob_in_total_thr = wob_in_total +
+wob_in_thr` and `wobtotal_thr = wobtotal + wob_in_thr`; `calculatewob`, its five
+columns and its V = 0 crossing are untouched, and `wobtotal` never absorbs
+`wob_in_thr`. `int_oesinsp_peepi = int_oesinsp + peepi_dyn · ti`, `ptp_oesinsp_peepi =
+int_oesinsp_peepi · bcnt · vefactor`; with Pgas and Pdi, `int_pdiinsp_peepi` /
+`ptp_pdiinsp_peepi` are the same with `peepi_corr` (Appendini 1996). A NaN `peepi_dyn`
+makes every dependent column NaN.
+
+All columns live in `breath["pressure_ext"]`, joined after `breath["wob"]` in
+`build_breath_table`, and are computed in `run_batch` right after each breath's
+`calculatemechanics`. Units come from `core/quantities.py`'s generic rules (`peepi*` →
+cmH₂O, `peepi_lag` → s, `int_`/`ptp_`/`wob*`); the columns are also registered in
+`core/analysis/registry.py`.
+
+**Thresholds are provisional.** `search_window_s = 1.0`, `smooth_s = 0.05`,
+`onset_slope_frac = 0.1` and `min_deflection = 0.5` are literature-informed starting
+values, not measured ones. Measured so far only on synthetic data: the analytical
+pause case (`tests/unit/test_peepi.py`: `peepi_dyn` equals the known fall to 1e-9 at
+`buffer` 500, 800 and 1200) and the built-in sample recording, which has no PEEPi at
+all but a Poes cardiac ripple and wander of 1–2 cmH₂O: with the starting thresholds 3
+of its 8 measurable breaths report a 1.2–2.1 cmH₂O deflection, a wider smoothing
+window (0.2 s, 0.4 s) does not remove them, and `min_deflection = 2.5` reports zero
+everywhere. A steeper fall earlier in the search window (the tail of an expiratory
+Poes hump decaying to baseline) raises the reference the slope threshold is a fraction
+of; that too is not yet measured on real recordings.
+
+**Golden**: `flow_peepi_on` (a dedicated `synth_peepi_A.csv`, whose breaths after the
+first follow a 0.4 s zero-flow pause carrying a 3 cmH₂O Poes fall and a 1 cmH₂O Pgas
+fall over the same 0.25 s), pinned analytically in `test_golden.py`: `peepi_dyn = 3.0`,
+`peepi_corr = 2.0`, breath #1 NaN.
+
 ---
 
 ## 6. Latent issues found (to fix deliberately in the refactor)
