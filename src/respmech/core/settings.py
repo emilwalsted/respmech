@@ -376,6 +376,39 @@ class PtpSettings:
 
 
 @dataclass
+class PeepiSettings:
+    """Opt-in PEEPi detection and the modified Campbell diagram's threshold work
+    (``core.analysis.pressure``). Off by default: enabling it only ADDS columns, so every
+    existing output is unchanged with it off.
+
+    The four numeric fields are literature-informed STARTING values, not measured ones,
+    and are provisional until they have been measured on real recordings (the same
+    lesson as ``segmentation.boundary_notice_min_relative_duration``):
+
+    ``search_window_s``: how far back into the preceding breath's expiration the onset
+    of the pre-flow Poes deflection is searched for.
+    ``smooth_s``: moving-average width applied to the search window before its slope is
+    read (the pressures actually READ at the onset and at the start of flow stay raw).
+    ``onset_slope_frac``: walking back from the start of inspiratory flow, the deflection
+    lasts while the smoothed Poes is still falling faster than this fraction of the
+    steepest fall in the search window.
+    ``min_deflection`` (cmH2O): a smaller deflection than this is reported as 0.
+    """
+    enabled: bool = False
+    search_window_s: float = 1.0
+    smooth_s: float = 0.05
+    onset_slope_frac: float = 0.1
+    min_deflection: float = 0.5
+
+
+@dataclass
+class PressureSettings:
+    """Pressure-derived analyses that build on the ordinary per-breath mechanics
+    (``core.analysis.pressure``): today PEEPi and the modified Campbell diagram."""
+    peepi: PeepiSettings = field(default_factory=PeepiSettings)
+
+
+@dataclass
 class IcSettings:
     """Inspiratory-capacity manoeuvre extraction (M-29, ``core.analysis.manoeuvres``).
 
@@ -630,6 +663,7 @@ class ProcessingSettings:
     ptp: PtpSettings = field(default_factory=PtpSettings)
     lung_volume: LungVolumeSettings = field(default_factory=LungVolumeSettings)
     mfvl: MfvlSettings = field(default_factory=MfvlSettings)
+    pressure: PressureSettings = field(default_factory=PressureSettings)
     exclude_breaths: list[ExcludeEntry] = field(default_factory=list)
     breath_counts: list[BreathCountEntry] = field(default_factory=list)
     breath_types: list[BreathTypeEntry] = field(default_factory=list)
@@ -1063,6 +1097,15 @@ class Settings:
                     "mvv_fev1_multiplier"):
             if getattr(mfvl, name) < 0:
                 raise SettingsError(f"processing.mfvl.{name} must not be negative")
+
+        # PeepiSettings: same front-line-failure-mode reasoning as MfvlSettings above.
+        peepi = self.processing.pressure.peepi
+        for name in ("search_window_s", "smooth_s", "onset_slope_frac", "min_deflection"):
+            if getattr(peepi, name) < 0:
+                raise SettingsError(
+                    f"processing.pressure.peepi.{name} must not be negative")
+        if peepi.search_window_s <= 0:
+            raise SettingsError("processing.pressure.peepi.search_window_s must be positive")
 
         # references/reference_defaults/subjects -- FORM only (validate() never resolves
         # a link or touches a file on disk; that is core.analysis.references' job). Same
