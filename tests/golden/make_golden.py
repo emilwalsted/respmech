@@ -209,6 +209,13 @@ V2_SCENARIOS: dict = {
     # Two breaths typed as manoeuvres (IC #4, FVC #7) in the SAME file, over the
     # dedicated synth_manoeuvre_*.csv input (own RNG stream, never synth_case_*.csv).
     "typed_ic_fvc_same_file": os.path.join("scenarios", "typed_ic_fvc_same_file.toml"),
+    # A reference-only IC recording (synth_crossfile_ic.csv) and a separate tidal
+    # recording (synth_crossfile_stage.csv) whose processing.references entry names
+    # the IC file as its IC source -- the CROSS-file counterpart of
+    # typed_ic_fvc_same_file's same-file "own typed breath" fallback. Own dedicated
+    # synth_crossfile_*.csv input pair (own RNG streams, never any other scenario's
+    # glob).
+    "typed_ic_crossfile": os.path.join("scenarios", "typed_ic_crossfile.toml"),
 }
 
 # The union both test_golden.py (via golden_newcore.mg.SCENARIOS) and this
