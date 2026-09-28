@@ -104,6 +104,17 @@ reference for…", "Reference manoeuvres…") went live in a later release (see 
      latent int-vs-string JSON key mismatch in the test harness (golden_newcore.py),
      never reachable before this ticket since no prior scenario emitted a "manoeuvres"
      key at all. -->
+<!-- changelog-skip cd740fe test-infrastructure only: a new golden/characterisation
+     scenario (typed_ic_crossfile) locks the CROSS-file counterpart of
+     typed_ic_fvc_same_file's own self-reference against a dedicated,
+     reference-only synthetic recording and an explicit processing.references
+     link -- no user-visible behaviour change, the cross-file reference feature
+     itself already shipped via the reference-manoeuvres/lung-volume bullets
+     above. Also adds an end-to-end workflow test covering the realistic
+     multi-file-per-participant lab setup (group-default resolution across two
+     participants, run_batch + write_batch, group_readout, check_links, the
+     cohort summary) that no earlier ticket in this programme exercised
+     together. -->
 
 **Explore with sample data follows the signal set.** The startup chooser's own
 'Explore with sample data' door still always opens the complete demo recording, but
