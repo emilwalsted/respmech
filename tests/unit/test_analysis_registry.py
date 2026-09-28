@@ -17,6 +17,20 @@ from respmech.core.analysis.signals import Capabilities
 # reclassified a column that is already shipping — see
 # test_unit_for_is_unchanged_for_every_current_golden_column.
 _GOLDEN_UNIT_SNAPSHOT = {
+    # opt-in PEEPi columns (core.analysis.pressure), golden scenario flow_peepi_on
+    'peepi_dyn': 'cmH₂O',
+    'peepi_pgas_drop': 'cmH₂O',
+    'peepi_corr': 'cmH₂O',
+    'peepi_lag': 's',
+    'int_oes_preflow': 'cmH₂O·s',
+    'ptp_oes_preflow': 'cmH₂O·s·min⁻¹',
+    'wob_in_thr': 'J·min⁻¹',
+    'wob_in_total_thr': 'J·min⁻¹',
+    'wobtotal_thr': 'J·min⁻¹',
+    'int_oesinsp_peepi': 'cmH₂O·s',
+    'ptp_oesinsp_peepi': 'cmH₂O·s·min⁻¹',
+    'int_pdiinsp_peepi': 'cmH₂O·s',
+    'ptp_pdiinsp_peepi': 'cmH₂O·s·min⁻¹',
     'bf': 'min⁻¹',
     'breath_no': '',
     # M-36: operating lung volumes (core.analysis.lungvol.attach), added to

@@ -32,6 +32,7 @@ from respmech.core import emg as emglib
 from respmech.core.analysis import lungvol as lungvollib
 from respmech.core.analysis import manoeuvres as manoeuvreslib
 from respmech.core.analysis import mfvl as mfvllib
+from respmech.core.analysis import pressure as pressurelib
 from respmech.core.analysis import references as referenceslib
 from respmech.core.analysis.signals import Capabilities
 from respmech.core.io.loaders import load
@@ -1157,6 +1158,17 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
             if not reference_only:
                 total = sum(1 for b in breaths.values() if not b["ignored"])
                 done = 0
+                # Opt-in PEEPi (core.analysis.pressure): reads the breath BEFORE each one
+                # in the recording, ignored or not (its expiration tail holds the start of
+                # the pre-flow deflection), so the neighbour is looked up over ALL breaths.
+                peepi_on = (not emg_only and s.processing.pressure.peepi.enabled
+                            and s.capabilities.flow and s.capabilities.poes)
+                if (not emg_only and s.processing.pressure.peepi.enabled and not peepi_on):
+                    file_notices.append(
+                        "PEEPi analysis is enabled but this signal set lacks Flow or Poes -- skipped")
+                _order = list(breaths)
+                _prev_of = {k: (breaths[_order[i - 1]] if i else None) for i, k in enumerate(_order)}
+                peepi_notes: list = []
                 for breathno in breaths:
                     breath = breaths[breathno]
                     if breath["ignored"]:
@@ -1185,8 +1197,31 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                         compute.calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, s,
                                                    cancel_check=cancel_check, peaks_s=gate_peaks,
                                                    detection_ok=gate_ok, detection_reason=gate_reason)
+                        if peepi_on:
+                            try:
+                                _note = pressurelib.attach(breath, _prev_of[breathno], bcnt, vefactor, s)
+                            except Exception as e:
+                                # isolated like mfvl.attach: the new columns stay NaN for this
+                                # breath instead of one unexpected fault failing the file
+                                breath.pop("pressure_ext", None)
+                                _note = f"PEEPi failed: {type(e).__name__}: {e}"
+                            if _prev_of[breathno] is None:
+                                # the first breath of a recording never has a predecessor: blank
+                                # by design, so no notice (it would repeat on every file)
+                                _note = None
+                            if _note:
+                                peepi_notes.append((breath["number"], _note))
                     done += 1
                     _emit(progress, ProgressEvent("breath", file=filename, breath=done, total_breaths=total))
+
+            if not reference_only and peepi_notes:
+                # One notice per file, not per breath: the first breath of every recording
+                # has no predecessor, so a per-breath notice would repeat on every file.
+                _detail = "; ".join(f"#{n}: {m}" for n, m in peepi_notes[:5])
+                if len(peepi_notes) > 5:
+                    _detail += f"; and {len(peepi_notes) - 5} more"
+                file_notices.append(
+                    f"PEEPi reported as NaN for {len(peepi_notes)} breath(s) -- {_detail}")
 
             # M-29/M-30: typed (non-`rest`) breaths never reach calculatemechanics above
             # (M-19 unions every typed kind into `excludebreaths` on a flow-bearing set,

@@ -7,6 +7,23 @@ for the installers themselves.
 
 ## Unreleased
 
+**Opt-in PEEPi-corrected work of breathing (modified Campbell diagram).** A new
+`processing.pressure.peepi` setting (off by default) measures intrinsic PEEP for every
+breath from the oesophageal-pressure deflection that precedes inspiratory flow — found
+from the true start of flow, not from the breath boundary, so the result does not depend
+on the breath-separation buffer — and reports the extra work that threshold adds to the
+Campbell diagram in new columns beside the existing ones: the deflection (`peepi_dyn`,
+and with a gastric-pressure channel the expiratory-muscle-corrected `peepi_corr`), how
+long it lasted, its pressure–time area, the threshold work of breathing and the
+totals with it (`wob_in_thr`, `wob_in_total_thr`, `wobtotal_thr`), and the
+inspiratory pressure–time products including it. Existing columns, the Campbell
+polygon and every earlier result are unchanged, with the setting on or off. The first
+breath of a file, which has no preceding breath to search in, reads blank.
+The four detection thresholds are starting values that have not yet been measured on
+real recordings; on the built-in sample, which has no intrinsic PEEP, the default
+minimum deflection is below that recording's own pressure wander, so treat small
+values with caution until the thresholds are tuned.
+
 **FVC/FEV1/PEF from a typed forced-vital-capacity breath, and how well a tidal
 breath's own flow keeps up with it.** A `fvc`/`ic_fvc`-typed breath's Manoeuvres row
 now carries the numeric extraction the previous release deferred: FVC, FEV1 and its

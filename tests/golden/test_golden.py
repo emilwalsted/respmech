@@ -127,6 +127,24 @@ def test_typed_ic_fvc_same_file_vol_ic_matches_analytical_value(current):
     assert row["quality"] == []
 
 
+def test_flow_peepi_on_matches_the_analytical_pre_flow_fall(current):
+    """The scenario's own acceptance criterion: every breath after the first reports the
+    known pre-flow Poes fall (generate_data.PEEPI_DROP) as ``peepi_dyn`` and the gastric-
+    corrected value as ``peepi_corr``, to 1e-9, not merely whatever the code computes this
+    run -- with the segmenter's boundary 400 samples before flow starts (buffer 800). Breath
+    #1 has no predecessor: NaN (the JSON round-trip spells it 'NaN')."""
+    import generate_data as gd
+    table = current["flow_peepi_on"]["per_file"]["synth_peepi_A.csv.breathdata.xlsx"]
+    dyn, corr = table["peepi_dyn"], table["peepi_corr"]
+    assert dyn[0] == "NaN" and corr[0] == "NaN"
+    assert dyn[1:] == pytest.approx([gd.PEEPI_DROP] * (len(dyn) - 1), abs=1e-9)
+    assert corr[1:] == pytest.approx([gd.PEEPI_DROP - gd.PEEPI_PGAS_DROP] * (len(corr) - 1), abs=1e-9)
+    # the boundary lands in the pause BEFORE the deflection, so the existing PTP and polygon
+    # already hold the threshold and the *_peepi/*_thr columns add nothing on top of them
+    assert table["int_oesinsp_peepi"][1:] == pytest.approx(table["int_oesinsp"][1:], abs=1e-9)
+    assert table["wob_in_thr"][1:] == pytest.approx([0.0] * (len(dyn) - 1), abs=1e-12)
+
+
 def test_typed_ic_crossfile_reference_only_file_is_skipped_from_per_file(current):
     """This scenario's own scope made mechanical: the reference-only
     ``synth_crossfile_ic.csv`` (every breath typed, no tidal breathing at all —
