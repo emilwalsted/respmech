@@ -618,3 +618,352 @@ def test_cli_init_rejects_a_pressure_signal_without_flow(tmp_path, capsys):
     assert capsys.readouterr().err == (
         "error: --signals: 'poes', 'pgas' and 'pdi' require 'flow'\n")
     assert not (tmp_path / "x.toml").exists()
+
+
+# --- `respmech breaths`, check_links in validate, IC/FVC ref lines in dry-run ---------
+
+def _breath_numbers(out: str) -> set:
+    import re
+    return {int(n) for n in re.findall(r"(?:Breath|Segment) #(\d+):", out)}
+
+
+def test_cli_breaths_numbers_equal_a_real_runs_breath_keys(tmp_path, capsys):
+    """The numbers `respmech breaths` prints for a file are EXACTLY
+    `FileResult.breaths`' own keys for a real `run_batch` of the same settings --
+    both build breaths through `core.pipeline.segment_file` (`run_batch`'s main loop
+    calls it directly), so this pins that the CLI command never drifts from what an
+    actual run would number."""
+    from respmech.settingsio.toml_io import save_toml
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+
+    result = run_batch(settings)
+    ref_keys = set(result.ok_files["synth_case_A.csv"].breaths)
+
+    rc = cli_main(["breaths", str(toml), "synth_case_A.csv"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert _breath_numbers(out) == ref_keys
+    assert ref_keys, "the comparison isn't vacuous"
+    # only the requested file is listed
+    assert "synth_case_B.csv" not in out
+
+
+def test_cli_breaths_with_no_file_argument_lists_every_matched_file(tmp_path, capsys):
+    from respmech.settingsio.toml_io import save_toml
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+    rc = cli_main(["breaths", str(toml)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "synth_case_A.csv:" in out
+    assert "synth_case_B.csv:" in out
+
+
+def test_cli_breaths_reports_onset_duration_kind_and_exclusion(tmp_path, capsys):
+    """A breath typed 'ic' (every typed kind is unioned into excludebreaths) shows up
+    with its own kind and as excluded; an ordinary breath shows kind=tidal and no
+    'excluded' marker."""
+    from respmech.settingsio.toml_io import save_toml
+    from respmech.core.settings import BreathTypeEntry
+
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    settings.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=4, kind="ic"))
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+
+    rc = cli_main(["breaths", str(toml), "synth_case_A.csv"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    line4 = next(l for l in out.splitlines() if l.strip().startswith("Breath #4:"))
+    assert "kind=ic" in line4 and "excluded" in line4
+    line1 = next(l for l in out.splitlines() if l.strip().startswith("Breath #1:"))
+    assert "kind=tidal" in line1 and "excluded" not in line1
+    assert "onset" in line1 and "duration" in line1
+
+
+def test_cli_breaths_suggested_fvc_hint_drives_a_ready_to_paste_snippet(tmp_path, capsys):
+    """`core.analysis.manoeuvres.suggest_fvc` (the longest untyped expiration) marks
+    one breath 'suggested FVC' and the printed TOML snippet uses that SAME breath
+    number, filled in (not a placeholder), plus `folder` -- ready to paste unedited."""
+    from respmech.settingsio.toml_io import save_toml
+    from respmech.core.analysis.manoeuvres import suggest_fvc
+    from respmech.core.pipeline import segment_file
+    from respmech.core._legacy_ns import to_legacy_ns
+    import os as _os
+
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+
+    s = to_legacy_ns(settings)
+    path = _os.path.join(settings.input.folder, "synth_case_A.csv")
+    breaths, _trimmed = segment_file(settings, s, path)
+    expected_hint = suggest_fvc(breaths)
+    assert expected_hint is not None, "the comparison isn't vacuous"
+
+    rc = cli_main(["breaths", str(toml), "synth_case_A.csv"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    hint_line = next(l for l in out.splitlines()
+                     if l.strip().startswith(f"Breath #{expected_hint}:"))
+    assert "suggested FVC" in hint_line
+    assert "[[processing.breath_types]]" in out
+    assert 'file = "synth_case_A.csv"' in out
+    assert f"breath = {expected_hint}" in out
+    assert 'kind = "fvc"' in out
+    assert f"folder = '{settings.input.folder}'" in out
+
+
+def test_cli_breaths_rejects_an_unmatched_file_argument(tmp_path, capsys):
+    from respmech.settingsio.toml_io import save_toml
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+    rc = cli_main(["breaths", str(toml), "does_not_exist.csv"])
+    assert rc == 2
+    assert "does_not_exist.csv" in capsys.readouterr().err
+
+
+def test_cli_validate_prints_check_links_cautions_as_warnings_but_stays_ok(tmp_path, capsys):
+    """A reference source not among the analysed files is a soft check_links caution
+    (require_references is off by default) -- printed, but `validate` still exits 0,
+    per LungVolumeSettings.require_references' own doctrine: "an unresolved link is a
+    caution plus NaN and a notice; it is a blocker only when this flag is set"."""
+    from respmech.settingsio.toml_io import save_toml
+    from respmech.core.settings import ReferenceEntry, BreathRef
+
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    settings.processing.references.append(ReferenceEntry(
+        file="synth_case_A.csv", ic=BreathRef(file="missing_source.csv", breaths=[2])))
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+
+    rc = cli_main(["validate", str(toml)])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "WARNING: processing.references[synth_case_A.csv]: ic source " \
+          "'missing_source.csv' is not among the analysed files" in err
+
+
+def test_cli_validate_fails_when_a_required_reference_source_is_missing(tmp_path, capsys):
+    """The SAME missing-source caution as above, but with require_references on --
+    the one condition that fails `validate`'s own exit code, mirroring
+    ui.validation.path_problem's existing hard block exactly (the same
+    missing_reference_sources() check, the same require_references gate)."""
+    from respmech.settingsio.toml_io import save_toml
+    from respmech.core.settings import ReferenceEntry, BreathRef
+
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    settings.processing.references.append(ReferenceEntry(
+        file="synth_case_A.csv", ic=BreathRef(file="missing_source.csv", breaths=[2])))
+    settings.processing.lung_volume.require_references = True
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+
+    rc = cli_main(["validate", str(toml)])
+    assert rc == 1
+
+
+def test_cli_validate_a_caution_with_no_missing_source_never_fails_even_when_required(
+        tmp_path, capsys):
+    """require_references only turns a MISSING source into a hard failure -- a
+    caution of a different kind (here: an excluded linked breath, the source file
+    itself present and fine) never fails validate, required or not."""
+    from respmech.settingsio.toml_io import save_toml
+    from respmech.core.settings import ReferenceEntry, BreathRef, ExcludeEntry
+
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    settings.processing.references.append(ReferenceEntry(
+        file="synth_case_A.csv", ic=BreathRef(file="synth_case_B.csv", breaths=[2])))
+    settings.processing.exclude_breaths.append(
+        ExcludeEntry(file="synth_case_B.csv", breaths=[2]))
+    settings.processing.lung_volume.require_references = True
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+
+    rc = cli_main(["validate", str(toml)])
+    err = capsys.readouterr().err
+    assert "is excluded" in err
+    assert rc == 0
+
+
+def test_cli_run_dry_run_shows_the_ic_and_fvc_reference_line_per_file(tmp_path, capsys):
+    """cmd_run's own acceptance example: 'IC ref: ... · FVC ref: ...' for a file whose
+    IC reference resolved (here: the file's own typed IC/FVC breaths -- 'own', not the
+    filename repeated back), and 'no IC reference — lung-volume columns NaN' for a
+    file in the SAME analysis (the IC family IS present) whose own IC never resolves."""
+    from respmech.settingsio.toml_io import save_toml
+    from respmech.core.settings import BreathTypeEntry
+
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    settings.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=4, kind="ic"))
+    settings.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=7, kind="fvc"))
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+
+    rc = cli_main(["run", str(toml), "--dry-run"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "IC ref: own #4 · FVC ref: own #7" in out
+    assert "no IC reference — lung-volume columns NaN" in out
+
+
+def test_cli_run_dry_run_omits_the_reference_line_when_no_ic_family_exists(tmp_path, capsys):
+    """The ordinary case (no cross-file/own-typed IC reference anywhere in this
+    analysis) must not print a spurious 'no IC reference' line for every file --
+    `_legacy` (this file's own default fixture) types no breath at all."""
+    from respmech.settingsio.toml_io import save_toml
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+    rc = cli_main(["run", str(toml), "--dry-run"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "IC ref:" not in out
+    assert "no IC reference" not in out
+
+
+def test_cli_run_dry_run_shows_a_cross_file_reference_with_one_hash_per_breath(tmp_path, capsys):
+    """_ref_label's multi-breath format is '#2,#3' (one '#' per breath number), not
+    '#2,3' -- and for a genuinely CROSS-file link (the source is a different file
+    than the one being reported on), the label names that file, not 'own'."""
+    from respmech.settingsio.toml_io import save_toml
+    from respmech.core.settings import BreathTypeEntry, ReferenceEntry, BreathRef
+
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    settings.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_B.csv", breath=2, kind="ic"))
+    settings.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_B.csv", breath=3, kind="ic"))
+    settings.processing.references.append(ReferenceEntry(
+        file="synth_case_A.csv", ic=BreathRef(file="synth_case_B.csv", breaths=[2, 3])))
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+
+    rc = cli_main(["run", str(toml), "--dry-run"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    # synth_case_A.csv's OWN reference line names the source file, not 'own' -- its
+    # IC comes from breaths typed in B, not from a breath typed in A itself.
+    # (synth_case_B.csv gets its OWN, separate reference line further down that DOES
+    # say 'own' -- B's IC breaths are B's own typed breaths, a different, equally
+    # valid resolution for a different file; this test only pins A's line.)
+    a_idx = next(i for i, l in enumerate(lines) if l.strip() == "synth_case_A.csv: 8 breaths")
+    assert lines[a_idx + 1].strip() == "IC ref: synth_case_B.csv #2,#3 · FVC ref: none"
+
+
+def test_cli_validate_passes_cleanly_when_required_references_all_resolve(tmp_path, capsys):
+    """require_references only fails validate on a MISSING source -- a fully
+    resolving reference set (here: own-typed IC/FVC breaths) must validate clean,
+    with no cautions at all, even with the flag on."""
+    from respmech.settingsio.toml_io import save_toml
+    from respmech.core.settings import BreathTypeEntry
+
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    settings.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=4, kind="ic"))
+    settings.processing.lung_volume.require_references = True
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+
+    rc = cli_main(["validate", str(toml)])
+    assert rc == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_cli_breaths_names_an_emg_only_analysiss_entries_segment_not_breath(tmp_path, capsys):
+    """An EMG-only signal set has no inspiration/expiration split
+    (core.analysis.segments._make_segment's own 'Segment #N' naming, has_phases=False)
+    -- `respmech breaths` must print exactly what the breath dict itself is named,
+    never a hardcoded 'Breath #N'. `suggest_fvc` has nothing eligible on such a set
+    (it always requires has_phases), so this also exercises the '(no suggested FVC
+    breath)' fallback line."""
+    import numpy as np
+    from respmech.core.settings import Settings
+    from respmech.settingsio.toml_io import save_toml
+
+    n = 2000
+    t = np.arange(n) / 1000.0
+    pd.DataFrame({"time": t, "EMG1": np.sin(t), "EMG2": np.sin(t + 0.5),
+                 "EMG3": np.cos(t)}).to_csv(tmp_path / "okemgonly.csv", index=False)
+    s = Settings()
+    s.input.folder = str(tmp_path)
+    s.input.files = "okemgonly.csv"
+    s.input.format.sampling_frequency = 1000
+    s.input.channels.emg = [2, 3, 4]
+    s.analysis.signals = ["emg"]
+    s.processing.segmentation.method = "whole_file"
+    s.output.folder = str(tmp_path / "out")
+    toml = tmp_path / "s.toml"
+    save_toml(s, toml)
+
+    rc = cli_main(["breaths", str(toml)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Segment #1:" in out
+    assert "Breath #1:" not in out
+    assert "(no suggested FVC breath)" in out
+
+
+def test_cli_breaths_reports_an_error_for_one_file_and_still_lists_the_next(tmp_path, capsys):
+    """A file that fails to segment (here: a constant flow channel, the same
+    ConstantFlowError `respmech validate` already fails on) prints an ERROR line for
+    THAT file and a non-zero exit code, but does not abort the whole command -- the
+    next matched file is still listed in full."""
+    import numpy as np
+    n = 2000
+    _write_layout_csv(tmp_path / "aaa_flatflow.csv", n, time_col=np.arange(n) / 1000.0,
+                      extra_cols={"flow": np.zeros(n)})
+    _write_layout_csv(tmp_path / "zzz_clean.csv", n, time_col=np.arange(n) / 1000.0)
+    toml = _validate_settings_toml(tmp_path, tmp_path)
+
+    rc = cli_main(["breaths", str(toml)])
+    assert rc == 1
+    captured = capsys.readouterr()
+    out, err = captured.out, captured.err
+    assert "aaa_flatflow.csv:" in out
+    assert "zzz_clean.csv:" in out
+    assert "ERROR: ConstantFlowError" in err
+    # the good file after the bad one is still listed with real breath lines
+    assert "onset" in out.split("zzz_clean.csv:", 1)[1]
+
+
+def test_cli_breaths_matches_a_resampled_runs_breath_count_and_duration(tmp_path, capsys):
+    """A pre-analysis resample must change what `respmech breaths` segments too --
+    without applying the same resample override `run_batch` applies before its own
+    `segment_file` call, this command would segment the file's NATIVE rate while a
+    real run segments the RESAMPLED one, printing different sample counts/durations
+    for the exact same settings."""
+    from respmech.settingsio.toml_io import save_toml
+
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    settings.processing.sampling.resample = True
+    settings.processing.sampling.resample_to_frequency = 500   # native is 1000 Hz
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+
+    result = run_batch(settings)
+    ref_breaths = result.ok_files["synth_case_A.csv"].breaths
+    ref_keys = set(ref_breaths)
+    ref_samples_breath1 = len(ref_breaths[1]["time"])
+
+    rc = cli_main(["breaths", str(toml), "synth_case_A.csv"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert _breath_numbers(out) == ref_keys
+    # onset/duration for breath #1 must reflect the RESAMPLED rate (500 Hz), not the
+    # native 1000 Hz -- duration = sample count / fs, so a wrong fs would print a
+    # duration exactly twice (or half) what the resampled run actually has.
+    import re
+    m = re.search(r"Breath #1:.*duration ([\d.]+)s", out)
+    assert m is not None
+    printed_duration = float(m.group(1))
+    expected_duration = ref_samples_breath1 / 500
+    assert abs(printed_duration - expected_duration) < 0.01
