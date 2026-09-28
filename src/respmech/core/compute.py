@@ -21,6 +21,7 @@ import scipy as sp
 import scipy.interpolate  # noqa: F401  (sp.interpolate)
 import scipy.integrate    # noqa: F401
 from collections import OrderedDict
+from dataclasses import dataclass
 
 from respmech.core import emg as emglib
 from respmech.core import entropy as entlib
@@ -549,6 +550,194 @@ def separateintobreathsbyvolume(filename, timecol, flow, volume, poes, pgas, pdi
         breaths[breathcnt] = _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols, filename,
                                            is_boundary, kind=bk.get(breathcnt))
     return breaths
+
+
+@dataclass
+class SegmentationOverrideNotice:
+    """One per-file quality notice from :func:`apply_segmentation_overrides` — an
+    out-of-range cut, a cut colliding with an existing boundary, or a join with no
+    automatic boundary nearby. Never raised as an error: one bad override entry in a
+    big batch must not abort an otherwise-fine run, the same "advisory, never fails a
+    file" posture :func:`trim_boundary_notices` already has for a truncated boundary
+    breath. ``message`` is plain text, ready to append to ``FileResult.notices``
+    alongside every other per-file notice."""
+    message: str
+
+
+def _walk_insp_end(flow, start: int, end: int, bufferwidth: int) -> int:
+    """The SAME criterion :func:`separateintobreathsbyflow`'s own inspiration
+    while-loop uses (mean-buffered flow sign), bounded to ``[start, end)`` instead of
+    the whole recording — used by :func:`apply_segmentation_overrides` to re-split
+    EACH resulting segment into inspiration/expiration once the override list has
+    decided where that segment's own boundaries are: the transition-finding rule
+    itself is unchanged, only the OUTER loop that used to keep discovering further
+    breaths past this one is gone, because this segment's own end is now GIVEN, not
+    found.
+
+    Everything from the returned index to ``end`` is that segment's expiration,
+    regardless of any further sign changes inside it — by construction, a segment
+    produced by the override list is meant to be exactly ONE breath, so a residual
+    flow wobble within it (the very artefact a ``join_s`` exists to absorb) must NOT
+    trigger a second split here, or the override would simply reproduce the automatic
+    over-segmentation it was asked to undo. A segment whose flow never leaves negative
+    (i reaches ``end`` without a qualifying transition) reports the whole segment as
+    inspiration with an empty expiration — a degenerate, boundary-notice-worthy
+    breath, the same risk ``_make_breath``'s own ``is_boundary`` branch already
+    handles for the ordinary auto-segmented case."""
+    i = start
+    while i < end and (flow[i] < 0 or np.mean(flow[i:min(end, i + bufferwidth)]) < 0):
+        i += 1
+    return i
+
+
+def apply_segmentation_overrides(filename, auto_breaths, cut_s, join_s, timecol, flow, volume,
+                                  poes, pgas, pdi, entropycolumns, emgcolumns, fs, bufferwidth,
+                                  *, ignored_breaths, kinds, tolerance_s=None):
+    """Repair the automatic flow-/volume-based breath segmentation using one file's
+    manual ``cut_s``/``join_s`` (``SegmentationOverrideEntry``),
+    applied AFTER the automatic segmentation (``auto_breaths`` — the un-overridden
+    output of :func:`separateintobreathsbyflow`/:func:`separateintobreathsbyvolume`,
+    read here ONLY for its breaths' own start times, never its numbering/ignore/kind,
+    which describe the OLD, pre-override segmentation) and BEFORE breath numbering,
+    ignore/kind assignment and phase re-splitting — so every downstream consumer
+    (exclusions, types, references, ``t_onset_s`` anchors, boundary notices) sees ONE
+    finished boundary list, exactly like the EMG-only ``separators`` method already
+    gives its own consumers one finished list (see :func:`core.analysis.segments.
+    separators`).
+
+    ``cut_s`` inserts a new boundary at each named time, splitting whatever automatic
+    breath currently spans it. ``join_s`` REMOVES the nearest AUTOMATIC boundary to
+    each named time, within ``tolerance_s`` (default ``max(2/fs, 0.05 s)`` — the same
+    tolerance the UI's click-to-remove uses for the EMG-only separators list). An
+    out-of-range or already-occupied cut, or a join with no automatic boundary
+    nearby, is reported as a soft :class:`SegmentationOverrideNotice` and otherwise
+    ignored — one bad
+    entry must not abort an otherwise-fine batch, the same posture
+    :func:`trim_boundary_notices` already has.
+
+    Each resulting segment gets its OWN inspiration/expiration split via
+    :func:`_walk_insp_end`, bounded to that segment's own ``[start, end)`` — see that
+    function's docstring for why a residual wobble inside a JOINED segment must not
+    re-trigger a split. ``ignored_breaths``/``kinds`` (the same shape
+    :func:`ignorebreaths`/:func:`breathkinds` already return) are then applied to the
+    NEW numbering, exactly as the automatic segmenters apply them to their own.
+
+    Returns ``(breaths, notices)``: ``breaths`` an ``OrderedDict`` in the exact shape
+    :func:`_make_breath` builds (``has_phases=True``), numbered 1..N; ``notices`` a
+    list of :class:`SegmentationOverrideNotice`. The caller (``core.pipeline.
+    segment_file``) only invokes this function when at least one of ``cut_s``/
+    ``join_s`` is non-empty — an analysis with no override entry for this file, or an
+    entry whose lists are both empty, never reaches here at all, which is what makes
+    the "empty overrides is byte-identical" acceptance criterion hold BY
+    CONSTRUCTION rather than by this function happening to reproduce
+    ``auto_breaths`` exactly."""
+    timecol = np.atleast_1d(timecol)
+    n = len(timecol)
+    tol = tolerance_s if tolerance_s is not None else max(2.0 / fs, 0.05)
+    notices: list[SegmentationOverrideNotice] = []
+
+    # `timecol` is the TRIMMED window's own array, but its VALUES are still the
+    # recording's absolute clock (compute.trim() slices timecolraw, an
+    # arange(n_raw)/fs built before any trimming -- it never re-zeroes it): the same
+    # convention `breath['time']`/`SeparatorEntry.times_s`/`cut_s`/`join_s` all use. So
+    # the trimmed window's own first sample is NOT necessarily t=0.0 (trim() commonly
+    # discards a leading partial expiration first) -- t0 below is that actual value,
+    # used everywhere "the window's own start" would otherwise wrongly assume 0.0 (a
+    # real bug this function shipped with once: on a file whose leading trim was
+    # nonzero, breath 1's own start was treated as a second, spurious "boundary" a
+    # metres away from true index 0, silently fabricating a near-empty first breath).
+    t0 = float(timecol[0]) if n else 0.0
+
+    def _index_of(t: float) -> int:
+        return int(round((t - t0) * fs))
+
+    auto_starts = sorted(
+        float(np.asarray(b["time"]).reshape(-1)[0])
+        for b in auto_breaths.values() if len(np.asarray(b["time"]).reshape(-1))
+    )
+    # boundaries strictly after the window's own start -- the first breath's own start
+    # (t0, or as close to it as the first sample is) is never a JOINABLE boundary,
+    # there is nothing analysed before it to merge into.
+    removable = [t for t in auto_starts if t > t0 + 1e-9]
+
+    for t in join_s:
+        candidates = [b for b in removable if abs(b - t) <= tol]
+        if not candidates:
+            notices.append(SegmentationOverrideNotice(
+                f"join at {t:g} s in {filename}: no automatic breath boundary within "
+                f"{tol * 1000:.0f} ms — ignored."))
+            continue
+        removable.remove(min(candidates, key=lambda b: abs(b - t)))
+
+    # Each boundary is tagged NATURAL (t0, a kept automatic breath start, or the
+    # file's own end) or CUT (inserted by this override). separateintobreathsbyflow's
+    # own `inend = i - 1` / `exend = min(i - 1, j)` drops exactly the sample AT a
+    # transition it found -- a real property of every NATURAL boundary in this file,
+    # reproduced below so a joined breath is byte-identical to the clean recording's
+    # own. A CUT boundary is not such a transition (it is a bisection point chosen by
+    # the user, not one the flow signal itself produced): giving it the same -1 would
+    # invent an extra dropped sample the acceptance criterion's own Ti+Te-conservation
+    # check exists to catch, so it does NOT get one -- the two segments either side of
+    # a cut partition the original span exactly, with no sample belonging to neither.
+    tagged = [(t0, True)] + [(t, True) for t in removable]
+    for t in cut_s:
+        ix = _index_of(t)
+        if not (0 < ix < n):
+            notices.append(SegmentationOverrideNotice(
+                f"cut at {t:g} s in {filename} falls outside the recording — ignored."))
+            continue
+        if any(abs(b - t) <= tol for b, _natural in tagged):
+            notices.append(SegmentationOverrideNotice(
+                f"cut at {t:g} s in {filename} coincides with an existing boundary — "
+                "ignored."))
+            continue
+        tagged.append((t, False))
+    tagged.sort(key=lambda pair: pair[0])
+
+    bound_ix = [0]
+    natural_end_ix = {n}                    # the file's own end is always natural
+    for t, natural in tagged[1:]:
+        ix = _index_of(t)
+        if ix > bound_ix[-1]:
+            bound_ix.append(ix)
+            if natural:
+                natural_end_ix.add(ix)
+    bound_ix.append(n)
+
+    breaths = OrderedDict()
+    breathno = 0
+    n_segments = len(bound_ix) - 1
+    for breathcnt, (start, end) in enumerate(zip(bound_ix[:-1], bound_ix[1:]), start=1):
+        inend = _walk_insp_end(flow, start, end, bufferwidth)
+        # `inend` gets the -1 UNLESS it is the degenerate "found no transition, ran
+        # into this segment's own end" case (_walk_insp_end's own docstring) AND that
+        # end is a CUT boundary rather than a natural one. A genuine transition
+        # (`inend < end`) always gets it, same as `separateintobreathsbyflow`'s own
+        # `inend = i - 1`. Reaching a NATURAL end without a transition (`inend ==
+        # end in natural_end_ix`) ALSO gets it -- that reproduces the original
+        # algorithm's own behaviour for a breath that runs to the file's end without
+        # ever finding an insp->exp transition (`exend = min(i - 1, j)` drops that
+        # same sample there too). Only reaching a CUT end without a transition must
+        # keep the segment's real last sample intact -- a cut boundary is not a flow
+        # transition, so inventing a drop there would silently lose exactly the
+        # sample this segment's own Ti+Te-conservation guarantee promises to keep
+        # (a real bug found by review: an earlier version of this function applied
+        # the -1 here unconditionally, silently dropping one sample from any cut
+        # placed mid-inspiration).
+        insp_end = inend if (inend == end and end not in natural_end_ix) else inend - 1
+        exend = end - 1 if end in natural_end_ix else end
+        exp, insp, entcols, emgcols = _phase_dicts(
+            (start, insp_end), (inend, exend), timecol, flow, volume, poes, pgas, pdi,
+            entropycolumns, emgcolumns)
+        is_boundary = (breathcnt == 1) or (breathcnt == n_segments)
+        if breathcnt in ignored_breaths:
+            ignored = True
+        else:
+            breathno += 1
+            ignored = False
+        breaths[breathcnt] = _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols,
+                                          filename, is_boundary, kind=kinds.get(breathcnt))
+    return breaths, notices
 
 
 def _separator_times_for(curfile, settings):

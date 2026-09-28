@@ -7,6 +7,13 @@ for the installers themselves.
 
 ## Unreleased
 
+**Repair a mis-detected breath boundary by hand (cut/join).** A flow wobble that
+splits one real breath into two, or a flat/leaky expiration that merges two real
+breaths into one, can now be fixed directly in Preview & QC ▸ Mechanics: click a
+channel trace to cut a new boundary there, or click an existing one to join it away.
+This repairs the automatic segmentation, it does not replace it — an analysis with no
+manual repair is unaffected.
+
 **The noise profile's expiration mask now follows the analysis's own segmentation
 method and volume trend correction.** When shared-profile EMG noise reduction builds
 its reference clip from a rest/expiration window (or samples active/quiet EMG across
