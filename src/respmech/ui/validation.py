@@ -88,14 +88,18 @@ _FRIENDLY_SETTINGS_ERRORS = {
         "No usable rest reference for noise reduction: type a segment as 'rest' in the "
         "reference file, or give explicit reference intervals (Preview & QC ▸ EMG – "
         "noise reduction)",
-    "processing.emg.noise.reference_mode='interburst' is not yet implemented":
-        "Inter-burst noise reference is not available yet — use a rest-typed segment "
-        "or explicit reference intervals instead (Preview & QC ▸ EMG – noise reduction)",
-    "processing.emg.noise.auto_prop is not yet supported for an EMG-only signal set -- "
-    "set processing.emg.noise.prop_decrease manually and turn auto_prop off":
-        "Automatic noise-reduction strength is not available for an EMG-only signal "
-        "set yet — set the noise-reduction strength manually (Preview & QC ▸ EMG – "
-        "noise reduction)",
+    "processing.emg.noise.reference_mode='interburst' needs "
+    "processing.segmentation.method='emg_burst' (the inter-burst periods are what the "
+    "reference is cut from)":
+        "The inter-burst noise reference needs the automatic burst segmentation (Setup ▸ "
+        "Signals ▸ Change… ▸ Tidal breathing); otherwise use a rest-typed segment or "
+        "explicit reference intervals (Preview & QC ▸ EMG – noise reduction)",
+    "processing.emg.noise.auto_prop is only supported for an EMG-only signal set "
+    "segmented with 'emg_burst' (bursts against the periods between them) -- set "
+    "processing.emg.noise.prop_decrease manually and turn auto_prop off":
+        "Automatic noise-reduction strength is only available for an EMG-only signal set "
+        "segmented on its bursts — set the noise-reduction strength manually (Preview & "
+        "QC ▸ EMG – noise reduction)",
     # reference/subject/lung-volume settings — all point at the same, future Setup card.
     'processing.lung_volume.ic.eelv_tracking must be "none" or "within_file"':
         "EELV tracking must be 'none' or 'within file' "
@@ -141,6 +145,9 @@ _FRIENDLY_REGEXES = (
     (re.compile(r"^processing\.segmentation\.method '[^']*' is for an EMG-only signal set$"),
      "Whole-file, separator, fixed-window and burst segmentation are for EMG-only "
      f"analyses ({_SIGNAL_SET_CHANGE_LOCATION})"),
+    # the automatic EMG-only segmentation's own parameters (window/step, burst thresholds)
+    (re.compile(r"^processing\.segmentation\.emg\.\w+ must be "),
+     "A segmentation parameter is not valid (Preview & QC ▸ EMG – segments ▸ Advanced…)"),
     # M-22: reference_mode's explicit, EMG-only-only alternatives, chosen while a flow
     # channel is still declared — same location as the noise-reduction messages above.
     (re.compile(r"^processing\.emg\.noise\.reference_mode='[^']*' is only valid for an "

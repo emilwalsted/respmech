@@ -7,6 +7,25 @@ for the installers themselves.
 
 ## Unreleased
 
+**Tidal EMG-only recordings without separators.** The third question in the EMG-only signal
+set, 'Tidal breathing — detect bursts automatically', now works: each file is cut at the
+onset of every burst of inspiratory EMG activity, found on the envelope of the
+ECG-removed signal (a threshold with hysteresis, a minimum duration for a burst and for a
+gap, after Hodges & Bui 1996). Every segment reports the neural timing of its own cycle
+under `ti_emg`, `te_emg`, `ttot_emg`, `ti_ttot_emg` and `bf_emg` (the last burst of a
+recording has no following onset, so only its `ti_emg` is filled in), and three per-file
+quality columns, `emg_seg_n_bursts`, `emg_seg_burst_frac` and `emg_seg_contrast`. A
+recording where no channel's envelope rises clearly above its resting level fails that
+file with a named error instead of being cut into noise. The noise reference can be the
+periods between the bursts (Preview & QC ▸ EMG – noise reduction, 'Use the periods
+between this file's bursts'), and the automatic noise-reduction strength is chosen from
+bursts against those periods. `method = "fixed_windows"` (settings file) cuts equal
+windows instead, every `hop_s` seconds of `window_s` (5 s and 5 s by default). The window
+length, the step and the four burst thresholds are in Preview & QC ▸ EMG – segments ▸
+Advanced…, and the run report's Segmentation line names the method and the number of
+bursts found. The burst thresholds are starting values that have been checked on
+synthetic recordings only; look at the shaded segments before trusting them on real ones.
+
 **Pressure and EMG as a percentage of a maximal effort, and tension-time indices.** A new
 `processing.pressure.normalization` setting (off by default) expresses every tidal
 breath's inspiratory oesophageal and transdiaphragmatic pressure against the same
@@ -149,9 +168,8 @@ entire file as one segment, or 'Several efforts or breaths — I will place sepa
 lets you mark the boundaries yourself in Preview & QC's 'EMG – segments' tab (click to
 place, click near an existing one to remove; any exclusion or type on a segment follows
 it through a renumbering). 'Try it on sample data' opens a ready-made EMG-only demo,
-already split at its own natural breath boundaries. Automatic burst detection for tidal
-breathing is not available yet — its own door in the picker is visibly there but
-disabled until a later release calibrates it.
+already split at its own natural breath boundaries. Tidal breathing, with nothing to
+place separators on, has its own door in the picker: see the next entry.
 <!-- changelog-skip f4e19c8 documentation-only decision record (docs/beslutninger.md); no
      user-visible behaviour changes, the feature it describes lands in a later change. -->
 <!-- changelog-skip 72afcff the 'EMG – segments' tab landed in Preview & QC in this

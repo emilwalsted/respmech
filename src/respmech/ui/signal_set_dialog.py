@@ -49,10 +49,12 @@ class EmgRecordingContentDialog(QDialog):
     two copies drifting apart.
 
     After ``exec()`` returns ``QDialog.Accepted``, ``method`` is one of
-    ``'whole_file'``/``'separators'`` (``core.settings.SegmentationSettings.method``'s
-    own EMG-only vocabulary); a cancelled/rejected dialog leaves it ``None``.
-    ``'emg_burst'`` (automatic tidal-breathing burst detection) is shown, matching the
-    eventual three-way shape, but disabled until a later release calibrates it."""
+    ``'whole_file'``/``'separators'``/``'emg_burst'`` (``core.settings.
+    SegmentationSettings.method``'s own EMG-only vocabulary; ``'emg_burst'`` is the
+    automatic detection of tidal-breathing bursts, whose thresholds are starting values
+    until they have been calibrated on real recordings); a cancelled/rejected dialog
+    leaves it ``None``. ``'fixed_windows'`` is a method of the same family but not one of
+    the three questions here: it is chosen in the analysis file."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -85,11 +87,14 @@ class EmgRecordingContentDialog(QDialog):
             "Place the segment boundaries yourself in Preview && QC.")
         self.emg_burst_btn = QCommandLinkButton(
             "Tidal breathing — detect bursts automatically",
-            f"Split each file into segments from the EMG activity itself. {_LATER_STEP}")
+            "Split each file into segments from the EMG activity itself, one per "
+            "inspiratory burst.")
 
-        self.emg_burst_btn.setEnabled(False)
         self.emg_burst_btn.setToolTip(_tip(
-            "processing.segmentation.method", _LATER_STEP))
+            "processing.segmentation.method",
+            "emg_burst — one segment per detected burst of EMG activity, with neural "
+            "timing. The thresholds are adjustable in Preview & QC ▸ EMG – segments ▸ "
+            "Advanced…"))
         self.whole_file_btn.setToolTip(_tip(
             "processing.segmentation.method",
             "whole_file — the entire recording is one segment."))
@@ -104,6 +109,7 @@ class EmgRecordingContentDialog(QDialog):
 
         self.whole_file_btn.clicked.connect(self._choose_whole_file)
         self.separators_btn.clicked.connect(self._choose_separators)
+        self.emg_burst_btn.clicked.connect(self._choose_emg_burst)
 
         foot = QHBoxLayout()
         foot.addStretch(1)
@@ -121,6 +127,10 @@ class EmgRecordingContentDialog(QDialog):
 
     def _choose_separators(self):
         self.method = "separators"
+        self.accept()
+
+    def _choose_emg_burst(self):
+        self.method = "emg_burst"
         self.accept()
 
 

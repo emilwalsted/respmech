@@ -206,22 +206,22 @@ def test_cancelling_the_recording_content_dialog_leaves_signal_set_dialog_open_a
     dlg.close()
 
 
-def test_emg_recording_content_dialog_whole_file_and_separators_are_enabled(qapp):
+def test_emg_recording_content_dialog_offers_all_three_choices(qapp):
     from respmech.ui.signal_set_dialog import EmgRecordingContentDialog
     sub = EmgRecordingContentDialog()
     assert sub.whole_file_btn.isEnabled() is True
     assert sub.separators_btn.isEnabled() is True
-    assert sub.emg_burst_btn.isEnabled() is False
-    assert "later step" in sub.emg_burst_btn.description().lower()
+    assert sub.emg_burst_btn.isEnabled() is True
+    assert "later step" not in sub.emg_burst_btn.description().lower()
     sub.close()
 
 
-def test_emg_recording_content_dialog_emg_burst_produces_no_outcome_even_if_clicked(qapp):
+def test_emg_recording_content_dialog_emg_burst_is_chosen_by_clicking_it(qapp):
     from respmech.ui.signal_set_dialog import EmgRecordingContentDialog
     sub = EmgRecordingContentDialog()
     sub.emg_burst_btn.click()
-    assert sub.method is None
-    assert sub.result() != QDialog.Accepted
+    assert sub.method == "emg_burst"
+    assert sub.result() == QDialog.Accepted
     sub.close()
 
 

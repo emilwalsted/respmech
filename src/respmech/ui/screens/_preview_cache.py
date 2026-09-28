@@ -168,6 +168,17 @@ def _kinds_for(settings, filename):
                         if t.file == filename))
 
 
+def _emg_seg_key(settings):
+    """The parameters of the two automatic EMG-only segmentations (``processing.
+    segmentation.emg``): window/step and the four burst thresholds. Part of every key
+    whose clip or mask is built from segments that method places -- an edit to any one
+    of them moves the segment (or burst) boundaries without touching a single other
+    setting, so it must miss."""
+    e = settings.processing.segmentation.emg
+    return (e.window_s, e.hop_s, e.burst_threshold_frac, e.burst_min_s, e.burst_smooth_s,
+            e.burst_min_contrast)
+
+
 def _method_sensitive_key(settings):
     """Every setting ``core.pipeline.segment_file``'s trim/zero/drift/trend/segment
     sequence can read, beyond ``segmentation.method``/``buffer`` themselves (already
@@ -220,9 +231,12 @@ def ref_clip_key(settings, ref_path):
       entirely, so none of those settings can ever affect this branch's clip.
     * ``intervals``: an explicit ``[t0, t1]`` span plus the sampling rate that turns it into
       sample indices -- independent of segmentation entirely.
-    * ``interburst``/``unresolved``: no clip-building implementation exists for either yet
-      (:func:`respmech.core.pipeline._reference_noise_clip` raises for both, and
-      ``Settings.validate()`` rejects them before a batch can even start) -- nothing beyond
+    * ``interburst``: the periods between the bursts ``segment_file`` finds with the
+      ``emg_burst`` method, so it depends on that method's parameters
+      (:func:`_emg_seg_key`) and on nothing a flow-bearing set reads.
+    * ``unresolved``: no clip-building implementation exists
+      (:func:`respmech.core.pipeline._reference_noise_clip` raises, and
+      ``Settings.validate()`` rejects it before a batch can even start) -- nothing beyond
       the common base below is meaningful to key on.
 
     Excludes the noise STFT params + prop_decrease (the clip is prop/profile-independent)
@@ -248,12 +262,15 @@ def ref_clip_key(settings, ref_path):
     if mode == "rest_segments":
         name = os.path.basename(ref_path)
         return base + (seg.method, seg.buffer, _separators_for(settings, name),
-                       _kinds_for(settings, name), _exclude_key(settings))
+                       _kinds_for(settings, name), _exclude_key(settings),
+                       _emg_seg_key(settings))
+    if mode == "interburst":
+        return base + (seg.method, _emg_seg_key(settings))
     if mode == "intervals":
         n = settings.processing.emg.noise
         return base + (tuple(tuple(iv) for iv in n.reference_intervals),
                        settings.input.format.sampling_frequency)
-    return base                          # 'interburst' / 'unresolved' -- see docstring
+    return base                          # 'unresolved' -- see docstring
 
 
 def noise_report_key(settings, ref_path, files):
@@ -290,7 +307,7 @@ def noise_report_key(settings, ref_path, files):
         # assume that pairing can never change, since ref_clip_key itself only ever sees ONE
         # file (the reference), never the whole gather set this report is keyed on.
         names = tuple(os.path.basename(f) for f in files)
-        key += (seg.buffer, _method_sensitive_key(settings),
+        key += (seg.buffer, _method_sensitive_key(settings), _emg_seg_key(settings),
                tuple(_separators_for(settings, name) for name in names),
                tuple(_kinds_for(settings, name) for name in names))
     return key

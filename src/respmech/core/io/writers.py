@@ -129,7 +129,7 @@ def _segmentation_provenance_value(settings) -> str:
         return "separators (" + ", ".join(
             f"{e.file}: {len(e.times_s)}" for e in seg.separators) + ")"
     if seg.method == "fixed_windows":
-        return f"fixed windows {seg.emg.window_s:g}/{seg.emg.hop_s:g} s"
+        return f"fixed windows {float(seg.emg.window_s)}/{float(seg.emg.hop_s)} s"
     # emg_burst: the number of bursts is a per-file result, not a setting; the run report
     # adds it per file (see _burst_counts_text) and the thresholds stay in the manifest.
     return "EMG bursts"
