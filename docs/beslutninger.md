@@ -64,10 +64,12 @@ possible follow-up, not a condition. The construction is:
    deflection and the existing columns then already hold it (otherwise it would be
    counted twice, and the answer would depend on where the boundary fell); and a
    window with no falling step at all reports a deflection of 0 rather than NaN
-   (NaN is kept for an unlocatable window or a missing predecessor).
+   (NaN is kept for an unlocatable window or a missing predecessor). The Pgas term of
+   point 3 is the Pgas FALL over the interval (Pgas[t_onset] minus Pgas[t_flow]).
    First measurements (28-09-2026, synthetic data only, pinned in
-   `tests/unit/test_peepi.py`): the analytical pause case is exact at
-   `breathseparationbuffer` 500, 800 and 1200; on the built-in sample recording, which
+   `tests/unit/test_peepi.py`): the analytical pause case is exact with the
+   segment boundary 400 samples before flow (an exact-zero pause puts the boundary at the
+   pause start for any `breathseparationbuffer` above the pause); on the built-in sample recording, which
    has no PEEPi but a Poes cardiac ripple and wander of 1-2 cmH2O, the starting
    `min_deflection` of 0.5 cmH2O reports a deflection in 3 of 8 measurable breaths,
    a wider smoothing window does not remove them, and 2.5 cmH2O reports zero. The

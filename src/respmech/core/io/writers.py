@@ -218,7 +218,7 @@ def _provenance_rows(settings, when, incomplete_note: str | None = None,
         ent = settings.processing.entropy
         rows.append(("Sample entropy", f"m = {ent.epochs - 1}, r = {ent.tolerance:g} × SD"))
     peepi = getattr(getattr(settings.processing, "pressure", None), "peepi", None)
-    if peepi is not None and peepi.enabled and caps.poes:
+    if peepi is not None and peepi.enabled and caps.flow and caps.poes:
         # Which PEEPi value fed the threshold work depends on the signal set (Pgas
         # present -> gastric-corrected, else dynamic); named here because the two are
         # different quantities under the same column names (wob_in_thr etc.).

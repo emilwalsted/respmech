@@ -85,8 +85,11 @@ def test_true_flow_start_falls_back_to_the_phase_start():
 
 @pytest.mark.parametrize("buffer", [500, 800, 1200])
 def test_the_segment_boundary_is_not_the_zero_crossing(buffer):
-    """The premise of the whole module: the breath's inspiratory phase starts at the pause
-    (0.4 s before flow does), and t_flow finds the real start."""
+    """The premise of the whole module: with an exact-zero pause the segmenter puts the breath
+    boundary at the START of the pause (400 samples before flow does, whatever buffer exceeds
+    the pause; a buffer of 400 or less is refused as flat flow), and t_flow finds the real
+    start. NB the three buffers give the same segmentation: this pins that the boundary is
+    not the zero crossing, not that buffer changes anything."""
     breaths = _breaths(buffer)
     insp = breaths[2]["inspiration"]
     # (the segmenter's phase slices are end-exclusive, so each phase loses its last sample)
@@ -97,7 +100,7 @@ def test_the_segment_boundary_is_not_the_zero_crossing(buffer):
 # --- the pinned pause case ------------------------------------------------------------------
 
 @pytest.mark.parametrize("buffer", [500, 800, 1200])
-def test_peepi_dyn_is_the_analytical_fall_independent_of_buffer(buffer):
+def test_peepi_dyn_is_the_analytical_fall_with_the_boundary_400_samples_before_flow(buffer):
     breaths = _breaths(buffer)
     st = _settings()
     for which in (2, 3, 4):
@@ -142,12 +145,15 @@ def _late_boundary_pair(drop=3.0, pgas_drop=1.0, ramp_n=250, flat_n=500, insp_n=
         return {"time": (t0 + np.arange(n)) / FS, "flow": np.asarray(flow, float),
                 "poes": np.asarray(poes, float), "pgas": np.asarray(pgas, float),
                 "pdi": np.asarray(pgas, float) - np.asarray(poes, float)}
-    m = np.arange(1, ramp_n + 1) / ramp_n
+    # the ramp stops one step short of the first inspiratory sample, so an off-by-one at
+    # t_flow would read a different pressure (and the linear start of inspiration keeps
+    # falling, so t_flow+1 differs too)
+    m = np.arange(1, ramp_n + 1) / (ramp_n + 1)
     exp = phase(np.full(flat_n + ramp_n, 0.01),
                 np.concatenate([np.full(flat_n, -5.0), -5.0 - drop * m]),
                 np.concatenate([np.full(flat_n, 9.0), 9.0 - pgas_drop * m]), 0)
     k = np.arange(insp_n) / insp_n
-    insp = phase(-0.5 * np.ones(insp_n), -5.0 - drop - 6 * np.sin(np.pi * k) ** 2,
+    insp = phase(-0.5 * np.ones(insp_n), -5.0 - drop - 6 * k,
                  8.0 + 1.5 * np.sin(np.pi * k) ** 2, len(exp["flow"]) + 1)
     return ({"has_phases": True, "expiration": exp, "inspiration": {"time": [0.0]}},
             {"has_phases": True, "expiration": exp, "inspiration": insp})
@@ -356,11 +362,11 @@ def test_pipeline_adds_the_columns_only_when_enabled(tmp_path):
     np.testing.assert_allclose(on["peepi_dyn"].iloc[1:].to_numpy(float), gd.PEEPI_DROP, atol=1e-9)
 
 
-def test_pipeline_reports_the_nan_breath_once_per_file(tmp_path):
-    res = _run_batch(tmp_path, enabled=True)
-    fr = res.ok_files["synth_peepi_A.csv"]
-    notes = [n for n in fr.notices if n.startswith("PEEPi reported as NaN")]
-    assert len(notes) == 1 and "#1" in notes[0]
+def test_pipeline_gives_no_notice_for_the_first_breath_of_a_file(tmp_path):
+    """Breath #1 never has a predecessor: blank by design, and a notice would repeat on
+    every file."""
+    fr = _run_batch(tmp_path, enabled=True).ok_files["synth_peepi_A.csv"]
+    assert not [n for n in fr.notices if "PEEPi" in n]
 
 
 def test_pipeline_without_poes_skips_with_a_notice(tmp_path):
@@ -403,3 +409,42 @@ def test_sample_recording_reports_zero_once_min_deflection_exceeds_its_wander(tm
     dyn = _sample_peepi(tmp_path, min_deflection=2.5)
     assert np.isnan(dyn[0])
     assert np.all(dyn[1:] == 0.0)
+
+
+# --- validation, provenance ----------------------------------------------------------------
+
+@pytest.mark.parametrize("name,value,match", [
+    ("search_window_s", float("nan"), "finite"), ("smooth_s", float("inf"), "finite"),
+    ("min_deflection", float("nan"), "finite"), ("onset_slope_frac", 0.0, "above 0"),
+    ("onset_slope_frac", 1.5, "at most 1"),
+])
+def test_validate_rejects_unusable_thresholds(name, value, match):
+    from respmech.core.settings import SettingsError
+    from respmech.settingsio.toml_io import load_toml
+    st = load_toml(os.path.join(HERE, "..", "golden", "scenarios", "flow_peepi_on.toml"))
+    setattr(st.processing.pressure.peepi, name, value)
+    with pytest.raises(SettingsError, match=match):
+        st.validate()
+
+
+def test_provenance_names_the_peepi_source():
+    from respmech.core.io.writers import _provenance_rows
+    from respmech.settingsio.toml_io import load_toml
+    st = load_toml(os.path.join(HERE, "..", "golden", "scenarios", "flow_peepi_on.toml"))
+    rows = dict(_provenance_rows(st, None).itertuples(index=False, name=None))
+    assert "from corrected PEEPi" in rows["PEEPi threshold work"]
+    st.processing.pressure.peepi.enabled = False
+    assert "PEEPi threshold work" not in dict(_provenance_rows(st, None).itertuples(index=False, name=None))
+
+
+def test_an_ignored_predecessor_is_still_used(tmp_path):
+    from respmech.core.pipeline import run_batch
+    from respmech.settingsio.toml_io import load_toml
+    from respmech.core.settings import ExcludeEntry
+    st = load_toml(os.path.join(HERE, "..", "golden", "scenarios", "flow_peepi_on.toml"))
+    st.input.folder = os.path.join(HERE, "..", "golden", "input")
+    st.output.folder = str(tmp_path)
+    st.processing.exclude_breaths = [ExcludeEntry(file="synth_peepi_A.csv", breaths=[3])]
+    t = run_batch(st).ok_files["synth_peepi_A.csv"].breaths_table
+    assert list(t["breath_no"]) == [1, 2, 4, 5, 6]
+    np.testing.assert_allclose(t["peepi_dyn"].to_numpy(float)[1:], gd.PEEPI_DROP, atol=1e-9)

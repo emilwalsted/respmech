@@ -18,7 +18,7 @@ long it lasted, its pressure–time area, the threshold work of breathing and th
 totals with it (`wob_in_thr`, `wob_in_total_thr`, `wobtotal_thr`), and the
 inspiratory pressure–time products including it. Existing columns, the Campbell
 polygon and every earlier result are unchanged, with the setting on or off. The first
-breath of a file, which has no preceding breath to search in, reads blank with a note.
+breath of a file, which has no preceding breath to search in, reads blank.
 The four detection thresholds are starting values that have not yet been measured on
 real recordings; on the built-in sample, which has no intrinsic PEEP, the default
 minimum deflection is below that recording's own pressure wander, so treat small

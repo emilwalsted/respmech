@@ -109,6 +109,9 @@ _FRIENDLY_SETTINGS_ERRORS = {
 #: — matched by prefix, so the friendly text stands alone rather than gluing raw TOML
 #: notation onto a translated sentence.
 _FRIENDLY_PREFIXES = (
+    ("processing.pressure.peepi.",
+     "A PEEPi setting is out of range (no Setup control yet: fix processing.pressure.peepi "
+     "in the analysis file)"),
     ("processing.mfvl.",
      "An MFVL setting must not be negative (Preview & QC ▸ Mechanics ▸ Advanced… ▸ "
      "Lung volumes; the presence threshold is in the analysis file)"),
