@@ -402,10 +402,27 @@ class PeepiSettings:
 
 
 @dataclass
+class PressureNormalizationSettings:
+    """Opt-in normalisation of the inspiratory pressures and EMG to a maximal
+    manoeuvre (``core.analysis.normalisation``). Off by default: enabling it only
+    ADDS a "Pressure normalised" sheet to each file's workbook, so every existing
+    output is unchanged with it off.
+
+    The reference is the file's ``max_insp``/``sniff`` breath, resolved exactly like the
+    other manoeuvre references (an explicit ``processing.references`` entry, then the
+    group default, then the file's own typed breath); there is nothing to configure here
+    beyond switching the analysis on."""
+    enabled: bool = False
+
+
+@dataclass
 class PressureSettings:
     """Pressure-derived analyses that build on the ordinary per-breath mechanics
-    (``core.analysis.pressure``): today PEEPi and the modified Campbell diagram."""
+    (``core.analysis.pressure``, ``core.analysis.normalisation``): today PEEPi and the
+    modified Campbell diagram, and the normalisation to a maximal manoeuvre."""
     peepi: PeepiSettings = field(default_factory=PeepiSettings)
+    normalization: PressureNormalizationSettings = field(
+        default_factory=PressureNormalizationSettings)
 
 
 @dataclass
@@ -543,8 +560,8 @@ class BreathCountEntry:
 
 #: the closed set of manoeuvre labels a single breath can be typed as (M-19). ``ic``/
 #: ``fvc``/``ic_fvc`` are inspiratory-capacity/forced-vital-capacity manoeuvres (M-29
-#: extracts their values); ``max_insp``/``sniff`` are maximal-effort references (M-47's
-#: normalisation); ``rest`` marks a quiet SEGMENT usable as an EMG-only noise reference
+#: extracts their values); ``max_insp``/``sniff`` are maximal-effort references (read by
+#: ``core.analysis.normalisation``); ``rest`` marks a quiet SEGMENT usable as an EMG-only noise reference
 #: (M-22's ``resolve_noise_reference_mode``/``rest_segments`` -- only reachable for a
 #: signal set with no flow channel at all, since a flow-bearing set already has a
 #: well-defined quiet period in every breath's own expiration). On a flow-bearing file,
