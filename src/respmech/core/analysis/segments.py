@@ -218,6 +218,10 @@ def detect_bursts(emgcols, fs: float, *, threshold_frac: float, min_s: float,
     ``threshold_frac`` (the on level) somewhere. Gaps shorter than ``min_s`` between two
     bursts are then bridged, and bursts shorter than ``min_s`` discarded, in that order.
 
+    The 95th percentile stands for the burst level, so the bursts have to fill more than
+    about 5 % of the recording between them (tidal breathing fills roughly a third); a
+    single short burst in a long recording is judged to have no contrast.
+
     What is measured and what is not (K-035 lesson): the defaults were exercised on
     synthetic burst trains with a known onset/offset (onsets and offsets recovered within
     2 samples at 2 kHz, envelope smoothing 0.1 s) and on the built-in sample recording's

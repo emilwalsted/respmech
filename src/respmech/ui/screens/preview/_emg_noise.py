@@ -26,7 +26,7 @@ from respmech.core.settings import (ExcludeEntry, _reference_file_has_rest_segme
                                     resolve_noise_reference_mode_or_none)
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
-from respmech.ui.noise_profile_dialog import NOISE_ACCENT
+from respmech.ui.noise_profile_dialog import INTERBURST, NOISE_ACCENT
 from respmech.ui import plot_perf
 from respmech.ui.stft_frames import (MIN_STABLE_FRAMES,
                                      min_seconds_for_frames,
@@ -742,7 +742,10 @@ class _EmgNoiseMixin:
             spans = ", ".join(f"{a:.2f}–{b:.2f} s" for a, b in n.reference_intervals)
             self.noise_ref_readout.setFullText(
                 f"Rest reference: {n.reference_file}, {spans}")
-        else:                                  # 'interburst' (not implemented) / 'unresolved'
+        elif mode == "interburst":
+            self.noise_ref_readout.setFullText(
+                f"Rest reference: {n.reference_file}, the periods between bursts")
+        else:                                  # 'unresolved'
             self.noise_ref_readout.setFullText(
                 f"Rest reference: {n.reference_file}, unresolved")
 
@@ -966,6 +969,8 @@ class _EmgNoiseMixin:
         n.reference_file = name
         n.reference_intervals = []
         n.reference_folder = self.state.settings.input.folder
+        if n.reference_mode == "interburst":
+            n.reference_mode = "auto"       # an explicit other choice retires it
         n.use_expiration = True
         self.noise_reference_changed.emit(name, [], True)
         self._refresh_noise_readout()
@@ -991,6 +996,8 @@ class _EmgNoiseMixin:
         n.reference_file = name
         n.reference_intervals = [[t0, t1]]
         n.reference_folder = self.state.settings.input.folder
+        if n.reference_mode == "interburst":
+            n.reference_mode = "auto"       # an explicit other choice retires it
         n.use_expiration = False
         fs = self.state.settings.input.format.sampling_frequency or 0
         span = int(round((t1 - t0) * fs))
@@ -1027,11 +1034,36 @@ class _EmgNoiseMixin:
         n.reference_file = name
         n.reference_intervals = []
         n.reference_folder = self.state.settings.input.folder
+        if n.reference_mode == "interburst":
+            n.reference_mode = "auto"       # an explicit other choice retires it
         self.noise_reference_changed.emit(name, [], False)
         self._refresh_noise_readout()
         self._refresh_noise_reference_band()          # no single span -> stays hidden
         self._set_status(f"Noise profile ← {name}, built from this file's rest-typed "
                          "segment(s). Enable 'Reduce EMG noise' to apply it.")
+        self._update_actions()
+        self._request_autorun()
+        return True
+
+    def _apply_noise_interburst(self):
+        """Define the shared noise reference as the periods between the bursts of this
+        file (core mode ``'interburst'``, only meaningful for an ``emg_burst``
+        segmentation). Unlike the rest-segments mode, ``'auto'`` never resolves to it, so
+        the mode is written explicitly; the stale span is cleared for the same reason
+        ``_apply_noise_rest_segments`` clears it."""
+        name = self._selected_filename()
+        if not name:
+            return None
+        n = self.state.settings.processing.emg.noise
+        n.reference_file = name
+        n.reference_intervals = []
+        n.reference_folder = self.state.settings.input.folder
+        n.reference_mode = "interburst"
+        self.noise_reference_changed.emit(name, [], False)
+        self._refresh_noise_readout()
+        self._refresh_noise_reference_band()          # no single span -> stays hidden
+        self._set_status(f"Noise profile ← {name}, built from the periods between its "
+                         "bursts. Enable 'Reduce EMG noise' to apply it.")
         self._update_actions()
         self._request_autorun()
         return True
@@ -1090,6 +1122,9 @@ class _EmgNoiseMixin:
             modes.add("expiration")
         elif _reference_file_has_rest_segment(self.state.settings, file_name):
             modes.add("rest_segments")
+        if (not has_flow
+                and self.state.settings.processing.segmentation.method == "emg_burst"):
+            modes.add("interburst")
         modes_available = frozenset(modes)
         dlg = NoiseProfileDialog(data["processed"], data["t"], data["fs"], data["cols"],
                                  parent=self, file_name=file_name,
@@ -1108,6 +1143,8 @@ class _EmgNoiseMixin:
         # a single span to shade, and their own checkbox above/below already reflects them.
         if "rest_segments" in modes_available and mode == "rest_segments":
             dlg.use_rest_segments.setChecked(True)
+        elif "interburst" in modes_available and mode == "interburst":
+            dlg.use_interburst.setChecked(True)
         elif not n.use_expiration and n.reference_intervals:
             try:
                 t0, t1 = float(n.reference_intervals[0][0]), float(n.reference_intervals[0][1])
@@ -1121,6 +1158,8 @@ class _EmgNoiseMixin:
                 self._apply_noise_expiration()
             elif sel is REST_SEGMENTS:
                 self._apply_noise_rest_segments()
+            elif sel is INTERBURST:
+                self._apply_noise_interburst()
             elif sel is not None:
                 self._apply_noise_reference(sel[0], sel[1])
 
