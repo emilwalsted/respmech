@@ -1101,11 +1101,17 @@ class Settings:
         # PeepiSettings: same front-line-failure-mode reasoning as MfvlSettings above.
         peepi = self.processing.pressure.peepi
         for name in ("search_window_s", "smooth_s", "onset_slope_frac", "min_deflection"):
-            if getattr(peepi, name) < 0:
+            v = getattr(peepi, name)
+            if not math.isfinite(v):
+                raise SettingsError(f"processing.pressure.peepi.{name} must be a finite number")
+            if v < 0:
                 raise SettingsError(
                     f"processing.pressure.peepi.{name} must not be negative")
         if peepi.search_window_s <= 0:
             raise SettingsError("processing.pressure.peepi.search_window_s must be positive")
+        if not 0 < peepi.onset_slope_frac <= 1:
+            raise SettingsError(
+                "processing.pressure.peepi.onset_slope_frac must be above 0 and at most 1")
 
         # references/reference_defaults/subjects -- FORM only (validate() never resolves
         # a link or touches a file on disk; that is core.analysis.references' job). Same
