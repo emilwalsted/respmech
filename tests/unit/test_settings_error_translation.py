@@ -164,6 +164,7 @@ _CASES = [
                s.analysis.signals.append("emg"),
                setattr(s.processing.segmentation, "method", "whole_file"),
                setattr(s.processing.emg.noise, "reference_mode", "interburst"),
+               setattr(s.processing.emg.noise, "reference_file", "ref.csv"),
                setattr(s.processing.emg, "remove_ecg", True),
                setattr(s.processing.emg.noise, "enabled", True)),
      ["inter-burst"]),

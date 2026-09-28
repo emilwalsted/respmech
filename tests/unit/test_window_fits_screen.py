@@ -171,11 +171,13 @@ def test_the_segments_action_band_fits_on_windows_metrics(qapp, tmp_path, window
         qapp.processEvents()
 
     band = pv._segments_action_band
-    # M-27: confirm the row really does carry all three elements before measuring it —
+    # M-27: confirm the row really does carry all its elements before measuring it —
     # a widget silently dropped from the layout would still pass the ratio check below
-    # (a smaller row squeezes just as easily), so the count is asserted explicitly.
-    assert band.layout().count() == 3
+    # (a smaller row squeezes just as easily), so the count is asserted explicitly. The
+    # fourth is 'Advanced…' (the automatic segmentations' parameters), added with them.
+    assert band.layout().count() == 4
     assert pv.btn_place_separators.parent() is band
+    assert pv.btn_segmentation_advanced.parent() is band
 
     natural, floor = band.sizeHint().width(), band.minimumSizeHint().width()
     assert natural > 100, f"the segments action band reports a {natural} px natural width"

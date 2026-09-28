@@ -9,13 +9,15 @@ with no click surface at all — see that method's own docstring, since replaced
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QPushButton, QScrollArea,
+from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QMessageBox, QPushButton,
+                               QScrollArea,
                                QSplitter, QTableView, QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt
 
 import pyqtgraph as pg
 
 from respmech.core.settings import SeparatorEntry
+from respmech.ui.advanced_dialog import AdvancedDialog, Field, apply_values
 from respmech.ui.flow_layout import ElidingLabel
 from respmech.ui.plot_overlays import add_flow_background
 from respmech.ui import wheel as _wheel
@@ -116,6 +118,11 @@ class _SegmentsMixin:
         # M-27: checkable, so its own pressed state IS the "armed" flag the shared click
         # funnel reads (_toggle_from_emg_click) — toggled() keeps _separators_armed and
         # the checked visual in lockstep with no separate bookkeeping to drift.
+        # the parameters of the two AUTOMATIC methods (fixed_windows / emg_burst) live
+        # here, on the tab whose segments they decide; disabled under the other methods
+        self.btn_segmentation_advanced = QPushButton("Advanced…")
+        self.btn_segmentation_advanced.clicked.connect(self._open_segmentation_advanced)
+        bar.addWidget(self.btn_segmentation_advanced)
         self.btn_place_separators = QPushButton("Place separators")
         self.btn_place_separators.setCheckable(True)
         self.btn_place_separators.toggled.connect(self._on_place_separators_toggled)
@@ -288,16 +295,110 @@ class _SegmentsMixin:
         mirrors this same rule for a run that STARTS after the tab is already showing
         'separators' mode)."""
         method = self.state.settings.processing.segmentation.method
+        automatic = method in ("fixed_windows", "emg_burst")
+        # One slot, two buttons: the automatic segmentations have no separators to place,
+        # so 'Advanced…' takes that place instead of adding a fourth button to a row whose
+        # floor already sits close to the ceiling on the widest font metrics we ship to
+        # (test_the_segments_action_band_fits_on_windows_metrics). Only the visible one
+        # counts toward the row's minimum width.
+        self.btn_segmentation_advanced.setVisible(automatic)
+        self.btn_place_separators.setVisible(not automatic)
+        self.btn_segmentation_advanced.setEnabled(automatic and not self._run_active)
+        self.btn_segmentation_advanced.setToolTip(
+            "Window length and step, or the burst thresholds, of the automatic "
+            "segmentation.")
         if method == "whole_file":
             if self.btn_place_separators.isChecked():
                 self.btn_place_separators.setChecked(False)   # also clears _separators_armed
             self.btn_place_separators.setEnabled(False)
             self.btn_place_separators.setToolTip(_WHOLE_FILE_TOOLTIP)
+        elif automatic:
+            if self.btn_place_separators.isChecked():
+                self.btn_place_separators.setChecked(False)
+            self.btn_place_separators.setEnabled(False)
         else:
             self.btn_place_separators.setEnabled(not self._run_active)
             self.btn_place_separators.setToolTip(
                 "Click a channel trace to add a separator there, or click an existing "
                 "separator (within a few pixels) to remove it.")
+
+    def _open_segmentation_advanced(self):
+        """The parameters of ``fixed_windows`` (window length, step) or ``emg_burst``
+        (threshold, minimum duration, envelope length, minimum contrast), written to
+        ``processing.segmentation.emg`` on OK and followed by a fresh preview. Only the
+        fields of the CURRENT method are offered; the other method's values stay as they
+        are and are written back to the analysis untouched."""
+        s = self.state.settings
+        emg = s.processing.segmentation.emg
+        method = s.processing.segmentation.method
+        if method == "fixed_windows":
+            fields = [
+                Field("window_s", "Window length", "float", "processing.segmentation.emg.window_s",
+                      "Length of each window. A trailing piece shorter than this is dropped.",
+                      lo=0.05, hi=3600.0, step=0.5, decimals=2, suffix=" s"),
+                Field("hop_s", "Step", "float", "processing.segmentation.emg.hop_s",
+                      "Distance between the starts of two windows: equal to the length tiles the "
+                      "recording, shorter overlaps, longer leaves gaps.",
+                      lo=0.05, hi=3600.0, step=0.5, decimals=2, suffix=" s"),
+            ]
+            title, intro = "Segmentation — fixed windows", (
+                "Every file is cut into equal windows, one every step from its start.")
+        elif method == "emg_burst":
+            fields = [
+                Field("burst_threshold_frac", "Burst threshold", "float",
+                      "processing.segmentation.emg.burst_threshold_frac",
+                      "A burst starts when the EMG envelope, scaled from its resting level (0) "
+                      "to its 95th percentile (1), rises above this fraction, and ends when it "
+                      "falls below half of it.",
+                      lo=0.01, hi=0.99, step=0.05, decimals=2),
+                Field("burst_min_s", "Minimum burst", "float",
+                      "processing.segmentation.emg.burst_min_s",
+                      "Bursts shorter than this are discarded, and gaps shorter than this "
+                      "between two bursts are bridged.",
+                      lo=0.01, hi=60.0, step=0.05, decimals=2, suffix=" s"),
+                Field("burst_smooth_s", "Envelope window", "float",
+                      "processing.segmentation.emg.burst_smooth_s",
+                      "Length of the RMS window the envelope is built with; also the margin "
+                      "kept clear of a burst when the noise reference is cut from the periods "
+                      "between bursts.",
+                      lo=0.005, hi=5.0, step=0.01, decimals=3, suffix=" s"),
+                Field("burst_min_contrast", "Minimum contrast", "float",
+                      "processing.segmentation.emg.burst_min_contrast",
+                      "A recording is segmented only if its envelope's 95th percentile is at "
+                      "least this many times its median; otherwise there is nothing to find "
+                      "and the file fails instead of being cut into noise.",
+                      lo=1.01, hi=1000.0, step=0.1, decimals=2),
+            ]
+            title, intro = "Segmentation — EMG bursts", (
+                "Each file is cut at the onset of every burst of inspiratory EMG activity. "
+                "These starting values have not yet been calibrated on real recordings — "
+                "check the shaded segments before trusting them.")
+        else:
+            return
+        values = {f.key: getattr(emg, f.key) for f in fields}
+        dlg = AdvancedDialog(title, fields, values, parent=self, intro=intro)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        staged = dlg.edited_values()
+        if not any(getattr(emg, k) != v for k, v in staged.items()):
+            return
+        proc = s.processing
+        if proc.exclude_breaths or proc.breath_types:
+            # Segment NUMBERS follow from these parameters: a different window or
+            # threshold renumbers the file, so an exclusion or a type made against the old
+            # numbers would silently land on a different segment.
+            ans = QMessageBox.question(
+                self, "RespMech",
+                "Excluded and typed segments were numbered for the current segmentation, "
+                "which this change alters — clear them?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if ans == QMessageBox.Yes:
+                proc.exclude_breaths = []
+                proc.breath_types = []
+        apply_values(emg, staged)
+        self._sync_rail_breath_state()
+        self.settings_edited.emit()
+        self._request_autorun()
 
     def _on_place_separators_toggled(self, checked):
         self._separators_armed = checked

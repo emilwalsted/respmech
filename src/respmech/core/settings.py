@@ -175,8 +175,45 @@ class SegmentationOverrideEntry:
 
 
 @dataclass
+class EmgSegmentationSettings:
+    """Parameters of the two AUTOMATIC EMG-only segmentation methods
+    (``core.analysis.segments.fixed_windows`` / ``emg_burst``); ignored by every other
+    method, the same "dormant, unconsulted" relationship ``SegmentationSettings.separators``
+    has with the flow-bearing methods.
+
+    ``window_s``/``hop_s`` (``fixed_windows``): window length and step, in seconds; a hop
+    shorter than the window overlaps, a longer one leaves gaps. The defaults (5 s / 5 s)
+    tile the recording without overlap.
+
+    The burst parameters (``emg_burst``) are STARTING values, not calibrated ones: no
+    production EMG recording was available when they were chosen (see
+    ``segments.detect_bursts`` for what was measured, and what still has to be measured
+    on real recordings before they are frozen in the decisions log).
+
+    * ``burst_threshold_frac``: a burst starts when the baseline-subtracted, peak-scaled
+      envelope rises above this fraction (0 to 1, exclusive) and ends when it falls below
+      half of it (hysteresis).
+    * ``burst_min_s``: bursts shorter than this, and gaps shorter than this between two
+      bursts, are discarded / bridged (Hodges & Bui 1996: a threshold crossing counts only
+      when sustained).
+    * ``burst_smooth_s``: length of the RMS window the envelope is built with; also the
+      guard band left either side of a burst when an inter-burst reference is cut.
+    * ``burst_min_contrast``: the recording is only segmented when the envelope's 95th
+      percentile is at least this many times its median (> 1); otherwise there is no burst
+      to find and the file fails with ``EmgSegmentationError`` instead of splitting noise.
+    """
+    window_s: float = 5.0
+    hop_s: float = 5.0
+    burst_threshold_frac: float = 0.3
+    burst_min_s: float = 0.2
+    burst_smooth_s: float = 0.1
+    burst_min_contrast: float = 1.5
+
+
+@dataclass
 class SegmentationSettings:
-    method: str = "flow"                 # "flow" | "volume" | "whole_file" | "separators"
+    method: str = "flow"                 # "flow" | "volume" | "whole_file" | "separators" | "fixed_windows" | "emg_burst"
+    emg: EmgSegmentationSettings = field(default_factory=EmgSegmentationSettings)
     buffer: int = 800
     peak: PeakSettings = field(default_factory=PeakSettings)
     # Manual segment boundaries for the "separators" EMG-only method (one entry per
@@ -252,8 +289,8 @@ class NoiseSettings:
     # `use_expiration`/`reference_intervals` as the two saved choices a flow-bearing
     # analysis has always had -- this field adds nothing new for that case, it only NAMES
     # the two EMG-only alternatives an analysis with no flow channel can reach: 'rest_segments'
-    # (a segment typed 'rest' in the reference file -- see BREATH_KINDS) and 'interburst' (not
-    # yet implemented -- see resolve_noise_reference_mode()). 'rest_segments'/'interburst' are
+    # (a segment typed 'rest' in the reference file -- see BREATH_KINDS) and 'interburst' (the
+    # periods between the bursts of an 'emg_burst' segmentation, guard bands excluded). 'rest_segments'/'interburst' are
     # reachable only explicitly and only for an EMG-only signal set; Settings.validate() rejects
     # either one while a flow channel is declared, since 'auto' already covers that case fully.
     reference_mode: str = "auto"
@@ -827,6 +864,30 @@ class Settings:
                 f"processing.segmentation.method '{seg.method}' is for an EMG-only signal set")
         if not isinstance(seg.buffer, int):
             raise SettingsError("processing.segmentation.buffer must be an integer")
+        es = seg.emg
+        # only the parameters of the CURRENT automatic method are checked: under any other
+        # method they are dormant, and the UI offers no place to correct them there
+        for name in {"fixed_windows": ("window_s", "hop_s"),
+                     "emg_burst": ("burst_min_s", "burst_smooth_s")}.get(seg.method, ()):
+            v = getattr(es, name)
+            if isinstance(v, bool) or not isinstance(v, (int, float)) \
+                    or not 0 < v <= 1e6:
+                raise SettingsError(
+                    f"processing.segmentation.emg.{name} must be a positive number "
+                    "(at most 1e6 seconds)")
+        if seg.method == "emg_burst" and (
+                isinstance(es.burst_threshold_frac, bool)
+                or not isinstance(es.burst_threshold_frac, (int, float))
+                or not 0.0 < es.burst_threshold_frac < 1.0):
+            raise SettingsError(
+                "processing.segmentation.emg.burst_threshold_frac must be between 0 and 1 "
+                "(exclusive)")
+        if seg.method == "emg_burst" and (
+                isinstance(es.burst_min_contrast, bool)
+                or not isinstance(es.burst_min_contrast, (int, float))
+                or not es.burst_min_contrast > 1.0 or not math.isfinite(es.burst_min_contrast)):
+            raise SettingsError(
+                "processing.segmentation.emg.burst_min_contrast must be a number above 1")
         if not 0.0 < seg.boundary_notice_min_relative_duration <= 1.0:
             raise SettingsError(
                 "processing.segmentation.boundary_notice_min_relative_duration must be "
@@ -975,12 +1036,13 @@ class Settings:
         #     single file is processed" guarantee the old guard gave, just narrower
         #     now that a real usable case (a rest-typed reference segment, or explicit
         #     reference_intervals) exists;
-        #  2. 'interburst' (no clip-building implementation yet -- a later ticket);
+        #  2. 'interburst' outside an 'emg_burst' segmentation (there are no bursts to
+        #     take the periods between);
         #  3. 'auto_prop' (choose prop_decrease from active/quiet EMG pooled across the
-        #     whole test) has no EMG-only implementation either -- it is built on
-        #     inspiration/expiration PHASES (core.pipeline._emg_segmented, flow-only),
-        #     and a genuine EMG-only active/quiet split (rest-typed segments against
-        #     the rest, or bursts) is later tickets' scope. Left unguarded here, an
+        #     whole test) has an EMG-only implementation only for 'emg_burst' (bursts
+        #     against the periods between them); for the other EMG-only methods the
+        #     phase-based gather (core.pipeline._emg_segmented) has nothing to split
+        #     by, and a rest-typed active/quiet split is not built. Left unguarded here, an
         #     EMG-only analysis with noise reduction on (auto_prop defaults to True)
         #     would reach _build_noise_set's flow-only gather loop and crash the WHOLE
         #     BATCH with an unguarded TrimError -- exactly the failure mode the old
@@ -992,14 +1054,22 @@ class Settings:
                 raise SettingsError(
                     "processing.emg.noise: no usable rest reference for an EMG-only "
                     "signal set")
-            if mode == "interburst":
+            if (mode in ("interburst", "rest_segments")
+                    and not emg.noise.reference_file):
                 raise SettingsError(
-                    "processing.emg.noise.reference_mode='interburst' is not yet "
-                    "implemented")
-            if "flow" not in declared and "emg" in declared and emg.noise.auto_prop:
+                    "processing.emg.noise: no usable rest reference for an EMG-only "
+                    "signal set")
+            if mode == "interburst" and seg.method != "emg_burst":
                 raise SettingsError(
-                    "processing.emg.noise.auto_prop is not yet supported for an "
-                    "EMG-only signal set -- set processing.emg.noise.prop_decrease "
+                    "processing.emg.noise.reference_mode='interburst' needs "
+                    "processing.segmentation.method='emg_burst' (the inter-burst "
+                    "periods are what the reference is cut from)")
+            if ("flow" not in declared and "emg" in declared and emg.noise.auto_prop
+                    and seg.method != "emg_burst"):
+                raise SettingsError(
+                    "processing.emg.noise.auto_prop is only supported for an EMG-only "
+                    "signal set segmented with 'emg_burst' (bursts against the "
+                    "periods between them) -- set processing.emg.noise.prop_decrease "
                     "manually and turn auto_prop off")
 
         v = self.processing.volume
@@ -1221,8 +1291,8 @@ def resolve_noise_reference_mode(settings: "Settings") -> str:
     ``'interburst'``) is returned as-is, unresolved further -- these are only ever
     meaningful for an EMG-only set, and ``Settings.validate()`` is what actually
     enforces that (rejecting either one while a flow channel is declared) and rejects
-    ``'interburst'`` outright while noise reduction is enabled (no clip-building
-    implementation exists for it yet -- a later ticket's scope). This function itself
+    ``'interburst'`` while noise reduction is enabled unless the segmentation method is
+    ``'emg_burst'`` (only then are there bursts to take the periods between). This function itself
     never raises: it classifies whatever settings it is handed, the same way
     ``core.analysis.signals._mode_for`` classifies a signal set without validating it.
     """

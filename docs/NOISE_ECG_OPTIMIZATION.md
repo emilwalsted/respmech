@@ -305,11 +305,11 @@ noise.reference_mode` (default `'auto'`) drives it:
   refuses to enable noise reduction at all, rather than let an unbuildable profile reach
   the pipeline mid-batch.
 * `'rest_segments'`/`'interburst'` can also be set explicitly, but only for an EMG-only
-  set — `Settings.validate()` rejects either while a flow channel is declared. `
-  'interburst'` (an automatically detected inter-burst quiet period, for the automatic
-  EMG-burst segmentation a later addition builds) has no clip-building implementation
-  yet and is rejected too, for now, with a clear message rather than a bare error deep
-  in the pipeline.
+  set — `Settings.validate()` rejects either while a flow channel is declared, and either
+  without a `reference_file` while noise reduction is enabled. `'interburst'` is the
+  quiet periods between the bursts of the automatic `emg_burst` segmentation (each
+  shrunk by a guard band, measured from the wide coarse edges of the bursts; see
+  `docs/REVERSE_ENGINEERING.md` §5.12) and is accepted only with that method.
 
 **Decision:** a typed breath (any manoeuvre kind — IC, FVC, a maximal effort, `'rest'`
 itself, or `'other'`) is excluded from the flow-bearing reference file's own expiration
@@ -318,12 +318,13 @@ diaphragm-quiet period the profile is trusted for. A no-op for the overwhelming 
 case (no typed breaths at all) — every existing scenario is unaffected. See
 `core.pipeline._emg_segmented`'s `exclude_typed_from_expiration` parameter.
 
-**Left for later:** automatically choosing the noise-reduction strength (`auto_prop`)
-has no EMG-only implementation yet — it is built on inspiration/expiration phases, and
-a genuine EMG-only active/quiet split (rest-typed segments against the rest, or bursts)
-needs its own design. `Settings.validate()` requires `auto_prop` off whenever noise
-reduction is enabled for an EMG-only set, so this is a clear, named restriction rather
-than an unguarded crash.
+**Automatic strength (`auto_prop`) for an EMG-only set** exists only for the `emg_burst`
+segmentation, where "active" is the bursts and "quiet" the periods between them
+(`_emg_segmented` returns those masks instead of inspiration/expiration ones). For the
+other EMG-only methods there is no such split (a rest-typed active/quiet split is not
+built), so `Settings.validate()` requires `auto_prop` off whenever noise reduction is
+enabled for them: a clear, named restriction rather than an unguarded crash. A file with
+no quiet period at all is left out of the pooled sets, like an unreadable one.
 
 ## 7. The expiration mask now follows the analysis's own segmentation, not a hardcoded copy
 
