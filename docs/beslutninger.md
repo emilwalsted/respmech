@@ -55,6 +55,16 @@ possible follow-up, not a condition. The construction is:
    frozen here only after being measured on real recordings (the lesson from the
    boundary-breath notice: a threshold chosen on feel can silently trade
    detection power away).
+   Refinements made when the module was implemented (28-09-2026), to points 1, 2
+   and 3 above: `t_flow` is the last `flow >= 0` to `< 0` crossing before peak
+   inspiratory flow rather than the first one (the first is defeated by flow noise
+   inside the pause); the threshold rectangle and the `*_peepi` PTP columns add only
+   the part of the deflection the existing polygon/PTP references do not already
+   contain, because the segmenter's boundary usually lands in the pause before the
+   deflection and the existing columns then already hold it (otherwise it would be
+   counted twice, and the answer would depend on where the boundary fell); and a
+   window with no falling step at all reports a deflection of 0 rather than NaN
+   (NaN is kept for an unlocatable window or a missing predecessor).
    First measurements (28-09-2026, synthetic data only, pinned in
    `tests/unit/test_peepi.py`): the analytical pause case is exact at
    `breathseparationbuffer` 500, 800 and 1200; on the built-in sample recording, which

@@ -20,9 +20,20 @@ The zero crossing
 ``separateintobreathsbyflow`` ends an expiration only when ``flow > 0`` OR the mean of the next
 ``breathseparationbuffer`` samples is ``> 0``. During an end-expiratory pause (flow at zero) that
 forward mean turns negative up to ``buffer`` samples before the real onset of inspiratory
-flow, so the breath boundary is NOT where flow starts. ``t_flow`` is therefore the first sample
-of the inspiratory phase with ``flow < 0`` whose predecessor has ``flow >= 0`` (fallback: the
-phase start), which makes the deflection independent of the segmentation buffer.
+flow, so the breath boundary is NOT where flow starts. ``t_flow`` is therefore the start of the inspiratory flow proper: the last ``flow >= 0`` to
+``flow < 0`` crossing before the phase's peak inspiratory flow (fallback: the phase start),
+which makes the deflection independent of the segmentation buffer and robust to flow noise
+inside the pause.
+
+What the existing columns already contain depends on where the segmenter put the breath
+boundary. ``calcptp`` integrates against the mean Poes of the first ``ptp_baseline_window_s`` of
+the inspiratory phase, and ``calculatewob`` measures its elastic and resistive areas against
+the Poes at the phase start/end of expiration. When the boundary lands in the pause BEFORE
+the deflection, both references are the pre-deflection level and the existing PTP and Campbell
+polygon already contain (part of) the threshold; when it lands after the deflection, they do
+not. The ``*_peepi`` and ``*_thr`` columns therefore add only the part the existing reference
+does not already contain (``shift_*`` below), never the full PEEPi, so the same recording gives
+the same answer wherever the boundary falls.
 
 Two quantities are deliberately not merged: ``int_oes_preflow`` (the area of the deflection,
 referenced to the Poes at its onset) is reported separately and never added to any ``*_peepi``
@@ -58,15 +69,19 @@ def peepi_source(caps) -> str:
 
 
 def true_flow_start(flow) -> int:
-    """Index, within an inspiratory phase, of the true zero crossing: the first sample with
-    ``flow < 0`` whose predecessor has ``flow >= 0``. A phase that already starts below zero
-    starts flowing at its first sample, and a phase with no such crossing at all falls back
-    to index 0 (the phase start)."""
+    """Index, within an inspiratory phase, of the true start of inspiratory flow: the sample
+    after the LAST sample with ``flow >= 0`` that lies before the phase's peak inspiratory
+    flow (i.e. the last ``>= 0`` to ``< 0`` crossing leading into the real inspiration).
+    Choosing the last such crossing, rather than the first, keeps a stray sub-zero sample of
+    flow noise inside an end-expiratory pause from being mistaken for the start of flow.
+    A phase whose peak flow is its first sample, or that never crosses, falls back to index 0
+    (the phase start)."""
     f = np.asarray(flow, dtype=float).reshape(-1)
-    if f.size == 0 or f[0] < 0:
+    if f.size == 0 or not np.any(f < 0):
         return 0
-    hits = np.flatnonzero((f[1:] < 0) & (f[:-1] >= 0))
-    return int(hits[0]) + 1 if hits.size else 0
+    peak = int(np.nanargmin(f))
+    before = np.flatnonzero(f[:peak] >= 0)
+    return int(before[-1]) + 1 if before.size else 0
 
 
 def _moving_average(x: np.ndarray, n: int) -> np.ndarray:
@@ -169,6 +184,19 @@ def attach(breath, prev_breath, bcnt, vefactor, settings):
         lag = 0.0
         int_preflow = 0.0
 
+    insp_poes = np.asarray(insp["poes"], dtype=float).reshape(-1)
+    ptp_bw = max(1, int(round(float(getattr(getattr(settings.processing, "mechanics", None),
+                                          "ptp_baseline_window_s", 0.05)) * fs)))
+    base_ptp = float(np.mean(insp_poes[:ptp_bw]))
+    base_wob = float(insp_poes[0])
+    if detected:
+        # the part of the deflection the existing references do NOT already contain
+        shift_ptp = min(max(float(poes_w[onset]) - base_ptp, 0.0), peepi_dyn)
+        shift_wob = min(max(float(poes_w[onset]) - base_wob, 0.0), peepi_dyn)
+    else:
+        shift_ptp = shift_wob = 0.0
+    already_in_polygon = peepi_dyn - shift_wob
+
     values = OrderedDict()
     values["peepi_dyn"] = peepi_dyn
     peepi_src = peepi_dyn
@@ -186,15 +214,22 @@ def attach(breath, prev_breath, bcnt, vefactor, settings):
 
     mech = breath["mechanics"]
     wob = breath.get("wob", {})
-    wob_in_thr = peepi_src * mech["vt"] * WOBUNITCHANGEFACTOR * bcnt * vefactor
+    # Threshold work added ON TOP of the existing polygon: the source value minus what the
+    # polygon already holds (never negative: a corrected PEEPi smaller than the polygon's own
+    # share adds nothing rather than subtracting).
+    added = max(peepi_src - already_in_polygon, 0.0)
+    wob_in_thr = added * mech["vt"] * WOBUNITCHANGEFACTOR * bcnt * vefactor
     values["wob_in_thr"] = wob_in_thr
     values["wob_in_total_thr"] = wob["wob_in_total"] + wob_in_thr
     values["wobtotal_thr"] = wob["wobtotal"] + wob_in_thr
-    int_oes = mech["int_oesinsp"] + peepi_dyn * mech["ti"]
+    int_oes = mech["int_oesinsp"] + shift_ptp * mech["ti"]
     values["int_oesinsp_peepi"] = int_oes
     values["ptp_oesinsp_peepi"] = int_oes * bcnt * vefactor
     if has_pdi_columns:
-        int_pdi = mech["int_pdiinsp"] + peepi_corr * mech["ti"]
+        pdi_w = pgas_w - poes_w
+        base_pdi = float(np.mean(np.asarray(insp["pdi"], dtype=float).reshape(-1)[:ptp_bw]))
+        shift_pdi = min(max(base_pdi - float(pdi_w[onset]), 0.0), peepi_corr) if detected else 0.0
+        int_pdi = mech["int_pdiinsp"] + shift_pdi * mech["ti"]
         values["int_pdiinsp_peepi"] = int_pdi
         values["ptp_pdiinsp_peepi"] = int_pdi * bcnt * vefactor
 

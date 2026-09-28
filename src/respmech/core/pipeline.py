@@ -1165,7 +1165,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                             and s.capabilities.flow and s.capabilities.poes)
                 if (not emg_only and s.processing.pressure.peepi.enabled and not peepi_on):
                     file_notices.append(
-                        "PEEPi analysis is enabled but this signal set has no Poes -- skipped")
+                        "PEEPi analysis is enabled but this signal set lacks Flow or Poes -- skipped")
                 _order = list(breaths)
                 _prev_of = {k: (breaths[_order[i - 1]] if i else None) for i, k in enumerate(_order)}
                 peepi_notes: list = []
