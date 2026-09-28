@@ -83,6 +83,7 @@ _GOLDEN_UNIT_SNAPSHOT = {
     'efl_coverage_pct': '%',
     'efl_pct': '%',
     'efl_present': '',
+    'fev1_source': '',
     'ex_flow_pct_mfvl_max': '%',
     'in_flow_pct_mfvl_max': '%',
     'max_ex_flow_pct_mfvl_peak': '%',
