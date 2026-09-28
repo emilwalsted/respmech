@@ -55,6 +55,11 @@ def build_breath_table(file, breaths, settings):
         if "wob" in breath:
             dfwob = pd.DataFrame(breath["wob"], index=[0])
             dfmech = dfmech.join(dfwob, how="outer", sort=False)
+        # M-42: core.analysis.mfvl.attach stamps this dict on every tidal breath of a
+        # file with a resolved (same-file) fvc reference — same join shape as wob.
+        if "mfvl_ext" in breath:
+            dfmfvl = pd.DataFrame(breath["mfvl_ext"], index=[0])
+            dfmech = dfmech.join(dfmfvl, how="outer", sort=False)
 
         has_phases = breath.get("has_phases", True)
 

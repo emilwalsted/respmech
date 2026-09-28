@@ -782,6 +782,173 @@ convention, so their `unit="L"` is registered explicitly; every other new column
 prefix; every `_pct`/`_pct_` column via the generic suffix rule) already resolves
 without a registry entry.
 
+### 5.15 MFVL, EFL and ventilatory capacity (v2-only) — `core/analysis/mfvl.py`
+
+`§5.13`'s `manoeuvres.extract` types a breath `fvc`/`ic_fvc` but computes no
+spirometric arithmetic for it at all — deliberately deferred to this module
+(M-42), kept SEPARATE rather than folded into `manoeuvres.py` so the boundary that
+module's own docstring states stays real. Two independent pieces:
+
+**FVC/FEV1/PEF from ONE typed breath** (`mfvl.fvc_metrics`, merged into that
+breath's Manoeuvres row by `core.pipeline.run_batch` itself, both in the main loop
+and its `§5.13a` external-reference forepass — never by `manoeuvres.extract`,
+which stays untouched by this ticket): `V_TLC = insp['volume'][-1]`; the maximal
+expiratory flow-volume (MEFV) envelope `v = V_TLC − exp['volume']`, forced
+non-decreasing (`np.maximum.accumulate`, a numerical-noise guard, not a
+physiological correction); PEF over a ≥10 ms centred moving-average window (a
+single-sample spike must not win), mapped back to a real sample for the
+back-extrapolation tangent; `t0`/BEV via ATS/ERS 2019's own back-extrapolation
+(the tangent through the PEF sample, extrapolated to `v=0`; BEV is the REAL curve
+interpolated at `t0`, not the tangent); FEV1 (clipped to FVC when the whole
+manoeuvre finishes under 1 s, never extrapolated past the last real sample);
+FEV1/FVC; forced expiratory time (`t[-1] - t0`); the end-of-forced-expiration
+criterion (FET ≥ 15 s, or < 25 mL change over the last second); a peak
+inspiratory-flow reference from the file's own NEXT tidal breath, only when that
+breath's own excursion reaches ≥90% of FVC (some protocols record a rapid
+near-maximal re-inflation right after the forced exhalation — a genuine
+maximal-effort inspiratory reference, not to be confused with an ordinary tidal
+breath that happens to follow). `quality` gets `BEV_HIGH` when BEV exceeds
+`max(0.1 L, 5% of FVC)`.
+
+**TLC consistency** (`mfvl.apply_tlc_consistency`, a second pass mirroring
+`manoeuvres.apply_repeatability`'s own timing — run once per file after every
+typed breath's row is in hand): when the SAME file also has `ic`/`ic_fvc`
+breath(s), `mfvl_tlc_consistency = V_TLC_fvc − V_TLC_ic` (the IC breaths' own
+`vol_ic + ic_eelv_pre`, averaged), flagged `not_from_tlc` past a 0.15 L tolerance
+(placeholder, `†`) — comparing a CROSS-file IC reference's TLC is deliberately
+never attempted (two different recordings rarely share a volume zero, the same
+reasoning `§5.14`'s within-file EELV tracking already applies).
+
+**Placement against a tidal breath** (`mfvl.attach`, `mfvl.tidal_mfvl_ext`):
+unlike `§5.13a`/`§5.14`'s `attach()` functions, this one is NOT a post-loop pass —
+it runs INSIDE `core.pipeline.run_batch`'s main per-file loop, stamping
+`breath['mfvl_ext']` on every tidal breath BEFORE `build_breath_table` joins it in
+exactly like `breath['wob']` already is (`core.results.build_breath_table`). This
+is why it is deliberately SAME-FILE ONLY: resolving a file's own `fvc`/`ic`
+reference (`core.analysis.references.resolve_reference`, the SAME slot every
+other reference shares) needs the raw MEFV curve's actual sample arrays, which
+only a file already IN this loop iteration's own `breaths` dict has available — a
+CROSS-file or external reference source (`§5.13a`'s forepass) only ever carries
+`manoeuvres.extract`'s scalar fields, no raw arrays to rebuild a curve from. The
+IC operating point this module resolves is therefore also its OWN, simpler
+`eelv_tracking='none'`-equivalent (`ic_op = vol_ic_ref`, held constant across the
+file — `mfvl.resolve_same_file_ic_op`), not `§5.14`'s full per-breath EELV
+tracking (which has not run yet at this point in the loop — `lungvol.attach` is
+still a post-loop pass). Both are documented, deliberate gaps for a future ticket
+to reconcile once the two loop-timing models can be aligned properly.
+
+The MEFV envelope itself (`mfvl.resolve_same_file_curve`): `processing.mfvl.source
+= "single"` (default) picks the resolved `fvc`/`ic_fvc` attempt with the LARGEST
+FVC (ATS/ERS 2019's "report the largest across acceptable attempts", reused here
+for which single curve to compare against); `"envelope"` takes the per-volume
+MAXIMUM flow across every resolved attempt (Johnson 1999's own composite-MEFV
+construction; identical to "single" when only one attempt resolved).
+
+Each tidal breath is placed on a TLC-anchored axis (Johnson 1999):
+`v_below_tlc(t) = ic_op − (V(t) − vol_endexp_b)` — at end-expiration
+(`V(t)=vol_endexp_b`) this equals `ic_op` (the reference IC's own distance below
+TLC); at end-inspiration it equals `ic_op − vt`. `efl_coverage_pct` is the
+volume-weighted fraction of the breath's own expiratory excursion whose
+`v_below_tlc` falls inside the MEFV curve's own domain — below 100% (a domain
+mismatch, typically a genuine `not_from_tlc` disagreement between the file's IC-
+and FVC-implied TLC), every placement-dependent column NaNs with ONE per-file
+notice (never per-breath); with NO IC reference at all, only the two IC-
+independent peak-vs-peak ratios below are filled, everything else NaN with its
+own per-file notice.
+
+Columns (all in `breath['mfvl_ext']`, joined into `breaths_table`/`average_row`):
+`efl_pct` (Johnson 1999: `100·Σ limited_i·ΔV_i / Σ ΔV_i`, volume-weighted, never
+sample-counted, and normalised by the SAME measured path length its own numerator
+is built from — self-review finding: normalising by `mechanics.vt` (a net
+excursion) instead let sample-to-sample volume noise, e.g. cardiogenic
+oscillation, push the result over 100%, since it adds to the |ΔV| path length
+without adding to vt; `limited_i = flow_i ≥ mefv(v_i)·(1−efl_rel_tol) −
+efl_abs_tol_lps`, both tolerances `†`-placeholder 0.0 — a sample must literally
+reach the envelope); `efl_present` (`efl_pct ≥ efl_present_min_pct`, `†` 5.0);
+`ex_flow_pct_mfvl_max`/`in_flow_pct_mfvl_max` (this breath's own peak ex/in flow
+against the MEFV's LOCAL ceiling across its own operating range —
+placement-dependent, NaN without full coverage); `max_ex_flow_pct_mfvl_peak`/
+`max_in_flow_pct_mfvl_peak` (against the GLOBAL PEF/peak-in-flow scalars instead
+— needs no placement at all, the one pair still filled without an IC reference);
+`te_min_mfvl` (`∫ dv/mefv(v)` over `[ic_op−vt_exp, ic_op]`, where `vt_exp` is this
+breath's OWN measured expiratory excursion (`max(exp.volume) − min(exp.volume)`),
+never `mechanics.vt` (the whole breath's own max−min, inspiration included) —
+self-review finding: the two can differ under volume drift, which let the
+integration range silently fall partly outside the MEFV curve's own domain while
+`efl_coverage_pct` (built from a slightly different quantity) still read 100%; NaN
+where the envelope drops under 0.05 L/s, or where `[lo, hi]` is not FULLY inside
+the curve's own domain — `_te_min` refuses outright rather than silently
+integrating over a clipped-down remainder); `ve_cap = 60·vt_exp·(1−ti_ttot)/
+te_min_mfvl`, `ve_pct_cap`, `ve_reserve_pct` (Johnson 1995/1999); `mvv_est`
+(`input.subjects.mvv_lpm` first, else `fev1_used × mvv_fev1_multiplier`, `†` 40.0
+— ATS/ACCP 2003; `fev1_used` prefers `input.subjects.fev1_l` over the largest
+derived FEV1 among this file's own resolved FVC attempts, the SAME preference
+`§5.14`'s VC-fallback comment already anticipated), `ve_pct_mvv`, `br_mvv_pct` —
+the last three independent of MEFV placement (MVV needs no placement at all), so
+they are NaN only when NO IC reference resolved, never merely for partial
+coverage.
+
+**PEF used for the tidal ratio columns is the SAME smoothed value the Manoeuvres
+sheet shows** (self-review finding): an earlier version re-derived it from the
+resolved curve's own raw samples (`mefv_flow.max()`), which for `source=
+"envelope"` in particular is a single-SAMPLE maximum of an interpolated curve and
+can equal a spike `_pef`'s own ≥10 ms smoothing exists to reject. `attach` now
+reads the participating attempt(s)' own already-smoothed `mfvl_peak_ex_flow`
+instead (the max across attempts, for "envelope"). `_pef` itself was also
+corrected to return the smoothed maximum as its VALUE (the previous version
+returned the raw sample at the window's centre, which could still be the spike if
+one happened to sit there).
+
+**`apply_tlc_consistency` excludes `ic_cfg.reject_flags`-flagged IC breaths from
+the comparison and ignores a non-finite `vol_ic`/`ic_eelv_pre` on any one IC row**
+(self-review findings): the first now matches `resolve_same_file_ic_op`'s own
+disqualifying rule (a `LOW_EFFORT` attempt should not drag either comparison); the
+second means one bad IC row no longer silently poisons `np.mean` into NaN for
+EVERY `fvc` row in the file. A shared `_finite(x)` helper (true only for a real,
+non-NaN number) replaces the `x == x` idiom used throughout this module for "not
+NaN" — that idiom is silently wrong for a MISSING dict key (`.get(...)` hands back
+`None`, and `None == None` is `True`), which mattered because `core.pipeline`'s
+own `attach` call is now wrapped in its own per-file `try`/`except` (self-review
+finding: one FVC row an upstream extraction failure left half-built — `{"kind":
+"fvc", "quality": [...]}`, no numeric fields — could otherwise crash the WHOLE
+file via a `row["fev1"]` lookup a few functions later, taking down every other
+breath's mechanics with it; every other failure mode in this loop already has
+this same per-file isolation).
+
+**`source="envelope"`'s composite curve no longer extrapolates a SHORTER attempt's
+tail flat** past its own domain (self-review finding): the previous
+`right=flow[-1]`/`left=flow[0]` held a truncated attempt's end flow constant
+across every volume the LONGER attempt alone reaches, letting a shorter attempt
+that was still flowing fast at its own cutoff win the per-volume maximum near RV
+— raising the composite envelope exactly where a real curve is near zero, and so
+understating `efl_pct` and overstating `te_min_mfvl`/`ve_cap` there without any
+warning. Each curve now extrapolates to NaN outside its own domain instead
+(`np.fmax`, which ignores NaN), so the maximum at any given volume is only ever
+taken among attempts that genuinely cover it.
+
+**Threshold provenance**: every `†`-marked field in `core.settings.MfvlSettings`
+is a placeholder (the plan's own starting value), same K-035 provenance as
+`§5.13`'s `IcSettings` — this sandbox has no production FVC recording to calibrate
+against; the formulas are pinned by analytical/synthetic tests
+(`tests/unit/test_mfvl.py`), the cut-offs want a pass against real recordings.
+
+**Units**: `fvc`/`fev1`/`fvc_bev`/`mfvl_tlc_consistency` → L; `fev1_fvc` → `—`
+(dimensionless); `fvc_fet`/`te_min_mfvl` → s; `fvc_eofe_ok`/`efl_present` → ""
+(explicit blank); `ve_cap`/`mvv_est` → L·min⁻¹ — none match a generic `_RULES`
+convention, so each is registered explicitly. `mfvl_peak_ex_flow`/
+`mfvl_peak_in_flow` (contain "flow") and every `_pct`/`_pct_` column already
+resolve via the generic rules, listed in `registry.py` for documentation only.
+
+**Golden**: `typed_ic_fvc_same_file` (`§5.13`) re-baked with this ticket's new
+keys — its own IC (breath #4) and FVC (breath #7) breaths do NOT share a common
+TLC in that fixture (a fixture limitation, not a code bug: `generate_data.py`'s
+own comment already noted "the actual FVC/FEV1/PEF numerics are a later feature's
+scope, not this generator's"), which the `not_from_tlc` flag correctly catches and
+which then drives `efl_coverage_pct` to 0% for every tidal breath — so the golden
+scenario exercises the "domain mismatch" branch, not the "full coverage" one.
+`tests/unit/test_mfvl.py` covers the full-coverage EFL/VEcap arithmetic instead,
+with purpose-built fixtures where the IC and FVC TLC agree.
+
 ---
 
 ## 6. Latent issues found (to fix deliberately in the refactor)
