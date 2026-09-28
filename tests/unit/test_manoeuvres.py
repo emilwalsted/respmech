@@ -334,8 +334,7 @@ def test_apply_repeatability_ignores_non_ic_entries():
 #      case that should, and a case that should not, flag — replace the PLACEHOLDER_*
 #      rows below with those measured numbers (never invented ones).
 #   3. Remove the `pytest.mark.skip` line once the case is confirmed against the real
-#      recording, and record the calibrated threshold in docs/beslutninger.md (M-41's
-#      own ticket names this as the exact deliverable to Emil).
+#      recording, and record the calibrated threshold in docs/beslutninger.md.
 #
 # EELV_UNSTABLE cases: (case id, preceding EELVs [L], manoeuvre EELV [L], ic_vol [L],
 # eelv_tolerance_frac, expect the flag to fire). The PLACEHOLDER values below are
@@ -371,25 +370,38 @@ def test_eelv_unstable_measured_case(preceding_eelvs, manoeuvre_eelv, ic_vol, to
 # repeatability_frac, 1-based index of the expected outlier (None if none), expect the
 # flag to fire on that outlier).
 NOT_REPEATABLE_MEASURED_CASES = [
-    pytest.param([3.0, 3.0, 3.0], 0.10, None, False, id="PLACEHOLDER_repeatable"),
-    pytest.param([3.0, 3.0, 1.0], 0.10, 3, True, id="PLACEHOLDER_outlier"),
+    pytest.param([3.0, 3.0, 3.0], 0.10, "mean", None, False, id="PLACEHOLDER_repeatable"),
+    # aggregate='median' here (not the IcSettings default 'mean'): with only 3-4 total
+    # attempts, a leave-one-out MEAN is itself dragged by the one bad attempt (see
+    # apply_repeatability's own docstring on this well-known mean-vs-median
+    # trade-off), so a 'mean' placeholder this small cannot demonstrate SELECTIVITY —
+    # every entry ends up flagged, not just the true outlier. 'median' is immune to a
+    # single outlier at any N >= 3, so this placeholder can prove the good attempts
+    # stay unflagged while the bad one is caught, exactly the shape a real measured
+    # case should have. Swap back to 'mean' when filling this in IF the real
+    # recording's own repeat count/aggregate choice calls for it.
+    pytest.param([3.0, 3.0, 3.0, 1.0], 0.10, "median", 4, True, id="PLACEHOLDER_outlier"),
 ]
 
 
 @pytest.mark.skip(reason="måles lokalt — RIU_H5_IC.txt, se tests/golden/README.md")
 @pytest.mark.parametrize(
-    "vol_ics,repeatability_frac,outlier_no,expect_flag",
+    "vol_ics,repeatability_frac,aggregate,outlier_no,expect_flag",
     NOT_REPEATABLE_MEASURED_CASES)
-def test_not_repeatable_measured_case(vol_ics, repeatability_frac, outlier_no, expect_flag):
+def test_not_repeatable_measured_case(vol_ics, repeatability_frac, aggregate, outlier_no,
+                                      expect_flag):
     """Pins NOT_REPEATABLE against REAL repeat-IC volumes measured on a real typed-IC
     recording (K-035: a threshold pinned without a real recording is a guess). See
     this section's own header comment for how to fill this in."""
-    ic_cfg = IcSettings(repeatability_frac=repeatability_frac)
+    ic_cfg = IcSettings(repeatability_frac=repeatability_frac, aggregate=aggregate)
     manoeuvres = {i: {"kind": "ic", "vol_ic": v, "quality": []}
                   for i, v in enumerate(vol_ics, start=1)}
     m.apply_repeatability(manoeuvres, ic_cfg)
     if expect_flag:
         assert "NOT_REPEATABLE" in manoeuvres[outlier_no]["quality"]
+        others = {no: e for no, e in manoeuvres.items() if no != outlier_no}
+        assert all("NOT_REPEATABLE" not in e["quality"] for e in others.values()), \
+            "a good attempt was also flagged — the outlier is not actually selective"
     else:
         assert all("NOT_REPEATABLE" not in e["quality"] for e in manoeuvres.values())
 

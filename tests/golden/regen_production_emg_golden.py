@@ -63,7 +63,15 @@ TYPED_IC_COVERS = {
 }
 TYPED_IC_SCENARIOS = list(TYPED_IC_TOML)
 
-ALL_SCENARIOS = list(SCENARIO_CFG) + TYPED_IC_SCENARIOS
+# Deliberately NOT included: a bare `python regen_production_emg_golden.py --write`
+# (documented as the whole-suite invocation in docs/NOISE_ECG_OPTIMIZATION.md) runs
+# every name in ALL_SCENARIOS and only writes production_golden.json once, AFTER the
+# loop -- a typed_ic_h5 entry here would make that bare invocation raise
+# FileNotFoundError the moment RIU_H5_typed_ic.toml is not yet authored locally
+# (always true until the maintainer does step 6 of the README's how-to), losing the
+# regen of every scenario that already had data, not just this one. typed_ic_h5 is
+# reachable only by naming it explicitly, exactly as the README's own how-to does.
+ALL_SCENARIOS = list(SCENARIO_CFG)
 
 
 def _classify(col):
@@ -85,10 +93,12 @@ def _run_typed_ic_scenario(scname):
     """Run a v2-only production scenario (TYPED_IC_TOML) straight from its committed-
     locally TOML file -- no ``migrate_dict``, unlike every scenario in SCENARIO_CFG,
     because breath typing / processing.references have no legacy-dict shape to migrate
-    FROM (the frozen v1 oracle predates both). Same output-folder/save_processed
-    override as the legacy-derived path above, so a run here never writes into the
-    gitignored production/ tree itself."""
+    FROM (the frozen v1 oracle predates both). Overrides input.folder/output.folder/
+    save_processed exactly like the legacy-derived path above -- so the committed TOML
+    never has to hardcode a machine-specific absolute input path, and a run here never
+    writes into the gitignored production/ tree itself."""
     settings = load_toml(TYPED_IC_TOML[scname])
+    settings.input.folder = os.path.join(bpg.PROD, "EMG processing fix test")
     settings.output.folder = os.path.join(HERE, "_prod_work_emg", scname)
     settings.output.data.save_processed = False
     return run_batch(settings)

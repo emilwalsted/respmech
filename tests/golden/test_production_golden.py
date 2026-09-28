@@ -81,13 +81,16 @@ def _typed_ic_h5_skip_reason():
     if not (os.path.isdir(d) and any(f.endswith(".txt") for f in os.listdir(d))):
         return ("typed_ic_h5: 'EMG processing fix test' production recordings not "
                 "present locally (gitignored)")
+    if not os.path.exists(os.path.join(d, "RIU_H5_IC.txt")):
+        return "typed_ic_h5: RIU_H5_IC.txt (the typed-IC recording) not present locally"
     if not os.path.exists(R.TYPED_IC_TOML["typed_ic_h5"]):
         return ("typed_ic_h5: RIU_H5_typed_ic.toml not authored locally yet — see "
                 "tests/golden/README.md's production-scenario table")
-    if "typed_ic_h5" not in json.load(open(GOLDEN)):
-        return ("typed_ic_h5: no frozen golden entry yet — run "
-                "'python tests/golden/regen_production_emg_golden.py typed_ic_h5 --write' "
-                "locally first")
+    with open(GOLDEN) as f:
+        if "typed_ic_h5" not in json.load(f):
+            return ("typed_ic_h5: no frozen golden entry yet — run "
+                    "'python tests/golden/regen_production_emg_golden.py typed_ic_h5 --write' "
+                    "locally first")
     return None
 
 
@@ -99,13 +102,20 @@ _TYPED_IC_H5_SKIP_REASON = _typed_ic_h5_skip_reason()
 def test_typed_ic_h5_scenario_reproduces_golden(golden):
     res = R.run_scenario("typed_ic_h5")
     gfiles = golden["typed_ic_h5"]["files"]
-    for fname, fr in sorted(res.ok_files.items()):
+    # golden-driven, like test_scenario_reproduces_golden above: every golden 'ok' file
+    # must still reproduce and every golden 'error' file must still error — walking
+    # res.ok_files instead would let a file that regressed from ok to erroring quietly
+    # vanish from the comparison instead of failing it.
+    for fname, gentry in gfiles.items():
+        if gentry.get("status") == "error":
+            assert fname in res.failed_files, f"{fname} expected to error but did not"
+            continue
+        assert fname in res.ok_files, f"{fname} expected ok but errored/absent"
+        fr = res.ok_files[fname]
         if fr.breaths_table is None:
             continue  # reference-only file (RIU_H5_IC.txt itself) — nothing to compare
-        assert fname in gfiles and gfiles[fname]["status"] == "ok", \
-            f"{fname} missing/erroring in golden"
         cur = fr.breaths_table.reset_index(drop=True)
-        gcols = gfiles[fname]["golden"]
+        gcols = gentry["golden"]
         assert set(gcols) == set(map(str, cur.columns)), f"{fname}: columns changed"
         for col in gcols:
             a = pd.to_numeric(pd.Series(gcols[col]), errors="coerce").to_numpy(float)

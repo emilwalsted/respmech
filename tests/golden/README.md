@@ -188,7 +188,12 @@ recording — see `IcSettings`' own docstring and the K-035 lesson in
    `tests/golden/production/EMG processing fix test/` alongside the existing H5 files.
 2. `respmech migrate "tests/golden/production/EMG processing fix test/RIU_H5_example.py" -o "tests/golden/production/EMG processing fix test/RIU_H5_typed_ic.toml"`
    (or hand-author the TOML — either way it ends up at the path `TYPED_IC_TOML` names).
-   Point `[input] files` at `RIU_H5_IC.txt;RIU_H5_*W.txt` (or the settings-equivalent).
+   Point `[input] files` at the SINGLE glob `RIU_H5_*.txt` — like `typed_ic_crossfile.toml`
+   above, one glob matches both the reference-only IC file and the tidal `*W.txt`
+   files in the SAME batch (`match_input_files` does not split on `;`/multiple
+   patterns). `[input] folder` does not need editing — `_run_typed_ic_scenario`
+   overrides it to the local `EMG processing fix test/` folder at run time, same as
+   every `SCENARIO_CFG` entry does for its own settings_py.
 3. `respmech breaths "tests/golden/production/EMG processing fix test/RIU_H5_typed_ic.toml" RIU_H5_IC.txt`
    — lists every breath's onset/duration; paste a `[[processing.breath_types]]` entry
    typing EACH one `kind = "ic"` (every breath in this file is a repeat IC by design).
