@@ -6,6 +6,40 @@ decision <date>" — never an internal ticket reference; this repo is public).
 
 ---
 
+**28-09-2026 — The MFVL/EFL/VEcap placement of a tidal breath against a file's own
+forced-vital-capacity curve resolves the FVC and IC references SAME-FILE ONLY,
+and uses a constant ("`eelv_tracking='none'`") IC operating point of its own
+rather than the within-file EELV-tracking arithmetic the operating-lung-volumes
+module already has (self-review, not fixed by this ticket).** The ticket asked
+for the placement columns to live in `breath['mfvl_ext']`, joined into the
+per-breath table exactly like `breath['wob']` already is — which happens INSIDE
+the main per-file processing loop, before that file's own table is built. The
+existing pattern for a resolved CROSS-file reference (the IC/baseline machinery)
+is a POST-loop pass, run only after every file in the batch has already been
+through the main loop once, specifically so a reference naming a file processed
+later is still resolvable. Reconciling "the column must exist before the loop
+moves to the next file" with "a cross-file reference may not resolve until the
+loop is done" was not attempted here: only a same-file forced-vital-capacity
+breath's curve is used, and only that same file's own resolved inspiratory
+capacity (held constant across the file, never per-breath EELV-tracked). A
+cross-file reference or full EELV tracking for this specific feature is a
+deliberate, documented gap for a later change, not a silent limitation — flagged
+here so it is not mistaken for "not yet noticed" rather than "not yet done".
+
+**28-09-2026 — Two near-identical MFVL ratio columns (a tidal breath's own peak
+flow against the LOCAL ceiling its own operating range implies, versus against
+the GLOBAL peak of the whole curve) are both computed, with the LOCAL one treated
+as placement-dependent and the global one not — a best-effort reading of a terse
+specification, not independently confirmed (self-review, flagged for
+confirmation, not settled).** The inspiratory side has no separate curve at all
+(only a single peak-flow reference from a near-maximal breath, when one exists),
+so its own "local" column is computed with the SAME formula as its "global"
+counterpart today — correct by construction, but only because there is nothing
+else it could mean yet. Revisit if a dedicated maximal inspiratory flow-volume
+curve is ever added.
+
+---
+
 **28-09-2026 — Manual segmentation overrides repair the automatic detector, they
 never replace it; applied after automatic segmentation, before trim (boundary
 notices), breath numbering and phase re-splitting; an empty override list is

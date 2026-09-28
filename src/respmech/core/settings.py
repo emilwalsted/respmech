@@ -446,6 +446,46 @@ class LungVolumeSettings:
 
 
 @dataclass
+class MfvlSettings:
+    """FVC/MFVL/EFL/VEcap and ventilatory-capacity extraction (M-42,
+    ``core.analysis.mfvl``).
+
+    ``source``: how the maximal expiratory flow-volume (MEFV) envelope a tidal
+    breath is placed against is built from a file's resolved ``fvc`` reference
+    breath(s) (``core.analysis.references.resolve_reference(..., "fvc", ...)``, the
+    SAME slot ``ic``/``baseline_ic``/``max_insp`` already share). ``"single"`` (the
+    default) uses the ONE attempt with the largest ``fvc`` among the resolved
+    breaths (ATS/ERS 2019: report the largest FVC/FEV1 across acceptable attempts,
+    not necessarily from the same manoeuvre — reused here for which single curve to
+    pick). ``"envelope"`` takes the per-volume MAXIMUM flow across every resolved
+    attempt (Johnson 1999's own composite-MEFV construction) — identical to
+    "single" by construction whenever only one attempt resolved.
+
+    ``efl_rel_tol``/``efl_abs_tol_lps``: a tidal sample counts as flow-LIMITED
+    (Johnson 1999) when ``flow >= mefv(v)*(1-efl_rel_tol) - efl_abs_tol_lps``. Both
+    default to 0.0 (a sample must literally reach the envelope, the strictest
+    reading) — the SAME ``†`` provenance as ``IcSettings``' own placeholders: this
+    sandbox has no production FVC recording to calibrate a tolerance against
+    (K-035's lesson), so the formula is pinned by analytical/synthetic tests, but
+    the tolerance wants a pass against real recordings before it is trusted.
+
+    ``efl_present_min_pct``: ``efl_present`` (a boolean summary flag) is True only
+    once ``efl_pct`` clears this floor — a single grazing sample rounding to a
+    fraction of a percent should not, on its own, read as "this patient shows
+    expiratory flow limitation" on a summary display.
+
+    ``mvv_fev1_multiplier``: the classic FEV1 x 40 MVV estimate (ATS/ACCP 2003),
+    the fallback when neither ``input.subjects.mvv_lpm`` nor a resolved FVC-derived
+    FEV1 applies.
+    """
+    source: str = "single"                       # "single" | "envelope"
+    efl_rel_tol: float = 0.0                      # † EFL flow-limitation tolerance (relative)
+    efl_abs_tol_lps: float = 0.0                  # † EFL flow-limitation tolerance (absolute, L/s)
+    efl_present_min_pct: float = 5.0              # † efl_present floor
+    mvv_fev1_multiplier: float = 40.0             # ATS/ACCP 2003 MVV = FEV1 x 40 fallback
+
+
+@dataclass
 class ExcludeEntry:
     file: str
     breaths: list[int] = field(default_factory=list)
@@ -589,6 +629,7 @@ class ProcessingSettings:
     entropy: EntropySettings = field(default_factory=EntropySettings)
     ptp: PtpSettings = field(default_factory=PtpSettings)
     lung_volume: LungVolumeSettings = field(default_factory=LungVolumeSettings)
+    mfvl: MfvlSettings = field(default_factory=MfvlSettings)
     exclude_breaths: list[ExcludeEntry] = field(default_factory=list)
     breath_counts: list[BreathCountEntry] = field(default_factory=list)
     breath_types: list[BreathTypeEntry] = field(default_factory=list)
@@ -1010,6 +1051,16 @@ class Settings:
         if ic.eelv_tracking not in ("none", "within_file"):
             raise SettingsError(
                 'processing.lung_volume.ic.eelv_tracking must be "none" or "within_file"')
+
+        # M-42 MfvlSettings: same front-line-failure-mode reasoning as IcSettings
+        # above (a hand-edited TOML with no UI writing this table yet).
+        mfvl = self.processing.mfvl
+        if mfvl.source not in ("single", "envelope"):
+            raise SettingsError('processing.mfvl.source must be "single" or "envelope"')
+        for name in ("efl_rel_tol", "efl_abs_tol_lps", "efl_present_min_pct",
+                    "mvv_fev1_multiplier"):
+            if getattr(mfvl, name) < 0:
+                raise SettingsError(f"processing.mfvl.{name} must not be negative")
 
         # references/reference_defaults/subjects -- FORM only (validate() never resolves
         # a link or touches a file on disk; that is core.analysis.references' job). Same
