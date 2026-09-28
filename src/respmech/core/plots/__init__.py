@@ -38,7 +38,7 @@ import numpy as np
 
 from respmech.core import plot_style
 from respmech.core.analysis import mfvl as mfvllib
-from respmech.core.analysis.pressure import peepi_rectangle_height
+from respmech.core.analysis.pressure import mean_peepi_rectangle_height, peepi_rectangle_height  # noqa: F401 (re-exported for the Preview panel)
 from respmech.core.analysis.signals import Capabilities
 
 _BRAND = "#2C6E9B"
@@ -69,13 +69,6 @@ def _ordered(fr):
 def _breaths(fr):
     """Non-ignored breaths of a file result, in order."""
     return [b for b in _ordered(fr) if not b.get("ignored")]
-
-
-def mean_peepi_rectangle_height(breaths):
-    """Mean PEEPi-rectangle height over the breaths that have one (``None`` when none do,
-    e.g. the feature is off) -- the height drawn over an AVERAGE breath."""
-    hs = [h for h in (peepi_rectangle_height(b) for b in breaths) if h is not None]
-    return float(np.mean(hs)) if hs else None
 
 
 def draw_peepi_rectangle(ax, eilv, eelv, height, *, color="#D9822B", alpha=0.35, zorder=None):
