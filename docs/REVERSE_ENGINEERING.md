@@ -837,6 +837,20 @@ tracking (which has not run yet at this point in the loop — `lungvol.attach` i
 still a post-loop pass). Both are documented, deliberate gaps for a future ticket
 to reconcile once the two loop-timing models can be aligned properly.
 
+**The flow-volume figure** (`mfvl.placed_tidal_loops`, drawn by
+`core.plots.draw_flow_volume_mfvl` for both `flow-volume (tidal in MFVL).pdf` and the
+Preview panel): no calculation of its own. It reuses `resolve_same_file_curve` and
+`resolve_same_file_ic_op`, so a loop can never sit anywhere but where `efl_pct` placed
+it. The x axis is volume below TLC (the MEFV curve's own axis, TLC on the left); each
+non-ignored tidal breath is drawn at `x(t) = ic_op − (V(t) − vol_endexp)`, so the end
+of expiration (EELV) sits at `ic_op` and the end of inspiration (EILV) one tidal volume
+nearer TLC. The bold average loop resamples every breath onto 200 points by breath
+fraction (a display construct, not a per-column value). Without an IC reference the
+loops cannot be anchored and only the envelope is drawn, with a note. The job is
+planned only when `processing.breath_types` names an `fvc`/`ic_fvc` breath and
+`output.diagnostics.save_flow_volume` (default true) is on; a file with no resolvable
+curve returns no figure.
+
 The MEFV envelope itself (`mfvl.resolve_same_file_curve`): `processing.mfvl.source
 = "single"` (default) picks the resolved `fvc`/`ic_fvc` attempt with the LARGEST
 FVC (ATS/ERS 2019's "report the largest across acceptable attempts", reused here

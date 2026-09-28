@@ -23,7 +23,13 @@ exhaled given the ceiling, and the ventilatory capacity and breathing reserve th
 implies (against either a spirometry-supplied maximum voluntary ventilation or the
 classic FEV1×40 estimate). Without an inspiratory-capacity reference in the same
 file, only the two flow-vs-peak columns are filled; the rest read blank, with a note
-explaining why. The flow–volume figure and its Preview overlay are a later release.
+explaining why. A new figure, `flow-volume (tidal in MFVL).pdf`, draws those tidal
+loops inside the file's own maximal flow-volume curve (grey loops, a bold average
+loop, EELV and EILV marked), and for a Flow-only analysis the Preview panel shows the
+same picture whenever the previewed file has a breath typed as a forced vital
+capacity. Mechanics ▸ Advanced… ▸ Lung volumes gained the curve source (largest
+attempt or envelope), the two flow-limitation tolerances and the FEV1-to-MVV
+multiplier; the figure can be switched off with `output.diagnostics.save_flow_volume`.
 
 **New `respmech breaths` command; `respmech validate` reports reference-link
 cautions; `respmech run --dry-run` and `respmech migrate` name more of what an
