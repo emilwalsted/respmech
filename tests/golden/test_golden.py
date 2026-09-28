@@ -128,12 +128,12 @@ def test_typed_ic_fvc_same_file_vol_ic_matches_analytical_value(current):
 
 
 def test_typed_ic_crossfile_reference_only_file_is_skipped_from_per_file(current):
-    """M-40's own scope statement made mechanical: the reference-only
+    """This scenario's own scope made mechanical: the reference-only
     ``synth_crossfile_ic.csv`` (every breath typed, no tidal breathing at all —
-    ``core.pipeline.run_batch``'s M-30 detection) never gets a ``per_file`` /
+    ``core.pipeline.run_batch``'s own detection) never gets a ``per_file`` /
     breathdata entry (``golden_newcore.run_scenario``'s own
-    ``if fr.breaths_table is not None`` guard, already built by an earlier ticket in
-    this programme) — only the tidal ``synth_crossfile_stage.csv`` does."""
+    ``if fr.breaths_table is not None`` guard, already built for an earlier
+    scenario) — only the tidal ``synth_crossfile_stage.csv`` does."""
     per_file = current["typed_ic_crossfile"]["per_file"]
     assert "synth_crossfile_stage.csv.breathdata.xlsx" in per_file
     assert "synth_crossfile_ic.csv.breathdata.xlsx" not in per_file
@@ -169,9 +169,9 @@ def test_typed_ic_crossfile_stage_file_resolves_the_crossfile_reference(current)
     """The tidal ``synth_crossfile_stage.csv`` resolves its explicit
     ``processing.references`` entry to the reference file's own ``vol_ic`` (3.0):
     every breath's ``vol_ic_ref``/``ic_ref_n``/``ic_ref_source`` (``core.analysis.
-    references.attach``, M-35) names the reference file, one accepted attempt.
+    references.attach``) names the reference file, one accepted attempt.
 
-    ``core.analysis.lungvol.attach`` (M-36) then derives the operating-lung-volume
+    ``core.analysis.lungvol.attach`` then derives the operating-lung-volume
     family from that constant reference. ``processing.lung_volume.ic.eelv_tracking``
     is left at its default ``'none'`` here -- the only valid choice for a CROSS-file
     reference (``'within_file'`` needs a SAME-file IC and NaNs otherwise, see
