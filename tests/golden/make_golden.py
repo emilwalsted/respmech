@@ -222,6 +222,11 @@ V2_SCENARIOS: dict = {
     # empty overrides entry (synth_case_B.csv, no entry at all) is untouched while a
     # non-empty one (synth_case_A.csv) actually changes that file's own breath table.
     "flow_separator_overrides": os.path.join("scenarios", "flow_separator_overrides.toml"),
+    # Opt-in PEEPi / modified Campbell columns (processing.pressure.peepi.enabled) over a
+    # dedicated synth_peepi_*.csv recording whose every breath but the first follows a
+    # 0.4 s zero-flow pause carrying a known pre-flow Poes fall (see generate_data.py's
+    # peepi_channels): peepi_dyn/peepi_corr have exact analytical values.
+    "flow_peepi_on": os.path.join("scenarios", "flow_peepi_on.toml"),
 }
 
 # The union both test_golden.py (via golden_newcore.mg.SCENARIOS) and this
