@@ -31,6 +31,7 @@ from respmech.core import compute
 from respmech.core import emg as emglib
 from respmech.core.analysis import lungvol as lungvollib
 from respmech.core.analysis import manoeuvres as manoeuvreslib
+from respmech.core.analysis import mfvl as mfvllib
 from respmech.core.analysis import references as referenceslib
 from respmech.core.analysis.signals import Capabilities
 from respmech.core.io.loaders import load
@@ -879,10 +880,17 @@ def _load_external_references(settings: Settings, s, files: list, *, cache: dict
             try:
                 rows[breathno] = manoeuvreslib.extract(
                     breath, kind, tidal_breaths, s.capabilities, s)
+                # M-42: fvc_metrics is deliberately NOT part of manoeuvres.extract
+                # itself (that module's own docstring keeps it out of scope) --
+                # merged in here, and identically in the main loop below, so an
+                # external reference source's own FVC row matches an in-batch one.
+                mfvllib.apply_to_row(rows[breathno], breath, tidal_breaths,
+                                     float(s.input.format.samplingfrequency))
             except Exception as e:
                 errors[(src, breathno)] = f"{type(e).__name__}: {e}"
         if rows:
             manoeuvreslib.apply_repeatability(rows, s.processing.lung_volume.ic)
+            mfvllib.apply_tlc_consistency(rows, s.processing.lung_volume.ic)
         references[src] = rows
     return references, errors
 
@@ -1203,6 +1211,13 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                     try:
                         fr_manoeuvres[breathno] = manoeuvreslib.extract(
                             breath, kind, tidal_breaths, s.capabilities, s)
+                        # M-42: fvc_metrics is deliberately NOT part of manoeuvres.
+                        # extract itself (that module's own docstring keeps it out of
+                        # scope) -- merged in here, identically to the external-
+                        # reference forepass above, so an in-batch FVC row and one
+                        # loaded as an external reference source agree.
+                        mfvllib.apply_to_row(fr_manoeuvres[breathno], breath, tidal_breaths,
+                                             float(s.input.format.samplingfrequency))
                     except Exception as e:
                         _msg = (f"breath #{breathno} ({kind}) manoeuvre extraction failed: "
                                f"{type(e).__name__}: {e}")
@@ -1210,6 +1225,32 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                         file_notices.append(_msg)
                 if fr_manoeuvres:
                     manoeuvreslib.apply_repeatability(fr_manoeuvres, s.processing.lung_volume.ic)
+                    mfvllib.apply_tlc_consistency(fr_manoeuvres, s.processing.lung_volume.ic)
+                    # M-42: stamps breath['mfvl_ext'] on every TIDAL breath of THIS
+                    # file (same-file fvc/ic reference only -- see mfvl.attach's own
+                    # docstring for why), BEFORE build_breath_table below joins it in
+                    # exactly like breath['wob'] already is. Never for a reference-
+                    # only file (M-30) or an EMG-only signal set (no tidal breaths
+                    # with a real flow-volume trace to compare against an MEFV curve).
+                    # Self-review finding: one breath's own manoeuvre extraction failing
+                    # (the try/except a few lines above) leaves a half-built row in
+                    # fr_manoeuvres that attach() was not written to tolerate -- caught
+                    # here, per-file, the same isolation every other failure mode in
+                    # this loop already gets, rather than letting it take the whole
+                    # file down.
+                    if not reference_only and tidal_breaths:
+                        try:
+                            mfvl_notice = mfvllib.attach(
+                                fr_manoeuvres=fr_manoeuvres, breaths=breaths,
+                                tidal_breaths=tidal_breaths, filename=filename,
+                                settings=settings, s=s)
+                        except Exception as e:
+                            _msg = f"MFVL placement failed: {type(e).__name__}: {e}"
+                            warnings.warn(f"{filename}: {_msg}")
+                            file_notices.append(_msg)
+                        else:
+                            if mfvl_notice:
+                                file_notices.append(f"{filename}: {mfvl_notice}")
             manoeuvres_table = build_manoeuvre_table(fr_manoeuvres)
 
             # M-30: a reference-only file has no tidal breath table or average row to
