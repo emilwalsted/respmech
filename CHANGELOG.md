@@ -113,6 +113,8 @@ it through a renumbering). 'Try it on sample data' opens a ready-made EMG-only d
 already split at its own natural breath boundaries. Automatic burst detection for tidal
 breathing is not available yet — its own door in the picker is visibly there but
 disabled until a later release calibrates it.
+<!-- changelog-skip f4e19c8 documentation-only decision record (docs/beslutninger.md); no
+     user-visible behaviour changes, the feature it describes lands in a later change. -->
 <!-- changelog-skip 72afcff the 'EMG – segments' tab landed in Preview & QC in this
      commit; folded into the rewritten bullet above once the signal-set picker's EMG-only
      preset itself was activated (see the 4ea83a7 marker below and the bullet's own
