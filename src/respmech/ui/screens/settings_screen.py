@@ -2149,7 +2149,11 @@ class SettingsScreen(QWidget):
         # glob (matching_files), never the manifest's majority-column-count subset --
         # check_links' own doctrine, see its docstring.
         matches = matching_files(s.input.folder, s.input.files)
-        out.extend(check_links(s, matches))
+        # M-38: the manifest already knows which outliers are also named reference
+        # sources -- check_links stays Qt-free and does no column probing of its own.
+        m = self._manifest
+        outlier_refs = m.outlier_reference_names if m is not None else None
+        out.extend(check_links(s, matches, outlier_reference_names=outlier_refs))
         return out
 
     def _science_note(self):
