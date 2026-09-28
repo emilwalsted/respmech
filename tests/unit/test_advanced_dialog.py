@@ -318,9 +318,13 @@ def test_the_mechanics_card_left_setup_for_the_preview_tab(qapp, tmp_path):
     from PySide6.QtWidgets import QGroupBox
     sc = _settings_screen(qapp, tmp_path)
     titles = {g.title() for g in sc.findChildren(QGroupBox)}
-    # Setup is lean now: Input, Channels, Output, and the conditional Sample entropy card.
+    # Setup is lean now: Input, Channels, Output, and the conditional Sample entropy and
+    # Subjects && lung volumes cards (M-34/M-37; both built unconditionally and merely
+    # hidden while empty via _cond_cards, so findChildren still sees them regardless of
+    # whether this settings object names any subjects).
     assert "Mechanics" not in titles and "Advanced (rarely changed)" not in titles
-    assert titles == {"Input", "Channels", "Output", "Sample entropy"}
+    assert titles == {"Input", "Channels", "Output", "Sample entropy",
+                      "Subjects && lung volumes"}
     pv = _preview(qapp, tmp_path)
     assert hasattr(pv, "btn_mech_advanced"), "the Preview Mechanics tab hosts Advanced…"
     pv.shutdown()
@@ -373,7 +377,10 @@ def test_wob_and_ptp_cards_are_hidden_without_poes(qapp, tmp_path, monkeypatch):
     Poes-less analysis) — both cards drop out of the Mechanics — advanced… dialog for a
     Flow-only signal set, and come back the moment Poes rejoins it. The other cards this
     ticket does not touch (Breath detection, Volume, End-expiratory trend, Sampling,
-    Per-file overrides) must stay exactly as many as before."""
+    Lung volumes, Per-file overrides) must stay exactly as many as before. Lung volumes
+    (M-36/M-45) is unrelated to Poes — its fields (require_references/eelv_tracking/
+    aggregate/preceding_breaths) are never filtered by the poes-gate below — so it stays
+    present for a flow-only signal set exactly as it does for the full one."""
     from respmech.ui.screens.preview_screen import PreviewScreen
     from respmech.ui.state import AppState
 
@@ -388,7 +395,7 @@ def test_wob_and_ptp_cards_are_hidden_without_poes(qapp, tmp_path, monkeypatch):
     assert "Pressure–time product" not in seen["titles"]
     assert "Other" not in seen["titles"], "the hidden fields must not resurface as 'Other'"
     assert seen["titles"] == {"Breath detection", "Volume", "End-expiratory trend",
-                              "Sampling", "Per-file overrides"}
+                              "Sampling", "Lung volumes", "Per-file overrides"}
     pv.shutdown()
 
     full = synth_settings(str(tmp_path), data_out=_OUT)

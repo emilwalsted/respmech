@@ -15,7 +15,6 @@ from PySide6.QtCore import Qt
 
 import pyqtgraph as pg
 
-from respmech.core.analysis.segments import remap_segment_number
 from respmech.core.settings import SeparatorEntry
 from respmech.ui.flow_layout import ElidingLabel
 from respmech.ui.plot_overlays import add_flow_background
@@ -323,6 +322,8 @@ class _SegmentsMixin:
         edit of an existing one — the same carried-over-state rule ``ExcludeEntry``/
         ``BreathTypeEntry`` already follow (see ``_set_breath_type`` in
         ``_mechanics.py``)."""
+        from respmech.core.analysis.segments import remap_segment_number  # noqa: PLC0415
+
         proc = self.state.settings.processing
         seg = proc.segmentation
         entry = next((e for e in seg.separators if e.file == file), None)
