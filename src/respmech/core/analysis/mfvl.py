@@ -632,3 +632,111 @@ def attach(*, fr_manoeuvres: dict, breaths: dict, tidal_breaths: list, filename:
                  "te_min_mfvl/ve_cap/ve_pct_cap/ve_reserve_pct are NaN for that breath")
 
     return notice, fev1_source
+
+
+# --------------------------------------------------------------------------- #
+# Tidal loops placed inside the MFVL (figure geometry; no new calculation)
+# --------------------------------------------------------------------------- #
+#: ``processing.breath_types`` kinds that carry a forced vital capacity.
+_FVC_KINDS = ("fvc", "ic_fvc")
+#: Points each phase (inspiration, expiration) is resampled to for the average tidal loop.
+_MEAN_LOOP_PHASE_POINTS = 100
+
+
+def fvc_typed_in_settings(settings) -> bool:
+    """``True`` when ``settings`` declares at least one breath typed ``fvc``/``ic_fvc``:
+    the settings-only test for "this analysis uses the FVC family", so a figure that needs
+    an MEFV curve can be planned before any data is loaded. It is a ceiling, not a promise
+    -- a file without such a breath still gets no figure (:func:`placed_tidal_loops`
+    returns ``None`` for it). Only breaths typed in the file that is analysed count,
+    because :func:`attach` builds the curve from the file's own typed breaths."""
+    return any(getattr(e, "kind", None) in _FVC_KINDS
+               for e in getattr(settings.processing, "breath_types", ()))
+
+
+def _mean_loop(loops: list[tuple[np.ndarray, np.ndarray, int]]):
+    """Mean of several ``(x, flow, n_insp)`` loops (``n_insp`` = samples of the
+    inspiratory phase, which comes first). Inspiration and expiration are resampled
+    SEPARATELY onto ``_MEAN_LOOP_PHASE_POINTS`` points each, by phase fraction, so the
+    switch between the phases stays a corner even when breaths split their time
+    differently; a single fraction over the whole breath would smear it. A display
+    construct only."""
+    grid = np.linspace(0.0, 1.0, _MEAN_LOOP_PHASE_POINTS)
+    xs, fs_ = [], []
+    for x, flow, n_in in loops:
+        if n_in < 2 or x.size - n_in < 2:
+            continue
+        px, pf = [], []
+        for sl in (slice(0, n_in), slice(n_in, None)):
+            frac = np.linspace(0.0, 1.0, x[sl].size)
+            px.append(np.interp(grid, frac, x[sl]))
+            pf.append(np.interp(grid, frac, flow[sl]))
+        xs.append(np.concatenate(px))
+        fs_.append(np.concatenate(pf))
+    if not xs:
+        return None
+    return np.mean(xs, axis=0), np.mean(fs_, axis=0)
+
+
+def placed_tidal_loops(breaths, manoeuvres, mfvl_cfg, ic_cfg) -> dict | None:
+    """Everything a flow-volume figure needs to draw this file's tidal loops inside its
+    own MFVL, or ``None`` when the file has no usable typed FVC breath (or no tidal
+    breath to draw against it).
+
+    Reuses the resolved pieces :func:`attach` already builds the numbers from --
+    :func:`resolve_same_file_curve` (which curve, ``source='single'|'envelope'``) and
+    :func:`resolve_same_file_ic_op` -- so the picture can never place a loop differently
+    from the ``efl_pct`` column. The x axis is "volume below TLC" (0 at TLC, the MEFV
+    curve's own axis): ``x(t) = ic_op - (V(t) - vol_endexp)`` for a tidal breath, so the
+    end of expiration (EELV) sits at ``ic_op`` and the end of inspiration (EILV) at
+    ``ic_op - vt``.
+
+    Returns a dict: ``mefv_v``/``mefv_flow`` (the expiratory envelope), ``v_tlc``,
+    ``ic_op`` (``None`` without an IC reference: loops cannot be anchored to the TLC axis,
+    so ``loops`` is then empty and only the envelope is drawn), ``loops`` (one
+    ``(x, flow)`` per non-ignored tidal breath), ``mean`` (``(x, flow)`` or ``None``),
+    ``eelv``/``eilv`` (mean end-expiratory/end-inspiratory position on the x axis, or
+    ``None``; ``eelv`` is ``ic_op`` by construction, the same held-fixed
+    ``eelv_tracking='none'`` reading the columns use, so it shows no drift), and
+    ``in_domain_pct`` (share of the drawn samples inside the envelope's own volume range,
+    ``None`` without loops). A breath with a missing key, an empty phase or a non-finite
+    sample is skipped rather than blanking the mean."""
+    if not manoeuvres or not breaths:
+        return None
+    curve = resolve_same_file_curve(manoeuvres, breaths, mfvl_cfg)
+    if curve is None:
+        return None
+    mefv_v, mefv_flow, v_tlc, _rows = curve
+    tidal = [b for b in breaths.values() if not b.get("ignored")]
+    if not tidal:
+        return None
+    ic_op = resolve_same_file_ic_op(manoeuvres, ic_cfg)
+    loops: list[tuple[np.ndarray, np.ndarray]] = []
+    mean_items: list[tuple[np.ndarray, np.ndarray, int]] = []
+    eelv = eilv = None
+    in_domain_pct = None
+    if ic_op is not None:
+        for b in tidal:
+            try:
+                vol = _arr(b["volume"])
+                flow = _arr(b["flow"])
+                n_in = int(_arr(b["inspiration"]["volume"]).size)
+                vol_endexp = float(_arr(b["expiration"]["volume"])[-1])
+            except (KeyError, IndexError, TypeError):
+                continue                      # a half-built breath is skipped, not fatal
+            if vol.size < 2 or vol.size != flow.size:
+                continue
+            x = ic_op - (vol - vol_endexp)
+            if not (np.isfinite(x).all() and np.isfinite(flow).all()):
+                continue                      # one NaN must not blank the mean/EILV
+            loops.append((x, flow))
+            mean_items.append((x, flow, n_in))
+        if loops:
+            eelv = float(ic_op)
+            eilv = float(np.mean([x.min() for x, _f in loops]))
+            lo, hi = float(np.nanmin(mefv_v)), float(np.nanmax(mefv_v))
+            in_domain_pct = 100.0 * float(np.mean(
+                [np.mean((x >= lo) & (x <= hi)) for x, _f in loops]))
+    return {"mefv_v": mefv_v, "mefv_flow": mefv_flow, "v_tlc": float(v_tlc),
+            "ic_op": ic_op, "loops": loops, "mean": _mean_loop(mean_items),
+            "eelv": eelv, "eilv": eilv, "in_domain_pct": in_domain_pct}

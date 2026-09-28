@@ -1752,3 +1752,153 @@ def test_outlier_filter_skips_when_poes_mininsp_absent():
     assert len(per_breath) == 3
     assert "rms_col_2" in per_breath.columns
     assert average_row["file"].iloc[0] == "x.csv"
+
+
+# --------------------------------------------------------------------------- #
+# flow-volume (tidal in MFVL).pdf
+# --------------------------------------------------------------------------- #
+def _mfvl_settings(tmp_path, *, ic=True, fvc=True, **kw):
+    """The dedicated manoeuvre recording (tidal breathing + one IC + one FVC breath)."""
+    from respmech.core.settings import BreathTypeEntry
+    s = synth_settings(str(tmp_path), **kw)
+    s.input.files = "synth_manoeuvre_*.csv"
+    if ic:
+        s.processing.breath_types.append(
+            BreathTypeEntry(file="synth_manoeuvre_A.csv", breath=4, kind="ic"))
+    if fvc:
+        s.processing.breath_types.append(
+            BreathTypeEntry(file="synth_manoeuvre_A.csv", breath=7, kind="fvc"))
+    s.validate()
+    return s
+
+
+def test_mfvl_figure_job_is_planned_only_with_a_typed_fvc(tmp_path):
+    from respmech.core import plots
+    plain = synth_settings(str(tmp_path))
+    assert not any("MFVL" in label for label, _f, _s in plots.per_file_figure_jobs(plain))
+    with_fvc = _mfvl_settings(tmp_path)
+    jobs = plots.per_file_figure_jobs(with_fvc)
+    assert [sfx for label, _f, sfx in jobs if "MFVL" in label] == [
+        "flow-volume (tidal in MFVL).pdf"]
+    with_fvc.output.diagnostics.save_flow_volume = False
+    assert not any("MFVL" in label for label, _f, _s in plots.per_file_figure_jobs(with_fvc))
+    only_ic = _mfvl_settings(tmp_path, fvc=False)
+    assert not any("MFVL" in label for label, _f, _s in plots.per_file_figure_jobs(only_ic))
+
+
+def test_mfvl_figure_job_needs_flow_and_volume(tmp_path):
+    from respmech.core import plots
+    s = _mfvl_settings(tmp_path, channels={"poes": None, "pgas": None, "pdi": None,
+                                           "emg": [], "entropy": []})
+    assert any("MFVL" in label for label, _f, _s in plots.per_file_figure_jobs(s))
+    s.input.channels.flow = None
+    s.input.channels.volume = None
+    assert not any("MFVL" in label for label, _f, _s in plots.per_file_figure_jobs(s))
+
+
+@requires_synth()
+def test_mfvl_figure_is_in_the_plan_and_actually_written(tmp_path):
+    from respmech.core import plots
+    from respmech.core.io.plan import plan_outputs
+    from respmech.core.pipeline import run_batch
+
+    s = _mfvl_settings(tmp_path)
+    for flag in ("save_pv_average", "save_pv_individual", "save_raw", "save_trimmed",
+                 "save_drift", "save_emg"):
+        setattr(s.output.diagnostics, flag, False)
+    plan = plan_outputs(s, [os.path.join(INPUT, "synth_manoeuvre_A.csv")])
+    name = "synth_manoeuvre_A.csv – flow-volume (tidal in MFVL).pdf"
+    assert any(p.endswith(name) for p in plan.all_paths())
+
+    result = run_batch(s)
+    written, failures = plots.write_figures(result, s, str(tmp_path))
+    assert not failures
+    pdfs = [p for p in written if p.endswith(name)]
+    assert len(pdfs) == 1 and os.path.getsize(pdfs[0]) > 0
+    assert _rel(pdfs, tmp_path) <= set(plan.all_paths())
+
+
+@requires_synth()
+def test_mfvl_figure_without_an_ic_reference_still_draws_the_envelope(tmp_path):
+    from respmech.core import plots
+    from respmech.core.pipeline import run_batch
+
+    s = _mfvl_settings(tmp_path, ic=False)
+    fr = run_batch(s).files["synth_manoeuvre_A.csv"]
+    out = str(tmp_path / "fv.pdf")
+    assert plots._flow_volume_mfvl(fr, "synth_manoeuvre_A.csv", out, s) == out
+    assert os.path.getsize(out) > 0
+
+
+@requires_synth()
+def test_mfvl_figure_is_none_for_a_file_without_a_resolved_fvc(tmp_path):
+    from respmech.core import plots
+    from respmech.core.pipeline import run_batch
+
+    s = _mfvl_settings(tmp_path)
+    s.input.files = "synth_case_A.csv"                 # typed entries name another file
+    fr = run_batch(s).files["synth_case_A.csv"]
+    assert plots._flow_volume_mfvl(fr, "synth_case_A.csv", str(tmp_path / "x.pdf"), s) is None
+    assert not (tmp_path / "x.pdf").exists()
+
+
+def _drawn(placed):
+    from matplotlib.figure import Figure
+    from respmech.core import plots
+    ax = Figure().add_subplot(111)
+    plots.draw_flow_volume_mfvl(ax, placed)
+    return ax
+
+
+@requires_synth()
+def test_mfvl_figure_draws_every_tidal_loop_the_mean_and_the_markers(tmp_path):
+    from respmech.core.analysis import mfvl
+    from respmech.core.pipeline import run_batch
+    from respmech.core.settings import ExcludeEntry
+
+    s = _mfvl_settings(tmp_path)
+    s.processing.exclude_breaths.append(
+        ExcludeEntry(
+            file="synth_manoeuvre_A.csv", breaths=[2]))
+    fr = run_batch(s).files["synth_manoeuvre_A.csv"]
+    placed = mfvl.placed_tidal_loops(fr.breaths, fr.manoeuvres, s.processing.mfvl,
+                                     s.processing.lung_volume.ic)
+    n_tidal = sum(1 for b in fr.breaths.values() if not b["ignored"])
+    assert len(placed["loops"]) == n_tidal and fr.breaths[2]["ignored"]
+    ax = _drawn(placed)
+    labels = [ln.get_label() for ln in ax.lines]
+    assert "MFVL" in labels and "average tidal breath" in labels
+    # one line per loop, plus the mean, the envelope, two dotted markers and the zero line
+    assert len(ax.lines) == n_tidal + 5
+    assert {t.get_text().strip() for t in ax.texts} >= {"EELV", "EILV"}
+
+
+def test_mfvl_figure_notes_a_missing_ic_and_loops_outside_the_envelope():
+    from respmech.core.analysis import mfvl
+    import numpy as np
+    env = {"mefv_v": np.array([0.0, 2.0]), "mefv_flow": np.array([3.0, 0.0]), "v_tlc": 2.0,
+           "loops": [], "mean": None, "eelv": None, "eilv": None}
+    ax = _drawn({**env, "ic_op": None, "in_domain_pct": None})
+    assert any("inspiratory-capacity reference" in t.get_text() for t in ax.texts)
+    x = np.array([2.5, 3.0]); f = np.array([0.1, 0.1])
+    ax = _drawn({**env, "ic_op": 3.0, "loops": [(x, f)], "mean": (x, f), "eelv": 3.0,
+                 "eilv": 2.5, "in_domain_pct": 0.0})
+    assert any("outside" in t.get_text() for t in ax.texts)
+    ax = _drawn({**env, "ic_op": 3.0, "loops": [(x, f)], "mean": (x, f), "eelv": 3.0,
+                 "eilv": 2.5, "in_domain_pct": 100.0})
+    assert not any("outside" in t.get_text() or "inspiratory" in t.get_text() for t in ax.texts)
+
+
+@requires_synth()
+def test_mfvl_figure_is_not_written_or_planned_when_switched_off(tmp_path):
+    from respmech.core import plots
+    from respmech.core.io.plan import plan_outputs
+    from respmech.core.pipeline import run_batch
+
+    s = _mfvl_settings(tmp_path)
+    s.output.diagnostics.save_flow_volume = False
+    plan = plan_outputs(s, [os.path.join(INPUT, "synth_manoeuvre_A.csv")])
+    assert not any("tidal in MFVL" in p for p in plan.all_paths())
+    written, failures = plots.write_figures(run_batch(s), s, str(tmp_path))
+    assert not failures and not any("tidal in MFVL" in p for p in written)
+

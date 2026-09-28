@@ -100,11 +100,18 @@ _FRIENDLY_SETTINGS_ERRORS = {
     'processing.lung_volume.ic.eelv_tracking must be "none" or "within_file"':
         "EELV tracking must be 'none' or 'within file' "
         f"({_SUBJECTS_LOCATION})",
+    # the MFVL fields live in Mechanics ▸ Advanced… ▸ Lung volumes.
+    'processing.mfvl.source must be "single" or "envelope"':
+        "MFVL source must be 'largest-FVC attempt' or 'envelope of all attempts' "
+        "(Preview & QC ▸ Mechanics ▸ Advanced… ▸ Lung volumes)",
 }
 #: messages whose text carries a dynamic suffix (e.g. "... at the analysis rate (500 Hz)")
 #: — matched by prefix, so the friendly text stands alone rather than gluing raw TOML
 #: notation onto a translated sentence.
 _FRIENDLY_PREFIXES = (
+    ("processing.mfvl.",
+     "An MFVL setting must not be negative (Preview & QC ▸ Mechanics ▸ Advanced… ▸ "
+     "Lung volumes; the presence threshold is in the analysis file)"),
     ("processing.volume.trend_peak_min_distance_s must be at least one sample",
      "Trend anchor — minimum spacing is smaller than one sample at the analysis rate "
      "(Preview & QC ▸ Mechanics ▸ Advanced… ▸ End-expiratory trend)"),
