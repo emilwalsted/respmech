@@ -1,0 +1,73 @@
+# V2_SCENARIOS golden fixture: 'flow_peepi_on'. The opt-in PEEPi / modified Campbell
+# columns (core.analysis.pressure, processing.pressure.peepi.enabled = true) over a
+# DEDICATED recording, tests/golden/input/synth_peepi_A.csv (own RNG stream and naming,
+# never matched by any other scenario's glob). Every breath but the first is preceded by
+# a 0.4 s end-expiratory pause of exactly zero flow whose last 0.25 s carries a linear
+# Poes fall of 3 cmH2O (Pgas 1 cmH2O over the same interval), so the segmenter's own
+# boundary lands in the pause (buffer = 800 > pause) up to 400 samples before flow
+# starts, and peepi_dyn / peepi_corr have exact analytical answers (3.0 / 2.0, pinned by
+# tests/unit/test_peepi.py and test_golden.py). Breath #1 has no predecessor: NaN.
+#
+# Full pressure set, no EMG/entropy (the feature reads only flow and the pressures).
+# The thresholds are the plan's STARTING values, unmeasured on real recordings.
+#
+# v2-only (processing.pressure has no legacy-dict shape), baked directly from the v2
+# core (golden_newcore.py --write, merged onto the committed file per the README). Do
+# not hand-edit golden_reference.json's "flow_peepi_on" entry.
+schema_version = 2
+
+[analysis]
+signals = ["flow", "poes", "pgas", "pdi"]
+
+[input]
+folder = "../input"
+files  = "synth_peepi_*.csv"
+
+[input.format]
+sampling_frequency = 1000
+decimal            = "."
+
+[input.channels]
+flow   = 5
+volume = 6
+poes   = 7
+pgas   = 8
+pdi    = 9
+
+[processing.segmentation]
+method = "flow"
+buffer = 800
+# Breath #1 has no leading pause (compute.trim starts the file at the first inspiratory
+# sample), so its inspiration (1.2 s) is shorter than the others' (1.6 s, pause included):
+# a synthetic-data property, not a truncated recording -- lower the advisory boundary
+# notice's threshold below that ratio so it does not fire. Advisory only, no number moves.
+boundary_notice_min_relative_duration = 0.5
+
+[processing.segmentation.peak]
+height     = 0.1
+distance_s = 0.1
+width_s    = 0.2
+
+[processing.volume]
+integrate_from_flow = false
+correct_drift       = true
+correct_trend       = false
+
+[processing.wob]
+calc_from          = "average"
+avg_resampling_obs = 300
+
+[processing.pressure.peepi]
+enabled          = true
+search_window_s  = 1.0
+smooth_s         = 0.05
+onset_slope_frac = 0.1
+min_deflection   = 0.5
+
+[output]
+folder = "output"
+
+[output.data]
+save_average          = true
+save_breath_by_breath = true
+save_processed        = false

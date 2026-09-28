@@ -429,6 +429,79 @@ def make_ic_reference_file(path, seed, lead_expiration_s=0.3):
     return N
 
 
+# --- PEEPi recordings (the ``flow_peepi_on`` golden scenario) ------------------------------
+#
+# Every breath but the first is preceded by an end-expiratory pause: ``PEEPI_PAUSE_N``
+# samples of flow EXACTLY zero, whose last ``PEEPI_RAMP_N`` samples carry the pre-flow
+# deflection -- Poes falling linearly by ``PEEPI_DROP`` cmH2O (Pgas by ``PEEPI_PGAS_DROP``
+# over the same interval) and ending on the last pause sample, so the first inspiratory
+# flow sample (``t_flow``) sits exactly ``PEEPI_DROP`` below the flat end-expiratory
+# level. Everything is piecewise linear or a sin^2 hump, so the analytic answer
+# (peepi_dyn == PEEPI_DROP, peepi_corr == PEEPI_DROP - PEEPI_PGAS_DROP) is exact and the
+# dedicated ``synth_peepi_*.csv`` naming keeps the file out of every other scenario's glob.
+# The first breath has no pause (``compute.trim`` starts the file at the first inspiratory
+# sample) and no predecessor, which is the "breath #1 is NaN" case.
+PEEPI_DROP = 3.0
+PEEPI_PGAS_DROP = 1.0
+PEEPI_PAUSE_N = 400
+PEEPI_RAMP_N = 250
+PEEPI_INSP_N = 1200
+PEEPI_EXP_N = 1300
+_PEEPI_POES_BASE = -5.0
+_PEEPI_PGAS_BASE = 8.0
+
+
+def peepi_channels(n_breaths, *, pause_n=PEEPI_PAUSE_N, ramp_n=PEEPI_RAMP_N,
+                   drop=PEEPI_DROP, pgas_drop=PEEPI_PGAS_DROP, vt_l=0.8,
+                   insp_n=PEEPI_INSP_N, exp_n=PEEPI_EXP_N):
+    """Noise-free ``flow, volume, poes, pgas`` arrays for ``n_breaths`` breaths (see above).
+    Flow is strictly negative through inspiration, strictly positive through expiration and
+    exactly zero in the pauses, so ``compute.separateintobreathsbyflow`` places its
+    boundaries deterministically."""
+    ki = (np.arange(insp_n) + 0.5) / insp_n
+    ke = (np.arange(exp_n) + 0.5) / exp_n
+    insp_flow = -vt_l * np.pi / (2 * insp_n / FS) * np.sin(np.pi * ki)
+    exp_flow = vt_l * np.pi / (2 * exp_n / FS) * np.sin(np.pi * ke)
+    base_p, base_g = _PEEPI_POES_BASE, _PEEPI_PGAS_BASE
+    flow, poes, pgas = [], [], []
+    for b in range(n_breaths):
+        if b > 0:
+            flat = pause_n - ramp_n
+            m = np.arange(1, ramp_n + 1) / ramp_n
+            flow.append(np.zeros(pause_n))
+            poes.append(np.concatenate([np.full(flat, base_p), base_p - drop * m]))
+            pgas.append(np.concatenate([np.full(flat, base_g + pgas_drop),
+                                        base_g + pgas_drop * (1 - m)]))
+        s_i = np.sin(np.pi * np.arange(insp_n) / insp_n) ** 2
+        s_e = np.sin(np.pi * np.arange(exp_n) / exp_n) ** 2
+        first = b == 0
+        p0 = base_p - (0.0 if first else drop)
+        g0 = base_g + (pgas_drop if first else 0.0)
+        flow += [insp_flow, exp_flow]
+        poes += [p0 - 8.0 * s_i, base_p + 2.0 * s_e]
+        pgas += [g0 + 1.5 * s_i, base_g + pgas_drop + 3.0 * s_e]
+    flow = np.concatenate(flow)
+    volume = np.concatenate([[0.0], np.cumsum(-flow[:-1])]) / FS
+    return flow, volume, np.concatenate(poes), np.concatenate(pgas)
+
+
+def make_peepi_file(path, seed, n_breaths=6):
+    """Write a dedicated ``synth_peepi_*.csv`` recording (full channel set, own RNG stream)
+    built from :func:`peepi_channels`."""
+    rng = np.random.default_rng(seed)
+    flow, vol, poes, pgas = peepi_channels(n_breaths)
+    pdi = pgas - poes
+    N = len(flow)
+    emg = [rng.normal(0, 0.002 + 0.0005 * ch, N) for ch in range(3)]
+    ent = [rng.normal(0, 0.1, N) for ch in range(3)]
+    time = np.arange(N) / FS
+    header = "time,EMG1,EMG2,EMG3,flow,volume,poes,pgas,pdi,ENT1,ENT2,ENT3"
+    data = np.column_stack([time, emg[0], emg[1], emg[2], flow, vol, poes, pgas, pdi,
+                            ent[0], ent[1], ent[2]])
+    np.savetxt(path, data, delimiter=",", header=header, comments="", fmt="%.10g")
+    return N
+
+
 if __name__ == "__main__":
     here = os.path.dirname(os.path.abspath(__file__))
     indir = os.path.join(here, "input")
@@ -453,3 +526,6 @@ if __name__ == "__main__":
     n7 = make_ic_reference_file(os.path.join(indir, "synth_crossfile_ic.csv"), seed=55502)
     print(f"Wrote synth_crossfile_stage.csv ({n6} samples), "
          f"synth_crossfile_ic.csv ({n7} samples, IC=breath #{MANOEUVRE_CROSSFILE_IC_BREATH_NO})")
+
+    n8 = make_peepi_file(os.path.join(indir, "synth_peepi_A.csv"), seed=44401)
+    print(f"Wrote synth_peepi_A.csv ({n8} samples, pre-flow drop {PEEPI_DROP} cmH2O)")
