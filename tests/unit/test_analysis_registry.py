@@ -17,6 +17,16 @@ from respmech.core.analysis.signals import Capabilities
 # reclassified a column that is already shipping — see
 # test_unit_for_is_unchanged_for_every_current_golden_column.
 _GOLDEN_UNIT_SNAPSHOT = {
+    # emg_burst neural timing and per-file burst QC (core.analysis.segments), golden
+    # scenario emg_only_burst -- explicit registry units, none reachable through _RULES
+    'ti_emg': 's',
+    'te_emg': 's',
+    'ttot_emg': 's',
+    'ti_ttot_emg': '—',
+    'bf_emg': 'min⁻¹',
+    'emg_seg_n_bursts': '',
+    'emg_seg_burst_frac': '—',
+    'emg_seg_contrast': '—',
     # opt-in PEEPi columns (core.analysis.pressure), golden scenario flow_peepi_on
     'peepi_dyn': 'cmH₂O',
     'peepi_pgas_drop': 'cmH₂O',
