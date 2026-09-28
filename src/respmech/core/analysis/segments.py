@@ -37,7 +37,11 @@ from collections import OrderedDict
 
 import numpy as np
 
-from respmech.core import emg as emglib
+# NB ``core.emg`` (``rolling_rms``) is imported lazily inside the one function that needs
+# it: core.emg imports scipy.signal at module level, which pulls scipy.interpolate along,
+# and this module is imported at module level by Preview's EMG-segments tab -- so a
+# top-level import here put scipy on the app's synchronous GUI-startup path (see
+# tests/unit/test_startup_imports.py). Everything else here is numpy-only.
 
 
 class EmgSegmentationError(ValueError):
@@ -117,6 +121,7 @@ def _attach_whole_file_rms_diagnostics(segment: OrderedDict, rms_s: float, fs: f
     emgcols = segment['emgcols']
     if len(emgcols) == 0:
         return
+    from respmech.core import emg as emglib  # noqa: PLC0415  (see the module note)
     n_ch = np.asarray(emgcols).shape[1]
     rms_max, t_rms_max, rms_top3 = [], [], []
     for ch in range(n_ch):

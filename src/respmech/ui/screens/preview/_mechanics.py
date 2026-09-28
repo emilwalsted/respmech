@@ -26,7 +26,10 @@ from respmech.core.analysis.references import resolve_reference
 from respmech.core.analysis.signals import Capabilities
 from respmech.core.settings import (BreathRef, BreathTypeEntry, ExcludeEntry,
                                     GroupReferenceEntry, ReferenceEntry)
-from respmech.core.summary import group_key
+# NB ``core.summary.group_key`` is imported lazily at its two use sites below (the
+# breath context menu and ``_set_reference``): core.summary imports pandas at module
+# level, and this mixin is on the app's synchronous GUI-startup import path -- see
+# tests/unit/test_startup_imports.py and the same deferral in ui/manifest.py.
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
 from respmech.ui import plot_perf
@@ -1907,6 +1910,7 @@ class _MechanicsMixin:
             if can_ref else
             "Type this breath as an IC manoeuvre (or IC + FVC) first.")
         if name:
+            from respmech.core.summary import group_key  # noqa: PLC0415  (see the import note)
             group = group_key(name, self.state.settings)
             a_file = ref_for.addAction("This file")
             a_file.triggered.connect(
@@ -1972,6 +1976,7 @@ class _MechanicsMixin:
             _point_file_at(file)
             where = "this file"
         elif scope == "group":
+            from respmech.core.summary import group_key  # noqa: PLC0415  (see the import note)
             group = group_key(file, self.state.settings)
             entry = next((e for e in proc.reference_defaults if e.group == group), None)
             if entry is None:

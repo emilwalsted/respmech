@@ -318,9 +318,12 @@ def test_the_mechanics_card_left_setup_for_the_preview_tab(qapp, tmp_path):
     from PySide6.QtWidgets import QGroupBox
     sc = _settings_screen(qapp, tmp_path)
     titles = {g.title() for g in sc.findChildren(QGroupBox)}
-    # Setup is lean now: Input, Channels, Output, and the conditional Sample entropy card.
+    # Setup is lean now: Input, Channels, Output, the conditional Sample entropy card and
+    # the read-only "Subjects && lung volumes" card (a QGroupBox title keeps the raw
+    # "&&", the mnemonic-escaped form -- see CLAUDE.md on the single-& guard).
     assert "Mechanics" not in titles and "Advanced (rarely changed)" not in titles
-    assert titles == {"Input", "Channels", "Output", "Sample entropy"}
+    assert titles == {"Input", "Channels", "Output", "Sample entropy",
+                      "Subjects && lung volumes"}
     pv = _preview(qapp, tmp_path)
     assert hasattr(pv, "btn_mech_advanced"), "the Preview Mechanics tab hosts Advanced…"
     pv.shutdown()
@@ -373,7 +376,8 @@ def test_wob_and_ptp_cards_are_hidden_without_poes(qapp, tmp_path, monkeypatch):
     Poes-less analysis) — both cards drop out of the Mechanics — advanced… dialog for a
     Flow-only signal set, and come back the moment Poes rejoins it. The other cards this
     ticket does not touch (Breath detection, Volume, End-expiratory trend, Sampling,
-    Per-file overrides) must stay exactly as many as before."""
+    Lung volumes, Per-file overrides) must stay exactly as many as before — Lung volumes
+    included, since operating lung volumes need only a volume trace, never Poes."""
     from respmech.ui.screens.preview_screen import PreviewScreen
     from respmech.ui.state import AppState
 
@@ -388,7 +392,7 @@ def test_wob_and_ptp_cards_are_hidden_without_poes(qapp, tmp_path, monkeypatch):
     assert "Pressure–time product" not in seen["titles"]
     assert "Other" not in seen["titles"], "the hidden fields must not resurface as 'Other'"
     assert seen["titles"] == {"Breath detection", "Volume", "End-expiratory trend",
-                              "Sampling", "Per-file overrides"}
+                              "Sampling", "Lung volumes", "Per-file overrides"}
     pv.shutdown()
 
     full = synth_settings(str(tmp_path), data_out=_OUT)

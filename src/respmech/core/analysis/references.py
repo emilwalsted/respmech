@@ -27,7 +27,13 @@ import os
 import numpy as np
 
 from respmech.core.settings import BreathRef, Settings
-from respmech.core.summary import group_key
+
+# NB ``group_key`` is imported lazily inside ``resolve_reference``/``check_links`` below.
+# It needs nothing but ``re``, but ``core.summary`` imports pandas at ITS module level, and
+# this module is imported at module level by the GUI (Setup, Preview's Mechanics tab, the
+# reference picker) -- so a top-level import here silently put pandas on the app's
+# synchronous startup path, exactly what tests/unit/test_startup_imports.py guards
+# against. Same deferral as ``ui/manifest.py::group_readout`` and ``ui/workers.py``.
 
 
 class ReferenceLinkError(ValueError):
@@ -103,6 +109,7 @@ def resolve_reference(file: str, slot: str, settings: Settings) -> BreathRef | N
                 return val
             break                      # this file HAS an entry; only this slot is unset
 
+    from respmech.core.summary import group_key  # noqa: PLC0415  (see the module note)
     group = group_key(file, settings)
     for g in settings.processing.reference_defaults:
         if g.group == group:
@@ -202,6 +209,7 @@ def check_links(settings: Settings, filenames: list[str], *,
         for slot in REFERENCE_SLOTS:
             _check_one_ref(cautions, label, slot, getattr(r, slot), names, settings)
 
+    from respmech.core.summary import group_key  # noqa: PLC0415  (see the module note)
     seen_groups = {group_key(n, settings) for n in names}
 
     for g in settings.processing.reference_defaults:

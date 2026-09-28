@@ -34,7 +34,13 @@ def test_full_variant_is_the_default_and_hash_pinned(tmp_path):
     desc = write_sample_recording(str(tmp_path))
     assert desc["variant"] == "full"
     assert desc["filename"] == FILENAME
-    digest = hashlib.sha256(open(desc["path"], "rb").read()).hexdigest()
+    # ``np.savetxt`` writes in TEXT mode, so on Windows every "\n" lands on disk as
+    # "\r\n" and the raw bytes hash differently there (measured: the Windows digest is
+    # exactly the CRLF rendering of this same file). Normalise the line endings before
+    # hashing -- the pin is about the numbers and the CSV formatting, which are identical
+    # on every platform, not about the OS's newline convention.
+    raw = open(desc["path"], "rb").read().replace(b"\r\n", b"\n")
+    digest = hashlib.sha256(raw).hexdigest()
     assert digest == _FULL_SHA256, (
         "the 'full' sample recording's bytes changed -- if this is deliberate, update "
         "_FULL_SHA256 here and say why in the commit/CHANGELOG, since other tests and "

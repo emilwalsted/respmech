@@ -61,19 +61,32 @@ def test_run_batch_aborts_inside_the_mechanics_loop(tmp_path):
     from respmech.core.pipeline import run_batch
     s = synth_settings(str(tmp_path),
                        data_out={"saveaveragedata": True, "savebreathbybreathdata": True})
-    calls = {"n": 0}
+    # The checker flips True only once run_batch has actually ENTERED the file (its own
+    # ``file_start`` progress event), never on a call count: every guard run_batch checks
+    # before the main loop (the noise-profile build, the cross-file reference forepass and
+    # its post-forepass check, the per-file guard) answers False and returns silently on
+    # True -- so a count-based flip lands on one of those and the run ends with a quiet
+    # "cancelled" return instead of the in-file Cancelled this test is about. That is
+    # exactly how this test went red when the forepass added one more pre-file guard.
+    entered = {"file": False}
+    calls = {"after_entry": 0}
+
+    def on_progress(ev):
+        if ev.kind == "file_start":
+            entered["file"] = True
 
     def cc():
-        calls["n"] += 1
-        return calls["n"] > 1        # False on the pre-file guard (enter the file); True once inside
+        if entered["file"]:
+            calls["after_entry"] += 1
+        return entered["file"]
 
     with pytest.raises(Cancelled):
-        run_batch(s, cancel_check=cc, only_files=["synth_case_A.csv"])
-    # proves the abort came from an IN-FILE checkpoint (the per-breath loop), not the between-files
-    # guard alone: that guard is the 1st call and returned False, so the raise needed a 2nd check.
-    assert calls["n"] >= 2
+        run_batch(s, progress=on_progress, cancel_check=cc, only_files=["synth_case_A.csv"])
+    # proves the abort came from an IN-FILE checkpoint (segmentation / the per-breath loop),
+    # not a pre-file guard: every check answered False until the file was entered, and at
+    # least one check ran after that -- the one that raised.
+    assert entered["file"] and calls["after_entry"] >= 1
 
     # default path (no checker) still runs the file to completion -> byte-identical golden path
-    calls["n"] = 0
     result = run_batch(s, cancel_check=None, only_files=["synth_case_A.csv"])
     assert result.files and "synth_case_A.csv" in result.files
