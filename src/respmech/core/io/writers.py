@@ -789,6 +789,17 @@ def _write_run_report(result, settings, outputfolder: str,
         L.append("  Breath types:            " + "; ".join(parts))
     else:
         L.append("  Breath types:            none")
+    # Which files have a manual repair of the automatic flow-/volume-based
+    # segmentation configured -- the STUDY-WIDE setting, same register as
+    # Breath-count overrides/Excluded breaths/Breath types above (an entry with both
+    # lists empty is a no-op the UI could still leave behind, same guard those three
+    # already use; see SegmentationOverrideEntry's _CARRIED_KINDS row).
+    ov_entries = [e for e in settings.processing.segmentation.overrides if e.cut_s or e.join_s]
+    if ov_entries:
+        L.append("  Segmentation overrides:  " + "; ".join(
+            f"{e.file}: {len(e.cut_s)} cuts, {len(e.join_s)} joins" for e in ov_entries))
+    else:
+        L.append("  Segmentation overrides:  none")
     # M-35: what this analysis's cross-file reference SETTINGS configure (per-file and
     # per-group IC/FVC/baseline/max-effort links) -- same "what is configured" register
     # as Breath-count overrides/Excluded breaths/Breath types above; what actually

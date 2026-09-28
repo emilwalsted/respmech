@@ -185,6 +185,66 @@ def test_the_segments_action_band_fits_on_windows_metrics(qapp, tmp_path, window
     win.close()
 
 
+def test_the_mech_action_band_fits_on_windows_metrics(qapp, tmp_path, windows_metrics):
+    """A THIRD button was added to Mechanics' own action band ('Place separators',
+    between the squeezable window label and the process button) — the flow-bearing
+    twin of the segments tab's own button, reusing the exact same button object
+    (checkable, own armed flag) on a different tab. A widget silently dropped from the
+    layout would still pass a bare ratio check (a smaller row squeezes just as easily),
+    so the element count and the new button's presence are asserted explicitly first.
+
+    This band's ratio ceiling is NOT ``_WRAPPED`` (0.65): unlike the segments band
+    (one squeezable chip + only TWO buttons), this one carries a THIRD fixed-width
+    button ('Export Campbell…', pre-existing, not renamed here —
+    ``test_flow_only.py`` pins its exact text) that cannot itself shrink, and Qt's
+    minimumSizeHint for a plain QHBoxLayout is the literal SUM of every item's own
+    minimum regardless of stretch factor — so three non-shrinking buttons alone push
+    the floor higher, as a fraction of natural, than two do, with no antipattern
+    involved (measured here: 778/1109 = 0.70, comfortably below "cannot squeeze at
+    all" = 1.0, and the band's own ~778 px floor is nowhere near forcing the
+    1280 px laptop ceiling ``test_window_minimum_fits_a_laptop_screen`` already
+    guards at the whole-window level). 0.75 gives real margin above that measured
+    0.70 without pretending a 3-button row squeezes as well as a 2-button one."""
+    import copy
+
+    _WRAPPED_MECH = 0.75
+
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.workers import BatchWorker
+
+    s = synth_settings(str(tmp_path), data_out=_DATA_OUT)   # default flow-bearing set
+    win = MainWindow(AppState(s))
+    win.resize(1200, 800)
+    win.show()
+    for _ in range(6):
+        qapp.processEvents()
+    pv = win.preview_screen
+    pv.file_rail.select_filename("synth_case_A.csv")
+    snap = copy.deepcopy(pv.state.settings)
+    worker = BatchWorker(snap, write=False, only_files=["synth_case_A.csv"])
+    captured = {}
+    worker.finished.connect(lambda r: captured.update(result=r))
+    worker.run()
+    pv._on_batch_result(captured["result"])
+    for _ in range(6):
+        qapp.processEvents()
+
+    band = pv._mech_action_band
+    assert band.layout().count() == 6   # qc chip, spacing, window label, 3 buttons
+    assert pv.btn_place_overrides.parent() is band
+
+    natural, floor = band.sizeHint().width(), band.minimumSizeHint().width()
+    assert natural > 100, f"the mech action band reports a {natural} px natural width"
+    assert floor < natural * _WRAPPED_MECH, (
+        f"the mech action band demands {floor} px of its {natural} px natural width on "
+        f"Windows metrics ({floor / natural:.2f} of natural, ceiling {_WRAPPED_MECH}) — "
+        f"a regression beyond this band's own three-fixed-button floor")
+    assert floor < _NARROWEST_SCREEN, (
+        f"the mech action band alone demands {floor} px — more than the "
+        f"{_NARROWEST_SCREEN} px narrowest screen the app must fit on")
+    win.close()
+
+
 def test_the_emg_strips_wrap_rather_than_summing_their_chips(qapp, tmp_path):
     """The specific regression: the EMG subtab pages must not demand the sum of their chips.
 

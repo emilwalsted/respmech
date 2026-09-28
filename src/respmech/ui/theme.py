@@ -85,6 +85,12 @@ _PLOT_LIGHT = {
     "breath_rest_brush": (80, 90, 160, 70), "breath_rest_label": (80, 90, 160),
     "breath_other_brush": (140, 100, 60, 70), "breath_other_label": (140, 100, 60),
     "separator": (150, 165, 180), "noise_region": (44, 110, 155, 45),
+    # Manual segmentation-repair (cut/join) boundary markers on the Mechanics
+    # stack -- a magenta distinct from every other hue in this table (checked >= ~40
+    # units of Euclidean RGB distance, same convention as the breath-kind colours
+    # above), so an override marker never reads as an ordinary EMG-only separator
+    # (which uses "separator" above, a different tab).
+    "segmentation_override": (200, 40, 140),
     "raw_trace": (150, 165, 180), "noise_trace": (90, 150, 200),
     # Legend backing, kept for any future pyqtgraph legend: the EMG working views that
     # used to read it now name their traces in the panel band instead (_set_trace_key).
@@ -115,6 +121,7 @@ _PLOT_DARK = {
     "breath_rest_brush": (150, 160, 230, 62), "breath_rest_label": (150, 160, 230),
     "breath_other_brush": (206, 168, 120, 62), "breath_other_label": (206, 168, 120),
     "separator": (98, 112, 128), "noise_region": (110, 172, 224, 55),
+    "segmentation_override": (235, 90, 150),
     "raw_trace": (128, 140, 156), "noise_trace": (118, 176, 224),
     "legend_bg": (22, 27, 33, 220),   # near-opaque dark backing so legend text stays legible over fills
     "mpl_bg": "#14181D",

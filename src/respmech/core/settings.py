@@ -146,6 +146,35 @@ class SeparatorEntry:
 
 
 @dataclass
+class SegmentationOverrideEntry:
+    """One file's manual repair of the AUTOMATIC flow-/volume-based breath
+    segmentation — reparation of a mis-detected boundary, never a new
+    segmentation method. Contrast :class:`SeparatorEntry`, which REPLACES the whole
+    boundary list for an EMG-only ``separators`` analysis: this entry only ADJUSTS the
+    boundary list the automatic flow-/volume-based detector already produced.
+
+    ``cut_s`` inserts a new breath boundary at a given time (splitting one detected
+    breath into two, when a flat/leaky expiration was under-split into one breath that
+    is really two). ``join_s`` names a time near an EXISTING automatic boundary and
+    removes the nearest one within tolerance (merging the two breaths on either side
+    into one, when a flow wobble mid-breath was over-split into two). Both are absolute
+    seconds into the recording, the same clock ``breath['time']``/``SeparatorEntry.
+    times_s`` already use. See ``core.compute.apply_segmentation_overrides`` for
+    exactly how the two combine and are re-split into phases, and
+    ``Settings.validate()`` for the (non-negative, strictly increasing within EACH
+    list) form check.
+
+    ``folder`` is the same carried-over-state provenance tag as every other tagged
+    kind — see ``_CARRIED_KINDS`` below; stamped only when the entry is first created,
+    exactly like ``SeparatorEntry.folder``/``ExcludeEntry.folder``.
+    """
+    file: str
+    cut_s: list[float] = field(default_factory=list)
+    join_s: list[float] = field(default_factory=list)
+    folder: str | None = None
+
+
+@dataclass
 class SegmentationSettings:
     method: str = "flow"                 # "flow" | "volume" | "whole_file" | "separators"
     buffer: int = 800
@@ -154,6 +183,14 @@ class SegmentationSettings:
     # file; a file with no entry here under "separators" is treated as whole_file --
     # 0 separators is a legal, explicit way to say "one segment").
     separators: list[SeparatorEntry] = field(default_factory=list)
+    # Manual repair (cut/join) of the AUTOMATIC flow-/volume-based segmentation for a
+    # flow-bearing analysis — only ever consulted when `method` is "flow"/"volume";
+    # `separators` above is the EMG-only counterpart (no automatic detection to
+    # repair there), consulted only for "whole_file"/"separators". An entry present
+    # for a file not currently using the method it applies to is simply never read,
+    # the same "dormant, unconsulted" relationship `separators` already has with the
+    # other methods.
+    overrides: list[SegmentationOverrideEntry] = field(default_factory=list)
     # K-035 boundary-truncation quality notice (compute.trim_boundary_notices): how much
     # shorter than the file's own median a boundary breath's phase must be before it is
     # flagged as likely truncated by trim(). 0.8 was measured, not guessed (see that
@@ -742,6 +779,35 @@ class Settings:
                     "entry")
             seen_separator_files.add(se.file)
 
+        # SegmentationOverrideEntry (flow-/volume-bearing segmentation repair):
+        # same two-pass shape (form, then the one cross-entry conflict) as separators
+        # above, checked independently for `cut_s` and `join_s` -- each is its own
+        # sorted list, not one combined timeline the way SeparatorEntry.times_s is.
+        for i, oe in enumerate(seg.overrides):
+            if not isinstance(oe, SegmentationOverrideEntry):
+                raise SettingsError(
+                    f"processing.segmentation.overrides[{i}] must be a table with "
+                    "file, cut_s and join_s")
+            for field_name in ("cut_s", "join_s"):
+                times = getattr(oe, field_name)
+                if not isinstance(times, list) or any(
+                        isinstance(t, bool) or not isinstance(t, (int, float))
+                        or not math.isfinite(t) for t in times):
+                    raise SettingsError(
+                        f"processing.segmentation.overrides[{i}].{field_name} must be "
+                        "a list of numbers")
+                if any(t < 0 for t in times) or any(b <= a for a, b in zip(times, times[1:])):
+                    raise SettingsError(
+                        f"processing.segmentation.overrides[{i}].{field_name} must be "
+                        "non-negative and strictly increasing")
+        seen_override_files: set[str] = set()
+        for oe in seg.overrides:
+            if oe.file in seen_override_files:
+                raise SettingsError(
+                    f"processing.segmentation.overrides: {oe.file} has more than one "
+                    "entry")
+            seen_override_files.add(oe.file)
+
         if self.processing.wob.calc_from not in ("average", "individual"):
             raise SettingsError("processing.wob.calc_from must be 'average' or 'individual'")
         if not isinstance(self.processing.wob.avg_resampling_obs, int):
@@ -1192,6 +1258,11 @@ _CARRIED_KINDS: tuple[tuple[str, str, Callable[[Any], Any], Callable[[Any], None
     # otherwise be a no-op left behind by the UI).
     ("processing.segmentation.separators", "separator_files",
      lambda e: e.file, None),
+    # An override entry with both lists still empty is a no-op left behind by the
+    # UI (same guard as exclude_files' `if e.breaths`) — an entry only names its file
+    # once it actually adjusts something.
+    ("processing.segmentation.overrides", "segmentation_override_files",
+     lambda e: e.file if (e.cut_s or e.join_s) else None, None),
     # a reference entry always names a file worth reporting once it exists at
     # all, same reasoning as breath_types/separators above (an entry with every slot
     # still unset is still a deliberate placeholder the user created, not a no-op).
@@ -1249,6 +1320,10 @@ class CarriedOverState:
     @property
     def separator_files(self) -> list[str]:
         return self._by_kind.get("separator_files", [])
+
+    @property
+    def segmentation_override_files(self) -> list[str]:
+        return self._by_kind.get("segmentation_override_files", [])
 
     @property
     def reference_files(self) -> list[str]:
