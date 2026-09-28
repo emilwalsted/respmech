@@ -865,19 +865,25 @@ class Settings:
         if not isinstance(seg.buffer, int):
             raise SettingsError("processing.segmentation.buffer must be an integer")
         es = seg.emg
-        for name in ("window_s", "hop_s", "burst_min_s", "burst_smooth_s"):
+        # only the parameters of the CURRENT automatic method are checked: under any other
+        # method they are dormant, and the UI offers no place to correct them there
+        for name in {"fixed_windows": ("window_s", "hop_s"),
+                     "emg_burst": ("burst_min_s", "burst_smooth_s")}.get(seg.method, ()):
             v = getattr(es, name)
-            if isinstance(v, bool) or not isinstance(v, (int, float)) or not v > 0 \
-                    or not math.isfinite(v):
+            if isinstance(v, bool) or not isinstance(v, (int, float)) \
+                    or not 0 < v <= 1e6:
                 raise SettingsError(
-                    f"processing.segmentation.emg.{name} must be a positive number")
-        if (isinstance(es.burst_threshold_frac, bool)
+                    f"processing.segmentation.emg.{name} must be a positive number "
+                    "(at most 1e6 seconds)")
+        if seg.method == "emg_burst" and (
+                isinstance(es.burst_threshold_frac, bool)
                 or not isinstance(es.burst_threshold_frac, (int, float))
                 or not 0.0 < es.burst_threshold_frac < 1.0):
             raise SettingsError(
                 "processing.segmentation.emg.burst_threshold_frac must be between 0 and 1 "
                 "(exclusive)")
-        if (isinstance(es.burst_min_contrast, bool)
+        if seg.method == "emg_burst" and (
+                isinstance(es.burst_min_contrast, bool)
                 or not isinstance(es.burst_min_contrast, (int, float))
                 or not es.burst_min_contrast > 1.0 or not math.isfinite(es.burst_min_contrast)):
             raise SettingsError(
@@ -1045,6 +1051,11 @@ class Settings:
         if emg.noise.enabled:
             mode = resolve_noise_reference_mode(self)
             if mode == "unresolved":
+                raise SettingsError(
+                    "processing.emg.noise: no usable rest reference for an EMG-only "
+                    "signal set")
+            if (mode in ("interburst", "rest_segments")
+                    and not emg.noise.reference_file):
                 raise SettingsError(
                     "processing.emg.noise: no usable rest reference for an EMG-only "
                     "signal set")

@@ -10,7 +10,7 @@ for the installers themselves.
 **Tidal EMG-only recordings without separators.** The third question in the EMG-only signal
 set, 'Tidal breathing — detect bursts automatically', now works: each file is cut at the
 onset of every burst of inspiratory EMG activity, found on the envelope of the
-ECG-removed signal (a threshold with hysteresis, a minimum duration for a burst and for a
+ECG-removed signal (the raw signal when ECG removal is off; a threshold with hysteresis, a minimum duration for a burst and for a
 gap, after Hodges & Bui 1996). Every segment reports the neural timing of its own cycle
 under `ti_emg`, `te_emg`, `ttot_emg`, `ti_ttot_emg` and `bf_emg` (the last burst of a
 recording has no following onset, so only its `ti_emg` is filled in), and three per-file
@@ -23,7 +23,9 @@ bursts against those periods. `method = "fixed_windows"` (settings file) cuts eq
 windows instead, every `hop_s` seconds of `window_s` (5 s and 5 s by default). The window
 length, the step and the four burst thresholds are in Preview & QC ▸ EMG – segments ▸
 Advanced…, and the run report's Segmentation line names the method and the number of
-bursts found. The burst thresholds are starting values that have been checked on
+bursts found (the Provenance sheet has a row for the thresholds). Choosing the burst door
+also sets the noise reference to the periods between the bursts, unless a reference was
+already picked. The burst thresholds are starting values that have been checked on
 synthetic recordings only; look at the shaded segments before trusting them on real ones.
 
 **Pressure and EMG as a percentage of a maximal effort, and tension-time indices.** A new
