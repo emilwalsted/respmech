@@ -242,6 +242,8 @@ _CAMPBELL_YLABEL_VARIANTS = ("Oesophageal pressure  Poes (cmH₂O)", "Poes (cmH�
 #: tidal flow-volume loop, same axis-label ladder mechanics as the Campbell diagram above.
 _FV_XLABEL_VARIANTS = ("Lung volume (L)", "Volume (L)", "V (L)")
 _FV_YLABEL_VARIANTS = ("Flow (L/s)", "Flow")
+#: M-43: the same panel when the tidal loops sit inside the file's MFVL — TLC on the left.
+_MFVL_XLABEL_VARIANTS = ("Volume below TLC (L)", "Below TLC (L)", "V (L)")
 
 
 def _mech_channel_count(settings) -> int:
@@ -1015,6 +1017,30 @@ class _MechanicsMixin:
                         "How many tidal breaths right before the manoeuvre set its "
                         "end-expiratory baseline.",
                         lo=0, hi=1000, step=1)),
+            # M-43: the four MFVL fields the ticket names; efl_present_min_pct stays TOML-only.
+            ("mfvl", Field("source", "MFVL source", "choice",
+                          "processing.mfvl.source",
+                          "Which forced expiration the tidal breaths are placed against: the "
+                          "single attempt with the largest FVC, or the per-volume maximum flow "
+                          "across every attempt in the file.",
+                          options=[("Largest-FVC attempt", "single"),
+                                   ("Envelope of all attempts", "envelope")])),
+            ("mfvl", Field("efl_rel_tol", "EFL tolerance (relative)", "float",
+                          "processing.mfvl.efl_rel_tol",
+                          "A tidal sample counts as flow-limited when its flow reaches the MFVL "
+                          "flow at that volume minus this fraction (0 = it must reach the "
+                          "curve).",
+                          lo=0.0, hi=1.0, step=0.01, decimals=3)),
+            ("mfvl", Field("efl_abs_tol_lps", "EFL tolerance (absolute)", "float",
+                          "processing.mfvl.efl_abs_tol_lps",
+                          "Extra flow, in L/s, a tidal sample may fall short of the MFVL and "
+                          "still count as flow-limited.",
+                          lo=0.0, hi=10.0, step=0.01, decimals=3, suffix=" L/s")),
+            ("mfvl", Field("mvv_fev1_multiplier", "MVV = FEV1 ×", "float",
+                          "processing.mfvl.mvv_fev1_multiplier",
+                          "Multiplier that estimates maximal voluntary ventilation from FEV1 "
+                          "when no measured MVV is given (ATS/ACCP 2003 uses 40).",
+                          lo=0.0, hi=100.0, step=1.0, decimals=1)),
         ]
         # M-17 (R7): "Work of breathing" and "Pressure–time product" are meaningless without
         # a Poes trace — WOB/PTP are never computed for a Poes-less analysis (M-14's
@@ -1029,7 +1055,8 @@ class _MechanicsMixin:
             _hidden_without_poes = {"calc_from", "avg_resampling_obs", "baseline_window_s"}
             fields = [(grp, f) for grp, f in fields if f.key not in _hidden_without_poes]
         owner = {"seg": seg, "peak": peak, "vol": vol, "samp": samp, "wob": wob, "ptp": ptp,
-                "lv": s.processing.lung_volume, "ic": s.processing.lung_volume.ic}
+                "lv": s.processing.lung_volume, "ic": s.processing.lung_volume.ic,
+                "mfvl": s.processing.mfvl}
         values = {f.key: getattr(owner[grp], f.key) for grp, f in fields}
         # breath counts round-trip as one 'file = count' line each, edited as text
         bc_field = Field("breath_counts", "Breath-count overrides", "text",
@@ -1057,7 +1084,8 @@ class _MechanicsMixin:
             ("Sampling", ["resample", "resample_to_frequency"]),
             ("Pressure–time product", ["baseline_window_s"]),
             ("Lung volumes", ["require_references", "eelv_tracking", "aggregate",
-                              "preceding_breaths"]),
+                              "preceding_breaths", "source", "efl_rel_tol",
+                              "efl_abs_tol_lps", "mvv_fev1_multiplier"]),
             # not "Breath-count overrides" — the one field on this card is already called
             # that, and a card whose title repeats its only row reads like a mistake
             ("Per-file overrides", ["breath_counts"]),
@@ -2633,6 +2661,7 @@ class _MechanicsMixin:
             self._update_qc_overview(fr, chip=self.segments_qc_overview)
         else:
             self._fill_table(fr.breaths_table)
+            self._campbell_manoeuvres = fr.manoeuvres     # M-43: read by the flow-only branch
             self._draw_campbell_or_loop(fr.breaths)
             self._update_qc_overview(fr)                  # P16 QC line, for THIS file only
             self._fill_manoeuvres_table(fr.manoeuvres_table, fr.manoeuvres)
@@ -2716,6 +2745,7 @@ class _MechanicsMixin:
         file the user is no longer looking at, under that file's name. Clearing the figure
         and clearing what it was drawn from have to be the same act."""
         self._campbell_breaths = None
+        self._campbell_manoeuvres = None
         try:
             self.btn_export_fig.setEnabled(False)
         except Exception:                       # pragma: no cover - button may not exist yet
@@ -2766,8 +2796,54 @@ class _MechanicsMixin:
         caps = Capabilities.from_settings_or_none(self.state.settings)
         if caps is not None and caps.poes:
             self._draw_campbell(breaths, pal=pal)
+            return
+        # M-43: no Poes but a forced vital capacity typed in this file -> the tidal loops
+        # inside that file's own MFVL; anything else keeps the plain flow-volume loop.
+        placed = self._placed_mfvl(breaths)
+        if placed is not None:
+            self._draw_flow_volume_in_mfvl(breaths, placed, pal=pal)
         else:
             self._draw_flow_volume_loop(breaths, pal=pal)
+
+    def _placed_mfvl(self, breaths):
+        """``core.analysis.mfvl.placed_tidal_loops`` for the file just previewed, or ``None``
+        (no typed FVC, no tidal breath, or the placement itself failing: a preview must
+        degrade to the plain loop, never raise). Imported here so the compute core stays off
+        the startup path."""
+        manoeuvres = getattr(self, "_campbell_manoeuvres", None)
+        if not manoeuvres:
+            return None
+        from respmech.core.analysis import mfvl as _mfvl        # noqa: PLC0415
+        s = self.state.settings
+        try:
+            return _mfvl.placed_tidal_loops(breaths, manoeuvres, s.processing.mfvl,
+                                            s.processing.lung_volume.ic)
+        except Exception:                                       # noqa: BLE001
+            return None
+
+    def _draw_flow_volume_in_mfvl(self, breaths, placed, pal=None):
+        """The Campbell panel for a Poes-less analysis whose file carries a forced vital
+        capacity: the tidal loops drawn inside that file's MFVL (the same picture the
+        ``flow-volume (tidal in MFVL).pdf`` figure writes), in the panel's own theme."""
+        from respmech.core.plots import draw_flow_volume_mfvl   # noqa: PLC0415
+        self._campbell_breaths = breaths        # kept so the export can re-render it light
+        pal = _plot_pal() if pal is None else pal
+        fig = self.campbell.figure
+        fig.clear()
+        fig.set_facecolor(pal["mpl_bg"])
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(pal["mpl_bg"])
+        draw_flow_volume_mfvl(ax, placed, loop=pal["mpl_loop"], mean=pal["mpl_accent"],
+                              envelope=pal["fg"], marker=pal["mpl_zeroline"], label=pal["fg"])
+        ax.set_xlabel(_MFVL_XLABEL_VARIANTS[0])
+        ax.set_ylabel(_FV_YLABEL_VARIANTS[0])
+        _fit_compact_figure(
+            self.campbell, ax,
+            legend_kw={"loc": "upper right", "frameon": False, "fontsize": 7},
+            xlabel_variants=_MFVL_XLABEL_VARIANTS,
+            ylabel_variants=_FV_YLABEL_VARIANTS)
+        self.campbell.draw()
+        self.btn_export_fig.setEnabled(True)         # a diagram now exists to export
 
     def _draw_campbell(self, breaths, pal=None):
         self._campbell_breaths = breaths        # kept so the export can re-render it light

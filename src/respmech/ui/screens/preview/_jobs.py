@@ -178,7 +178,8 @@ def _kinds_for_settings_path(path, caps=None):
     # wob/ptp/entropy/breath_counts rule above rather than falling through to the wide
     # default).
     if (path.startswith("processing.references") or path.startswith("processing.reference_defaults")
-            or path.startswith("processing.lung_volume") or path.startswith("input.subjects")):
+            or path.startswith("processing.lung_volume") or path.startswith("processing.mfvl")
+            or path.startswith("input.subjects")):
         return frozenset(("batch",))
     # channels core / format / volume inverse+integrate (all applied inside load()),
     # channels.entropy (validated in every load path), input.folder/files,
