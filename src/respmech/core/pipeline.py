@@ -210,6 +210,33 @@ def _coupled_stft(cfg, fs_in, fs_out):
     return n_fft, hop_length, win_length
 
 
+def apply_resample_override(settings: Settings, s) -> "tuple | None":
+    """Mutate the legacy namespace ``s`` in place so every downstream ``_load()``/
+    :func:`segment_file` call resamples to ``processing.sampling.resample_to_frequency``
+    when ``processing.sampling.resample`` is on -- a no-op (``s`` untouched) when
+    resampling is off, or configured to the file's own native rate.
+
+    ``run_batch`` and the ``respmech breaths`` CLI (``cli.__main__.cmd_breaths``) both
+    call this, rather than each re-deriving the same two-line override: a caller that
+    built its own ``s`` (via ``core._legacy_ns.to_legacy_ns``) but skipped this call
+    would segment at the file's NATIVE rate while ``run_batch`` segments at the
+    RESAMPLED one -- a genuinely different array (and, since
+    ``processing.mechanics.breathseparationbuffer`` is a raw sample-count window, a
+    different real time window for the same segmentation decision). Returns the
+    ``(n_fft, hop_length, win_length)`` STFT override :func:`_build_noise_set` needs at
+    the new rate (``None`` when this call was a no-op) -- callers that never build a
+    noise profile (``cmd_breaths``) can simply discard it."""
+    fs_in = int(s.input.format.samplingfrequency)
+    if not settings.processing.sampling.resample:
+        return None
+    fs_out = int(settings.processing.sampling.resample_to_frequency)
+    if fs_out <= 0 or fs_out == fs_in:
+        return None
+    s.input.format.samplingfrequency = fs_out          # analysis rate for all downstream
+    s.input.format.samplingfrequency_in = fs_in         # true file rate, read by _load
+    return _coupled_stft(settings.processing.emg.noise, fs_in, fs_out)
+
+
 def _diag_wanted(settings) -> bool:
     """True when any diagnostic figure or the WAV export is enabled — i.e. when the
     per-file diagnostic signal arrays need to be retained on the FileResult."""
@@ -902,14 +929,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
     # Pre-analysis resample: fix the analysis rate up front so the shared noise profile
     # AND every per-file load/compute use the same (possibly resampled) rate. Default OFF
     # (fs_out == fs_in) ⇒ _load is a pass-through and the run is byte-identical.
-    fs_in = int(s.input.format.samplingfrequency)
-    stft_override = None
-    if settings.processing.sampling.resample:
-        fs_out = int(settings.processing.sampling.resample_to_frequency)
-        if fs_out > 0 and fs_out != fs_in:
-            s.input.format.samplingfrequency = fs_out          # analysis rate for all downstream
-            s.input.format.samplingfrequency_in = fs_in        # true file rate, read by _load
-            stft_override = _coupled_stft(settings.processing.emg.noise, fs_in, fs_out)
+    stft_override = apply_resample_override(settings, s)
 
     allfiles = match_input_files(s.input.inputfolder, s.input.files)   # the full test (defines the shared profile)
     files = [f for f in allfiles if only_files is None or os.path.basename(f) in set(only_files)]
