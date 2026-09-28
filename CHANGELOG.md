@@ -7,6 +7,24 @@ for the installers themselves.
 
 ## Unreleased
 
+**FVC/FEV1/PEF from a typed forced-vital-capacity breath, and how well a tidal
+breath's own flow keeps up with it.** A `fvc`/`ic_fvc`-typed breath's Manoeuvres row
+now carries the numeric extraction the previous release deferred: FVC, FEV1 and its
+%FVC, PEF, the back-extrapolated volume (flagged when it is unusually large), forced
+expiratory time and whether the manoeuvre reached a genuine end (ATS/ERS 2019), a peak
+inspiratory-flow reference from a near-maximal breath right after it (some protocols
+record one), and — when the same file also has an IC manoeuvre — whether the two
+independently imply the same total lung capacity. Every tidal breath in that same
+file then gets a set of new columns placing its own tidal flow-volume loop against
+that curve: how much of its own exhaled breath runs at or above the ceiling the FVC
+curve set (expiratory flow limitation, as a percentage and as a plain yes/no), how its
+own peak flow compares to that ceiling, the fastest that breath COULD have been
+exhaled given the ceiling, and the ventilatory capacity and breathing reserve that
+implies (against either a spirometry-supplied maximum voluntary ventilation or the
+classic FEV1×40 estimate). Without an inspiratory-capacity reference in the same
+file, only the two flow-vs-peak columns are filled; the rest read blank, with a note
+explaining why. The flow–volume figure and its Preview overlay are a later release.
+
 **New `respmech breaths` command; `respmech validate` reports reference-link
 cautions; `respmech run --dry-run` and `respmech migrate` name more of what an
 analysis will actually do.** `respmech breaths settings.toml [FILE]` lists every

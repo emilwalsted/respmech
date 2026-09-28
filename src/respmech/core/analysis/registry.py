@@ -18,6 +18,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# A plain string constant, no heavier than anything already declared in this
+# module — quantities.py itself only ever imports THIS module lazily (inside a
+# function body, to avoid the reverse cycle), so importing its constant here at
+# module level is safe.
+from respmech.core.quantities import DIMLESS
+
 
 @dataclass(frozen=True)
 class ColumnSpec:
@@ -238,10 +244,34 @@ _LUNG_VOLUMES = (
     ColumnSpec(name="irv_pct_tlc", requires=_TIMING, module="lungvol", unit="%"),
 )
 
+# FVC/MFVL/EFL/VEcap (M-42, core.analysis.mfvl). Manoeuvres-sheet fields
+# (fvc/fev1/fvc_bev/fvc_fet/mfvl_tlc_consistency) and mfvl_ext fields
+# (te_min_mfvl/ve_cap/mvv_est) that _RULES' generic conventions do not already
+# classify -- their unit= here IS the resolving path. `mfvl_peak_ex_flow`,
+# `mfvl_peak_in_flow` (contain "flow" -> L/s) and every `*_pct*` column
+# (efl_pct/efl_coverage_pct/ex_flow_pct_mfvl_max/in_flow_pct_mfvl_max/
+# max_ex_flow_pct_mfvl_peak/max_in_flow_pct_mfvl_peak/ve_pct_cap/ve_reserve_pct/
+# ve_pct_mvv/br_mvv_pct) are already resolved by _RULES before this registry is
+# ever consulted -- listed nowhere here, same "documented by the generic rule
+# alone" precedent as _LUNG_VOLUMES' own vol_/_pct columns.
+_MFVL = (
+    ColumnSpec(name="fvc", requires=_TIMING, module="mfvl", unit="L"),
+    ColumnSpec(name="fev1", requires=_TIMING, module="mfvl", unit="L"),
+    ColumnSpec(name="fvc_bev", requires=_TIMING, module="mfvl", unit="L"),
+    ColumnSpec(name="mfvl_tlc_consistency", requires=_TIMING, module="mfvl", unit="L"),
+    ColumnSpec(name="fev1_fvc", requires=_TIMING, module="mfvl", unit=DIMLESS),
+    ColumnSpec(name="fvc_fet", requires=_TIMING, module="mfvl", unit="s"),
+    ColumnSpec(name="te_min_mfvl", requires=_TIMING, module="mfvl", unit="s"),
+    ColumnSpec(name="fvc_eofe_ok", requires=_TIMING, module="mfvl", unit=""),
+    ColumnSpec(name="efl_present", requires=_TIMING, module="mfvl", unit=""),
+    ColumnSpec(name="ve_cap", requires=_TIMING, module="mfvl", unit="L·min⁻¹"),
+    ColumnSpec(name="mvv_est", requires=_TIMING, module="mfvl", unit="L·min⁻¹"),
+)
+
 #: Every column/family this skeleton knows about. Later tickets append to this,
 #: never remove from or reorder ``LEGACY_MECHANICS_ORDER`` within it.
 REGISTRY = (LEGACY_MECHANICS_ORDER + (_ENTROPY, _EMG) + _SEGMENT_EMG + _MANOEUVRES
-           + _REFERENCE_MANOEUVRES + _LUNG_VOLUMES)
+           + _REFERENCE_MANOEUVRES + _LUNG_VOLUMES + _MFVL)
 
 # The Capabilities boolean fields resolve() is willing to read. Kept as an
 # explicit tuple (rather than e.g. dataclasses.fields(caps)) so a caller could
