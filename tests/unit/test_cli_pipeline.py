@@ -439,3 +439,182 @@ def test_cli_validate_the_golden_synthetic_files_have_no_new_caveats(tmp_path, c
     err = capsys.readouterr().err
     assert "merged row-by-row" not in err
     assert "constant channel" not in err
+
+
+def test_cli_validate_prints_the_signal_set_summary_line(capsys):
+    """M-13 acceptance criterion 1, against examples/settings.toml (the full pressure
+    family + EMG + a 3-column entropy set, all DERIVED -- no [analysis] table in that
+    file): 'respmech validate' prints a Signals/Entropy/Analyses line and exits 0.
+    Nothing is off (every core signal is declared), so there is no '· off:' segment."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.dirname(os.path.dirname(here))
+    example = os.path.join(repo_root, "examples", "settings.toml")
+    rc = cli_main(["validate", example])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert ("Signals: flow, poes, pgas, pdi, emg (derived) · Entropy: 3 columns · "
+           "Analyses: Breath timing, Work of breathing, Gastric pressure, "
+           "Transdiaphragmatic pressure, Ventilatory muscle ratio, EMG, Sample entropy"
+           in out)
+    assert "off:" not in out
+
+
+def test_cli_validate_names_off_signals_for_a_reduced_set(tmp_path, capsys):
+    """A signal set that excludes Pgas/Pdi reports them as 'off ... (not in signal set)'
+    -- the wording `respmech validate` uses is distinct from the Provenance sheet's
+    own 'absent by signal set' (see test_core_outputs.py's sibling test)."""
+    from respmech.settingsio.toml_io import save_toml
+    s = synth_settings(tmp_path, channels={"pgas": None, "pdi": None})
+    toml = tmp_path / "s.toml"
+    save_toml(s, toml)
+    rc = cli_main(["validate", str(toml)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Signals: flow, poes, emg (derived)" in out
+    assert "· off: Pgas/Pdi (not in signal set)" in out
+    assert "absent by signal set" not in out
+
+
+def test_cli_run_dry_run_prints_the_analyses_line(tmp_path, capsys):
+    """M-13: `respmech run --dry-run` prints the same 'Analyses: ...' line the GUI's
+    commitment sheet shows for the identical settings (run_screen.py's
+    `_update_commitment`), right after the output plan's Total line."""
+    from respmech.settingsio.toml_io import save_toml
+    settings, _ = migrate_dict(_legacy(str(tmp_path)))
+    toml = tmp_path / "s.toml"
+    save_toml(settings, toml)
+    rc = cli_main(["run", str(toml), "--dry-run"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert ("Analyses: Breath timing, Work of breathing, Gastric pressure, "
+           "Transdiaphragmatic pressure, Ventilatory muscle ratio, EMG, Sample entropy"
+           in out)
+    # Between the output plan's Total line and the blank line before per-file counts.
+    total_idx = out.index("Total:")
+    analyses_idx = out.index("Analyses:")
+    assert total_idx < analyses_idx
+
+
+def test_cli_init_writes_a_template_that_validates_immediately_with_all_flags(tmp_path):
+    """With --folder/--files/--fs all given, the written file needs no further editing
+    at all -- load_toml + validate() succeed unedited."""
+    from respmech.settingsio.toml_io import load_toml
+    out = tmp_path / "new.toml"
+    rc = cli_main(["init", str(out), "--signals", "flow,poes,emg",
+                  "--folder", str(INPUT), "--files", "synth_case_*.csv", "--fs", "1000"])
+    assert rc == 0
+    assert out.exists()
+    s = load_toml(str(out))
+    s.validate()
+    assert s.analysis.signals == ["flow", "poes", "emg"]
+    assert s.input.channels.pgas is None and s.input.channels.pdi is None
+    assert s.input.channels.emg == [4]
+
+
+def test_cli_init_writes_a_windows_style_folder_as_valid_toml(tmp_path):
+    """A `--folder` containing backslashes (a raw Windows path, e.g. a user pasting
+    `C:\\Users\\Emil\\data`) must round-trip through the generated TOML file unchanged
+    -- a naive f-string into a double-quoted TOML string would leave `\\U`/`\\d`/etc,
+    which `tomllib` rejects outright as an invalid escape. Parsed directly with
+    `tomllib` here (not `load_toml`, which rebases a RELATIVE folder against the
+    file's own directory using `os.path.isabs` -- true for a Windows path only on
+    Windows itself, so that rebase step would be a second, unrelated variable on this
+    Linux test runner)."""
+    import tomllib
+    out = tmp_path / "win.toml"
+    win_folder = r"C:\Users\Emil\data"
+    rc = cli_main(["init", str(out), "--signals", "flow",
+                  "--folder", win_folder, "--files", "*.csv", "--fs", "1000"])
+    assert rc == 0
+    with open(out, "rb") as f:
+        data = tomllib.load(f)       # would raise TOMLDecodeError before the fix
+    assert data["input"]["folder"] == win_folder
+
+
+def test_toml_string_falls_back_to_an_escaped_basic_string_for_an_embedded_quote():
+    """`_toml_string`'s own unit-level contract: a literal (single-quoted) string for
+    the common case (no escaping needed, works unchanged for a Windows `\\` path), a
+    properly escaped basic (double-quoted) string as the fallback for a value that
+    itself contains a literal `'` (which a literal string has no escape for)."""
+    import tomllib
+    from respmech.cli.__main__ import _toml_string
+
+    win_path = r"C:\Users\Emil\data"
+    quoted_win = _toml_string(win_path)
+    assert quoted_win == r"'C:\Users\Emil\data'"
+    assert tomllib.loads(f"x = {quoted_win}")["x"] == win_path
+
+    tricky = "O'Brien's folder"
+    quoted = _toml_string(tricky)
+    assert quoted.startswith('"') and quoted.endswith('"')
+    assert tomllib.loads(f"x = {quoted}")["x"] == tricky
+
+
+def test_cli_init_writes_a_template_that_validates_after_filling_fs_and_folder(tmp_path):
+    """Acceptance criterion 2, verbatim: with NO --folder/--files/--fs, the written file
+    is not yet runnable (Settings.validate() requires sampling_frequency) -- but becomes
+    so, unedited otherwise, once fs and the folder/files are filled in. The channel
+    column numbers and [analysis] signals the template already wrote need no editing."""
+    from respmech.settingsio.toml_io import load_toml
+    from respmech.core.settings import SettingsError
+    out = tmp_path / "new.toml"
+    rc = cli_main(["init", str(out), "--signals", "poes,flow"])
+    assert rc == 0
+    s = load_toml(str(out))
+    with pytest.raises(SettingsError, match="sampling_frequency"):
+        s.validate()
+
+    s.input.folder = str(INPUT)
+    s.input.files = "synth_case_*.csv"
+    s.input.format.sampling_frequency = 1000
+    s.validate()                              # now accepts it, unedited otherwise
+    assert sorted(s.analysis.signals) == ["flow", "poes"]
+
+
+def test_cli_init_writes_only_the_relevant_channel_entries(tmp_path):
+    """'kun relevante sektioner' (only relevant sections): an EMG-only template carries
+    no flow/poes/pgas/pdi channel keys at all, and validates with the whole_file
+    segmentation method it wrote for the flow-less case."""
+    from respmech.settingsio.toml_io import load_toml
+    out = tmp_path / "emg_only.toml"
+    rc = cli_main(["init", str(out), "--signals", "emg",
+                  "--folder", str(INPUT), "--files", "*.csv", "--fs", "1000"])
+    assert rc == 0
+    text = out.read_text(encoding="utf-8")
+    assert "flow" not in text.split("[input.channels]")[1].split("[processing")[0]
+    s = load_toml(str(out))
+    s.validate()
+    assert s.processing.segmentation.method == "whole_file"
+    assert s.input.channels.flow is None
+
+
+def test_cli_init_rejects_an_unknown_signal(tmp_path, capsys):
+    rc = cli_main(["init", str(tmp_path / "x.toml"), "--signals", "flow,made_up"])
+    assert rc == 2
+    assert "unknown signal" in capsys.readouterr().err
+    assert not (tmp_path / "x.toml").exists()
+
+
+def test_cli_init_rejects_an_empty_signal_set(tmp_path, capsys):
+    """An all-comma, entirely-empty --signals is the ONE case that hits `cmd_init`'s
+    FIRST rule (mirrors Settings.validate()'s own `not declared` check exactly --
+    core/settings.py) -- not any non-empty set, however incomplete, since a non-empty
+    --signals always yields a non-empty `declared` set (see the next test)."""
+    rc = cli_main(["init", str(tmp_path / "x.toml"), "--signals", ",,"])
+    assert rc == 2
+    assert capsys.readouterr().err == (
+        "error: --signals must name at least one of 'flow' or 'emg'\n")
+    assert not (tmp_path / "x.toml").exists()
+
+
+def test_cli_init_rejects_a_pressure_signal_without_flow(tmp_path, capsys):
+    """'poes' alone is a NON-empty declared set ({'poes'}), so this hits `cmd_init`'s
+    SECOND rule (poes/pgas/pdi require flow), word for word what
+    `Settings.validate()` itself raises for the equivalent saved TOML -- NOT the
+    first, 'at least one of flow or emg' rule, which only ever fires for a truly
+    empty set (see the sibling test above)."""
+    rc = cli_main(["init", str(tmp_path / "x.toml"), "--signals", "poes"])
+    assert rc == 2
+    assert capsys.readouterr().err == (
+        "error: --signals: 'poes', 'pgas' and 'pdi' require 'flow'\n")
+    assert not (tmp_path / "x.toml").exists()

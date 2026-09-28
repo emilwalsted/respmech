@@ -1094,17 +1094,40 @@ def test_commitment_sheet_names_file_and_output_counts_matching_plan_outputs(qap
     win.close()
 
 
+def test_commitment_sheet_omits_the_analyses_line_instead_of_crashing_on_malformed_signals(
+        qapp, tmp_path):
+    """M-13: `_update_commitment` runs on every settings-changed tick, unconditionally
+    and with no surrounding try/except (that is the whole point of an always-visible
+    commitment sheet) -- so it must use `Capabilities.from_settings_or_none`, never the
+    raising `from_settings`, exactly like every other frequent-tick caller in this
+    codebase already does. A hand-edited `analysis.signals = "flow"` (a bare string
+    instead of a list -- `effective_signals`'s own documented TypeError guard) must
+    degrade to simply omitting the Analyses line, not raise out of a Qt slot."""
+    win = _win(tmp_path); rn = win.run_screen
+    rn.state.settings.analysis.signals = "flow"   # malformed: a bare string, not a list
+    rn.refresh_actions()                            # must not raise
+    text = rn._commitment.text()
+    assert "Analyses:" not in text
+    assert text.split("\n")[0].startswith("2 files")   # the head line still renders
+    win.close()
+
+
 def test_commitment_sheet_adds_a_references_line_only_when_references_are_configured(qapp, tmp_path):
     """M-37: an ordinary analysis (no references/reference_defaults/subjects at all) gets
-    NO extra line -- the commitment sheet's two-line shape from before this ticket is
-    unchanged for the common case. Configuring one IC reference inserts exactly one line,
-    BETWEEN the head and the blocker/ready line (never after it, so ``.split("\\n")[-1]``
-    still means the same thing to every pre-existing test)."""
+    NO extra line beyond M-13's own always-present Analyses line -- the commitment
+    sheet's three-line shape (head, Analyses, ready/blocker) is unchanged for the common
+    case. Configuring one IC reference inserts exactly one MORE line, BETWEEN Analyses
+    and the blocker/ready line (never after it, so ``.split("\\n")[-1]`` still means the
+    same thing to every pre-existing test)."""
     from respmech.core.settings import BreathTypeEntry, ReferenceEntry, BreathRef
     win = _win(tmp_path); rn = win.run_screen
     rn.refresh_actions()
     before = rn._commitment.text()
-    assert before.count("\n") == 1
+    assert before.count("\n") == 2
+    # synth_settings' default channels are the full pressure family + EMG + entropy.
+    assert before.split("\n")[1] == (
+        "Analyses: Breath timing, Work of breathing, Gastric pressure, "
+        "Transdiaphragmatic pressure, Ventilatory muscle ratio, EMG, Sample entropy")
     assert "References:" not in before
 
     s = rn.state.settings
@@ -1115,9 +1138,50 @@ def test_commitment_sheet_adds_a_references_line_only_when_references_are_config
     rn.refresh_actions()
     after = rn._commitment.text()
     lines = after.split("\n")
-    assert len(lines) == 3
-    assert lines[1] == "References: 2/2 linked"   # A resolves to its own typed breath; B is explicit
+    assert len(lines) == 4
+    assert lines[2] == "References: 2/2 linked"   # A resolves to its own typed breath; B is explicit
     assert lines[-1] == "Ready to run."            # unchanged tail, still the LAST line
+    win.close()
+
+
+def test_commitment_sheet_analyses_line_costs_at_most_one_text_line_on_windows_metrics(
+        qapp, tmp_path, windows_metrics):
+    """M-13 acceptance, verbatim: 'Kommitment-sheetets minimumSizeHint().height() vokser
+    højst én tekstlinje (windows_metrics)'. Same heightForWidth-at-a-fixed-width
+    technique as the References windows_metrics test above (a bare sizeHint() does not
+    track height monotonically on an unshown/unconstrained word-wrap QLabel) -- measured
+    here by comparing the real, always-present Analyses line against the same text with
+    that one line removed, rather than against a hypothetical pre-M-13 sheet. A short,
+    two-analysis signal set (flow + poes only, no pgas/pdi/emg/entropy) is used so the
+    Analyses line itself does not ALSO wrap across several visual lines under the wider
+    Windows-modelled font -- a separate concern from the one this test measures."""
+    win = _win(tmp_path); rn = win.run_screen
+    ch = rn.state.settings.input.channels
+    ch.pgas = ch.pdi = None
+    ch.emg = []
+    ch.entropy = []
+    win.resize(1100, 760)
+    win.show()
+    for _ in range(6):
+        qapp.processEvents()
+    rn.refresh_actions()
+    width = rn._commitment.width()
+    assert width > 0
+    line_h = rn._commitment.fontMetrics().lineSpacing()
+    full_text = rn._commitment.text()
+    lines = full_text.split("\n")
+    assert lines[1] == "Analyses: Breath timing, Work of breathing"
+    without_analyses = "\n".join([lines[0]] + lines[2:])
+
+    rn._commitment.setText(without_analyses)
+    before_h = rn._commitment.heightForWidth(width)
+    rn._commitment.setText(full_text)
+    after_h = rn._commitment.heightForWidth(width)
+
+    grew = after_h - before_h
+    assert 0 < grew <= line_h * 1.5, (
+        f"the Analyses line cost {grew}px — more than one text line ({line_h}px) "
+        "under the Windows-modelled font")
     win.close()
 
 
@@ -1502,3 +1566,52 @@ def test_end_to_end_real_write_reports_a_complete_finished_status(qapp, tmp_path
 # via the shared _lone_ampersands(root) helper, not just QAbstractButton — so later
 # screens can register in the same scan instead of each growing its own copy of the
 # guard.
+
+
+def test_commitment_sheet_analyses_line_for_a_full_signal_set_wraps_past_one_line(
+        qapp, tmp_path, windows_metrics):
+    """KNOWN, DOCUMENTED LIMITATION (self-review finding, M-13): the acceptance
+    criterion 'grows by at most one text line' does NOT hold for a full-capability
+    (flow+poes+pgas+pdi+emg+entropy) analysis -- `synth_settings`' own default, the
+    same one every OTHER test in this file uses via `_win`. Measured directly: at the
+    commitment label's real width in this screen's actual layout (~640px under a
+    1100px window), the full seven-item Analyses line
+    ('Breath timing, Work of breathing, Gastric pressure, Transdiaphragmatic
+    pressure, Ventilatory muscle ratio, EMG, Sample entropy') wraps to about THREE
+    visual lines, not one -- roughly 51px of the ~16px single-line budget the
+    sibling short-signal-set test above pins. This is a real gap against the
+    ticket's own acceptance criterion for the common, full-capability case, flagged
+    to Emil rather than silently worked around by shortening the analysis names
+    (which would break the 'same Analyses text everywhere' requirement) or picking
+    an artificially narrow test width. This test pins the CURRENT, over-budget
+    behaviour so a future change to it is a deliberate decision, not an accident --
+    same 'document the quirk, do not silently paper over it' convention this
+    codebase already uses elsewhere (see e.g. M-14's golden-locked quirks)."""
+    win = _win(tmp_path); rn = win.run_screen
+    win.resize(1100, 760)
+    win.show()
+    for _ in range(6):
+        qapp.processEvents()
+    rn.refresh_actions()
+    width = rn._commitment.width()
+    assert width > 0
+    line_h = rn._commitment.fontMetrics().lineSpacing()
+    full_text = rn._commitment.text()
+    lines = full_text.split("\n")
+    assert lines[1] == ("Analyses: Breath timing, Work of breathing, Gastric pressure, "
+                        "Transdiaphragmatic pressure, Ventilatory muscle ratio, EMG, "
+                        "Sample entropy")
+    without_analyses = "\n".join([lines[0]] + lines[2:])
+
+    rn._commitment.setText(without_analyses)
+    before_h = rn._commitment.heightForWidth(width)
+    rn._commitment.setText(full_text)
+    after_h = rn._commitment.heightForWidth(width)
+
+    grew = after_h - before_h
+    assert grew > line_h * 1.5, (
+        "the full-signal-set Analyses line no longer overflows one line at this "
+        f"width ({grew}px grown vs a {line_h}px line) -- if this is because of a "
+        "deliberate fix, replace this test with one that asserts the NEW bound "
+        "instead of deleting the coverage")
+    win.close()

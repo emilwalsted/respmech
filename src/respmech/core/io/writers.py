@@ -29,6 +29,7 @@ import pandas as pd
 from respmech import __version__
 from respmech.core import quantities as _units
 from respmech.core.analysis import references as referenceslib
+from respmech.core.analysis.signals import Capabilities, off_signals_text, signals_text
 from respmech.core.settings import resolve_noise_reference_mode
 from respmech.core.summary import build_cohort_summary, normalize_emg_table, resolve_emg_reference
 
@@ -181,12 +182,22 @@ def _provenance_rows(settings, when, incomplete_note: str | None = None,
                      reference_note: str | None = None, olv_active: bool = False):
     ts = (when or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
     ip = settings.input
+    caps = Capabilities.from_settings(settings)
+    signals_value = signals_text(settings)
+    off = off_signals_text(caps.declared)
+    if off:
+        # M-13: an off signal is deliberate (this shape's own definition), not a gap --
+        # named here so a reader of the Provenance sheet alone (no run-report.txt open)
+        # is never left wondering why, say, no gastric-pressure column exists.
+        signals_value += f" — {off} absent by signal set"
     rows = [("RespMech version", __version__),
             ("Environment", _environment_info()),
             ("Generated", ts),
             ("Input folder", ip.folder),
             ("Input pattern", ip.files),
             ("Sampling frequency (Hz)", ip.format.sampling_frequency),
+            ("Signals", signals_value),
+            ("Analyses", ", ".join(caps.analyses())),
             (_segmentation_provenance_key(settings), _segmentation_provenance_value(settings)),
             # D22 (UI-overhaul): the same "average vs individual" choice that makes the
             # Preview & QC table's wob* columns either one repeated value or real
@@ -651,15 +662,16 @@ def _write_run_report(result, settings, outputfolder: str,
     L.append(f"Generated: {ts}")
     L.append(f"Environment: {_environment_info()}")
     ok, failed = result.ok_files, result.failed_files
+    # M-13: computed once, reused both here (the pre-existing poes check) and further
+    # down for the Signals/Analyses lines -- never a second construction.
+    caps = Capabilities.from_settings(settings)
     if not cohort_outputs:
         L.append("")
         cohort_bits = []
         if settings.output.data.save_average:
             cohort_bits.append("Average breathdata.xlsx")
             cohort_bits.append("Cohort summary.xlsx")
-        from respmech.core.analysis.signals import Capabilities
-        if (settings.output.diagnostics.save_pv_individual
-                and Capabilities.from_settings(settings).poes):
+        if settings.output.diagnostics.save_pv_individual and caps.poes:
             cohort_bits.append("the cohort Campbell figure")
         if cohort_bits:
             named = (cohort_bits[0] if len(cohort_bits) == 1
@@ -691,6 +703,10 @@ def _write_run_report(result, settings, outputfolder: str,
     L.append(f"  Folder:   {ip.folder}")
     L.append(f"  Pattern:  {ip.files}")
     L.append(f"  Sampling: {ip.format.sampling_frequency} Hz")
+    # M-13: which signals governed this run and what they computed -- the plain-text
+    # counterpart of the Provenance sheet's own 'Signals'/'Analyses' rows.
+    L.append(f"  Signals:  {signals_text(settings)}")
+    L.append(f"  Analyses: {', '.join(caps.analyses())}")
     L.append("")
 
     L.append(f"FILES ({len(ok)} processed, {len(failed)} failed)")

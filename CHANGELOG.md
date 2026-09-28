@@ -7,6 +7,15 @@ for the installers themselves.
 
 ## Unreleased
 
+**New `respmech init` command; `respmech validate` and the run report now name the
+signal set.** `respmech init new_settings.toml --signals flow,poes,emg [--folder DIR
+--files MASK --fs 1000]` writes a commented starting TOML file with only the channel
+entries the chosen signal set needs. `respmech validate` prints a `Signals: ... ·
+Entropy: N columns · Analyses: ... · off: ...` summary line after "Settings valid",
+the same `Analyses:` line is now part of `respmech run --dry-run`'s output and the
+Run screen's commitment sheet, and run-report.txt and each workbook's Provenance
+sheet both gain "Signals"/"Analyses" rows.
+
 **One IC file per participant can now reference all of that participant's other
 files.** A recording's inspiratory-capacity reference no longer has to be a breath
 in the SAME file — a dedicated IC recording (or a shared, per-participant default)
