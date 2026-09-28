@@ -14,9 +14,18 @@ can supply the value for every one of that participant's exercise files, and a f
 excluded from a single-file test run still resolves the same reference a full batch
 would. Reported as new `vol_ic_ref`/`ic_ref_n`/`ic_ref_source` columns, a
 "Reference manoeuvres" line and block in the run report, and an "IC reference" row
-in a resolved file's own Provenance sheet. Settings-file only for now — the
-reference-picker menu entries mentioned below stay disabled until a later release
-puts this in the UI.
+in a resolved file's own Provenance sheet.
+
+**Choose which IC/FVC/baseline/maximal-effort manoeuvre a file references — in the
+same file or a different one.** The reference-picker menu entries mentioned above are
+live: right-click an already-typed IC manoeuvre in Preview & QC ▸ Mechanics for "Use
+as IC reference for ▸ this file / all files of its group / all files", or open
+"Reference manoeuvres…" (also on a file's row in the file rail) for the full picker
+across all four reference kinds and any file's typed breaths. A resolved IC reference
+now shows next to the analysis window; the Run screen's commitment sheet names how
+many files have one linked; and Setup gets a read-only "Subjects && lung volumes"
+card listing the per-participant spirometry (`[[input.subjects]]`) these calculations
+use.
 
 **Operating lung volumes derived from a resolved IC reference.** Once a file has a
 resolved inspiratory-capacity reference (see above), every tidal breath now also
@@ -68,7 +77,7 @@ candidate. A dedicated recording where every breath is typed (a separate IC or F
 file, say) used to fail the whole file with "no breaths detected"; it now runs and
 writes its own workbook (the Manoeuvres table stands in for the usual breath-by-breath
 data, with a note explaining why) instead. Reference-picker menu entries ("Use as IC
-reference for…", "Reference manoeuvres…") are visible but disabled — a later release.
+reference for…", "Reference manoeuvres…") went live in a later release (see above).
 <!-- changelog-skip f380c02 the right-click/Ctrl+left-click primitive itself landed in
      this commit (BreathSpansItem.typeRequested + a minimal Tidal/Excluded/Rest menu);
      folded into the rewritten bullet above once the fuller manoeuvre menu made typing

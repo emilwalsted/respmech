@@ -13,12 +13,14 @@ import os
 import tomllib
 import traceback
 
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
-                               QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
-                               QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
-                               QScrollArea, QSpinBox, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox,
+                               QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
+                               QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+                               QPlainTextEdit, QPushButton, QScrollArea, QSpinBox,
+                               QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 from PySide6.QtCore import Signal, QTimer, Qt
 
+from respmech.core.analysis.references import check_links
 from respmech.core.analysis.signals import Capabilities, SINGLE_SIGNALS, effective_signals
 from respmech.core.settings import BreathCountEntry, Settings, SettingsError
 from respmech.ui import column_stack as _cs
@@ -296,6 +298,30 @@ class SettingsScreen(QWidget):
         self.ent_epochs.valueChanged.connect(self._update_entropy_caption)
         self.ent_tol.valueChanged.connect(self._update_entropy_caption)
 
+        # Subjects & lung volumes ---------------------------------------------
+        # M-37: read-only -- input.subjects (SubjectEntry: TLC/VC/RV/FEV1/MVV per
+        # participant, M-34) is written by the reference model itself (an analysis's own
+        # .toml, or a later release's dedicated editor), never from a Setup widget, so
+        # there is no to_state() write-back for this card, unlike every other one on this
+        # screen. Hidden while empty (_cond_cards, same mechanism Sample entropy already
+        # uses) -- an empty table would just be clutter for an analysis that names no
+        # subjects at all.
+        gsub = QGroupBox("Subjects && lung volumes")
+        vsub = QVBoxLayout(gsub)
+        self.subjects_table = QTableWidget(0, 6)
+        self.subjects_table.setHorizontalHeaderLabels(
+            ["Key", "TLC (L)", "VC (L)", "RV (L)", "FEV1 (L)", "MVV (L/min)"])
+        self.subjects_table.verticalHeader().setVisible(False)
+        self.subjects_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.subjects_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.subjects_table.setToolTip(_tip(
+            "input.subjects",
+            "Per-participant spirometry, keyed on the same group as the cohort "
+            "summary. Used by operating-lung-volume calculations (Preview & QC ▸ "
+            "Mechanics ▸ Advanced… ▸ Lung volumes) when no per-file TLC/VC is "
+            "available another way."))
+        vsub.addWidget(self.subjects_table)
+
         # 'What to save' lives inside the Output card now (one place for everything the run
         # produces and where it goes), so these rows attach to the Output form (fo). The two
         # checkbox groups are each run through a FlowLayout (B05): ten checkboxes stacked in
@@ -378,13 +404,14 @@ class SettingsScreen(QWidget):
         # benefits from the width, unlike the Advanced modals' short captions.
         self._card_input, self._card_channels = gin, gch
         self._card_output, self._card_entropy = gout, gent
+        self._card_subjects = gsub
         rig = QWidget(); rig_col = QVBoxLayout(rig)
         rig_col.setContentsMargins(0, 0, 0, 0); rig_col.setSpacing(11)
         rig_col.addWidget(gin); rig_col.addWidget(gch)
         _rig_sp = rig.sizePolicy(); _rig_sp.setHeightForWidth(True); rig.setSizePolicy(_rig_sp)
         leverance = QWidget(); lev_col = QVBoxLayout(leverance)
         lev_col.setContentsMargins(0, 0, 0, 0); lev_col.setSpacing(11)
-        lev_col.addWidget(gout); lev_col.addWidget(gent)
+        lev_col.addWidget(gout); lev_col.addWidget(gent); lev_col.addWidget(gsub)
         _lev_sp = leverance.sizePolicy(); _lev_sp.setHeightForWidth(True); leverance.setSizePolicy(_lev_sp)
         self._rig, self._leverance = rig, leverance
         columns = QWidget()
@@ -482,6 +509,7 @@ class SettingsScreen(QWidget):
         # column is actually assigned to entropy, in either mode.
         self._cond_cards = [
             (gent, lambda: bool(self.state.settings.input.channels.entropy)),
+            (gsub, lambda: bool(self.state.settings.input.subjects)),
         ]
         self._mode = "full"          # "full" = an opened/default analysis; "new" = guided
         self._flow_ready = True
@@ -767,6 +795,23 @@ class SettingsScreen(QWidget):
         self._refresh_channel_view()   # 'Volume: derived from flow' follows the model
         self._update_save_preview()
         self._update_entropy_caption()   # a loaded analysis may set m/r without a valueChanged
+        self._refresh_subjects_table()   # M-37: a loaded analysis brings its own subjects
+
+    def _refresh_subjects_table(self):
+        """Repopulate the read-only Subjects && lung volumes card from
+        ``input.subjects`` -- called wherever a loaded/opened/imported analysis can
+        change the list (``_sync_widgets``), never from a widget edit of its own (this
+        card has none, see its own construction comment)."""
+        subs = self.state.settings.input.subjects
+        self.subjects_table.setRowCount(len(subs))
+        for row, sub in enumerate(subs):
+            values = (sub.key, sub.tlc_l, sub.vc_l, sub.rv_l, sub.fev1_l, sub.mvv_lpm)
+            for col, v in enumerate(values):
+                text = v if isinstance(v, str) else ("—" if v is None else f"{v:g}")
+                item = QTableWidgetItem(text)
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                self.subjects_table.setItem(row, col, item)
+        self.subjects_table.resizeColumnsToContents()
 
     def _update_save_preview(self):
         """The 'You will get' line under the output checklist — the deliverables the current
@@ -2097,6 +2142,14 @@ class SettingsScreen(QWidget):
                            "for EMG — Preview & QC ▸ Mechanics ▸ Advanced… ▸ Sampling")
             else:
                 out.append(f"sampling frequency {fs_eff} Hz is low for EMG")
+        # M-37: reference/subject cautions -- lowest priority (informational, never a
+        # blocker unless processing.lung_volume.require_references is set, in which case
+        # ui.validation.path_problem already surfaces the missing-source half of this as
+        # a hard error ahead of any of the notes above). filenames is the batch's OWN
+        # glob (matching_files), never the manifest's majority-column-count subset --
+        # check_links' own doctrine, see its docstring.
+        matches = matching_files(s.input.folder, s.input.files)
+        out.extend(check_links(s, matches))
         return out
 
     def _science_note(self):

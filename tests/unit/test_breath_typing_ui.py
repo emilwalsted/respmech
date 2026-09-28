@@ -352,10 +352,12 @@ def test_build_type_menu_has_the_minimal_labels_and_no_lone_ampersand(qapp, tmp_
 
     from PySide6.QtWidgets import QMenu
     menu = pv._build_type_menu(a_breath, ("tidal", "excluded", "rest"))
-    # M-31: the caller's kinds are still exactly Tidal/Excluded/Rest, but the menu now
-    # always appends the M-37 placeholders behind a separator (text() == '').
+    # M-31/M-37: the caller's kinds are still exactly Tidal/Excluded/Rest, but the menu
+    # now always appends the reference actions behind a separator (text() == '').
+    # 'Use as IC reference for' is a real submenu now (Qt draws its own arrow, so the
+    # action's own text carries no manual '▸').
     assert [a.text() for a in menu.actions()] == [
-        "Tidal", "Excluded", "Rest", "", "Use as IC reference for ▸", "Reference manoeuvres…"]
+        "Tidal", "Excluded", "Rest", "", "Use as IC reference for", "Reference manoeuvres…"]
     # Self-review finding: an unparented menu with these exact (ampersand-free) labels
     # would pass an "offenders is empty" check for the wrong reason. Prove the menu is
     # actually IN the tree _lone_ampersands walks, not just that its own text is clean.
@@ -401,13 +403,17 @@ def test_build_type_menu_offers_the_full_manoeuvre_set_with_no_lone_ampersand(qa
     assert texts == [
         "Tidal", "Excluded", "IC manoeuvre", "FVC manoeuvre", "IC + FVC",
         "Maximal inspiratory effort", "Sniff", "Rest", "Other…",
-        "", "Use as IC reference for ▸", "Reference manoeuvres…"]
+        "", "Use as IC reference for", "Reference manoeuvres…"]
     assert not _lone_ampersands(win)
     menu.close()
     win.close()
 
 
-def test_the_two_m37_placeholders_are_present_but_disabled(qapp, tmp_path):
+def test_the_reference_submenu_is_disabled_until_the_breath_is_typed_ic(qapp, tmp_path):
+    """M-37: 'Use as IC reference for' only makes sense once THIS breath is already
+    typed 'ic'/'ic_fvc' -- an untyped (or excluded/tidal) breath leaves it disabled,
+    with a statusTip saying so. 'Reference manoeuvres…' (the full cross-file picker)
+    has no such precondition and stays enabled regardless."""
     from respmech.ui.main_window import MainWindow
     s = synth_settings(str(tmp_path))
     win = MainWindow(AppState(s)); pv = win.preview_screen
@@ -415,10 +421,35 @@ def test_the_two_m37_placeholders_are_present_but_disabled(qapp, tmp_path):
     a_breath = next(iter(pv._breath_spans))
 
     menu = pv._build_type_menu(a_breath, ("tidal", "excluded"))
-    ref_for = next(a for a in menu.actions() if a.text() == "Use as IC reference for ▸")
+    ref_for = next(a for a in menu.actions() if a.text() == "Use as IC reference for")
     ref_manoeuvres = next(a for a in menu.actions() if a.text() == "Reference manoeuvres…")
     assert ref_for.isEnabled() is False
-    assert ref_manoeuvres.isEnabled() is False
+    assert ref_manoeuvres.isEnabled() is True
+    win.close()
+
+
+def test_the_reference_submenu_enables_once_typed_ic_and_sets_the_reference(qapp, tmp_path):
+    """M-37 round trip (the ticket's own acceptance criterion): type a breath IC, then
+    'Use as IC reference for ▸ This file' links THIS file to its own breath via
+    processing.references, with folder stamped on the brand-new entry."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    name = pv.file_rail.current_filename()
+
+    assert pv._set_breath_type(a_breath, "ic") == "ic"
+    menu = pv._build_type_menu(a_breath, ("tidal", "excluded"))
+    ref_for = next(a for a in menu.actions() if a.text() == "Use as IC reference for")
+    assert ref_for.isEnabled() is True
+    this_file = next(a for a in ref_for.menu().actions() if a.text() == "This file")
+    this_file.trigger()
+
+    entry = next(e for e in s.processing.references if e.file == name)
+    assert entry.ic.file == name and entry.ic.breaths == [a_breath]
+    assert entry.folder == s.input.folder
+    assert "reference for this file" in pv.status.text().lower()
     win.close()
 
 
@@ -436,6 +467,207 @@ def test_choosing_ic_from_the_menu_sets_the_type_and_status(qapp, tmp_path):
     entry = next(t for t in s.processing.breath_types if t.file == name and t.breath == a_breath)
     assert entry.kind == "ic"
     assert "ic manoeuvre" in pv.status.text().lower()
+
+
+# --------------------------------------------------------------------------- #
+# M-37: _set_reference's three scopes, the run lock, and the reference chip
+# --------------------------------------------------------------------------- #
+def test_set_reference_group_scope_writes_a_group_reference_default(qapp, tmp_path):
+    from respmech.core.summary import group_key
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    name = pv.file_rail.current_filename()
+    group = group_key(name, s)
+
+    assert pv._set_breath_type(a_breath, "ic_fvc") == "ic_fvc"
+    assert pv._set_reference(name, a_breath, "group") == "group"
+    entry = next(e for e in s.processing.reference_defaults if e.group == group)
+    assert entry.ic.file == name and entry.ic.breaths == [a_breath]
+    assert entry.folder == s.input.folder
+    win.close()
+
+
+def test_set_reference_all_scope_points_every_matched_file_at_the_breath(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.validation import matching_files
+    import os as _os
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    name = pv.file_rail.current_filename()
+    expected = {_os.path.basename(f) for f in matching_files(s.input.folder, s.input.files)}
+    assert len(expected) > 1, "the synthetic input set must have more than one file"
+
+    assert pv._set_breath_type(a_breath, "ic") == "ic"
+    assert pv._set_reference(name, a_breath, "all") == "all"
+    targets = {e.file for e in s.processing.references if e.ic is not None}
+    assert targets == expected
+    entries = [e for e in s.processing.references if e.ic is not None]
+    for e in entries:
+        assert e.ic.file == name and e.ic.breaths == [a_breath]
+    # Self-review finding: an earlier version handed every entry the SAME BreathRef
+    # instance (and its same mutable .breaths list), so mutating one file's reference
+    # later silently corrupted every other file's too. Each entry's .ic (and its
+    # .breaths list) must be its OWN object -- proving VALUES agree (above) is not
+    # enough to catch aliasing, so this checks identity directly.
+    ic_refs = [e.ic for e in entries]
+    assert len({id(r) for r in ic_refs}) == len(ic_refs), "every entry shares one BreathRef"
+    assert len({id(r.breaths) for r in ic_refs}) == len(ic_refs), "breaths lists are aliased"
+    ic_refs[0].breaths.append(999)
+    assert all(e.ic.breaths == [a_breath] for e in entries[1:]), (
+        "mutating one file's reference breaths corrupted another file's")
+    win.close()
+
+
+def test_set_reference_and_reference_picker_are_blocked_while_a_run_is_active(
+        qapp, tmp_path, monkeypatch):
+    """The run-lock check must happen BEFORE any dialog work, not just before writing —
+    proven by spying on ReferencePickerDialog itself, since 'write_action_blocked fired
+    twice' alone would pass identically even if a dialog were built (just wastefully,
+    or worse, incorrectly) ahead of the guard (self-review finding)."""
+    from respmech.ui.main_window import MainWindow
+    import respmech.ui.reference_picker_dialog as _rpd
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    name = pv.file_rail.current_filename()
+    pv._set_breath_type(a_breath, "ic")
+
+    built = []
+    monkeypatch.setattr(_rpd.ReferencePickerDialog, "__init__",
+                        lambda self, *a, **kw: built.append(a))
+    blocked = []
+    pv.write_action_blocked.connect(blocked.append)
+    pv.set_run_active(True)
+    assert pv._set_reference(name, a_breath, "file") is None
+    assert not s.processing.references
+    pv._open_reference_picker(name)          # must return without ever building a dialog
+    assert len(blocked) == 2
+    assert built == [], "ReferencePickerDialog was constructed despite the run lock"
+    assert all("locked" in m.lower() for m in blocked)
+    pv.set_run_active(False)
+    win.close()
+
+
+def test_open_reference_picker_never_overwrites_an_untouched_multi_breath_reference(
+        qapp, tmp_path, monkeypatch):
+    """Self-review finding (the original bug, independently confirmed by two review
+    passes): an untouched slot must never be written back, even when a DIFFERENT slot
+    in the SAME dialog is touched and accepted -- otherwise a legitimate multi-breath
+    own-typed-breath IC reference (IcSettings.aggregate combines repeats) is silently
+    truncated to the picker's single-breath selection the moment ANY other slot is
+    edited and OK is clicked."""
+    from PySide6.QtWidgets import QDialog
+    from respmech.core.analysis.references import resolve_reference
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.ui.main_window import MainWindow
+    import respmech.ui.reference_picker_dialog as _rpd
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    name = pv.file_rail.current_filename()
+    other = next(n for n in pv.file_rail.filenames() if n != name)
+
+    # `name` has THREE typed IC breaths -- resolve_reference's own-typed fallback
+    # aggregates all of them (IcSettings.aggregate); the picker's ic ROW can only ever
+    # pre-select the first, since its combo is single-breath.
+    s.processing.breath_types.extend([
+        BreathTypeEntry(file=name, breath=1, kind="ic", t_onset_s=0.1),
+        BreathTypeEntry(file=name, breath=2, kind="ic", t_onset_s=0.2),
+        BreathTypeEntry(file=name, breath=3, kind="ic", t_onset_s=0.3),
+        BreathTypeEntry(file=other, breath=5, kind="fvc", t_onset_s=0.5),
+    ])
+    assert resolve_reference(name, "ic", s).breaths == [1, 2, 3]
+
+    def _touch_fvc_only_and_accept(self):
+        row = self._rows["fvc"]
+        row.file_combo.setCurrentIndex(row.file_combo.findData(other))
+        row.breath_combo.setCurrentIndex(row.breath_combo.findData(5))
+        return QDialog.Accepted
+
+    monkeypatch.setattr(_rpd.ReferencePickerDialog, "exec", _touch_fvc_only_and_accept)
+    pv._open_reference_picker(name)
+
+    entry = next(e for e in s.processing.references if e.file == name)
+    assert entry.ic is None, "an untouched slot must not gain an explicit entry"
+    assert entry.fvc.file == other and entry.fvc.breaths == [5]
+    ref = resolve_reference(name, "ic", s)
+    assert ref.file == name and ref.breaths == [1, 2, 3], (
+        "the untouched ic reference must still resolve to all three typed breaths, "
+        "not be truncated by editing a different slot")
+    win.close()
+
+
+def test_the_mech_window_chip_shows_the_resolved_ic_reference(qapp, tmp_path):
+    """The ticket's own acceptance criterion: 'chip viser den' after the round trip.
+    Checked on BOTH ``fullText()`` (the ElidingLabel's own un-elided source, what the
+    chip actually renders from) and ``toolTip()`` (what a hover recovers) — asserting
+    only the tooltip would not prove the chip text was ever appended to the label's own
+    full text at all, only that the tooltip string happens to contain the substring."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    name = pv.file_rail.current_filename()
+
+    assert "ic ref" not in pv.mech_window_label.fullText().lower()
+    assert "ic ref" not in pv.mech_window_label.toolTip().lower()
+    assert pv._set_breath_type(a_breath, "ic") == "ic"
+    assert pv._set_reference(name, a_breath, "file") == "file"
+    expected = f"ic ref: this file (breath {a_breath})"
+    assert expected in pv.mech_window_label.fullText().lower()
+    assert expected in pv.mech_window_label.toolTip().lower()
+    win.close()
+
+
+def test_the_mech_window_chip_full_text_survives_under_windows_font_metrics(
+        qapp, tmp_path, windows_metrics):
+    """Acceptance criterion: '...chippen...består windows_metrics-ratiotests'. The
+    combined trim-window + reference text can legitimately be too long to show in full
+    at the Windows runner's wider advance — ElidingLabel's whole POINT is to shrink the
+    DISPLAYED text rather than force the window wider (CLAUDE.md's 'never assert on a
+    QLabel's rendered text() when elide shortened it'). The full sentence must still be
+    intact and recoverable from fullText()/toolTip() regardless of how narrow the
+    granted width ends up, and the label's minimumSizeHint must stay at its small,
+    non-forcing floor even with the reference chip appended."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    a_breath = next(iter(pv._breath_spans))
+    name = pv.file_rail.current_filename()
+    pv._set_breath_type(a_breath, "ic")
+    pv._set_reference(name, a_breath, "file")
+
+    full = pv.mech_window_label.fullText()
+    assert f"ic ref: this file (breath {a_breath})" in full.lower()
+    assert pv.mech_window_label.toolTip().lower().endswith(full.lower())
+    # the floor this label reports must not grow just because the string got longer —
+    # that is what lets a squeezing layout still give it room, on any font.
+    assert pv.mech_window_label.minimumSizeHint().width() <= 24
+    win.close()
+
+
+def test_file_rails_references_requested_opens_the_picker_for_that_row(qapp, tmp_path, monkeypatch):
+    """FileRail's own context-menu action (M-32, unconnected until this ticket) must
+    reach PreviewScreen._open_reference_picker with the ROW's filename."""
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    other = next(n for n in pv.file_rail.filenames() if n != pv.file_rail.current_filename())
+
+    seen = []
+    monkeypatch.setattr(pv, "_open_reference_picker", lambda filename=None: seen.append(filename))
+    pv.file_rail.referencesRequested.emit(other)
+    assert seen == [other]
+    win.close()
     win.close()
 
 
