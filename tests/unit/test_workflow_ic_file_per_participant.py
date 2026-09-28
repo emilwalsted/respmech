@@ -1,13 +1,12 @@
-"""End-to-end workflow test (M-40): the typical multi-file lab setup a per-file/
+"""End-to-end workflow test: the typical multi-file lab setup a per-file/
 per-group cross-file IC reference is actually built for -- each of two participants
 contributes three ordinary stage recordings plus one dedicated, reference-only IC
 recording, ALL EIGHT files matched by one glob and run through ``run_batch`` +
 ``write_batch`` as a single batch, with the IC value resolved per PARTICIPANT via a
 ``reference_defaults`` GROUP entry (not a per-file ``processing.references`` entry,
 which the ``typed_ic_crossfile`` golden scenario already covers for the single-file
-case). This closes the gap the M-40 ticket names: no earlier ticket in this
-programme ran a genuinely multi-file-per-participant batch through the real
-pipeline end to end.
+case). This closes a real gap: no earlier test ran a genuinely
+multi-file-per-participant batch through the real pipeline end to end.
 
 Two participants (not one) so "one row per group" in the cohort summary and
 "resolves per participant, not globally" in the reference link both have something
@@ -95,7 +94,7 @@ def test_workflow_ic_file_per_participant(tmp_path):
         f"{p}_{suffix}.csv" for p in _PARTICIPANTS
         for suffix in ("stage1", "stage2", "stage3", "IC"))
 
-    # group_readout (M-37/M-38, the live Setup read-out): both IC files are
+    # group_readout (the live Setup read-out): both IC files are
     # correctly predicted reference-only and excluded from the "N files -> M
     # groups" count; the 6 stage files collapse into exactly the 2 participant
     # groups, 3 files each.
@@ -113,7 +112,7 @@ def test_workflow_ic_file_per_participant(tmp_path):
     for participant in _PARTICIPANTS:
         ic_file = f"{participant}_IC.csv"
         ic_fr = result.files[ic_file]
-        # M-30: a reference-only file has no tidal breath table/average row of its
+        # A reference-only file has no tidal breath table/average row of its
         # own -- it never contributes a row to the written cohort/average sheets.
         assert ic_fr.role == "reference"
         assert ic_fr.average_row is None
@@ -136,7 +135,7 @@ def test_workflow_ic_file_per_participant(tmp_path):
             assert fr.references_used["ic"]["source"] == ic_file
 
     # average_table: exactly the 6 stage files, never the 2 reference-only ones --
-    # a reference-only file's average_row is always None (M-30) and is therefore
+    # a reference-only file's average_row is always None and is therefore
     # never appended to the cross-file "Average breathdata" concat.
     assert len(result.average_table) == 6
     assert set(result.average_table["file"]) == {
@@ -164,8 +163,8 @@ def test_workflow_ic_file_per_participant(tmp_path):
         # write_batch (unlike the golden harness's own narrower run_scenario
         # serialisation) DOES write a per-file workbook for a reference-only file
         # too -- its "Data" sheet is the file's Manoeuvres table (its only content)
-        # rather than a tidal breaths_table, per writers.py's own M-30 handling
-        # ("no tidal breathdata to be the Data sheet -- the Manoeuvres table ...
+        # rather than a tidal breaths_table, per writers.py's own reference-only
+        # handling ("no tidal breathdata to be the Data sheet -- the Manoeuvres table ...
         # takes its place").
         ic_path = os.path.join(str(outdir), "data", f"{participant}_IC.csv.breathdata.xlsx")
         assert ic_path in written
