@@ -269,10 +269,35 @@ _MFVL = (
     ColumnSpec(name="mvv_est", requires=_TIMING, module="mfvl", unit="L·min⁻¹"),
 )
 
+# Opt-in PEEPi / modified Campbell diagram (core.analysis.pressure, trigger
+# `processing.pressure.peepi.enabled`). Every column is resolved by `_RULES`' generic
+# conventions already (peepi* -> cmH2O, peepi_lag -> s, int_/ptp_ -> integrals/rates,
+# wob* -> J/min) before this registry is consulted: the `unit=` values here are
+# documentation, same precedent as _MANOEUVRES above. The gastric-corrected columns need
+# Pgas; the diaphragm ones need Pgas AND Pdi (the correction is what feeds them).
+_PEEPI_POES = frozenset({"flow", "poes"})
+_PEEPI_PGAS = frozenset({"flow", "poes", "pgas"})
+_PEEPI_PDI = frozenset({"flow", "poes", "pgas", "pdi"})
+_PEEPI = (
+    ColumnSpec(name="peepi_dyn", requires=_PEEPI_POES, module="peepi", unit="cmH₂O", trigger="peepi"),
+    ColumnSpec(name="peepi_pgas_drop", requires=_PEEPI_PGAS, module="peepi", unit="cmH₂O", trigger="peepi"),
+    ColumnSpec(name="peepi_corr", requires=_PEEPI_PGAS, module="peepi", unit="cmH₂O", trigger="peepi"),
+    ColumnSpec(name="peepi_lag", requires=_PEEPI_POES, module="peepi", unit="s", trigger="peepi"),
+    ColumnSpec(name="int_oes_preflow", requires=_PEEPI_POES, module="peepi", unit="cmH₂O·s", trigger="peepi"),
+    ColumnSpec(name="ptp_oes_preflow", requires=_PEEPI_POES, module="peepi", unit="cmH₂O·s·min⁻¹", trigger="peepi"),
+    ColumnSpec(name="wob_in_thr", requires=_PEEPI_POES, module="peepi", unit="J·min⁻¹", trigger="peepi"),
+    ColumnSpec(name="wob_in_total_thr", requires=_PEEPI_POES, module="peepi", unit="J·min⁻¹", trigger="peepi"),
+    ColumnSpec(name="wobtotal_thr", requires=_PEEPI_POES, module="peepi", unit="J·min⁻¹", trigger="peepi"),
+    ColumnSpec(name="int_oesinsp_peepi", requires=_PEEPI_POES, module="peepi", unit="cmH₂O·s", trigger="peepi"),
+    ColumnSpec(name="ptp_oesinsp_peepi", requires=_PEEPI_POES, module="peepi", unit="cmH₂O·s·min⁻¹", trigger="peepi"),
+    ColumnSpec(name="int_pdiinsp_peepi", requires=_PEEPI_PDI, module="peepi", unit="cmH₂O·s", trigger="peepi"),
+    ColumnSpec(name="ptp_pdiinsp_peepi", requires=_PEEPI_PDI, module="peepi", unit="cmH₂O·s·min⁻¹", trigger="peepi"),
+)
+
 #: Every column/family this skeleton knows about. Later tickets append to this,
 #: never remove from or reorder ``LEGACY_MECHANICS_ORDER`` within it.
 REGISTRY = (LEGACY_MECHANICS_ORDER + (_ENTROPY, _EMG) + _SEGMENT_EMG + _MANOEUVRES
-           + _REFERENCE_MANOEUVRES + _LUNG_VOLUMES + _MFVL)
+           + _REFERENCE_MANOEUVRES + _LUNG_VOLUMES + _MFVL + _PEEPI)
 
 # The Capabilities boolean fields resolve() is willing to read. Kept as an
 # explicit tuple (rather than e.g. dataclasses.fields(caps)) so a caller could

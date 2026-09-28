@@ -145,6 +145,9 @@ def to_legacy_ns(s: Settings) -> SimpleNamespace:
             # core.analysis.mfvl.attach/tidal_mfvl_ext via s.processing.mfvl. Passed
             # through as the dataclass itself, same precedent as lung_volume.ic above.
             mfvl=s.processing.mfvl,
+            # v2-only passthrough (no legacy counterpart) -- read by
+            # core.analysis.pressure.attach via s.processing.pressure.peepi.
+            pressure=s.processing.pressure,
             wob=SimpleNamespace(
                 calcwobfrom=wob.calc_from,
                 avgresamplingobs=wob.avg_resampling_obs,
