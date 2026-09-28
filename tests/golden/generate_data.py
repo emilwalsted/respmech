@@ -375,6 +375,60 @@ def make_manoeuvre_file(path, seed, lead_expiration_s=0.3):
     return N
 
 
+#: The dedicated reference-only recording for the ``typed_ic_crossfile`` golden
+#: scenario: a SINGLE IC manoeuvre breath (the same ``_MANOEUVRE_IC`` recipe
+#: as ``make_manoeuvre_file`` above, so ``vol_ic`` is exactly ``3.0`` for the same
+#: reason — see ``_manoeuvre_breath``'s docstring), and NOTHING else — no leading,
+#: trailing or intervening tidal breaths. ``core.pipeline.run_batch``'s own
+#: reference-only detection (every breath typed, no tidal breathing at all)
+#: needs no minimum breath count to fire; ``compute.trim()`` only needs the
+#: recording to START at the first flow<0 sample and END at the last flow>=0
+#: sample (see its own docstring), which a single lead-in + one full trapezoid
+#: breath cycle already satisfies without any trailing filler.
+MANOEUVRE_CROSSFILE_IC_BREATH_NO = 1
+
+
+def make_ic_reference_file(path, seed, lead_expiration_s=0.3):
+    """Write the dedicated, reference-only ``synth_crossfile_ic.csv`` input for the
+    ``typed_ic_crossfile`` golden scenario — a participant's separate,
+    stand-alone IC recording, referenced by a DIFFERENT file's
+    ``processing.references`` entry rather than containing any tidal breathing of
+    its own.
+
+    Deliberately its own ``synth_crossfile_*.csv`` naming (never matching
+    ``synth_case_*.csv``/``synth_emgonly_*.csv``/``synth_manoeuvre_*.csv``, each
+    already a different scenario's dedicated, committed glob in
+    ``tests/golden/scenarios/*.toml`` — reusing any of those prefixes would silently
+    pull this file into a SIBLING scenario's own ``input.files`` match and change
+    its batch, not just this one's) and its own dedicated RNG stream.
+    """
+    rng = np.random.default_rng(seed)
+
+    nlead = int(round(lead_expiration_s * FS))
+    tl = np.arange(nlead) / FS
+    lead_flow = 0.4 * np.sin(np.pi * tl / lead_expiration_s)
+    lead_vol = 0.05 * np.cos(np.pi * tl / (2 * lead_expiration_s))
+    lead_poes = -5.0 + 0.05 * rng.normal(0, 1, nlead)
+    lead_pgas = 8.0 + 0.05 * rng.normal(0, 1, nlead)
+
+    insp, exp = _manoeuvre_breath(**_MANOEUVRE_IC)
+    flow = np.concatenate([lead_flow, insp["flow"], exp["flow"]])
+    vol = np.concatenate([lead_vol, insp["volume"], exp["volume"]])
+    poes = np.concatenate([lead_poes, insp["poes"], exp["poes"]])
+    pgas = np.concatenate([lead_pgas, insp["pgas"], exp["pgas"]])
+    pdi = pgas - poes
+    N = len(flow)
+    emg = [rng.normal(0, 0.002 + 0.0005 * ch, N) for ch in range(3)]
+    ent = [rng.normal(0, 0.1, N) for ch in range(3)]
+    time = np.arange(N) / FS
+
+    header = "time,EMG1,EMG2,EMG3,flow,volume,poes,pgas,pdi,ENT1,ENT2,ENT3"
+    data = np.column_stack([time, emg[0], emg[1], emg[2], flow, vol, poes, pgas, pdi,
+                            ent[0], ent[1], ent[2]])
+    np.savetxt(path, data, delimiter=",", header=header, comments="", fmt="%.10g")
+    return N
+
+
 if __name__ == "__main__":
     here = os.path.dirname(os.path.abspath(__file__))
     indir = os.path.join(here, "input")
@@ -394,3 +448,8 @@ if __name__ == "__main__":
     n5 = make_manoeuvre_file(os.path.join(indir, "synth_manoeuvre_A.csv"), seed=90210)
     print(f"Wrote synth_manoeuvre_A.csv ({n5} samples, IC=breath #{MANOEUVRE_IC_BREATH_NO}, "
          f"FVC=breath #{MANOEUVRE_FVC_BREATH_NO})")
+
+    n6 = make_file(os.path.join(indir, "synth_crossfile_stage.csv"), seed=55501, n_breaths=6)
+    n7 = make_ic_reference_file(os.path.join(indir, "synth_crossfile_ic.csv"), seed=55502)
+    print(f"Wrote synth_crossfile_stage.csv ({n6} samples), "
+         f"synth_crossfile_ic.csv ({n7} samples, IC=breath #{MANOEUVRE_CROSSFILE_IC_BREATH_NO})")
