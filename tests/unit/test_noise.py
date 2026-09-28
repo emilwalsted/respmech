@@ -180,11 +180,13 @@ def test_identical_transformation_regardless_of_batch_subset():
 
 @requires_synth()
 def test_emg_segmented_masks_unchanged_by_time_length_fix():
-    """pipeline._emg_segmented now derives each breath's inspiration/expiration mask
+    """pipeline._emg_segmented derives each breath's inspiration/expiration mask
     length from breath['time'] instead of breath['poes'] (poes may become the absent
     channel in a future signal set). On today's full-channel data the two lengths must
     agree breath for breath, and the function's own masks must be byte-identical to what
-    the old poes-based computation would have produced."""
+    the old poes-based computation would have produced. synth_settings() uses flow-method
+    segmentation with no trend correction, so this is also one of the (method='flow',
+    correct_trend=False) scenarios M-23 documents as byte-identical to before."""
     from respmech.core import compute, pipeline
     from respmech.core._legacy_ns import to_legacy_ns
 
@@ -205,7 +207,7 @@ def test_emg_segmented_masks_unchanged_by_time_length_fix():
         assert len(b["inspiration"]["time"]) == len(b["inspiration"]["poes"])
         assert len(b["expiration"]["time"]) == len(b["expiration"]["poes"])
 
-    emg_full, ins, ex = pipeline._emg_segmented(path, s)
+    emg_full, ins, ex = pipeline._emg_segmented(settings, s, path)
 
     ins_ref = np.zeros(len(fT), bool)
     ex_ref = np.zeros(len(fT), bool)
@@ -223,9 +225,10 @@ def test_emg_segmented_masks_unchanged_by_time_length_fix():
 def test_emg_segmented_mask_length_actually_comes_from_time_not_poes(monkeypatch):
     """Mutation-catching companion to the synth_case_A test above: on today's real data
     'time' and 'poes' always have equal length, so that test alone cannot tell 'reads
-    time' apart from 'reads poes'. Here the two are made to genuinely differ (an
-    otherwise-empty breath segmentation is monkeypatched in), so only a real read of
-    ['time'] gives the expected mask."""
+    time' apart from 'reads poes'. Here the two are made to genuinely differ (a fake
+    ``segment_file`` stands in for the real trim/zero/drift/trend/segment sequence, since
+    M-23 routes _emg_segmented through it), so only a real read of ['time'] gives the
+    expected mask."""
     from respmech.core import pipeline
 
     n = 10
@@ -234,27 +237,74 @@ def test_emg_segmented_mask_length_actually_comes_from_time_not_poes(monkeypatch
         1: {"inspiration": {"time": np.zeros(3), "poes": np.zeros(5)},
             "expiration": {"time": np.zeros(2), "poes": np.zeros(7)}},
     }
+    fake_trimmed = pipeline.Trimmed(
+        timecol=zeros, flow=zeros, volume=zeros, poes=zeros, pgas=zeros, pdi=zeros,
+        entropycolumns=[], emgcolumns=np.zeros((n, 1)),
+        startix=0, endix=n,
+        vol_uncorrected=zeros, zerovol=zeros, driftvol=zeros,
+        raw_timecol=zeros, raw_flow=zeros, raw_volume=zeros, raw_poes=zeros,
+        raw_pgas=zeros, raw_pdi=zeros, raw_emgcolumns=np.zeros((n, 1)),
+    )
+
+    def fake_segment_file(settings, s, path, *, cache=None, cancel_check=None,
+                          filename=None, noise_set=None, ecg_precomputed=None, progress=None):
+        return fake_breaths, fake_trimmed
 
     def fake_load_and_ecg(path, s, cache=None, cancel_check=None):
+        # _emg_segmented primes the cache via _load_and_ecg before calling segment_file
+        # (Wave 2.4 -- see its own docstring); "dummy.csv" does not exist on disk, so
+        # this must not touch it either.
         return (zeros, zeros, zeros, zeros, zeros, [], np.zeros((n, 1))), np.zeros((n, 1)), {}
 
-    def fake_trim(tc, flow, vol, poes, pgas, pdi, emgcolumns, s):
-        return tc, flow, vol, poes, pgas, pdi, emgcolumns, 0, n
-
-    def fake_separate(method, filename, tcT, fT, volc, pT, gT, dT, ent, emg_full, s):
-        return fake_breaths
-
+    monkeypatch.setattr(pipeline, "segment_file", fake_segment_file)
     monkeypatch.setattr(pipeline, "_load_and_ecg", fake_load_and_ecg)
-    monkeypatch.setattr(pipeline.compute, "trim", fake_trim)
-    monkeypatch.setattr(pipeline.compute, "separateintobreaths", fake_separate)
-    monkeypatch.setattr(pipeline.compute, "zero", lambda v: v)
-    monkeypatch.setattr(pipeline.compute, "correctdrift", lambda v, s: v)
 
     from respmech.core._legacy_ns import to_legacy_ns
-    s = to_legacy_ns(synth_settings())
-    _emg_full, ins, ex = pipeline._emg_segmented("dummy.csv", s)
+    settings = synth_settings()
+    s = to_legacy_ns(settings)
+    _emg_full, ins, ex = pipeline._emg_segmented(settings, s, "dummy.csv")
 
     # 'time' gives 3 True / 2 True (ins/ex); the old 'poes'-based code would have given
     # 5 True / 7 True instead -- a revert of the fix flips this assertion.
     assert list(ins[:5]) == [True, True, True, False, False]
     assert list(ex[:5]) == [False, False, False, True, True]
+
+
+@requires_synth()
+@pytest.mark.parametrize("method,correct_trend", [
+    ("flow", False),      # every existing golden scenario -- must stay byte-identical
+    ("volume", False),    # M-23: the segmentation method now genuinely changes the mask
+    ("flow", True),       # M-23: trend correction is now genuinely applied
+])
+def test_emg_segmented_mask_equals_main_loop_mask(method, correct_trend):
+    """M-23 acceptance criterion: _emg_segmented's inspiration/expiration mask must
+    equal the mask a direct segment_file() call -- exactly what run_batch's own main
+    loop uses -- implies for the SAME settings, for every segmentation method and with
+    trend correction on, not just the (flow, no-trend) case every golden scenario
+    happens to exercise. Before this ticket, _emg_segmented hardcoded flow-method
+    segmentation and never trend-corrected regardless of settings, so a volume-
+    segmented or trend-corrected analysis built its noise masks from breaths it never
+    actually analysed with."""
+    from respmech.core import pipeline
+    from respmech.core._legacy_ns import to_legacy_ns
+
+    settings = synth_settings()
+    settings.processing.segmentation.method = method
+    settings.processing.volume.correct_trend = correct_trend
+    s = to_legacy_ns(settings)
+    path = os.path.join(INPUT, "synth_case_A.csv")
+
+    breaths, trimmed = pipeline.segment_file(settings, s, path)
+    ins_ref = np.zeros(len(trimmed.flow), bool)
+    ex_ref = np.zeros(len(trimmed.flow), bool)
+    p = 0
+    for b in breaths.values():
+        ni = len(b["inspiration"]["time"]); ne = len(b["expiration"]["time"])
+        ins_ref[p:p + ni] = True
+        ex_ref[p + ni:p + ni + ne] = True
+        p += ni + ne
+
+    emg_full, ins, ex = pipeline._emg_segmented(settings, s, path)
+    n = min(len(emg_full), len(ins_ref))
+    assert np.array_equal(ins, ins_ref[:n])
+    assert np.array_equal(ex, ex_ref[:n])
