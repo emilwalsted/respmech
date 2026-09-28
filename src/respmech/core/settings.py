@@ -378,8 +378,9 @@ class PtpSettings:
 @dataclass
 class PeepiSettings:
     """Opt-in PEEPi detection and the modified Campbell diagram's threshold work
-    (``core.analysis.pressure``). Off by default: enabling it only ADDS columns, so every
-    existing output is unchanged with it off.
+    (``core.analysis.pressure``). Off by default: enabling it only ADDS columns, so no
+    existing table changes with it off. (Separately, an EMG normalisation reference file with
+    typed maximal breaths is read at those breaths whatever this setting says.)
 
     The four numeric fields are literature-informed STARTING values, not measured ones,
     and are provisional until they have been measured on real recordings (the same
