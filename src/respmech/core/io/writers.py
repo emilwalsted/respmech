@@ -768,6 +768,11 @@ def _write_run_report(result, settings, outputfolder: str,
     if emg.noise.enabled:
         L.append(f"  Noise reference:         {_noise_reference_provenance_value(settings)}")
     L.append(f"  EMG normalisation:       {emg.normalization}")
+    _pp = settings.processing.pressure.peepi
+    if _pp.enabled and caps.flow and caps.poes:
+        # which PEEPi value fed the threshold work (gastric-corrected with Pgas, else
+        # dynamic): same words as the Provenance sheet's "PEEPi threshold work" row
+        L.append(f"  PEEPi source:            {pressurelib.peepi_source(caps)}")
     # K-215: the per-file settings that rescale bf/VE (breath_counts) or change which
     # breaths are averaged (exclude_breaths) most directly, plus the three other
     # analysis-used.toml-only settings the site's own listing of this block omits —
