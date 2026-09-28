@@ -983,9 +983,11 @@ expiration only when `flow > 0` OR the mean of the next `breathseparationbuffer`
 samples is `> 0`. During an end-expiratory pause (flow exactly zero) that forward mean
 turns negative first, so the breath boundary lands in the pause, up to `buffer` samples
 before flow actually starts (a pause LONGER than `buffer` is refused by the segmenter
-itself, as a flat-flow error). `t_flow` is the first sample of the breath's
-inspiratory phase with `flow < 0` whose predecessor has `flow >= 0`; a phase that
-already starts below zero, or never crosses, falls back to its first sample. It is a
+itself, as a flat-flow error). `t_flow` is the start of the inspiratory flow
+proper: the sample after the LAST `flow >= 0` sample before the phase's peak inspiratory
+flow (the last `>= 0` to `< 0` crossing leading into the real inspiration, so a stray
+sub-zero sample of noise inside the pause is not taken for the start); a phase with no
+such sample falls back to its first sample. It is a
 separate quantity from the golden-locked PTP baseline (§5.6, the mean of the first
 `ptp.baseline_window_s`), which is untouched. The phase slices are end-exclusive, so
 each phase is one sample short of its boundaries; `t_flow` is unaffected.
@@ -1018,22 +1020,53 @@ real deflection; the pressures READ at `t_onset` and `t_flow` are the raw ones.
   ordinary PTP is already referenced to its own end-expiratory baseline, so adding the
   pre-flow area would subtract that baseline twice (`PTP_INVESTIGATION.md`).
 
-**Threshold work.** `peepi_source` is `corrected` when Pgas exists, else `dynamic`
-(written to the Provenance sheet). `wob_in_thr = peepi_source_value · vt · (98.0638 /
-1000) · bcnt · vefactor` — the rectangle `PEEPi × VT` in J·min⁻¹, the same
-cmH₂O·L → J factor and scaling as §5.7. `wob_in_total_thr = wob_in_total +
-wob_in_thr` and `wobtotal_thr = wobtotal + wob_in_thr`; `calculatewob`, its five
-columns and its V = 0 crossing are untouched, and `wobtotal` never absorbs
-`wob_in_thr`. `int_oesinsp_peepi = int_oesinsp + peepi_dyn · ti`, `ptp_oesinsp_peepi =
-int_oesinsp_peepi · bcnt · vefactor`; with Pgas and Pdi, `int_pdiinsp_peepi` /
-`ptp_pdiinsp_peepi` are the same with `peepi_corr` (Appendini 1996). A NaN `peepi_dyn`
-makes every dependent column NaN.
+**Threshold work, and what the existing columns already hold.** `peepi_source` is
+`corrected` when Pgas exists, else `dynamic` (written to the Provenance sheet). The
+rectangle is `PEEPi × VT` in J·min⁻¹ with the same cmH₂O·L → J factor and scaling as §5.7
+(`· (98.0638 / 1000) · bcnt · vefactor`), BUT only the part the existing polygon does not
+already contain is added. Where the segmenter put the boundary decides that: the polygon
+measures against the Poes at the phase start (resistive part, `poesin[0]`) and at the
+end of expiration (elastic part), and `calcptp` against the mean of the first
+`ptp.baseline_window_s`. A boundary in the pause BEFORE the deflection (the usual case:
+the pause belongs to the inspiratory phase) makes those references the pre-deflection
+level, so `int_oesinsp`, `wob_in_total` and `wobtotal` already contain the deflection;
+a boundary AFTER it (the fall happened under the previous breath's last expiratory
+samples) makes them the already-fallen level, so they do not. With
+`shift_wob = min(max(Poes[t_onset] − Poes[phase start], 0), peepi_dyn)` (what the polygon
+does NOT yet hold), the polygon already holds `peepi_dyn − shift_wob`, and
+`wob_in_thr = max(peepi_source_value − (peepi_dyn − shift_wob), 0) · vt · (98.0638 /
+1000) · bcnt · vefactor` (never negative: a corrected PEEPi smaller than the polygon's own
+share adds nothing rather than subtracting). `wob_in_total_thr = wob_in_total +
+wob_in_thr` and `wobtotal_thr = wobtotal + wob_in_thr`; `calculatewob`, its five columns
+and its V = 0 crossing are untouched, and `wobtotal` never absorbs `wob_in_thr`.
+`int_oesinsp_peepi = int_oesinsp + shift_ptp · ti` with `shift_ptp = min(max(Poes[t_onset]
+− mean(insp Poes[:ptp_bw]), 0), peepi_dyn)`, and `ptp_oesinsp_peepi = int_oesinsp_peepi ·
+bcnt · vefactor`; with Pgas and Pdi, `int_pdiinsp_peepi` / `ptp_pdiinsp_peepi` use
+`shift_pdi = min(max(mean(insp Pdi[:ptp_bw]) − Pdi[t_onset], 0), peepi_corr)` (Appendini
+1996). The same recording therefore gives the same totals wherever the boundary falls: in
+the golden fixture (boundary in the pause) the `*_peepi` columns equal the plain ones and
+`wob_in_thr` is 0, in a boundary-after-deflection breath they add the full amount
+(`tests/unit/test_peepi.py`). A NaN `peepi_dyn` makes every dependent column NaN.
 
 All columns live in `breath["pressure_ext"]`, joined after `breath["wob"]` in
 `build_breath_table`, and are computed in `run_batch` right after each breath's
 `calculatemechanics`. Units come from `core/quantities.py`'s generic rules (`peepi*` →
 cmH₂O, `peepi_lag` → s, `int_`/`ptp_`/`wob*`); the columns are also registered in
 `core/analysis/registry.py`.
+
+**Known limitations (measured on synthetic data, not yet on real recordings).** A
+cardiac oscillation of 0.5–2 cmH₂O on Poes (1.2 Hz) is not removed by the 50 ms
+smoothing; one rising smoothed step stops the backward walk, so `peepi_dyn` can be
+over- or underestimated by more than the ripple (1.4–4.9 for a true 3.0 at 0.5–1 cmH₂O
+ripple) and read 0 in a share of breaths at 2 cmH₂O. An expiratory Poes hump that
+decays continuously into the pre-flow fall is counted as part of the deflection
+(the well-known reason the dynamic value overestimates PEEPi with active expiration,
+which the Pgas correction is meant to remove); one separated from the fall by a flat
+stretch is not. Without Pgas the `dynamic` value carries that overestimate. `peepi_pgas_drop`
+is clamped at 0, so the corrected value equals the Pdi rise before flow only when Pgas
+falls. With `wob.calc_from = "average"` the polygon is an average-breath value while
+PEEPi is per breath. A 0 (no deflection) cannot be told from a detection that found
+nothing; only an unlocatable window or a missing predecessor is NaN with a notice.
 
 **Thresholds are provisional.** `search_window_s = 1.0`, `smooth_s = 0.05`,
 `onset_slope_frac = 0.1` and `min_deflection = 0.5` are literature-informed starting
