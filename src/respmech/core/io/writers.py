@@ -128,7 +128,11 @@ def _segmentation_provenance_value(settings) -> str:
             return f"separators ({counts[0]} per file)"
         return "separators (" + ", ".join(
             f"{e.file}: {len(e.times_s)}" for e in seg.separators) + ")"
-    return seg.method                          # fixed_windows/emg_burst: a later ticket's scope
+    if seg.method == "fixed_windows":
+        return f"fixed windows {float(seg.emg.window_s)}/{float(seg.emg.hop_s)} s"
+    # emg_burst: the number of bursts is a result, not a setting; the run report appends
+    # the total over all processed files, and the thresholds have their own Provenance row.
+    return "EMG bursts"
 
 
 #: human text for each mode resolve_noise_reference_mode() can return -- shared
@@ -214,6 +218,12 @@ def _provenance_rows(settings, when, incomplete_note: str | None = None,
             ("Signals", signals_value),
             ("Analyses", ", ".join(caps.analyses())),
             (_segmentation_provenance_key(settings), _segmentation_provenance_value(settings)),
+            *(([("EMG burst detection",
+                 f"threshold {settings.processing.segmentation.emg.burst_threshold_frac:g}, "
+                 f"minimum {settings.processing.segmentation.emg.burst_min_s:g} s, "
+                 f"envelope {settings.processing.segmentation.emg.burst_smooth_s:g} s, "
+                 f"minimum contrast {settings.processing.segmentation.emg.burst_min_contrast:g}")]
+              if settings.processing.segmentation.method == "emg_burst" else [])),
             # D22 (UI-overhaul): the same "average vs individual" choice that makes the
             # Preview & QC table's wob* columns either one repeated value or real
             # per-breath variation — named here so it survives into the written file,
@@ -787,6 +797,11 @@ def _write_run_report(result, settings, outputfolder: str,
              + (f" (→ {samp.resample_to_frequency} Hz)" if samp.resample else ""))
     if seg.method in ("flow", "volume"):
         L.append(f"  Breath separation:       by {seg.method}, buffer {seg.buffer}")
+    elif seg.method == "emg_burst":
+        n_bursts = sum(1 for fr in ok.values() for b in (fr.breaths or {}).values()
+                       if "burst_span" in b)
+        L.append(f"  Segmentation:            {_segmentation_provenance_value(settings)} "
+                 f"({n_bursts})")
     else:
         L.append(f"  Segmentation:            {_segmentation_provenance_value(settings)}")
     L.append(f"  ECG removal:             {_yn(emg.remove_ecg)}")

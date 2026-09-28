@@ -969,6 +969,7 @@ def stage_noise_fidelity(settings: Settings, cancel_check=None) -> dict:
     from respmech.core.pipeline import _build_noise_set, match_input_files
     from respmech.core import compute
     from respmech.core.io.loaders import DataValidationError
+    from respmech.core.analysis.segments import EmgSegmentationError
 
     s = to_legacy_ns(settings)
     # SAME matcher as run_batch: the shared noise profile must be built from exactly the
@@ -1014,7 +1015,8 @@ def stage_noise_fidelity(settings: Settings, cancel_check=None) -> dict:
         except Exception:                                   # noqa: BLE001
             pass          # the report itself is intact; the caption just stays hidden
         return report
-    except (compute.TrimError, DataValidationError, FileNotFoundError, ImportError) as e:
+    except (compute.TrimError, DataValidationError, FileNotFoundError, ImportError,
+            EmgSegmentationError) as e:
         # A user-fixable precondition on the reference/input files. Surface it as a clean,
         # single-line, actionable message (rendered by _on_noise_result -> _FileRunError)
         # instead of a raw traceback. Genuine bugs (IndexError / KeyError / numeric) are NOT
@@ -1037,6 +1039,11 @@ def stage_noise_fidelity(settings: Settings, cancel_check=None) -> dict:
         if "flow" in effective_signals(settings):
             hint = ("Check the flow channel and inverse-flow assignment, or turn off "
                     "'use expiration' and set explicit reference intervals.")
+        elif settings.processing.segmentation.method == "emg_burst":
+            hint = ("Check that the reference file has bursts with quiet stretches between "
+                    "them: lower the minimum contrast or shorten the envelope window in "
+                    "Preview & QC ▸ EMG – segments ▸ Advanced…, or set explicit reference "
+                    "intervals in the noise picker instead.")
         else:
             hint = ("Check the reference file's rest-typed segment(s) (Preview & QC's "
                     "EMG segments tab), or set explicit reference intervals in the noise "

@@ -134,6 +134,14 @@ def to_legacy_ns(s: Settings) -> SimpleNamespace:
                 breathcounts=[[e.file, e.count] for e in s.processing.breath_counts],
                 breathtypes=_breath_types_passthrough(s),
                 separators=_separators_passthrough(s),
+                # v2-named passthrough: parameters of the automatic EMG-only methods
+                # (fixed_windows / emg_burst), read by compute.separateintobreaths.
+                emgsegmentation=SimpleNamespace(
+                    window_s=seg.emg.window_s, hop_s=seg.emg.hop_s,
+                    burst_threshold_frac=seg.emg.burst_threshold_frac,
+                    burst_min_s=seg.emg.burst_min_s,
+                    burst_smooth_s=seg.emg.burst_smooth_s,
+                    burst_min_contrast=seg.emg.burst_min_contrast),
                 ptp_baseline_window_s=s.processing.ptp.baseline_window_s,
             ),
             # v2-only passthrough (no legacy counterpart), like ptp_baseline_window_s

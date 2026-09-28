@@ -165,6 +165,20 @@ _SEGMENT_EMG = (
     ColumnSpec(prefix="t_rms_file_max_col_", requires=frozenset({"emg"}), module="segment_emg", unit="s"),
     ColumnSpec(prefix="rms_file_max_col_", requires=frozenset({"emg"}), module="segment_emg", unit="a.u."),
     ColumnSpec(prefix="rms_file_top3_col_", requires=frozenset({"emg"}), module="segment_emg", unit="a.u."),
+    # emg_burst neural timing (core.analysis.segments._neural_timing). EXPLICIT units
+    # (units are never left to inference for a new column): none of the five names matches core.quantities' exact-match
+    # rules for the mechanical ti/te/ttot/ti_ttot/bf, so without these rows they would
+    # come out with no unit at all.
+    ColumnSpec(name="ti_emg", requires=frozenset({"emg"}), module="segment_emg", unit="s"),
+    ColumnSpec(name="te_emg", requires=frozenset({"emg"}), module="segment_emg", unit="s"),
+    ColumnSpec(name="ttot_emg", requires=frozenset({"emg"}), module="segment_emg", unit="s"),
+    ColumnSpec(name="ti_ttot_emg", requires=frozenset({"emg"}), module="segment_emg", unit="—"),
+    ColumnSpec(name="bf_emg", requires=frozenset({"emg"}), module="segment_emg", unit="min⁻¹"),
+    # emg_burst per-file QC (identical on every segment of a file): a count, the share of
+    # the recording spent in bursts, and the envelope contrast the detection saw.
+    ColumnSpec(name="emg_seg_n_bursts", requires=frozenset({"emg"}), module="segment_emg", unit=""),
+    ColumnSpec(name="emg_seg_burst_frac", requires=frozenset({"emg"}), module="segment_emg", unit="—"),
+    ColumnSpec(name="emg_seg_contrast", requires=frozenset({"emg"}), module="segment_emg", unit="—"),
 )
 
 # Manoeuvre extraction (M-29, core.analysis.manoeuvres): the Manoeuvres-sheet columns

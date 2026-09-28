@@ -1614,7 +1614,8 @@ class SettingsScreen(QWidget):
         caller today that has a segmentation method to name at all —
         ``SignalSetDialog``'s 'EMG only' button and Setup's 'Change…' door reopening
         it), applied to ``processing.segmentation.method`` together with
-        ``noise.use_expiration = False`` and ``noise.auto_prop = False``: an EMG-only
+        ``noise.use_expiration = False`` and (except for ``emg_burst``, which implements it)
+        ``noise.auto_prop = False``: an EMG-only
         analysis has no inspiration/expiration phases for ``use_expiration`` to mean
         anything about (see ``core.settings.resolve_noise_reference_mode``), and
         ``Settings.validate()`` outright REJECTS ``auto_prop`` while noise reduction is
@@ -1684,12 +1685,27 @@ class SettingsScreen(QWidget):
         if "emg" not in new_set:
             ch.emg = []
 
+        noise = proc.emg.noise
         if segmentation_method is not None:
             proc.segmentation.method = segmentation_method
-            proc.emg.noise.use_expiration = False
-            proc.emg.noise.auto_prop = False
+            noise.use_expiration = False
+            if segmentation_method == "emg_burst":
+                # bursts against the periods between them IS an active/quiet split, so
+                # both the inter-burst reference and auto_prop have an implementation
+                # here (and are what a burst analysis with noise reduction needs: it has
+                # no typed rest segment to fall back on until the user makes one). Only
+                # the default while no other reference is set: re-choosing the method
+                # never overrides a span or mode the user picked.
+                if not noise.reference_intervals and noise.reference_mode == "auto":
+                    noise.reference_mode = "interburst"
+            else:
+                noise.auto_prop = False
+                if noise.reference_mode == "interburst":
+                    noise.reference_mode = "auto"      # no bursts to take the periods between
         elif wants_flow and proc.segmentation.method not in ("flow", "volume"):
             proc.segmentation.method = "flow"
+            if noise.reference_mode != "auto":
+                noise.reference_mode = "auto"           # EMG-only alternatives, refused with flow
         elif not wants_flow and proc.segmentation.method in ("flow", "volume"):
             proc.segmentation.method = "whole_file"
 
