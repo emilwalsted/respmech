@@ -543,7 +543,7 @@ output):
   min(inspiration['poes'])`, `pdi_max_ref = max(inspiration['pdi']) −
   inspiration['pdi'][0]` (both SWINGS from the breath's own immediate
   pre-inspiratory baseline — the same convention `poes_ic_swing`/`pdi_ic_swing`
-  use above, not the raw absolute pressure, so a later normalisation ratio (M-47)
+  use above, not the raw absolute pressure, so the normalisation ratio (§5.17)
   never divides a baseline-subtracted swing by a channel's absolute resting offset),
   and `rms_max_ref` — the peak rolling-RMS envelope (`emg.rolling_rms`, the same grid
   `§5.12`'s whole-file diagnostics use) across every EMG channel in the breath,
@@ -640,8 +640,8 @@ columns, in two passes around the ordinary main per-file loop:
   Provenance sheet gets an "IC reference" row when its own reference resolved
   (`FileResult.references_used['ic']`, via `_ic_reference_provenance_value`).
   `fvc`/`max_insp` are extracted by the SAME forepass (any typed breath in a source
-  file, of any kind) but have no consuming column of their own yet — that is
-  `mfvl.py` (M-42) and the normalisation ticket (M-47)'s scope. `baseline_ic` gained
+  file, of any kind); their consumers are `mfvl.py` (§5.15) and the normalisation
+  (§5.17). `baseline_ic` gained
   its first consumer in §5.14 below (`delta_ic`) — it is aggregated the same way an
   `ic` reference is, on demand, rather than through this forepass/afterpass pair
   (see §5.14's own note on why).
@@ -1095,6 +1095,64 @@ of; that too is not yet measured on real recordings.
 first follow a 0.4 s zero-flow pause carrying a 3 cmH₂O Poes fall and a 1 cmH₂O Pgas
 fall over the same 0.25 s), pinned analytically in `test_golden.py`: `peepi_dyn = 3.0`,
 `peepi_corr = 2.0`, breath #1 NaN.
+
+### 5.17 Normalisation to a maximal manoeuvre (v2-only, opt-in) — `core/analysis/normalisation.py`
+
+Off by default (`processing.pressure.normalization.enabled = false`). It is a pass over the
+finished per-breath tables, run after the operating-lung-volume pass; it adds no column to
+the Data sheet or the averages and writes one extra sheet, "Pressure normalised", per file.
+The design points are in [`beslutninger.md`](beslutninger.md) (28-09-2026).
+
+**The reference.** `resolve_reference(file, "max_insp")` (§5.13a: explicit entry, group
+default, the file's own typed `max_insp`/`sniff` breath). The values it reads are the ones
+`max_effort_from_breath` (§5.13) already wrote on the manoeuvre row: `poes_max_ref`
+(baseline sample minus the minimum of the inspiratory Poes), `pdi_max_ref` (maximum minus
+the baseline sample of the inspiratory Pdi), `rms_max_ref` (the largest channel peak of the
+rolling RMS over the whole breath) and `rms_max_ref_col_<channel>` (each channel's own
+peak). Over the breaths a link names, the largest finite value of each is used. Only breaths
+typed `max_insp` or `sniff` count; the kinds behind the reference are kept for Provenance.
+
+**Per tidal breath** (`n_bw = max(1, round(ptp.baseline_window_s · fs))`, the `calcptp` baseline window,
+with `fs = len(insp flow) / ti` recovered from the breath so a resampled run uses its own rate):
+
+| column | formula |
+|---|---|
+| `poes_insp_swing` | `mean(insp.poes[:n_bw]) − poes_mininsp` |
+| `pdi_insp_swing` | `pdi_maxinsp − mean(insp.pdi[:n_bw])` |
+| `poes_mean_insp`, `pdi_mean_insp` | `int_oesinsp / ti`, `int_pdiinsp / ti` |
+| `*_swing_pct`, `*_mean_insp_pct` | `100 · x / poes_max_ref` (or `pdi_max_ref`) |
+| `tt_es`, `tt_di` | `int_oesinsp / (ttot · poes_max_ref)`, `int_pdiinsp / (ttot · pdi_max_ref)` |
+| `rms_insp_max_pct` | `100 · rms_insp_max / rms_max_ref` |
+| `nrdi` | `rms_insp_max_pct · bf` |
+
+`tt_*` is the tension-time index `(Pmean/Pmax)·(Ti/Ttot)` (Bellemare & Grassino 1982;
+Ramonatxo et al. 1995) written with the pressure-time integral, in which `Ti` cancels. `nrdi`
+follows Murphy et al. 2011 (EMG as a percentage of maximum times breathing rate, arbitrary
+units). Anything whose reference is missing, or not a positive number, is NaN, with one
+notice per file; the column set follows the signal set alone, so a file without a
+reference writes the same columns.
+
+**EMG-normalised sheet.** `processing.emg.normalization_reference_file` naming a file that
+has `max_insp`/`sniff` breaths typed in it is now read at those breaths: a `_col_<channel>`
+column against that channel's peak (NaN if it has none), a `*_mean` column against the mean
+of the channel peaks, every other RMS column against `rms_max_ref`. This applies only with
+`normalization = "per_file_max"`; `per_file_mean`, and a file with no such breath, keep the
+earlier behaviour (each column's own maximum or mean over that file's breaths).
+
+**Sniff.** A nasal sniff has no mouth flow, so the inspiration/expiration boundary inside
+its typed breath is arbitrary; for `kind = sniff` the pressure swings are therefore taken over
+the whole typed breath (from the first sample's baseline), for `max_insp` over its inspiration.
+
+**Known properties, not corrected here.** (a) `calcptp` integrates over `linspace(0, n/fs, n)`,
+so every integral, and with it `tt_*` and `*_mean_insp`, is high by n/(n−1) (about 2 % at 50
+samples); the golden suite locks it. (b) `bf` counts every breath in the file, typed ones
+included, unless `breath_counts` is set, so `nrdi` is high in a tidal file with embedded
+maximal breaths. (c) `tt_di` uses baseline-referenced Pdi in numerator and denominator,
+where Bellemare & Grassino used absolute Pdi: it is lower than the classical index whenever
+end-expiratory Pdi is above zero, so do not read it against the classical 0.15 threshold.
+(d) An external reference source (outside the run's own files) is segmented without EMG
+noise reduction, so its `rms_max_ref` can differ from an in-batch source's; this predates
+normalisation and is not fixed here.
 
 ---
 
