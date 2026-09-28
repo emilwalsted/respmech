@@ -60,6 +60,10 @@ EXPIRATION = "expiration"
 #: segment(s)" option (M-24; the corresponding core mode is M-22's ``resolve_noise_
 #: reference_mode``'s ``'rest_segments'``).
 REST_SEGMENTS = "rest_segments"
+#: sentinel returned by ``selected_region`` for the EMG-only "use the periods between this
+#: file's bursts" option (core mode ``'interburst'``, offered only when the analysis is
+#: segmented with ``emg_burst``).
+INTERBURST = "interburst"
 #: the two "whole modes" every caller has always been able to reach, before ``modes_available``
 #: existed (M-24) -- every call site predating this ticket omits the argument and gets exactly
 #: this, so behaviour for them is unchanged byte-for-byte.
@@ -323,6 +327,20 @@ class NoiseProfileDialog(QDialog):
         else:
             self.use_rest_segments.setVisible(False)
 
+        # The third whole mode, again the same on/off shape: the quiet stretches between the
+        # bursts an ``emg_burst`` segmentation finds, so a burst analysis needs no typed
+        # 'rest' segment and no hand-marked span to build its profile.
+        self.use_interburst = ElidingCheckBox("Use the periods between this file's bursts")
+        self.use_interburst.setToolTip(
+            "Build the noise profile from the quiet stretches between the EMG bursts the "
+            "automatic segmentation finds in this file (a margin next to each burst is left "
+            "out), instead of marking a span by hand.")
+        self.use_interburst.toggled.connect(self._on_interburst_mode_changed)
+        if "interburst" in self._modes_available:
+            v.addWidget(self.use_interburst)
+        else:
+            self.use_interburst.setVisible(False)
+
         row = QHBoxLayout()
         self.info = QLabel(""); self.info.setProperty("status", "muted")
         row.addWidget(self.info, 1)
@@ -576,19 +594,29 @@ class NoiseProfileDialog(QDialog):
         """Whole-expiration and a marked span/rest-segments are alternatives, so choosing
         one visibly retires the others rather than leaving more than one on screen looking
         active."""
-        if on and self.use_rest_segments.isChecked():
-            self.use_rest_segments.blockSignals(True)
-            self.use_rest_segments.setChecked(False)
-            self.use_rest_segments.blockSignals(False)
+        self._untick(on, self.use_rest_segments, self.use_interburst)
+        self._sync_mode_ui()
+
+    @staticmethod
+    def _untick(on, *boxes):
+        """When a whole mode is switched ON, switch the others OFF without re-entering
+        their own handlers (they would each call ``_sync_mode_ui`` half-way through)."""
+        if not on:
+            return
+        for box in boxes:
+            if box.isChecked():
+                box.blockSignals(True)
+                box.setChecked(False)
+                box.blockSignals(False)
+
+    def _on_interburst_mode_changed(self, on):
+        self._untick(on, self.use_expiration, self.use_rest_segments)
         self._sync_mode_ui()
 
     def _on_rest_mode_changed(self, on):
         """M-24 counterpart of ``_on_mode_changed`` for the 'rest-typed segments' checkbox
         -- same mutual-exclusion-by-hand as the expiration/span pair above, just mirrored."""
-        if on and self.use_expiration.isChecked():
-            self.use_expiration.blockSignals(True)
-            self.use_expiration.setChecked(False)
-            self.use_expiration.blockSignals(False)
+        self._untick(on, self.use_expiration, self.use_interburst)
         self._sync_mode_ui()
 
     def _sync_mode_ui(self):
@@ -601,7 +629,8 @@ class NoiseProfileDialog(QDialog):
         that old logic."""
         exp_on = self.use_expiration.isChecked()
         rest_on = self.use_rest_segments.isChecked()
-        drag_on = not (exp_on or rest_on)
+        burst_on = self.use_interburst.isChecked()
+        drag_on = not (exp_on or rest_on or burst_on)
         self.glw.setEnabled(drag_on)
         for reg in self._regions:
             reg.setVisible(bool(self._selection) and drag_on)
@@ -611,11 +640,15 @@ class NoiseProfileDialog(QDialog):
         elif rest_on:
             self.warn.setVisible(False)
             self.info.setText("The profile will be built from this file's rest-typed segment(s).")
+        elif burst_on:
+            self.warn.setVisible(False)
+            self.info.setText("The profile will be built from the periods between this "
+                              "file's bursts.")
         elif self._selection:
             self._set_selection(*self._selection)
         else:
             self.info.setText("")
-        self.btn_ok.setEnabled(exp_on or rest_on or self._selection is not None)
+        self.btn_ok.setEnabled(exp_on or rest_on or burst_on or self._selection is not None)
 
     def selected_region(self):
         """The chosen (t0, t1) in seconds, ``EXPIRATION``/``REST_SEGMENTS`` for the two
@@ -629,4 +662,6 @@ class NoiseProfileDialog(QDialog):
             return EXPIRATION
         if "rest_segments" in self._modes_available and self.use_rest_segments.isChecked():
             return REST_SEGMENTS
+        if "interburst" in self._modes_available and self.use_interburst.isChecked():
+            return INTERBURST
         return self._selection

@@ -7,7 +7,7 @@ docstring for the two methods' shapes.
 import numpy as np
 import pytest
 
-from _helpers import requires_synth, synth_settings
+from _helpers import INPUT, requires_synth, synth_settings
 
 from respmech.core import compute
 from respmech.core import emg as emglib
@@ -416,3 +416,484 @@ def test_run_batch_refuses_emg_only_auto_prop_cleanly(tmp_path):
     s.input.files = "synth_case_A.csv"
     with pytest.raises(SettingsError, match="auto_prop"):
         run_batch(s)
+
+
+# -- automatic methods: fixed_windows and emg_burst ------------------------------------
+
+from respmech.core.analysis import segments as seglib          # noqa: E402
+from respmech.core.analysis.segments import (                  # noqa: E402
+    BURST_QC_COLUMNS, NEURAL_TIMING_COLUMNS, burst_masks, detect_bursts, emg_burst,
+    fixed_windows)
+
+BFS = 2000                          # sampling rate of the synthetic burst trains
+_DETECT = dict(threshold_frac=0.3, min_s=0.2, smooth_s=0.1, min_contrast=1.5)
+
+
+def _burst_train(onsets_s, dur_s, n_s=60, rest=0.02, seed=None, channels=1):
+    """A deterministic carrier whose amplitude steps between ``rest`` and 1 (so its RMS
+    is exactly known, unlike a noise burst, whose envelope fluctuates by several
+    percent): returns the signal and the TRUE ``(onset, offset)`` sample pairs."""
+    n = int(n_s * BFS)
+    t = np.arange(n) / BFS
+    env = np.full(n, rest)
+    truth = []
+    for o in onsets_s:
+        i0, i1 = int(round(o * BFS)), int(round((o + dur_s) * BFS))
+        env[i0:i1] = 1.0
+        truth.append((i0, i1))
+    sig = env * np.sin(2 * np.pi * 97 * t + 0.3)
+    if seed is not None:
+        sig = sig + np.random.default_rng(seed).normal(0, rest / 4, n)
+    if channels > 1:
+        sig = np.column_stack([sig] + [np.random.default_rng(i).normal(0, 0.01, n)
+                                       for i in range(1, channels)])
+    return sig, truth
+
+
+def test_detect_bursts_recovers_a_known_train_within_two_samples():
+    """A synthetic burst train with a known onset and offset gives segment times within
+    2 samples (measured: 1)."""
+    onsets = np.arange(2.0, 55.0, 4.0)
+    sig, truth = _burst_train(onsets, 1.5)
+    det = detect_bursts(sig, BFS, **_DETECT)
+    assert len(det.onsets) == len(truth)
+    assert np.max(np.abs(det.onsets - np.array([a for a, _ in truth]))) <= 2
+    assert np.max(np.abs(det.offsets - np.array([b for _, b in truth]))) <= 2
+    assert det.n_channels_used == 1 and det.contrast > 10
+
+
+def test_detect_bursts_locates_noisy_bursts_to_within_a_few_hundredths_of_a_second():
+    """Stochastic EMG has an envelope that fluctuates, so the half-power edge is only as
+    good as that fluctuation: measured 26 samples (13 ms) worst case at 2 kHz on the
+    train below. Pinned loosely on purpose -- this is the honest precision, not 2 samples."""
+    rng = np.random.default_rng(1)
+    n = 60 * BFS
+    sig = rng.normal(0, 0.05, n)
+    truth = []
+    for o in np.arange(2.0, 55.0, 4.0):
+        i0, i1 = int(o * BFS), int((o + 1.5) * BFS)
+        sig[i0:i1] += rng.normal(0, 0.5, i1 - i0)
+        truth.append((i0, i1))
+    det = detect_bursts(sig, BFS, **_DETECT)
+    assert len(det.onsets) == len(truth)
+    assert np.max(np.abs(det.onsets - np.array([a for a, _ in truth]))) <= 0.02 * BFS
+    assert np.max(np.abs(det.offsets - np.array([b for _, b in truth]))) <= 0.02 * BFS
+
+
+def test_pure_noise_raises_emg_segmentation_error():
+    """Nothing to find is an error, never a segmentation of noise."""
+    noise = np.random.default_rng(3).normal(0, 1, 60 * BFS)
+    with pytest.raises(EmgSegmentationError, match="No EMG bursts found in f.csv"):
+        detect_bursts(noise, BFS, filename="f.csv", **_DETECT)
+
+
+def test_a_silent_recording_raises_instead_of_dividing_by_zero():
+    with pytest.raises(EmgSegmentationError):
+        detect_bursts(np.zeros(10 * BFS), BFS, **_DETECT)
+
+
+def test_a_burst_shorter_than_burst_min_s_is_dropped_and_a_short_gap_is_bridged():
+    # 0.6 s burst, 0.1 s gap (< 0.2 s), 0.6 s burst -> ONE burst; a lone 0.1 s blip -> none
+    sig, _ = _burst_train([2.0], 0.6, n_s=8)
+    sig2, _ = _burst_train([2.7], 0.6, n_s=8)
+    bridged = sig + sig2 - np.sin(2 * np.pi * 97 * np.arange(sig.size) / BFS + 0.3) * 0.02
+    det = detect_bursts(bridged, BFS, **_DETECT)
+    assert len(det.onsets) == 1
+    assert (det.offsets[0] - det.onsets[0]) / BFS > 1.2          # the two merged
+    train, _ = _burst_train([2.0, 8.0], 1.0, n_s=12)
+    blip, _ = _burst_train([5.0], 0.1, n_s=12)
+    both = train + blip - np.sin(2 * np.pi * 97 * np.arange(train.size) / BFS + 0.3) * 0.02
+    assert len(detect_bursts(both, BFS, **_DETECT).onsets) == 2   # the blip never counts
+
+
+def test_a_channel_without_bursts_is_left_out_of_the_detection():
+    sig, truth = _burst_train(np.arange(2.0, 55.0, 4.0), 1.5, channels=2)
+    det = detect_bursts(sig, BFS, **_DETECT)
+    assert det.n_channels_used == 1
+    assert len(det.onsets) == len(truth)
+
+
+def test_a_non_finite_sample_does_not_poison_the_envelope_after_it():
+    sig, truth = _burst_train(np.arange(2.0, 55.0, 4.0), 1.5)
+    sig[int(1.0 * BFS)] = np.nan
+    det = detect_bursts(sig, BFS, **_DETECT)
+    assert len(det.onsets) == len(truth)
+
+
+def _segment_burst_train(**kw):
+    onsets = [2.0, 6.0, 10.5, 14.0]
+    sig, truth = _burst_train(onsets, 1.5, n_s=20)
+    n = sig.size
+    timecol = np.arange(n) / BFS
+    segs = emg_burst("f.csv", timecol, sig[:, None], [], sig[:, None], BFS,
+                     ignored_breaths=kw.get("ignored", set()), kinds=kw.get("kinds", {}),
+                     **_DETECT)
+    return segs, truth, n
+
+
+def test_emg_burst_cuts_at_each_onset_and_the_last_segment_runs_to_the_end():
+    segs, truth, n = _segment_burst_train()
+    assert list(segs) == [1, 2, 3, 4]
+    starts = [truth[k][0] for k in range(4)]
+    for k, number in enumerate(segs):
+        seg = segs[number]
+        assert abs(int(round(seg["time"][0] * BFS)) - starts[k]) <= 2
+        end = starts[k + 1] if k + 1 < 4 else n
+        assert abs(len(seg["time"]) - (end - starts[k])) <= 3
+        assert seg["has_phases"] is False
+        assert seg["burst_span"][1] > seg["burst_span"][0]
+        for key in ("flow", "volume", "poes", "pgas", "pdi"):
+            assert len(seg[key]) == 0
+
+
+def test_neural_timing_is_the_bursts_own_arithmetic():
+    segs, truth, _ = _segment_burst_train()
+    first = segs[1]["neural_timing"]
+    assert list(first) == list(NEURAL_TIMING_COLUMNS)
+    ti = (truth[0][1] - truth[0][0]) / BFS
+    ttot = (truth[1][0] - truth[0][0]) / BFS
+    assert first["ti_emg"] == pytest.approx(ti, abs=2 / BFS)
+    assert first["ttot_emg"] == pytest.approx(ttot, abs=3 / BFS)
+    assert first["te_emg"] == pytest.approx(first["ttot_emg"] - first["ti_emg"])
+    assert first["ti_ttot_emg"] == pytest.approx(first["ti_emg"] / first["ttot_emg"])
+    assert first["bf_emg"] == pytest.approx(60.0 / first["ttot_emg"])
+    last = segs[4]["neural_timing"]                       # no following onset: not a short cycle
+    assert last["ti_emg"] == pytest.approx(1.5, abs=2 / BFS)
+    assert all(np.isnan(last[k]) for k in ("te_emg", "ttot_emg", "ti_ttot_emg", "bf_emg"))
+
+
+def test_burst_qc_is_identical_on_every_segment_of_a_file():
+    segs, truth, n = _segment_burst_train()
+    qcs = [dict(s["emg_seg_qc"]) for s in segs.values()]
+    assert all(q == qcs[0] for q in qcs)
+    assert list(qcs[0]) == list(BURST_QC_COLUMNS)
+    assert qcs[0]["emg_seg_n_bursts"] == 4
+    assert qcs[0]["emg_seg_burst_frac"] == pytest.approx(4 * 1.5 * BFS / n, rel=0.01)
+
+
+def test_emg_burst_ignored_and_kinds_apply_by_segment_number():
+    segs, _, _ = _segment_burst_train(ignored={2}, kinds={3: "rest"})
+    assert [s["ignored"] for s in segs.values()] == [False, True, False, False]
+    assert segs[3]["kind"] == "rest" and segs[1]["kind"] is None
+
+
+def test_burst_masks_are_the_bursts_and_the_guarded_periods_between_them():
+    segs, _, n = _segment_burst_train()
+    spans = [s["burst_span"] for s in segs.values()]
+    coarse = [s["burst_span_coarse"] for s in segs.values()]
+    burst, inter = burst_masks(segs, n, BFS, 0.1)
+    guard = int(round(0.1 * BFS))
+    expect_burst = np.zeros(n, bool)
+    expect_inter = np.zeros(n, bool)
+    for k, (on, off) in enumerate(spans):
+        expect_burst[on:off] = True
+        if k + 1 < len(spans):
+            expect_inter[coarse[k][1] + guard:coarse[k + 1][0] - guard] = True
+    assert np.array_equal(burst, expect_burst)
+    assert np.array_equal(inter, expect_inter)
+    assert not (burst & inter).any()
+    assert not inter[:spans[0][0]].any() and not inter[spans[-1][1]:].any()   # nothing outside
+    assert all(c[0] <= s_[0] and c[1] >= s_[1] for c, s_ in zip(coarse, spans))  # coarse is wider
+
+
+def test_fixed_windows_tile_the_recording_and_drop_a_trailing_piece():
+    n = int(23.0 * FS)
+    timecol = np.arange(n) / FS
+    emg = _emg_data(n)
+    segs = fixed_windows("f.csv", timecol, emg, [], FS, window_s=5.0, hop_s=5.0,
+                         ignored_breaths=set(), kinds={})
+    assert list(segs) == [1, 2, 3, 4]                     # 3 s left over is dropped, not padded
+    assert all(len(s["time"]) == 5 * FS and s["has_phases"] is False for s in segs.values())
+    assert np.allclose(np.asarray(segs[2]["emgcols"]), emg[5 * FS:10 * FS])
+
+
+def test_fixed_windows_hop_shorter_than_window_overlaps_and_longer_leaves_gaps():
+    n = 20 * FS
+    timecol = np.arange(n) / FS
+    emg = _emg_data(n)
+    over = fixed_windows("f.csv", timecol, emg, [], FS, window_s=4.0, hop_s=2.0,
+                         ignored_breaths=set(), kinds={})
+    assert len(over) == 9 and over[2]["time"][0] == pytest.approx(2.0)
+    gaps = fixed_windows("f.csv", timecol, emg, [], FS, window_s=2.0, hop_s=5.0,
+                         ignored_breaths=set(), kinds={})
+    assert len(gaps) == 4 and gaps[2]["time"][0] == pytest.approx(5.0)
+
+
+def test_fixed_windows_on_a_recording_shorter_than_one_window_raises_named_error():
+    n = 3 * FS
+    with pytest.raises(EmgSegmentationError, match="f.csv"):
+        fixed_windows("f.csv", np.arange(n) / FS, _emg_data(n), [], FS, window_s=5.0,
+                      hop_s=5.0, ignored_breaths=set(), kinds={})
+
+
+def test_the_eight_new_columns_resolve_to_their_registry_units():
+    from _helpers import assert_units
+    assert_units({"ti_emg": "s", "te_emg": "s", "ttot_emg": "s", "ti_ttot_emg": "—",
+                  "bf_emg": "min⁻¹", "emg_seg_n_bursts": "", "emg_seg_burst_frac": "—",
+                  "emg_seg_contrast": "—"})
+
+
+# -- the dispatch and the whole run ------------------------------------------------------
+
+BURST_INPUT = "synth_emgburst_A.csv"
+
+
+def _burst_run_settings(tmp_path, method="emg_burst"):
+    s = _emg_only_synth_settings(tmp_path)
+    s.input.folder = INPUT
+    s.input.files = BURST_INPUT
+    s.analysis.signals = ["emg"]
+    s.processing.segmentation.method = method
+    s.input.channels.entropy = []
+    s.input.channels.emg = [2, 3, 4]
+    return s
+
+
+@requires_synth()
+def test_run_batch_emg_burst_end_to_end_reports_timing_and_qc_columns(tmp_path):
+    from respmech.core.pipeline import run_batch
+
+    s = _burst_run_settings(tmp_path)
+    result = run_batch(s)
+    fr = result.ok_files[BURST_INPUT]
+    assert fr.error is None
+    assert len(fr.breaths) == 6
+    cols = list(fr.breaths_table.columns)
+    for c in NEURAL_TIMING_COLUMNS + BURST_QC_COLUMNS + ("seg_duration_s",):
+        assert c in cols
+    assert not any(c in cols for c in ("ti", "te", "ttot", "bf"))
+    row = fr.breaths_table.iloc[0]
+    assert 1.0 < row["ti_emg"] < 1.6 and 3.5 < row["ttot_emg"] < 4.5
+    assert 13 < row["bf_emg"] < 17 and row["emg_seg_n_bursts"] == 6
+    assert "rms_col_2" in cols
+
+
+@requires_synth()
+def test_run_batch_fixed_windows_end_to_end(tmp_path):
+    from respmech.core.pipeline import run_batch
+
+    s = _burst_run_settings(tmp_path, method="fixed_windows")
+    s.processing.segmentation.emg.window_s = 4.0
+    s.processing.segmentation.emg.hop_s = 4.0
+    result = run_batch(s)
+    fr = result.ok_files[BURST_INPUT]
+    assert fr.error is None
+    assert len(fr.breaths) == 7                           # 28.4 s -> seven whole 4 s windows
+    assert not any(c in fr.breaths_table.columns for c in NEURAL_TIMING_COLUMNS)
+
+
+@requires_synth()
+def test_run_batch_reports_a_recording_failing_the_contrast_gate_as_a_soft_per_file_error(tmp_path):
+    from respmech.core.pipeline import run_batch
+
+    s = _burst_run_settings(tmp_path)
+    s.input.files = "synth_case_A.csv"        # flow-bearing file read as EMG only: steady EMG, no gaps
+    s.processing.segmentation.emg.burst_min_contrast = 50.0
+    result = run_batch(s)
+    fr = result.failed_files["synth_case_A.csv"]
+    assert fr.error_kind == "EmgSegmentationError"
+
+
+def test_bursts_are_detected_on_the_ecg_removed_signal_not_the_noise_reduced_one(tmp_path):
+    """The noise profile is itself cut from the periods between bursts, so segmenting the
+    already-reduced signal would be circular. ``segment_file`` therefore hands the
+    detection the ECG-stage signal (``stages['detect']``), whatever the noise setting."""
+    from respmech.core.pipeline import _process_emg, segment_file
+    from respmech.core._legacy_ns import to_legacy_ns
+
+    s = _burst_run_settings(tmp_path)
+    ns = to_legacy_ns(s)
+    raw = np.random.default_rng(0).normal(size=(500, 3))
+
+    class _Reduce:
+        def apply_columns(self, x):
+            return np.asarray(x) * 0.5
+
+    _emg, _diag, stages = _process_emg(ns, raw, 0, 500, noise_set=_Reduce())
+    assert np.array_equal(stages["detect"], raw)          # remove_ecg is off: ECG stage == raw
+    assert np.array_equal(stages["noise_reduced"], raw * 0.5)
+
+
+@requires_synth()
+def test_segmentation_settings_round_trip_through_toml(tmp_path):
+    from respmech.settingsio import toml_io
+
+    s = _burst_run_settings(tmp_path)
+    e = s.processing.segmentation.emg
+    e.window_s, e.hop_s, e.burst_threshold_frac = 2.5, 1.25, 0.4
+    e.burst_min_s, e.burst_smooth_s, e.burst_min_contrast = 0.3, 0.05, 2.0
+    path = tmp_path / "a.toml"
+    toml_io.save_toml(s, str(path))
+    back = toml_io.load_toml(str(path))
+    assert back.processing.segmentation.method == "emg_burst"
+    assert back.processing.segmentation.emg == e
+
+
+@pytest.mark.parametrize("method,field,value", [
+    ("fixed_windows", "window_s", 0), ("fixed_windows", "hop_s", -1.0),
+    ("fixed_windows", "window_s", float("inf")), ("fixed_windows", "hop_s", True),
+    ("fixed_windows", "window_s", 1e300),
+    ("emg_burst", "burst_min_s", 0), ("emg_burst", "burst_smooth_s", float("nan")),
+    ("emg_burst", "burst_threshold_frac", 0.0), ("emg_burst", "burst_threshold_frac", 1.0),
+    ("emg_burst", "burst_min_contrast", 1.0), ("emg_burst", "burst_min_contrast", float("inf"))])
+def test_validate_rejects_nonsense_emg_segmentation_parameters(method, field, value):
+    from respmech.core.settings import SettingsError
+    s = _base_settings()
+    s.analysis.signals = ["emg"]
+    s.processing.segmentation.method = method
+    setattr(s.processing.segmentation.emg, field, value)
+    with pytest.raises(SettingsError, match=f"segmentation.emg.{field}"):
+        s.validate()
+
+
+def test_validate_ignores_the_emg_segmentation_parameters_of_another_method():
+    """Under whole_file the burst thresholds are dormant, and the UI has no place to
+    correct them there, so a stale bad value must not block the analysis."""
+    s = _base_settings()
+    s.analysis.signals = ["emg"]
+    s.processing.segmentation.method = "whole_file"
+    s.processing.segmentation.emg.burst_min_contrast = 0.5
+    s.processing.segmentation.emg.window_s = -1
+    s.validate()
+
+
+@requires_synth()
+def test_run_report_and_provenance_name_the_automatic_methods(tmp_path):
+    from respmech.core.io import writers
+    from respmech.core.pipeline import run_batch
+
+    s = _burst_run_settings(tmp_path)
+    s.output.folder = str(tmp_path)
+    writers.write_batch(run_batch(s), s, str(tmp_path))
+    report = open(tmp_path / "run-report.txt", encoding="utf-8").read()
+    assert "Segmentation:            EMG bursts (6)" in report
+    frame = writers._provenance_rows(s, None)
+    rows = dict(zip(frame["Key"], frame["Value"]))
+    assert rows["Segmentation"] == "EMG bursts"
+    assert "threshold 0.3" in rows["EMG burst detection"]
+    s.processing.segmentation.method = "fixed_windows"
+    assert writers._segmentation_provenance_value(s) == "fixed windows 5.0/5.0 s"
+    assert "EMG burst detection" not in list(writers._provenance_rows(s, None)["Key"])
+
+
+# -- robustness of the detection (review findings) ---------------------------------------
+
+def _noisy_train(onsets_s, dur_s, amp, n_s, noise=1.0, seed=0, shape=None):
+    """Noise of standard deviation ``noise`` plus bursts of noise ``amp`` times larger;
+    ``shape`` optionally maps a 0..1 position in the burst to an amplitude factor."""
+    rng = np.random.default_rng(seed)
+    n = int(n_s * BFS)
+    sig = rng.normal(0, noise, n)
+    truth = []
+    for o in onsets_s:
+        i0, i1 = int(o * BFS), int((o + dur_s) * BFS)
+        pos = np.linspace(0, 1, i1 - i0)
+        f = np.ones_like(pos) if shape is None else shape(pos)
+        sig[i0:i1] += rng.normal(0, amp * noise, i1 - i0) * f
+        truth.append((i0, i1))
+    return sig, truth
+
+
+@pytest.mark.parametrize("duty", [0.35, 0.55, 0.65])
+def test_bursts_are_found_however_much_of_the_cycle_they_fill(duty):
+    """The resting level is the 20th percentile, not the median: with the muscle active for
+    more than half of the time a median IS burst level and nothing would be found."""
+    period = 3.0
+    onsets = np.arange(1.0, 55.0, period)
+    sig, truth = _noisy_train(onsets, duty * period, 5.0, 60)
+    det = detect_bursts(sig, BFS, **_DETECT)
+    assert len(det.onsets) == len(truth)
+
+
+def test_a_constant_offset_or_slow_drift_is_not_activity():
+    onsets = np.arange(2.0, 28.0, 3.5)
+    sig, truth = _noisy_train(onsets, 1.4, 5.0, 30)
+    t = np.arange(sig.size) / BFS
+    for disturbed in (sig + 20.0, sig + 3 * np.sin(2 * np.pi * 0.05 * t)):
+        assert len(detect_bursts(disturbed, BFS, **_DETECT).onsets) == len(truth)
+
+
+def test_a_dropout_of_missing_samples_is_neither_a_burst_nor_a_resting_level():
+    onsets = np.arange(2.0, 28.0, 3.5)
+    sig, truth = _noisy_train(onsets, 1.4, 5.0, 30)
+    sig[:int(5 * BFS)] = np.nan
+    det = detect_bursts(sig, BFS, **_DETECT)
+    valid_truth = [tr for tr in truth if tr[0] > 5 * BFS]
+    assert len(det.onsets) == len(valid_truth)
+    assert det.onsets[0] >= 5 * BFS and np.isfinite(det.contrast)
+
+
+def test_a_burst_cut_off_by_the_recordings_ends_reports_no_timing():
+    """A truncated cycle is not a short one: every timing value is NaN for a burst that
+    starts at sample 0 or runs to the last sample."""
+    sig, _ = _noisy_train([1.0, 5.0, 9.0, 13.0, 17.0], 1.4, 5.0, 19.0)
+    sig = sig[int(1.6 * BFS):int(17.6 * BFS)]        # begins mid-burst, ends mid-burst
+    n = sig.size
+    segs = emg_burst("f.csv", np.arange(n) / BFS, sig[:, None], [], sig[:, None], BFS,
+                     ignored_breaths=set(), kinds={}, **_DETECT)
+    assert len(segs) == 5
+    assert segs[1]["burst_span_coarse"][0] == 0
+    assert all(np.isnan(v) for v in segs[1]["neural_timing"].values())
+    assert segs[5]["burst_span_coarse"][1] >= n
+    assert all(np.isnan(v) for v in segs[5]["neural_timing"].values())
+    assert not any(np.isnan(v) for v in segs[2]["neural_timing"].values())
+
+
+def test_the_quiet_periods_stay_quiet_for_augmenting_bursts():
+    """Tidal diaphragm EMG ramps up through inspiration. The located edge of such a burst
+    is late, so the quiet masks are built from the coarse edges: measured here, the
+    reference cut from the periods between bursts holds essentially no burst activity."""
+    onsets = np.arange(2.0, 55.0, 4.0)
+    ramp = lambda p: np.where(p < 2 / 3, p / (2 / 3), (1 - p) / (1 / 3))          # noqa: E731
+    sig, truth = _noisy_train(onsets, 1.8, 6.0, 60, shape=ramp)
+    segs = emg_burst("f.csv", np.arange(sig.size) / BFS, sig[:, None], [], sig[:, None],
+                     BFS, ignored_breaths=set(), kinds={}, **_DETECT)
+    burst, inter = burst_masks(segs, sig.size, BFS, 0.1)
+    truly_active = np.zeros(sig.size, bool)
+    for a, b in truth:
+        truly_active[a:b] = True
+    assert inter.sum() > 0
+    assert (inter & truly_active).sum() / inter.sum() < 0.12
+    assert np.sqrt(np.mean(sig[inter] ** 2)) < 1.15            # pure noise is 1.0
+
+
+def test_refinement_never_lets_bursts_swap_or_overlap_and_keeps_a_minimum_duration():
+    """Two bursts closer than the envelope window: whatever the detection makes of them,
+    onsets and offsets stay ordered, non-overlapping and at least burst_min_s long."""
+    sig, _ = _burst_train([2.0, 3.35, 8.0], 1.0, n_s=12)
+    det = detect_bursts(sig, BFS, threshold_frac=0.3, min_s=0.2, smooth_s=0.5,
+                        min_contrast=1.5)
+    assert np.all(np.diff(det.onsets) > 0)
+    assert np.all(det.offsets > det.onsets)
+    assert np.all(det.offsets[:-1] <= det.onsets[1:])
+    assert np.all(det.offsets - det.onsets >= 0.2 * BFS)
+
+
+def test_segment_file_hands_the_ecg_stage_to_the_detection_not_the_reduced_signal(
+        tmp_path, monkeypatch):
+    from respmech.core import compute
+    from respmech.core.pipeline import segment_file
+    from respmech.core._legacy_ns import to_legacy_ns
+
+    s = _burst_run_settings(tmp_path)
+    s.processing.emg.remove_ecg = True
+    ns = to_legacy_ns(s)
+    seen = {}
+    real = compute.separateintobreaths
+
+    def spy(method, filename, timecol, flow, volume, poes, pgas, pdi, ent, emg, settings,
+            detect_emg=None):
+        seen["emg"], seen["detect"] = np.asarray(emg), np.asarray(detect_emg)
+        return real(method, filename, timecol, flow, volume, poes, pgas, pdi, ent, emg,
+                    settings, detect_emg=detect_emg)
+
+    class _Zero:
+        def apply_columns(self, x):
+            return np.zeros_like(np.asarray(x, dtype=float))
+
+    monkeypatch.setattr(compute, "separateintobreaths", spy)
+    import os
+    breaths, _ = segment_file(s, ns, os.path.join(INPUT, BURST_INPUT), noise_set=_Zero())
+    assert not seen["emg"].any()                          # what the segments carry: reduced
+    assert seen["detect"].any() and np.isfinite(seen["detect"]).all()
+    assert len(breaths) == 6                              # and the bursts were still found
