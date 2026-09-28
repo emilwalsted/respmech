@@ -6,6 +6,65 @@ decision <date>" — never an internal ticket reference; this repo is public).
 
 ---
 
+**28-09-2026 — Modified Campbell diagram / PEEPi construction: built from the
+published literature, with five fixed design points, before any code is written
+(author's decision 28-09-2026).** No external code or correspondence is a
+prerequisite; a later cross-check against other groups' implementations is a
+possible follow-up, not a condition. The construction is:
+
+1. **`t_flow` is the true zero-crossing, not the segment boundary.**
+   `separateintobreathsbyflow` (compute.py) ends the expiratory run only when
+   `flow > 0` OR the forward mean over `breathseparationbuffer` samples is `> 0`,
+   so during an end-expiratory pause (flow at zero) the forward mean turns
+   negative first and the boundary lands up to `buffer` samples before the real
+   onset of inspiratory flow. `t_flow` is therefore the first sample of the
+   inspiratory phase with `flow < 0` whose predecessor has `flow >= 0` (fallback:
+   the phase start). It is a separate quantity from the golden-locked `calcptp`
+   baseline (mean of the first `ptp_baseline_window_s` of the phase), which stays
+   unchanged. Consequence for testing: the PEEPi drop must be independent of
+   `breathseparationbuffer` (a synthetic breath with a 0.4 s zero-flow pause is
+   the pinned case).
+2. **The PEEPi rectangle is laid on top of the golden-locked Campbell polygon.**
+   `calculatewob`'s five columns and its V = 0 crossing (decision 05-09-2026) are
+   untouched, and `wobtotal` never absorbs the threshold work `wob_in_thr`. The
+   extra area is reported in its own columns (`wob_in_thr`, `wob_in_total_thr`,
+   `wobtotal_thr`), `wob_in_thr = peepi_source_value * vt * (98.0638/1000) * bcnt *
+   vefactor` (cmH2O·L to J, the same factor as the existing WOB). This follows the
+   precedent of extending the diagram with a separately reported area instead of
+   redefining its components (Banner 1994).
+3. **`peepi_source = 'corrected'` when Pgas exists, otherwise `'dynamic'`.**
+   Dynamic PEEPi is the negative Poes deflection from the onset of inspiratory
+   effort to `t_flow` (Haluszka 1990; Milic-Emili 1990), clamped to >= 0, set to
+   0 below `min_deflection`, and NaN with a notice when no onset is found or the
+   breath has no predecessor (the preceding breath is used even when it is an
+   ignored breath). With Pgas, the expiratory-muscle contribution is removed by
+   subtracting the Pgas rise over the SAME interval `[t_onset, t_flow]`
+   (`peepi_pgas_drop`, `peepi_corr = max(peepi_dyn - peepi_pgas_drop, 0)`,
+   equal to the pre-flow Pdi rise; Zakynthinos 1997, 1999). Which source fed
+   the threshold work is written to Provenance.
+4. **`int_oes_preflow` is reported separately** (with `ptp_oes_preflow`) and is
+   never added to any `*_peepi` column: the single-baseline rule from
+   `docs/PTP_INVESTIGATION.md` holds, so adding the pre-flow area to a PTP that
+   is already referenced to its own baseline would subtract that baseline twice.
+   The `*_peepi` PTP/integral columns are `int_oesinsp + peepi_dyn * ti` and, for
+   the diaphragm, the same with `peepi_corr` (Appendini 1996).
+5. **The starting thresholds are provisional until measured.** `search_window_s`
+   (1.0 s), `smooth_s` (0.05 s), `onset_slope_frac` (0.1) and `min_deflection`
+   (0.5 cmH2O) are literature-informed starting values, not measured ones. They
+   are pinned on the built-in sample recording and synthetic data first and are
+   frozen here only after being measured on real recordings (the lesson from the
+   boundary-breath notice: a threshold chosen on feel can silently trade
+   detection power away).
+
+The feature is opt-in (`processing.pressure.peepi.enabled = false`) and adds
+columns only, so every existing golden scenario stays byte-identical with it off.
+Sources: Haluszka J et al., Am Rev Respir Dis 1990;141:1194-7 (PMID 2111105);
+Milic-Emili J, Recenti Prog Med 1990;81:733-7 (PMID 2126881); Zakynthinos SG et
+al., Eur Respir J 1997;10:522-9 (PMID 9072979) and Am J Respir Crit Care Med
+1999;160:785-90 (PMID 10471597); Appendini L et al., Am J Respir Crit Care Med
+1996;154:1301-9 (PMID 8912740); Banner MJ et al., Crit Care Med 1994;22:515-23
+(PMID 8125004).
+
 **28-09-2026 — The MFVL/EFL/VEcap placement of a tidal breath against a file's own
 forced-vital-capacity curve resolves the FVC and IC references SAME-FILE ONLY,
 and uses a constant ("`eelv_tracking='none'`") IC operating point of its own
