@@ -22,13 +22,10 @@ import pyqtgraph as pg
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
-from respmech.core.analysis.references import resolve_reference
-from respmech.core.analysis.segments import remap_segment_number
 from respmech.core.analysis.signals import Capabilities
 from respmech.core.settings import (BreathRef, BreathTypeEntry, ExcludeEntry,
                                     GroupReferenceEntry, ReferenceEntry,
                                     SegmentationOverrideEntry)
-from respmech.core.summary import group_key
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
 from respmech.ui import plot_perf
@@ -769,6 +766,8 @@ class _MechanicsMixin:
         already reports a group-default or the file's own typed breath, not only an
         explicit ``processing.references`` entry — exactly like the chip's job
         ('viser den') requires after ANY of the three ways a reference can resolve."""
+        from respmech.core.analysis.references import resolve_reference  # noqa: PLC0415
+
         if not name:
             return ""
         ref = resolve_reference(name, "ic", self.state.settings)
@@ -1955,6 +1954,8 @@ class _MechanicsMixin:
         ``SegmentationOverrideEntry`` is created here, never on an edit of an
         existing one — the same carried-over-state rule every other tagged kind
         already follows (see ``_set_breath_type``)."""
+        from respmech.core.analysis.segments import remap_segment_number  # noqa: PLC0415
+
         proc = self.state.settings.processing
         seg = proc.segmentation
         entry = next((e for e in seg.overrides if e.file == file), None)
@@ -2121,6 +2122,8 @@ class _MechanicsMixin:
         M-37 reference actions below are unconditional, since they name a property of
         the BREATH's current type (already decided, not something ``kinds`` should ever
         need to suppress)."""
+        from respmech.core.summary import group_key  # noqa: PLC0415
+
         menu = QMenu(self.plots)
         menu.setAttribute(Qt.WA_DeleteOnClose)
         # M-31: a plain, deterministic hint (manoeuvres.suggest_fvc) — the untyped
@@ -2197,6 +2200,8 @@ class _MechanicsMixin:
 
         Returns ``scope`` again on success, or ``None`` if the write was blocked (a run
         in progress) or ``scope`` is not one of the three recognised values."""
+        from respmech.core.summary import group_key  # noqa: PLC0415
+
         if self._run_active:
             msg = "Reference editing is locked while a run is in progress."
             self._set_status(msg)

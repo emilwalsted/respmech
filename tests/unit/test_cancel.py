@@ -57,7 +57,13 @@ def test_run_batch_aborts_inside_the_mechanics_loop(tmp_path):
     2-core headless Windows CI) starved the reactive tests into a timeout cascade. It is now
     cooperatively cancellable: a checker that flips True only AFTER run_batch has entered the
     file aborts with Cancelled from inside compute.calculatemechanics/sample_entropy instead of
-    finishing the file."""
+    finishing the file.
+
+    Two pre-loop guards now run before any breath is reached (M-35's external-reference
+    forepass, ``pipeline.py`` ~line 995, plus the pre-existing per-file guard just below it)
+    — both silently return an (empty-batch) result rather than raising, exactly like the
+    between-files guard always has, so ``cc()`` must stay False through BOTH of them to reach
+    a real in-file checkpoint at all."""
     from respmech.core.pipeline import run_batch
     s = synth_settings(str(tmp_path),
                        data_out={"saveaveragedata": True, "savebreathbybreathdata": True})
@@ -65,13 +71,15 @@ def test_run_batch_aborts_inside_the_mechanics_loop(tmp_path):
 
     def cc():
         calls["n"] += 1
-        return calls["n"] > 1        # False on the pre-file guard (enter the file); True once inside
+        return calls["n"] > 2        # False on the two pre-file guards (forepass + per-file
+                                      # entry); True once inside the file
 
     with pytest.raises(Cancelled):
         run_batch(s, cancel_check=cc, only_files=["synth_case_A.csv"])
-    # proves the abort came from an IN-FILE checkpoint (the per-breath loop), not the between-files
-    # guard alone: that guard is the 1st call and returned False, so the raise needed a 2nd check.
-    assert calls["n"] >= 2
+    # proves the abort came from an IN-FILE checkpoint (the per-breath loop), not either
+    # pre-loop guard alone: both return silently rather than raising, so the raise needed a
+    # 3rd check.
+    assert calls["n"] >= 3
 
     # default path (no checker) still runs the file to completion -> byte-identical golden path
     calls["n"] = 0
