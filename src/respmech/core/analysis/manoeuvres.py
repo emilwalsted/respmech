@@ -246,11 +246,11 @@ def _ic_fields(breath, kind: str, tidal_breaths, caps, s) -> dict:
     return out
 
 
-def max_effort_from_breath(breath, caps, s) -> dict:
+def max_effort_from_breath(breath, caps, s, kind=None) -> dict:
     """Reference values for a maximal-effort manoeuvre breath (``max_insp``/
     ``sniff``): the peak inspiratory Poes/Pdi SWING and the peak EMG RMS reached
     anywhere in the breath — each present only with its own channel(s). These are
-    plain reference NUMBERS for a later ticket's normalisation (M-47), not a quality
+    plain reference NUMBERS for ``core.analysis.normalisation``, not a quality
     judgement of their own — a maximal-effort breath carries no ``quality`` flags
     here (the IC-specific acceptance checks above do not apply to it).
 
@@ -258,7 +258,7 @@ def max_effort_from_breath(breath, caps, s) -> dict:
     pre-inspiratory baseline (``insp[...][0]``) — the SAME convention
     ``poes_ic_swing``/``pdi_ic_swing`` use above (self-review finding: a max-effort
     breath and an IC's own swing must be on the same baseline-subtracted footing, or
-    a later "this breath's swing as a % of the max reference" (M-47) ratio would
+    a "this breath's swing as a % of the max reference" ratio would
     divide a baseline-subtracted number by one that still carries the channel's
     absolute resting offset — never physiologically meaningful).
 
@@ -269,20 +269,32 @@ def max_effort_from_breath(breath, caps, s) -> dict:
     """
     out: dict = {}
     insp = breath["inspiration"]
+    # A nasal sniff has no mouth flow, so the flow-based inspiration/expiration boundary
+    # inside its typed breath is arbitrary: for ``sniff`` the swing is taken over the WHOLE
+    # typed breath, from the same pre-inspiratory baseline.
+    whole = kind == "sniff" and "expiration" in breath
+    def _span(ch):
+        x = _arr(insp[ch])
+        return np.concatenate([x, _arr(breath["expiration"][ch])]) if whole else x
     if caps.poes:
-        out["poes_max_ref"] = float(_arr(insp["poes"])[0]) - float(_arr(insp["poes"]).min())
+        out["poes_max_ref"] = float(_arr(insp["poes"])[0]) - float(_span("poes").min())
     if caps.pdi:
-        out["pdi_max_ref"] = float(_arr(insp["pdi"]).max()) - float(_arr(insp["pdi"])[0])
+        out["pdi_max_ref"] = float(_span("pdi").max()) - float(_arr(insp["pdi"])[0])
     if caps.emg and np.size(breath.get("emgcols", [])) > 0:
         from respmech.core import emg as emglib
         fs = float(s.input.format.samplingfrequency)
         rms_s = float(s.processing.emg.rms_s)
         cols = np.asarray(breath["emgcols"])
+        labels = list(s.input.data.columns_emg)
         peaks = []
         for ch in range(cols.shape[1]):
             values, _starts = emglib.rolling_rms(cols[:, ch], rms_s, fs)
             if values.size and not np.all(np.isnan(values)):
                 peaks.append(float(np.nanmax(values)))
+                # each channel's own peak, for a percentage of THAT channel's maximum
+                # (core.analysis.normalisation); rms_max_ref below stays the largest one
+                if ch < len(labels):
+                    out[f"rms_max_ref_col_{labels[ch]}"] = peaks[-1]
         if peaks:
             out["rms_max_ref"] = max(peaks)
     return out
@@ -345,7 +357,7 @@ def extract(breath, kind: str, tidal_breaths, caps, s) -> dict:
         return _ic_fields(breath, kind, tidal_breaths, caps, s)
     if kind in _MAX_EFFORT_KINDS:
         out = {"kind": kind, "quality": []}
-        out.update(max_effort_from_breath(breath, caps, s))
+        out.update(max_effort_from_breath(breath, caps, s, kind))
         return out
     if kind == "fvc":
         return {"kind": kind, "quality": validate_fvc_manoeuvre(breath)}

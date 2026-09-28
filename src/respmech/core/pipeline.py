@@ -30,6 +30,7 @@ import numpy as np
 from respmech.core import compute
 from respmech.core import emg as emglib
 from respmech.core.analysis import lungvol as lungvollib
+from respmech.core.analysis import normalisation as normalisationlib
 from respmech.core.analysis import manoeuvres as manoeuvreslib
 from respmech.core.analysis import mfvl as mfvllib
 from respmech.core.analysis import pressure as pressurelib
@@ -90,6 +91,11 @@ class FileResult:
     # slot with no resolution at all (nothing named it, or the family itself is absent
     # from this analysis) is simply not a key here -- there is nothing to report.
     references_used: dict = field(default_factory=dict)
+    # The "Pressure normalised" table (core.analysis.normalisation.attach, opt-in via
+    # processing.pressure.normalization.enabled): one row per tidal breath, the inspiratory
+    # Poes/Pdi/EMG against the file's maximal-effort reference plus the tension-time indices.
+    # None when the analysis is off or nothing could be normalised.
+    pressure_normalised: object = None
 
 
 @dataclass
@@ -1384,6 +1390,10 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
     # -- and, like it, before average_rows is rebuilt below, so the new columns are
     # already on each average_row when pd.concat's outer join runs.
     lungvollib.attach(result, settings, allfiles)
+    # Normalisation to a maximal manoeuvre (opt-in): reads the per-file max_insp/sniff
+    # reference the main loop's extraction (or the forepass) already produced, and adds a
+    # separate table, so it touches neither breaths_table nor average_row.
+    normalisationlib.attach(result, settings)
     average_rows = [fr.average_row for fr in result.ok_files.values()
                     if fr.average_row is not None]
 
