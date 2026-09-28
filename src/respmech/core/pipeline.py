@@ -1204,6 +1204,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                                 # isolated like mfvl.attach: the new columns stay NaN for this
                                 # breath instead of one unexpected fault failing the file
                                 breath.pop("pressure_ext", None)
+                                breath.pop("peepi_added", None)
                                 _note = f"PEEPi failed: {type(e).__name__}: {e}"
                             if _prev_of[breathno] is None:
                                 # the first breath of a recording never has a predecessor: blank
