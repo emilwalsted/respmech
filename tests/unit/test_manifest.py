@@ -6,7 +6,9 @@ import os
 import pytest
 
 from respmech.settingsio.migrate import migrate_dict
-from respmech.core.settings import Settings
+from respmech.core.analysis.references import check_links
+from respmech.core.settings import (
+    BreathRef, BreathTypeEntry, GroupReferenceEntry, ReferenceEntry, Settings)
 from respmech.ui.manifest import Manifest, build_manifest, group_readout, narrow_mask
 
 from _helpers import write_delim as _write_delim, write_xlsx as _write_xlsx
@@ -707,6 +709,62 @@ def test_group_readout_truncates_the_straggler_list_separately_from_the_group_li
 
 
 # --------------------------------------------------------------------------- #
+# group_readout: reference-only files (M-38)
+# --------------------------------------------------------------------------- #
+def test_group_readout_excludes_a_predicted_reference_only_file_from_the_count():
+    """A reference-only file's average_row is always None (M-30), so it never appears
+    in core.summary.build_cohort_summary's own grouping either -- the read-out must
+    match that, not just report every matched filename."""
+    s = Settings()
+    s.processing.references.append(ReferenceEntry(
+        file="P02_120W.csv", ic=BreathRef(file="P01_IC.csv", breaths=[2, 3])))
+    s.processing.breath_types.append(BreathTypeEntry(file="P01_IC.csv", breath=2, kind="ic"))
+    s.processing.breath_types.append(BreathTypeEntry(file="P01_IC.csv", breath=3, kind="ic"))
+    status, text = group_readout(["P01_IC.csv", "P02_120W.csv"], s)
+    assert status == "info"
+    assert "1 file (1 reference-only)" in text
+    assert "1 group" in text
+    assert "P01_IC.csv" not in text   # excluded from the grouping/straggler text itself
+
+
+def test_group_readout_reports_nothing_to_group_when_every_file_is_reference_only():
+    s = Settings()
+    s.processing.references.append(ReferenceEntry(
+        file="P02_120W.csv", ic=BreathRef(file="P01_IC.csv", breaths=[2])))
+    s.processing.breath_types.append(BreathTypeEntry(file="P01_IC.csv", breath=2, kind="ic"))
+    status, text = group_readout(["P01_IC.csv"], s)
+    assert status == "info"
+    assert text == "0 files (1 reference-only) — nothing to group"
+
+
+def test_group_readout_handles_more_than_one_reference_only_file():
+    """Self-review finding (test coverage): every other reference-only test here uses
+    exactly one such file -- a miscount or a 'first match only' bug would slip through
+    all of them undetected."""
+    s = Settings()
+    s.processing.references.append(ReferenceEntry(
+        file="P01_120W.csv", ic=BreathRef(file="P01_IC.csv", breaths=[1])))
+    s.processing.reference_defaults.append(GroupReferenceEntry(
+        group="P02", fvc=BreathRef(file="P02_FVC.csv", breaths=[1])))
+    s.processing.breath_types.append(BreathTypeEntry(file="P01_IC.csv", breath=1, kind="ic"))
+    s.processing.breath_types.append(BreathTypeEntry(file="P02_FVC.csv", breath=1, kind="fvc"))
+    names = ["P01_IC.csv", "P01_120W.csv", "P02_FVC.csv", "P02_peak.csv"]
+    status, text = group_readout(names, s)
+    assert status == "info"
+    assert "2 files (2 reference-only)" in text
+    assert "2 group" in text
+    assert "P01_IC.csv" not in text and "P02_FVC.csv" not in text
+
+
+def test_group_readout_omits_the_reference_only_note_when_none_predicted():
+    """Acceptance criterion: grouping is UNCHANGED for a batch with no typed files at
+    all -- byte-identical to the pre-M-38 text, no stray '(0 reference-only)'."""
+    status, text = group_readout(_GROUP_FILES, Settings())
+    assert "reference-only" not in text
+    assert "3 files" in text and "2 groups" in text
+
+
+# --------------------------------------------------------------------------- #
 # peek_header_warning's floor (M-12): scales with the DECLARED single-column
 # signal roles instead of a fixed 3
 # --------------------------------------------------------------------------- #
@@ -776,3 +834,107 @@ def test_header_floor_does_not_crash_on_a_malformed_signal_set(tmp_path):
     s.analysis.signals = "flow"          # malformed: a bare string, not a list
     assert peek_header_warning(s, str(tmp_path / "a.txt")) is not None
     assert build_manifest(str(tmp_path), "*.txt", s).header_warnings != ()
+
+
+# --------------------------------------------------------------------------- #
+# Manifest.reference_only / .outlier_reference_sources (M-38)
+# --------------------------------------------------------------------------- #
+def test_manifest_reference_only_matches_predicted_reference_only(tmp_path):
+    _write_delim(tmp_path / "P01_120W.csv", 9)
+    _write_delim(tmp_path / "P01_IC.csv", 9)
+    s = _settings(str(tmp_path), "*.csv")
+    s.processing.references.append(ReferenceEntry(
+        file="P01_120W.csv", ic=BreathRef(file="P01_IC.csv", breaths=[2, 3])))
+    s.processing.breath_types.append(BreathTypeEntry(file="P01_IC.csv", breath=2, kind="ic"))
+    s.processing.breath_types.append(BreathTypeEntry(file="P01_IC.csv", breath=3, kind="ic"))
+    m = build_manifest(str(tmp_path), "*.csv", s)
+    assert {f.filename for f in m.reference_only} == {"P01_IC.csv"}
+    # the reference-only file has the SAME (majority) column count, so it is still an
+    # ordinary included file for the column-count vote -- M-38 predicts it from typed
+    # breaths, entirely independent of layout.
+    assert "P01_IC.csv" in {f.filename for f in m.included_files}
+
+
+def test_manifest_reference_only_is_empty_with_no_references_configured(tmp_path):
+    _write_delim(tmp_path / "a.csv", 9)
+    _write_delim(tmp_path / "b.csv", 9)
+    s = _settings(str(tmp_path), "*.csv")
+    m = build_manifest(str(tmp_path), "*.csv", s)
+    assert m.reference_only == ()
+
+
+def test_manifest_reference_only_is_a_live_view_not_a_build_time_snapshot(tmp_path):
+    """Self-review finding: Manifest.reference_only/outlier_reference_sources read the
+    SAME Settings object build_manifest() was given, recomputed on every access -- a
+    file typed/referenced AFTER the Manifest was built (e.g. from Preview & QC, a
+    different screen that never rebuilds Setup's manifest) must still show up, without
+    a second build_manifest() call. An earlier version baked the prediction into a
+    plain field at build time and went stale in exactly this situation."""
+    _write_delim(tmp_path / "P01_120W.csv", 9)
+    _write_delim(tmp_path / "P01_IC.csv", 9)
+    s = _settings(str(tmp_path), "*.csv")
+    m = build_manifest(str(tmp_path), "*.csv", s)
+    assert m.reference_only == ()          # nothing typed/referenced yet
+
+    s.processing.references.append(ReferenceEntry(
+        file="P01_120W.csv", ic=BreathRef(file="P01_IC.csv", breaths=[1])))
+    s.processing.breath_types.append(BreathTypeEntry(file="P01_IC.csv", breath=1, kind="ic"))
+    assert {f.filename for f in m.reference_only} == {"P01_IC.csv"}   # same m, no rebuild
+
+
+def test_manifest_reference_only_handles_more_than_one_file(tmp_path):
+    """Self-review finding (test coverage): every other Manifest reference-only test
+    here uses exactly one such file."""
+    _write_delim(tmp_path / "P01_120W.csv", 9)
+    _write_delim(tmp_path / "P01_IC.csv", 9)
+    _write_delim(tmp_path / "P02_peak.csv", 9)
+    _write_delim(tmp_path / "P02_FVC.csv", 9)
+    s = _settings(str(tmp_path), "*.csv")
+    s.processing.references.append(ReferenceEntry(
+        file="P01_120W.csv", ic=BreathRef(file="P01_IC.csv", breaths=[1])))
+    s.processing.reference_defaults.append(GroupReferenceEntry(
+        group="P02", fvc=BreathRef(file="P02_FVC.csv", breaths=[1])))
+    s.processing.breath_types.append(BreathTypeEntry(file="P01_IC.csv", breath=1, kind="ic"))
+    s.processing.breath_types.append(BreathTypeEntry(file="P02_FVC.csv", breath=1, kind="fvc"))
+    m = build_manifest(str(tmp_path), "*.csv", s)
+    assert {f.filename for f in m.reference_only} == {"P01_IC.csv", "P02_FVC.csv"}
+
+
+def test_manifest_outlier_reference_sources_flags_a_differently_shaped_source(tmp_path):
+    _write_delim(tmp_path / "P01_120W.csv", 9)
+    _write_delim(tmp_path / "P02_120W.csv", 9)
+    _write_delim(tmp_path / "P01_IC.csv", 6)      # fewer channels -- a real IC-only recording
+    s = _settings(str(tmp_path), "*.csv")
+    s.processing.references.append(ReferenceEntry(
+        file="P01_120W.csv", ic=BreathRef(file="P01_IC.csv", breaths=[2])))
+    m = build_manifest(str(tmp_path), "*.csv", s)
+    assert {f.filename for f in m.outliers} == {"P01_IC.csv"}
+    assert {f.filename for f in m.outlier_reference_sources} == {"P01_IC.csv"}
+
+
+def test_manifest_outlier_reference_sources_excludes_a_plain_column_outlier(tmp_path):
+    """A column-count outlier that is NOT named as a reference source anywhere stays
+    out of outlier_reference_sources -- it is an ordinary (likely-to-fail) outlier, not
+    the M-38 "differently-shaped reference recording" scenario."""
+    _write_delim(tmp_path / "a.csv", 9)
+    _write_delim(tmp_path / "b.csv", 9)
+    _write_delim(tmp_path / "notes.csv", 3)
+    s = _settings(str(tmp_path), "*.csv")
+    m = build_manifest(str(tmp_path), "*.csv", s)
+    assert {f.filename for f in m.outliers} == {"notes.csv"}
+    assert m.outlier_reference_sources == ()
+
+
+def test_manifest_and_check_links_agree_about_an_outlier_reference_source(tmp_path):
+    """The acceptance criterion in plain terms: the Manifest's own
+    outlier_reference_names is exactly what drives check_links' new caution -- Setup's
+    science notes and the Manifest can never independently disagree about this."""
+    _write_delim(tmp_path / "P01_120W.csv", 9)
+    _write_delim(tmp_path / "P01_IC.csv", 6)
+    s = _settings(str(tmp_path), "*.csv")
+    s.processing.references.append(ReferenceEntry(
+        file="P01_120W.csv", ic=BreathRef(file="P01_IC.csv", breaths=[2])))
+    m = build_manifest(str(tmp_path), "*.csv", s)
+    matches = [f.path for f in m.files]
+    cautions = check_links(s, matches, outlier_reference_names=m.outlier_reference_names)
+    assert any("P01_IC.csv" in c and "different column layout" in c for c in cautions)

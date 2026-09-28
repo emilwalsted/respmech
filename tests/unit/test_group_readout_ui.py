@@ -12,6 +12,7 @@ import shutil
 
 from PySide6.QtWidgets import QApplication
 
+from respmech.core.settings import BreathRef, BreathTypeEntry, ReferenceEntry
 from respmech.ui.state import AppState
 
 from _helpers import INPUT, requires_synth, synth_settings, write_delim
@@ -121,6 +122,47 @@ def test_dry_run_plan_repeats_the_same_grouping_line_setup_shows(qapp, tmp_path)
     log = rn.log.toPlainText()
     assert f"Grouping: {setup_text}" in log
     win.close()
+
+
+def test_setup_shows_a_reference_only_count_in_the_group_readout(qapp, tmp_path):
+    """M-38: a file settings predicts reference-only (typed, and named as a reference
+    source) is excluded from the readout's own count/grouping, with its own count
+    surfaced as a parenthetical -- exercised end to end against a real SettingsScreen,
+    not just group_readout's own pure unit tests in test_manifest.py."""
+    sc = _screen(qapp, tmp_path)
+    s = sc.state.settings
+    s.processing.references.append(ReferenceEntry(
+        file="synth_case_A.csv", ic=BreathRef(file="synth_case_B.csv", breaths=[1])))
+    s.processing.breath_types.append(BreathTypeEntry(file="synth_case_B.csv", breath=1, kind="ic"))
+    sc._update_group_readout()
+    qapp.processEvents()
+    assert sc.group_readout.property("status") == "info"
+    text = sc.group_readout.text()
+    assert "1 file (1 reference-only)" in text
+    assert "synth_case_B.csv" not in text
+
+
+def test_setup_science_notes_flag_an_outlier_reference_source(qapp, tmp_path):
+    """M-38's 'kommitment-sheetet' acceptance criterion, exercised through Setup's own
+    science notes (check_links' one existing caller): a reference source with a
+    different column layout than the batch gets a caution, without being treated as
+    'will fail' the way an ordinary outlier is."""
+    from respmech.ui.screens.settings_screen import SettingsScreen
+    indir = tmp_path / "in"; indir.mkdir()
+    shutil.copyfile(os.path.join(INPUT, "synth_case_A.csv"), indir / "P01_120W.csv")
+    shutil.copyfile(os.path.join(INPUT, "synth_case_B.csv"), indir / "P02_120W.csv")
+    write_delim(indir / "P01_IC.csv", ncols=6)   # fewer channels than the main study files
+    sc = SettingsScreen(AppState(synth_settings(str(tmp_path))))
+    sc.in_folder.setText(str(indir))
+    sc.in_files.setText("*.csv")
+    sc._on_inputs_changed()
+    qapp.processEvents()
+    assert len(sc._manifest.outliers) == 1   # confirms the fixture produced one
+
+    sc.state.settings.processing.references.append(ReferenceEntry(
+        file="P01_120W.csv", ic=BreathRef(file="P01_IC.csv", breaths=[1])))
+    notes = sc._science_notes()
+    assert any("P01_IC.csv" in n and "different column layout" in n for n in notes)
 
 
 def test_the_plan_omits_grouping_when_no_cohort_summary_will_be_written(qapp, tmp_path):

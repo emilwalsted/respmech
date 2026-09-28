@@ -13,7 +13,7 @@ import pytest
 
 from respmech.core.analysis.references import (
     REFERENCE_SLOTS, ReferenceLinkError, attach, check_links, external_reference_sources,
-    resolve_reference)
+    predicted_reference_only, reference_source_names, resolve_reference)
 from respmech.core.settings import (
     BreathRef, BreathTypeEntry, ExcludeEntry, GroupReferenceEntry, ReferenceEntry, Settings,
     SubjectEntry)
@@ -243,6 +243,159 @@ def test_check_links_full_path_filenames_resolve_group_keys_correctly():
     s.processing.breath_types.append(BreathTypeEntry(file="P03_IC.txt", breath=2, kind="ic"))
     cautions = check_links(s, ["/data/study/P03_120W.txt", "/data/study/P03_IC.txt"])
     assert cautions == []
+
+
+def test_check_links_flags_an_outlier_reference_source_when_given_the_name():
+    """M-38: an informational caution, distinct from every other check_links kind --
+    it never depends on resolve_reference/breath typing at all, just the (caller-
+    supplied) set of names that are both a column-count outlier and a named source."""
+    s = _settings()
+    s.processing.references.append(ReferenceEntry(
+        file="P03_peak.txt", ic=BreathRef(file="P03_IC.txt", breaths=[2])))
+    s.processing.breath_types.append(BreathTypeEntry(file="P03_IC.txt", breath=2, kind="ic"))
+    cautions = check_links(s, ["P03_peak.txt", "P03_IC.txt"],
+                           outlier_reference_names=frozenset({"P03_IC.txt"}))
+    assert len(cautions) == 1
+    assert "P03_IC.txt" in cautions[0] and "different column layout" in cautions[0]
+
+
+def test_check_links_omits_the_outlier_caution_when_the_name_set_is_empty_or_none():
+    s = _settings()
+    assert check_links(s, ["a.txt"], outlier_reference_names=None) == []
+    assert check_links(s, ["a.txt"], outlier_reference_names=frozenset()) == []
+
+
+def test_check_links_sorts_multiple_outlier_reference_cautions_deterministically():
+    s = _settings()
+    cautions = check_links(s, ["a.txt", "b.txt"],
+                           outlier_reference_names=frozenset({"b.txt", "a.txt"}))
+    assert len(cautions) == 2
+    assert "a.txt" in cautions[0]
+    assert "b.txt" in cautions[1]
+
+
+def test_check_links_can_report_both_a_missing_source_and_an_outlier_caution_for_one_name():
+    """Self-review finding (test coverage): the outlier-reference caution is appended
+    independently of every OTHER caution kind, with no cross-check against `names` --
+    a caller could (in principle, from a mismatched filenames argument) supply an
+    outlier name that ALSO fails the ordinary "not among the analysed files" check.
+    Both are true statements about the same name and both should simply be reported,
+    not silently merged or one dropped."""
+    s = _settings()
+    s.processing.references.append(ReferenceEntry(
+        file="P03_peak.txt", ic=BreathRef(file="P03_IC.txt", breaths=[2])))
+    cautions = check_links(s, ["P03_peak.txt"],   # P03_IC.txt not in the batch at all
+                           outlier_reference_names=frozenset({"P03_IC.txt"}))
+    assert len(cautions) == 2
+    assert any("not among the analysed files" in c for c in cautions)
+    assert any("different column layout" in c for c in cautions)
+
+
+# --------------------------------------------------------------------------- #
+# reference_source_names / predicted_reference_only (M-38)
+# --------------------------------------------------------------------------- #
+
+def test_reference_source_names_collects_every_slot_from_both_entry_kinds():
+    s = _settings()
+    s.processing.references.append(ReferenceEntry(
+        file="P03_peak.txt", ic=BreathRef(file="P03_IC.txt", breaths=[2]),
+        baseline_ic=BreathRef(file="P03_rest.txt", breaths=[1])))
+    s.processing.reference_defaults.append(GroupReferenceEntry(
+        group="P04", fvc=BreathRef(file="P04_FVC.txt", breaths=[1])))
+    assert reference_source_names(s) == {"P03_IC.txt", "P03_rest.txt", "P04_FVC.txt"}
+
+
+def test_reference_source_names_is_empty_for_a_settings_with_no_references():
+    assert reference_source_names(_settings()) == set()
+
+
+def test_predicted_reference_only_requires_both_typed_and_a_named_source():
+    """Neither condition alone is enough: a typed-but-unreferenced file is an ordinary
+    tidal file with an embedded manoeuvre (M-29/M-30's own scenario), and a named
+    source with no typed breaths yet is simply not typed yet."""
+    s = _settings()
+    s.processing.references.append(ReferenceEntry(
+        file="P03_peak.txt", ic=BreathRef(file="P03_IC.txt", breaths=[2])))
+    # P03_IC.txt is a named source but has no breath_types entry yet
+    assert predicted_reference_only(["P03_peak.txt", "P03_IC.txt"], s) == frozenset()
+
+    s.processing.breath_types.append(BreathTypeEntry(file="P03_peak.txt", breath=1, kind="ic"))
+    # P03_peak.txt is now typed, but nothing names IT as a reference source
+    assert predicted_reference_only(["P03_peak.txt", "P03_IC.txt"], s) == frozenset()
+
+
+def test_predicted_reference_only_flags_a_typed_named_source():
+    s = _settings()
+    s.processing.references.append(ReferenceEntry(
+        file="P03_peak.txt", ic=BreathRef(file="P03_IC.txt", breaths=[2, 3])))
+    s.processing.breath_types.append(BreathTypeEntry(file="P03_IC.txt", breath=2, kind="ic"))
+    s.processing.breath_types.append(BreathTypeEntry(file="P03_IC.txt", breath=3, kind="ic"))
+    assert predicted_reference_only(
+        ["P03_peak.txt", "P03_IC.txt"], s) == frozenset({"P03_IC.txt"})
+
+
+def test_predicted_reference_only_basenames_full_paths_like_check_links():
+    s = _settings()
+    s.processing.references.append(ReferenceEntry(
+        file="P03_peak.txt", ic=BreathRef(file="P03_IC.txt", breaths=[2])))
+    s.processing.breath_types.append(BreathTypeEntry(file="P03_IC.txt", breath=2, kind="ic"))
+    result = predicted_reference_only(
+        ["/data/study/P03_peak.txt", "/data/study/P03_IC.txt"], s)
+    assert result == frozenset({"P03_IC.txt"})
+
+
+def test_predicted_reference_only_is_empty_when_nothing_is_typed_at_all():
+    assert predicted_reference_only(["a.txt", "b.txt"], _settings()) == frozenset()
+
+
+def test_predicted_reference_only_ignores_a_rest_typed_breath_like_has_typed_does():
+    """Self-review finding: core.pipeline.run_batch's own ``has_typed`` (the real M-30
+    reference-only test) explicitly excludes 'rest' -- a rest-typed breath marks an EMG
+    noise-reference segment, never a manoeuvre, and never by itself makes a file
+    reference-only. A file typed ONLY 'rest' but named as a baseline_ic source (which
+    has no own-typed-kind restriction, see _OWN_TYPED_KINDS) must not be flagged."""
+    s = _settings()
+    s.processing.references.append(ReferenceEntry(
+        file="P03_peak.txt", baseline_ic=BreathRef(file="P03_rest.txt", breaths=[1])))
+    s.processing.breath_types.append(BreathTypeEntry(file="P03_rest.txt", breath=1, kind="rest"))
+    assert predicted_reference_only(["P03_peak.txt", "P03_rest.txt"], s) == frozenset()
+
+
+def test_predicted_reference_only_can_false_positive_on_a_tidal_file_used_as_a_cross_file_source():
+    """Documented, ACCEPTED limitation (found by self-review, see the function's own
+    docstring): a file that is itself an ordinary tidal recording with one embedded,
+    explicitly-typed manoeuvre breath is indistinguishable, from settings alone, from a
+    dedicated reference-only recording, once another file's ``processing.references``
+    entry names that embedded breath as ITS source. Settings has no way to see this
+    file's other, untyped tidal breaths ahead of a real run. Pinned here so the
+    limitation is visible and cannot silently change without a test noticing -- this is
+    NOT asserting the prediction is correct, only that it is the known, accepted
+    trade-off described in the docstring."""
+    s = _settings()
+    s.processing.references.append(ReferenceEntry(
+        file="P03_recovery.csv", ic=BreathRef(file="P03_120W.csv", breaths=[5])))
+    s.processing.breath_types.append(BreathTypeEntry(file="P03_120W.csv", breath=5, kind="ic"))
+    # P03_120W.csv also has 19 OTHER, untyped (tidal) breaths in the real recording --
+    # invisible to settings, which only ever records what was explicitly typed.
+    result = predicted_reference_only(["P03_120W.csv", "P03_recovery.csv"], s)
+    assert result == frozenset({"P03_120W.csv"})   # the known false positive
+
+
+def test_predicted_reference_only_handles_more_than_one_file_in_the_same_batch():
+    """Self-review finding (test coverage): every other test here uses exactly one
+    reference-only file -- a bug that only ever returns the first match, or that
+    conflates the two files' typed-breath sets, would not be caught by any of them."""
+    s = _settings()
+    s.processing.references.append(ReferenceEntry(
+        file="P01_peak.csv", ic=BreathRef(file="P01_IC.csv", breaths=[1])))
+    s.processing.reference_defaults.append(GroupReferenceEntry(
+        group="P02", fvc=BreathRef(file="P02_FVC.csv", breaths=[1, 2])))
+    s.processing.breath_types.append(BreathTypeEntry(file="P01_IC.csv", breath=1, kind="ic"))
+    s.processing.breath_types.append(BreathTypeEntry(file="P02_FVC.csv", breath=1, kind="fvc"))
+    s.processing.breath_types.append(BreathTypeEntry(file="P02_FVC.csv", breath=2, kind="fvc"))
+    result = predicted_reference_only(
+        ["P01_peak.csv", "P01_IC.csv", "P02_peak.csv", "P02_FVC.csv"], s)
+    assert result == frozenset({"P01_IC.csv", "P02_FVC.csv"})
 
 
 # --------------------------------------------------------------------------- #
