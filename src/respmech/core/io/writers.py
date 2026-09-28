@@ -172,15 +172,29 @@ def _ic_reference_provenance_value(used: dict) -> str:
     """The text for a per-file 'IC reference' Provenance row, from one entry of
     ``FileResult.references_used`` (``core.analysis.references.attach``'s own shape:
     ``{'source', 'breaths', 'n', 'value'}``). FVC/max-effort references join this same
-    row family once they have their own consuming column (M-42/M-47) -- the row is
-    named 'IC reference' rather than 'Reference' now so a later 'FVC reference'/'Max
-    reference' row is never mistaken for the same thing."""
+    row family once they have their own consuming column (the maximal-effort reference
+    already does, see ``_max_effort_text``) -- the row is named 'IC reference' rather
+    than 'Reference' so the two are never mistaken for the same thing."""
     breaths = ", ".join(str(b) for b in used["breaths"])
     return f"{used['source']} #{breaths} → {used['n']} accepted, {used['value']:.3g} L"
 
 
+def _max_effort_text(used: dict) -> str:
+    """One line naming the maximal-effort reference a file's normalised columns were
+    read against, from ``FileResult.references_used['max_insp']`` (``core.analysis.
+    normalisation.attach``'s shape): source file, breath numbers, the kind(s) behind it
+    (a sniff and a maximal inspiration give different Pdi, so the kind is part of the
+    reference) and the reference values themselves."""
+    breaths = ", ".join(str(b) for b in used["breaths"])
+    vals = [f"{k} {used[k]:.3g}" for k in ("poes_max_ref", "pdi_max_ref", "rms_max_ref")
+            if k in used]
+    text = f"{used['source']} #{breaths} ({' + '.join(used['kinds'])})"
+    return f"{text}: {', '.join(vals)}" if vals else text
+
+
 def _provenance_rows(settings, when, incomplete_note: str | None = None,
-                     reference_note: str | None = None, olv_active: bool = False):
+                     reference_note: str | None = None, olv_active: bool = False,
+                     normalisation_note: str | None = None):
     ts = (when or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
     ip = settings.input
     caps = Capabilities.from_settings(settings)
@@ -233,6 +247,8 @@ def _provenance_rows(settings, when, incomplete_note: str | None = None,
         # DIAGNOSTICS block / FileResult.notices), not here, since there is no
         # resolved value to show in a Key/Value row.
         rows.append(("IC reference", reference_note))
+    if normalisation_note:
+        rows.append(("Pressure normalisation", normalisation_note))
     if olv_active:
         # M-36: study-wide settings that shape every olv column (not a per-file
         # resolution outcome -- that is run-report.txt's own LUNG VOLUMES block) --
@@ -276,7 +292,7 @@ def _autofit(writer):
 
 def _write_xlsx(df: pd.DataFrame, path: str, settings=None, when=None, extra_sheets=None,
                 incomplete_note: str | None = None, reference_note: str | None = None,
-                olv_active: bool = False):
+                olv_active: bool = False, normalisation_note: str | None = None):
     """Write a Data sheet plus Units, any extra sheets, Provenance and Version.
 
     Only the Data sheet content is load-bearing (the golden suite pins the DataFrame,
@@ -288,7 +304,8 @@ def _write_xlsx(df: pd.DataFrame, path: str, settings=None, when=None, extra_she
             edf.to_excel(writer, sheet_name=name, index=False)
         if settings is not None:
             _provenance_rows(settings, when, incomplete_note=incomplete_note,
-                             reference_note=reference_note, olv_active=olv_active).to_excel(
+                             reference_note=reference_note, olv_active=olv_active,
+                             normalisation_note=normalisation_note).to_excel(
                 writer, sheet_name="Provenance", index=False)
         _version_df().to_excel(writer, sheet_name="Version", index=False)
         _autofit(writer)
@@ -368,6 +385,9 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
                     extra["EMG normalised"] = norm
                 if getattr(fr, "manoeuvres_table", None) is not None and len(fr.manoeuvres_table):
                     extra["Manoeuvres"] = fr.manoeuvres_table                                          # M-29
+                pn = getattr(fr, "pressure_normalised", None)
+                if pn is not None and len(pn):
+                    extra["Pressure normalised"] = pn      # opt-in normalisation to a maximal effort
             ic_used = (getattr(fr, "references_used", None) or {}).get("ic")
             reference_note = _ic_reference_provenance_value(ic_used) if ic_used else None
             # M-36: read core.analysis.lungvol.attach's own recorded decision (same
@@ -375,9 +395,15 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
             # analysis_plan['ic'] already established for REFERENCE MANOEUVRES below),
             # never re-derive it by sniffing DataFrame columns.
             olv_active = fname in _olv_active_files(result)
+            max_used = (getattr(fr, "references_used", None) or {}).get("max_insp")
+            normalisation_note = None
+            if "Pressure normalised" in extra:
+                normalisation_note = (_max_effort_text(max_used) if max_used
+                                      else "no maximal-effort reference resolved for this file "
+                                           "(normalised columns are blank)")
             _write_xlsx(data_df, p, settings=settings, when=when, extra_sheets=extra,
                        incomplete_note=note, reference_note=reference_note,
-                       olv_active=olv_active)
+                       olv_active=olv_active, normalisation_note=normalisation_note)
             written.append(p)
 
     if settings.output.data.save_processed:
@@ -948,6 +974,28 @@ def _write_run_report(result, settings, outputfolder: str,
             tlc_s = f"{row['tlc']:.3g} L" if row["tlc"] == row["tlc"] else "n/a"
             vc_s = f"{row['vc']:.3g} L" if row["vc"] == row["vc"] else "n/a"
             L.append(f"    {f}: ic_op {row['ic_op']:.3g} L, TLC {tlc_s}, VC {vc_s}")
+        L.append("")
+
+    # Normalisation to a maximal manoeuvre (opt-in): which reference each file's normalised
+    # columns were read against, and which files got none. Present only when the analysis
+    # is on (core.analysis.normalisation.attach's own recorded decision), same "leave the
+    # block out entirely" rule as the blocks above.
+    norm_plan = plan.get("pressure_normalisation") or {}
+    if norm_plan.get("enabled"):
+        L.append("PRESSURE NORMALISATION")
+        for f, used in sorted((norm_plan.get("resolved") or {}).items()):
+            L.append(f"  {f}: {_max_effort_text(used)}")
+        if norm_plan.get("unresolved"):
+            L.append("  No usable maximal-effort reference (normalised columns are blank):")
+            for f in sorted(norm_plan["unresolved"]):
+                L.append(f"    {f}")
+        if norm_plan.get("skipped"):
+            L.append("  Skipped (see the file's quality notice):")
+            for f in sorted(norm_plan["skipped"]):
+                L.append(f"    {f}")
+        if not norm_plan.get("resolved") and not norm_plan.get("unresolved") \
+                and not norm_plan.get("skipped"):
+            L.append("  No file had anything to normalise (no Poes, Pdi or EMG summary).")
         L.append("")
 
     report_name = "run-report.txt"

@@ -294,10 +294,47 @@ _PEEPI = (
     ColumnSpec(name="ptp_pdiinsp_peepi", requires=_PEEPI_PDI, module="peepi", unit="cmH₂O·s·min⁻¹", trigger="peepi"),
 )
 
+# Normalisation to a maximal manoeuvre (core.analysis.normalisation, opt-in via
+# `processing.pressure.normalization.enabled`): the "Pressure normalised" sheet. Every
+# column is resolved by `_RULES` before this registry is consulted (`poes*`/`pdi*` ->
+# cmH2O, `*_pct*` -> %, `tt_*` -> dimensionless, `rms*` -> a.u.) except `nrdi`, which
+# is deliberately blank: an EMG percentage times a breath rate is an arbitrary-unit index
+# (Murphy et al. 2011), so its `unit=""` here IS the resolving path. The sheet also repeats
+# `poes_max_ref`/`pdi_max_ref`/`rms_max_ref` (the reference each row was normalised to), which
+# `_MANOEUVRES` above already registers under the same names.
+_PRESSURE_NORMALISATION = (
+    ColumnSpec(name="poes_insp_swing", requires=_PRESSURES_POES, module="pressure_normalisation",
+               unit="cmH₂O", sheet="Pressure normalised", trigger="pressure_normalisation"),
+    ColumnSpec(name="poes_insp_swing_pct", requires=_PRESSURES_POES, module="pressure_normalisation",
+               unit="%", sheet="Pressure normalised", trigger="pressure_normalisation"),
+    ColumnSpec(name="poes_mean_insp", requires=_PRESSURES_POES, module="pressure_normalisation",
+               unit="cmH₂O", sheet="Pressure normalised", trigger="pressure_normalisation"),
+    ColumnSpec(name="poes_mean_insp_pct", requires=_PRESSURES_POES, module="pressure_normalisation",
+               unit="%", sheet="Pressure normalised", trigger="pressure_normalisation"),
+    ColumnSpec(name="tt_es", requires=_PRESSURES_POES, module="pressure_normalisation",
+               unit=DIMLESS, sheet="Pressure normalised", trigger="pressure_normalisation"),
+    ColumnSpec(name="pdi_insp_swing", requires=_PRESSURES_PDI, module="pressure_normalisation",
+               unit="cmH₂O", sheet="Pressure normalised", trigger="pressure_normalisation"),
+    ColumnSpec(name="pdi_insp_swing_pct", requires=_PRESSURES_PDI, module="pressure_normalisation",
+               unit="%", sheet="Pressure normalised", trigger="pressure_normalisation"),
+    ColumnSpec(name="pdi_mean_insp", requires=_PRESSURES_PDI, module="pressure_normalisation",
+               unit="cmH₂O", sheet="Pressure normalised", trigger="pressure_normalisation"),
+    ColumnSpec(name="pdi_mean_insp_pct", requires=_PRESSURES_PDI, module="pressure_normalisation",
+               unit="%", sheet="Pressure normalised", trigger="pressure_normalisation"),
+    ColumnSpec(name="tt_di", requires=_PRESSURES_PDI, module="pressure_normalisation",
+               unit=DIMLESS, sheet="Pressure normalised", trigger="pressure_normalisation"),
+    ColumnSpec(name="rms_insp_max_pct", requires=frozenset({"flow", "emg"}),
+               module="pressure_normalisation", unit="%", sheet="Pressure normalised",
+               trigger="pressure_normalisation"),
+    ColumnSpec(name="nrdi", requires=frozenset({"flow", "emg"}), module="pressure_normalisation",
+               unit="", sheet="Pressure normalised", trigger="pressure_normalisation"),
+)
+
 #: Every column/family this skeleton knows about. Later tickets append to this,
 #: never remove from or reorder ``LEGACY_MECHANICS_ORDER`` within it.
 REGISTRY = (LEGACY_MECHANICS_ORDER + (_ENTROPY, _EMG) + _SEGMENT_EMG + _MANOEUVRES
-           + _REFERENCE_MANOEUVRES + _LUNG_VOLUMES + _MFVL + _PEEPI)
+           + _REFERENCE_MANOEUVRES + _LUNG_VOLUMES + _MFVL + _PEEPI
+           + _PRESSURE_NORMALISATION)
 
 # The Capabilities boolean fields resolve() is willing to read. Kept as an
 # explicit tuple (rather than e.g. dataclasses.fields(caps)) so a caller could

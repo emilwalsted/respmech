@@ -275,7 +275,7 @@ _FALLBACK_PAL = {
     # M-20: one brush/label pair per breath-type kind this ticket's minimal type menu
     # (and M-31's fuller one) can set. 'other' is the fallback for any BREATH_KINDS
     # member without a dedicated entry here (ic_fvc/max_insp/sniff — not reachable
-    # from the UI until M-31/M-47). Deliberately DISTINCT hues from every channel/
+    # from the UI until the full type menu lands). Deliberately DISTINCT hues from every channel/
     # emg_cycle colour (an earlier draft reused volume/pgas/pdi's own greens/ambers/
     # purples verbatim, which shaded a typed breath the same colour as the trace
     # running through it) — kept in sync with theme.py's _PLOT_LIGHT/_PLOT_DARK.

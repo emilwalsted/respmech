@@ -7,6 +7,28 @@ for the installers themselves.
 
 ## Unreleased
 
+**Pressure and EMG as a percentage of a maximal effort, and tension-time indices.** A new
+`processing.pressure.normalization` setting (off by default) expresses every tidal
+breath's inspiratory oesophageal and transdiaphragmatic pressure against the same
+person's own maximal inspiratory effort: the breath typed `max_insp` or `sniff` (an
+explicit link, then the group default, then the file's own typed breath, exactly like the
+other manoeuvre references; for a nasal sniff, type the breath that contains it). Each
+file's workbook gains a "Pressure normalised" sheet with the swing and the mean
+inspiratory pressure (`poes_insp_swing`, `poes_mean_insp`, and the `pdi_` pair) in cmH₂O
+and as a percentage of the maximum, the tension-time indices `tt_es` (oesophageal) and
+`tt_di` (diaphragmatic; the two have different thresholds and are never mixed), and, with
+EMG, `rms_insp_max_pct` and the neural respiratory drive index `nrdi` (EMG percentage
+of maximum times breathing rate). A file with no reference reads blank, with one note
+saying why; the Provenance sheet and the run report name the reference used, including
+whether it was a sniff or a maximal inspiration, since those give different
+diaphragm pressures. Nothing else changes with it on or off. Independently of that setting, the Manoeuvres sheet of a
+`max_insp`/`sniff` breath gains each EMG channel's own peak (`rms_max_ref_col_<channel>`), a
+sniff's pressure swings are now taken over the whole typed breath, and the
+shared EMG normalisation reference (`processing.emg.normalization_reference_file`, with
+`normalization = "per_file_max"`) is read at the file's typed `max_insp`/`sniff` breath when it has one (each channel against
+its own peak in that breath), which also lets a file containing nothing but the
+maximal manoeuvre serve as that reference.
+
 **Opt-in PEEPi-corrected work of breathing (modified Campbell diagram).** A new
 `processing.pressure.peepi` setting (off by default) measures intrinsic PEEP for every
 breath from the oesophageal-pressure deflection that precedes inspiratory flow — found
