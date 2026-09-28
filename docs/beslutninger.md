@@ -8,7 +8,7 @@ decision <date>" — never an internal ticket reference; this repo is public).
 
 **28-09-2026 — Normalisation to a maximal manoeuvre: a post-pass over the finished
 tables, one sheet, reference read from the manoeuvre extraction (author's decision
-28-09-2026).** Six points that are easy to undo by accident:
+28-09-2026).** Seven points that are easy to undo by accident:
 
 1. **It is a post-pass, not a change to `compute`.** `core.analysis.normalisation.attach`
    runs after the operating-lung-volume pass, reads the per-file tables and the raw breath
@@ -37,7 +37,12 @@ tables, one sheet, reference read from the manoeuvre extraction (author's decisi
    so the file mean equals `mean(rms_insp_max_pct) * bf` (Murphy et al. 2011). It needs a
    maximal-effort reference: against a file's own maximum every file would read 100 % by
    construction, which is why the analysis has no per-file fallback.
-6. **A known asymmetry, left as it is.** The reference swing is measured from the maximal
+6. **Two existing outputs change regardless of the setting.** The Manoeuvres sheet gains
+   `rms_max_ref_col_<channel>`, and a `sniff` breath's `poes_max_ref`/`pdi_max_ref` are taken
+   over the whole typed breath (no mouth flow means the phase boundary inside it is arbitrary).
+   The EMG-normalised sheet also reads a named reference file at its typed maximal breath
+   (`per_file_max` only). None of these touches a golden value.
+7. **A known asymmetry, left as it is.** The reference swing is measured from the maximal
    breath's first inspiratory sample; the tidal swing from the mean over the same short
    baseline window `calcptp` uses. On noise-level pressure differences this moves a
    percentage by well under a percent, and changing the extraction would move the
