@@ -497,37 +497,52 @@ live in `processing.segmentation.emg` (`EmgSegmentationSettings`).
   **before** noise reduction (`_process_emg` exposes it as `stages["detect"]`; the noise
   profile is itself cut from the periods between bursts, so detecting on the reduced
   signal would be circular):
-  1. per channel, a centred moving RMS envelope over `burst_smooth_s`; non-finite samples
-     contribute nothing to their windows (a plain cumulative sum would let one NaN poison
-     everything after it);
-  2. the envelope is scaled so its median (the resting level, valid while the muscle is
-     active for less than half the recording) is 0 and its 95th percentile is 1; a channel
-     whose 95th percentile is under `burst_min_contrast` times its median has no bursts and
-     is left out; no channel left → `EmgSegmentationError` (a pure-noise or silent
-     recording is never cut). The bursts must fill more than about 5 % of the recording
-     for the 95th percentile to stand for the burst level;
-  3. the remaining channels are averaged into one activation trace *a*; a burst is a
-     stretch with *a* ≥ `burst_threshold_frac`/2 that reaches `burst_threshold_frac`
-     (hysteresis, Hodges & Bui 1996); gaps shorter than `burst_min_s` are bridged and
-     bursts shorter than `burst_min_s` dropped, in that order;
+  1. per channel, the 5 s running mean is removed (a DC offset or slow drift would count as
+     activity; the detection signal only, never the segments' EMG), then a centred moving
+     RMS envelope over `burst_smooth_s` is built; non-finite samples contribute nothing to
+     their windows (a plain cumulative sum would let one NaN poison everything after it)
+     and a window less than half finite has no envelope and is never "above threshold";
+  2. the envelope is scaled so its 20th percentile (the resting level, valid while the
+     muscle is active for less than about 80 % of the recording) is 0 and its 95th
+     percentile is 1; a channel whose 95th percentile is under `burst_min_contrast` times
+     its 20th has no bursts and is left out; no channel left → `EmgSegmentationError` (a
+     pure-noise or silent recording is never cut). The bursts must fill more than about
+     5 % of the recording for the 95th percentile to stand for the burst level, so one
+     large brief artefact (a cough) covering more than that can set the level instead;
+  3. the remaining channels are averaged with equal weight into one activation trace *a*
+     (all channels are taken to be inspiratory: a channel active in antiphase makes
+     half-cycles, so leave it out); a burst is a stretch with *a* ≥
+     `burst_threshold_frac`/2 that reaches `burst_threshold_frac` (hysteresis); gaps
+     shorter than `burst_min_s` are bridged and bursts shorter than `burst_min_s` dropped,
+     in that order (threshold plus minimum duration, after Hodges & Bui 1996). These are
+     the **coarse** edges;
   4. each edge is then moved to where the smoothed **power** envelope crosses half of
      that burst's own plateau (median over the middle half of the burst). A centred window
      smears a step over `burst_smooth_s`, and the on/off levels sit well down the ramp, so
      the coarse edges lead the true ones by up to about half a window; the half-power
-     point of a linear ramp is the step itself. The search is confined to one window
-     around the coarse edge and never crosses the midpoint to the neighbouring burst.
+     point of a linear ramp is the step itself. The search goes at most one window
+     outward from the coarse edge, never past the burst's own midpoint inward, and never
+     past the midpoint to the neighbouring burst; a burst that would come out shorter than
+     `burst_min_s` keeps its coarse edges. This assumes a roughly rectangular burst: an
+     augmenting burst (a ramp) is located later than its true start, which is why the quiet
+     masks below use the coarse edges.
 
   Measured: onsets and offsets of a synthetic burst train with a steady carrier are
-  recovered within 1 sample at 2 kHz (envelope 0.1 s); with *stochastic* bursts the envelope
-  itself fluctuates, and the worst case measured was 26 samples (13 ms) at 2 kHz. Not
-  measured: any production EMG recording — the four thresholds are starting values and
-  are to be calibrated there before they are frozen.
+  recovered within 1 sample at 2 kHz (envelope 0.1 s) on a clean signal, and within 6 over
+  unit noise; with *stochastic* bursts the envelope itself fluctuates, and the worst case
+  measured was about 30 samples (15 ms) at 2 kHz. Not measured: any production EMG
+  recording — the four thresholds are starting values and are to be calibrated there
+  before they are frozen.
 
-  Each segment carries `neural_timing` — `ti_emg` (burst duration), `te_emg` (this burst's
-  end to the next onset), `ttot_emg` (onset to onset), `ti_ttot_emg = ti_emg / ttot_emg`,
-  `bf_emg = 60 / ttot_emg` — with `_emg` names so they are never mistaken for the
-  mechanical `ti`/`te`/`ttot`/`ti_ttot`/`bf`; the last burst has no following onset, so
-  everything but `ti_emg` is NaN there (a truncated cycle is not a short one). Units are
+  Each segment carries `neural_timing` — `ti_emg` (onset to the half-power point of the
+  burst's end, not onset to peak), `te_emg` (this burst's end to the next onset),
+  `ttot_emg` (onset to onset), `ti_ttot_emg = ti_emg / ttot_emg`, `bf_emg = 60 / ttot_emg`
+  — with `_emg` names so they are never mistaken for the mechanical
+  `ti`/`te`/`ttot`/`ti_ttot`/`bf`; the last burst has no following onset, so everything
+  but `ti_emg` is NaN there, and a burst cut off by the start or the end of the recording
+  (its coarse edge at sample 0 or at the last sample) has every value NaN (a truncated
+  cycle is not a short one). A segment runs from one onset to the next, so an augmenting
+  burst's early ramp can fall in the previous segment when its onset is located late. Units are
   declared explicitly in the registry (`s`, `s`, `s`, `—`, `min⁻¹`), because none of the
   five names reaches `quantities.py`'s exact-match rules. Each segment also carries the
   file's `emg_seg_n_bursts`, `emg_seg_burst_frac` (share of the recording spent in
@@ -536,11 +551,14 @@ live in `processing.segmentation.emg` (`EmgSegmentationSettings`).
 
 The noise reference for an EMG-only set is resolved by `resolve_noise_reference_mode`.
 `interburst` (only with `emg_burst`, only when named explicitly) cuts the reference from the
-periods **between** two consecutive bursts, each shrunk by `burst_smooth_s` at both ends
-(the envelope smears an edge by about half its window, so the samples next to a burst are
-not yet quiet); the stretch before the first burst and after the last one is not between two
-bursts and never counts. `auto_prop` pools bursts (active) against those periods (quiet)
-across the batch; it is refused for the other EMG-only methods, which have no such split.
+periods **between** two consecutive bursts, measured from their coarse edges and shrunk by
+`burst_smooth_s` at both ends (the envelope smears an edge by about half its window, and an
+augmenting burst starts well before its half-power point, so the samples next to a burst
+are not yet quiet); the stretch before the first burst and after the last one is not
+between two bursts and never counts. `auto_prop` pools bursts (active) against those
+periods (quiet) across the batch, leaving out a file with no quiet period; while noise
+reduction is enabled it is refused for the other EMG-only methods, which have no such
+split.
 
 
 ### 5.13 Manoeuvre extraction (v2-only) — `core/analysis/manoeuvres.py`

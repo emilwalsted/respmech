@@ -633,7 +633,7 @@ def _emg_segmented(settings, s, path, cache=None, cancel_check=None, *, exclude_
     filename = os.path.basename(path)
     if getattr(s, "capabilities", Capabilities.FULL).mode == "emg_only":
         # No inspiration/expiration phases to build masks from: an EMG-only signal set
-        # has an active/quiet split only when it was segmented on its bursts (M-48), where
+        # has an active/quiet split only when it was segmented on its bursts, where
         # "active" is the bursts and "quiet" the periods between them. Any other method
         # is refused by Settings.validate() before a batch reaches here (auto_prop and
         # 'interburst' both require emg_burst); reaching it anyway is a caller bug.
@@ -725,7 +725,7 @@ def _reference_noise_clip(settings, s, cache=None, cancel_check=None):
                                                      cancel_check=cancel_check)
             clip = emg_full[inter]
             if len(clip) == 0:
-                raise ValueError(
+                raise segments_lib.EmgSegmentationError(
                     "no period between two bursts is long enough to serve as a noise "
                     "reference (it must exceed twice processing.segmentation.emg."
                     "burst_smooth_s)")
@@ -789,6 +789,14 @@ def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=
                 unreadable.append(os.path.basename(fi))
                 last_exc = e
                 continue
+            if not ex.any():
+                # a file with no quiet samples (a single burst, a guard band wider than
+                # every gap) says nothing about the resting level: leave it out of the
+                # pooled sets the way an unreadable file is
+                unreadable.append(os.path.basename(fi))
+                last_exc = segments_lib.EmgSegmentationError(
+                    "no quiet period to compare the bursts with")
+                continue
             act.append(emg_full[ins]); qui.append(emg_full[ex])
             if sum(len(a) for a in act) >= cap:
                 break
@@ -806,7 +814,7 @@ def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=
             # ValueError that such a type-keyed caller cannot recognise.
             msg = ("Could not auto-select the noise reduction strength (auto_prop): none of "
                   f"the {len(files)} batch file{'s' if len(files) != 1 else ''} could be "
-                  f"read ({', '.join(unreadable)}): {last_exc}")
+                  f"read or segmented ({', '.join(unreadable)}): {last_exc}")
             try:
                 wrapped = type(last_exc)(msg)
             except TypeError:
@@ -819,7 +827,7 @@ def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=
             # the user thinks it did.
             warnings.warn(
                 f"auto_prop: {len(unreadable)} of {len(files)} file"
-                f"{'s' if len(unreadable) != 1 else ''} could not be read and were "
+                f"{'s' if len(unreadable) != 1 else ''} could not be read or segmented and were "
                 f"excluded from noise-reduction-strength selection: "
                 f"{', '.join(unreadable)}")
         active = np.concatenate(act, axis=0)[:cap]

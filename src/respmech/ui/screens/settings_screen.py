@@ -1693,8 +1693,11 @@ class SettingsScreen(QWidget):
                 # bursts against the periods between them IS an active/quiet split, so
                 # both the inter-burst reference and auto_prop have an implementation
                 # here (and are what a burst analysis with noise reduction needs: it has
-                # no typed rest segment to fall back on until the user makes one)
-                noise.reference_mode = "interburst"
+                # no typed rest segment to fall back on until the user makes one). Only
+                # the default while no other reference is set: re-choosing the method
+                # never overrides a span or mode the user picked.
+                if not noise.reference_intervals and noise.reference_mode == "auto":
+                    noise.reference_mode = "interburst"
             else:
                 noise.auto_prop = False
                 if noise.reference_mode == "interburst":

@@ -480,9 +480,9 @@ def _burst_settings(tmp_path, *, reference_file="synth_emgburst_A.csv"):
 
 @requires_synth()
 def test_interburst_clip_is_the_concatenation_of_the_periods_between_the_bursts(tmp_path):
-    """The ticket's acceptance criterion, built independently of ``burst_masks``: the
-    segmentation's own burst spans give the gaps, each shrunk by the guard band, and the
-    clip must be exactly their concatenation over the ECG-removed (not noise-reduced) EMG."""
+    """Built independently of ``burst_masks``: the segmentation's own burst spans give the
+    gaps (measured between the coarse edges), each shrunk by the guard band, and the clip
+    must be exactly their concatenation over the ECG-removed (not noise-reduced) EMG."""
     s = _burst_settings(tmp_path)
     s.validate()
     assert resolve_noise_reference_mode(s) == "interburst"
@@ -491,9 +491,10 @@ def test_interburst_clip_is_the_concatenation_of_the_periods_between_the_bursts(
 
     from respmech.core.pipeline import segment_file
     breaths, trimmed = segment_file(s, legacy, os.path.join(INPUT, "synth_emgburst_A.csv"))
-    spans = [b["burst_span"] for b in breaths.values()]
+    spans = [b["burst_span_coarse"] for b in breaths.values()]
     assert len(spans) == 6
-    guard = int(round(s.processing.segmentation.emg.burst_smooth_s * 1000))
+    guard = int(round(s.processing.segmentation.emg.burst_smooth_s
+                      * s.input.format.sampling_frequency))
     emg = np.asarray(trimmed.emgcolumns)
     expected = np.concatenate(
         [emg[spans[k][1] + guard:spans[k + 1][0] - guard] for k in range(len(spans) - 1)],
@@ -543,3 +544,21 @@ def test_run_batch_with_an_interburst_reference_and_auto_prop_end_to_end(tmp_pat
     assert not result.failed_files
     assert set(result.ok_files) == {"synth_emgburst_A.csv", "synth_emgburst_B.csv"}
     assert [len(fr.breaths) for fr in result.ok_files.values()] == [6, 5]
+
+
+@requires_synth()
+def test_auto_prop_leaves_out_a_file_with_no_quiet_period_and_says_so(tmp_path):
+    """With every gap swallowed by the guard bands there is nothing to compare the bursts
+    with: the gather must fail by name instead of pooling an empty quiet set."""
+    from respmech.core.pipeline import _build_noise_set
+    s = _burst_settings(tmp_path)
+    s.processing.emg.noise.auto_prop = True
+    s.processing.segmentation.emg.burst_smooth_s = 2.0
+    s.processing.segmentation.emg.burst_min_s = 0.2
+    files = [os.path.join(INPUT, "synth_emgburst_A.csv")]
+    noise = s.processing.emg.noise
+    noise.reference_mode = "intervals"
+    noise.reference_mode = "auto"
+    noise.reference_intervals = [[0.0, 1.2]]          # a reference that does not need bursts
+    with pytest.raises(ValueError, match="read or segmented"):
+        _build_noise_set(s, to_legacy_ns(s), files)

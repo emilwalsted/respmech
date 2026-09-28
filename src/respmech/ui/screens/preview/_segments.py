@@ -9,7 +9,8 @@ with no click surface at all — see that method's own docstring, since replaced
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QPushButton, QScrollArea,
+from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QMessageBox, QPushButton,
+                               QScrollArea,
                                QSplitter, QTableView, QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt
 
@@ -379,9 +380,25 @@ class _SegmentsMixin:
         if dlg.exec() != QDialog.Accepted:
             return
         staged = dlg.edited_values()
-        if apply_values(emg, staged):
-            self.settings_edited.emit()
-            self._request_autorun()
+        if not any(getattr(emg, k) != v for k, v in staged.items()):
+            return
+        proc = s.processing
+        if proc.exclude_breaths or proc.breath_types:
+            # Segment NUMBERS follow from these parameters: a different window or
+            # threshold renumbers the file, so an exclusion or a type made against the old
+            # numbers would silently land on a different segment.
+            ans = QMessageBox.question(
+                self, "RespMech",
+                "Excluded and typed segments were numbered for the current segmentation, "
+                "which this change alters — clear them?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if ans == QMessageBox.Yes:
+                proc.exclude_breaths = []
+                proc.breath_types = []
+        apply_values(emg, staged)
+        self._sync_rail_breath_state()
+        self.settings_edited.emit()
+        self._request_autorun()
 
     def _on_place_separators_toggled(self, checked):
         self._separators_armed = checked

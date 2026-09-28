@@ -15,6 +15,7 @@ from respmech.ui.state import AppState
 def _emg_burst_settings(tmp_path, method="emg_burst"):
     s = synth_settings(tmp_path, channels={
         "flow": None, "poes": None, "pgas": None, "pdi": None, "volume": None})
+    s.input.channels.entropy = []
     s.input.files = "synth_emgburst_A.csv"
     s.processing.segmentation.method = method
     return s
@@ -100,6 +101,7 @@ def test_interburst_and_the_other_whole_modes_retire_each_other(qapp):
     dlg.deleteLater()
 
 
+@requires_synth()
 def test_the_interburst_choice_is_written_explicitly_and_undone_by_another_choice(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     s = _emg_burst_settings(tmp_path)
@@ -225,4 +227,84 @@ def test_the_new_settings_messages_are_translated_to_ui_controls():
     s.processing.emg.noise.reference_mode = "interburst"
     with pytest.raises(SettingsError) as ei:
         s.validate()
-    assert "burst" in friendly_settings_error(ei.value).lower()
+    friendly = friendly_settings_error(ei.value)
+    assert friendly != str(ei.value) and "inter-burst" in friendly
+
+
+def test_re_choosing_emg_burst_keeps_a_reference_the_user_picked(qapp):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.apply_signal_set(["emg"], segmentation_method="emg_burst")
+    noise = sc.state.settings.processing.emg.noise
+    noise.reference_mode = "auto"
+    noise.reference_intervals = [[1.0, 2.0]]           # a hand-marked span
+    sc.apply_signal_set(["emg"], segmentation_method="emg_burst")
+    assert noise.reference_mode == "auto" and noise.reference_intervals == [[1.0, 2.0]]
+    win.close()
+
+
+def test_interburst_or_rest_segments_without_a_reference_file_is_blocked_up_front():
+    """Otherwise the run starts and the whole batch aborts on the missing file."""
+    from respmech.core.settings import Settings, SettingsError
+    from respmech.ui.validation import friendly_settings_error
+    for mode, method in (("interburst", "emg_burst"), ("rest_segments", "whole_file")):
+        s = Settings()
+        s.input.format.sampling_frequency = 1000
+        s.analysis.signals = ["emg"]
+        s.input.channels.emg = [2]
+        s.processing.segmentation.method = method
+        s.processing.emg.remove_ecg = True
+        s.processing.emg.noise.enabled = True
+        s.processing.emg.noise.auto_prop = False
+        s.processing.emg.noise.reference_mode = mode
+        with pytest.raises(SettingsError, match="no usable rest reference") as ei:
+            s.validate()
+        assert "rest reference" in friendly_settings_error(ei.value)
+
+
+@requires_synth()
+def test_advanced_asks_before_clearing_numbered_exclusions(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    from respmech.core.settings import ExcludeEntry
+    from respmech.ui.advanced_dialog import AdvancedDialog
+    from respmech.ui.main_window import MainWindow
+    s = _emg_burst_settings(tmp_path)
+    s.processing.exclude_breaths = [ExcludeEntry(file="synth_emgburst_A.csv", breaths=[3])]
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    monkeypatch.setattr(AdvancedDialog, "exec", lambda self: QDialog.Accepted)
+    monkeypatch.setattr(AdvancedDialog, "edited_values",
+                        lambda self: {"burst_threshold_frac": 0.4})
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
+    pv._open_segmentation_advanced()
+    assert s.processing.segmentation.emg.burst_threshold_frac == 0.4
+    assert s.processing.exclude_breaths                       # kept on No
+    monkeypatch.setattr(AdvancedDialog, "edited_values",
+                        lambda self: {"burst_threshold_frac": 0.5})
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    pv._open_segmentation_advanced()
+    assert s.processing.exclude_breaths == []                 # cleared on Yes
+    win.close()
+
+
+@requires_synth()
+def test_a_reference_without_bursts_is_a_clean_message_in_the_noise_panel(qapp, tmp_path):
+    import numpy as np
+    from respmech.ui.workers import stage_noise_fidelity
+    rng = np.random.default_rng(0)
+    n = 6000
+    data = np.column_stack([np.arange(n) / 1000, rng.normal(0, 1, (n, 3))])
+    np.savetxt(tmp_path / "noise.csv", data, delimiter=",", header="time,E1,E2,E3", comments="")
+    s = _emg_burst_settings(tmp_path)
+    s.input.folder = str(tmp_path)
+    s.input.files = "noise.csv"
+    s.input.channels.emg = [2, 3, 4]
+    s.input.channels.entropy = []
+    s.processing.emg.remove_ecg = True
+    s.processing.emg.noise.enabled = True
+    s.processing.emg.noise.reference_file = "noise.csv"
+    s.processing.emg.noise.reference_mode = "interburst"
+    out = stage_noise_fidelity(s)
+    assert "error" in out and "No EMG bursts found" in out["error"]
+    assert "Advanced" in out["error"]
