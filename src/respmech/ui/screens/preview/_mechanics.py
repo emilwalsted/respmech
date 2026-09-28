@@ -993,7 +993,13 @@ class _MechanicsMixin:
             ("ptp", Field("baseline_window_s", "PTP baseline window", "float",
                           "processing.ptp.baseline_window_s",
                           "End-expiratory window whose mean is the PTP baseline.",
-                          lo=0.0, hi=1.0, step=0.01, decimals=4, suffix=" s")),
+                          lo=0.0, hi=1.0, step=0.01, decimals=4, suffix=" s",
+                          # Only while the opt-in PEEPi analysis is on (Setup ▸ Intrinsic PEEP):
+                          # the one-baseline rule means the pre-flow area stays OUT of every PTP
+                          # column, and a reader comparing them should be told where it went.
+                          note=("The pre-flow area of the PEEPi deflection (int_oes_preflow) is "
+                                "reported in its own column and is never added to PTP."
+                                if s.processing.pressure.peepi.enabled else None))),
             # M-37: only the four fields the ticket names -- the rest of LungVolumeSettings/
             # IcSettings (baseline_pattern, the EELV_UNSTABLE/NOT_REPEATABLE/LOW_EFFORT
             # thresholds, reject_flags) stay TOML-only for now, same "surface the most-used
@@ -2929,6 +2935,12 @@ class _MechanicsMixin:
                 ax.plot(vavg, pavg, color=pal["mpl_accent"], lw=2.0, zorder=3,
                         label="average breath")
             if eelv is not None and eilv is not None:
+                # modified Campbell (opt-in PEEPi): the hatched rectangle goes under the
+                # recoil line, exactly as the written figure draws it -- nothing at all
+                # (no patch, no legend entry) unless the feature produced a height.
+                from respmech.core.plots import draw_peepi_rectangle, mean_peepi_rectangle_height
+                draw_peepi_rectangle(ax, eilv, eelv, mean_peepi_rectangle_height(kept),
+                                     color=pal["mpl_target"], zorder=2)
                 # elastic recoil line: straight line between the two volume endpoints
                 ax.plot([eelv[0], eilv[0]], [eelv[1], eilv[1]], color=pal["mpl_target"],
                         ls="--", lw=1.3, zorder=4, label="elastic recoil")

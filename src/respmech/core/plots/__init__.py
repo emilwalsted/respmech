@@ -38,6 +38,7 @@ import numpy as np
 
 from respmech.core import plot_style
 from respmech.core.analysis import mfvl as mfvllib
+from respmech.core.analysis.pressure import peepi_rectangle_height
 from respmech.core.analysis.signals import Capabilities
 
 _BRAND = "#2C6E9B"
@@ -70,7 +71,36 @@ def _breaths(fr):
     return [b for b in _ordered(fr) if not b.get("ignored")]
 
 
-def _recoil_and_polygon(ax, eilv, eelv, alpha_line=1.0, alpha_fill=0.5):
+def mean_peepi_rectangle_height(breaths):
+    """Mean PEEPi-rectangle height over the breaths that have one (``None`` when none do,
+    e.g. the feature is off) -- the height drawn over an AVERAGE breath."""
+    hs = [h for h in (peepi_rectangle_height(b) for b in breaths) if h is not None]
+    return float(np.mean(hs)) if hs else None
+
+
+def draw_peepi_rectangle(ax, eilv, eelv, height, *, color="#D9822B", alpha=0.35, zorder=None):
+    """Hatched PEEPi rectangle of the modified Campbell diagram: it spans the tidal volume
+    (EELV to EILV) and rises ``height`` cmH2O above the end-expiratory Poes, so its area is the
+    threshold work the elastic-recoil polygon does not hold. Draw it BEFORE the polygon.
+    A no-op without a positive finite height or a usable EELV/EILV pair, which is what keeps a
+    figure without the feature identical to what it always was."""
+    from matplotlib.patches import Rectangle
+    if height is None or not np.isfinite(height) or height <= 0:
+        return
+    try:
+        x0, y0 = float(eelv[0]), float(eelv[1])
+        x1 = float(eilv[0])
+    except (TypeError, ValueError, IndexError):
+        return
+    if not np.isfinite([x0, y0, x1]).all():
+        return
+    kw = {} if zorder is None else {"zorder": zorder}
+    ax.add_patch(Rectangle((min(x0, x1), y0), abs(x1 - x0), float(height), facecolor=color,
+                           edgecolor=color, alpha=alpha, hatch="////", fill=True, lw=0.6,
+                           label="PEEPi", **kw))
+
+
+def _recoil_and_polygon(ax, eilv, eelv, alpha_line=1.0, alpha_fill=0.5, peepi_height=None):
     """Draw the elastic-recoil line (EILV↔EELV) and the shaded elastic-WOB triangle,
     exactly as the legacy Campbell diagrams did: Polygon(eelv, eilv, [eilv_x, eelv_y])."""
     from matplotlib.lines import Line2D
@@ -79,6 +109,7 @@ def _recoil_and_polygon(ax, eilv, eelv, alpha_line=1.0, alpha_fill=0.5):
         lx, ly = zip(eilv, eelv)
     except (TypeError, ValueError):
         return
+    draw_peepi_rectangle(ax, eilv, eelv, peepi_height)
     ax.add_line(Line2D(lx, ly, linewidth=2, alpha=alpha_line, color=_BRAND))
     tri = [[eelv[0], eelv[1]], [eilv[0], eilv[1]], [eilv[0], eelv[1]]]
     ax.add_patch(Polygon(tri, alpha=alpha_fill, color="#999999", fill=True))
@@ -118,7 +149,8 @@ def _pv_average(fr, fname, path):
             and len(b0["volumeavg"]) and len(b0["poesavg"]):
         ax.plot(b0["volumeavg"], b0["poesavg"], color=_BRAND, lw=2.4, label="average breath")
         if b0.get("eilvavg") is not None and b0.get("eelvavg") is not None:
-            _recoil_and_polygon(ax, b0["eilvavg"], b0["eelvavg"])
+            _recoil_and_polygon(ax, b0["eilvavg"], b0["eelvavg"],
+                                peepi_height=mean_peepi_rectangle_height(bs))
         ax.legend(loc="best", frameon=False)
     ax.set_xlabel("Volume (L)")
     ax.set_ylabel("Oesophageal pressure (cmH₂O)")
@@ -128,7 +160,8 @@ def _pv_average(fr, fname, path):
     return _save(fig, path)
 
 
-def _pv_grid(breaths, title_prefix, path, cols, rows, vkey, pkey, ekey_i, ekey_e, titler):
+def _pv_grid(breaths, title_prefix, path, cols, rows, vkey, pkey, ekey_i, ekey_e, titler,
+             peepi_height=peepi_rectangle_height):
     """Paginated Campbell grid (one loop per breath), shared axes, inverted x-axis,
     recoil line + WOB polygon, ignored breaths crossed out. Multi-page PDF."""
     from matplotlib.backends.backend_pdf import PdfPages
@@ -155,7 +188,7 @@ def _pv_grid(breaths, title_prefix, path, cols, rows, vkey, pkey, ekey_i, ekey_e
                     ax.plot([minx, maxx], [miny, maxy], "-r", lw=1)
                     ax.plot([minx, maxx], [maxy, miny], "-r", lw=1)
                 elif b.get(ekey_i) is not None and b.get(ekey_e) is not None:
-                    _recoil_and_polygon(ax, b[ekey_i], b[ekey_e])
+                    _recoil_and_polygon(ax, b[ekey_i], b[ekey_e], peepi_height=peepi_height(b))
                 ax.set_title(titler(b), fontsize=9)
                 ax.tick_params(labelsize=7)
                 ax.grid(True, color=_MUTED, alpha=0.2)
@@ -178,16 +211,19 @@ def _pv_cohort(result, path, cols, rows):
     """One panel per file: that file's MEAN Campbell loop — the cross-subject overview
     the old 'All files – average Campbell.pdf' provided."""
     reps = []
+    heights = {}
     for fname, fr in result.ok_files.items():
         bs = _breaths(fr)
         if (bs and bs[0].get("volumeavg") is not None and len(bs[0]["volumeavg"])
                 and len(bs[0].get("poes", []))):
             reps.append(bs[0])
+            heights[id(bs[0])] = mean_peepi_rectangle_height(bs)
     if not reps:
         return None
     return _pv_grid(reps, "All files — average Campbell", path, cols, rows,
                     "volumeavg", "poesavg", "eilvavg", "eelvavg",
-                    lambda b: str(b.get("filename", "?")))
+                    lambda b: str(b.get("filename", "?")),
+                    peepi_height=lambda b: heights.get(id(b)))
 
 
 # --------------------------------------------------------------------------- #
