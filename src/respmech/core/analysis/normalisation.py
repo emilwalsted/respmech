@@ -51,13 +51,14 @@ import os
 import numpy as np
 import pandas as pd
 
+from respmech.core.analysis import manoeuvres as manoeuvreslib
 from respmech.core.analysis import references as referenceslib
 from respmech.core.analysis.signals import Capabilities
 from respmech.core.settings import BreathRef
 
 #: kinds whose Manoeuvres row carries the ``*_max_ref`` numbers this module reads
 #: (``manoeuvres._MAX_EFFORT_KINDS``).
-_MAX_EFFORT_KINDS = frozenset({"max_insp", "sniff"})
+_MAX_EFFORT_KINDS = manoeuvreslib._MAX_EFFORT_KINDS
 
 _SCALAR_KEYS = ("poes_max_ref", "pdi_max_ref", "rms_max_ref")
 #: prefix of the per-channel EMG references ``max_effort_from_breath`` also writes.
@@ -278,6 +279,7 @@ def _attach_one_file(result, settings, filename, fr, plan) -> None:
         return
     missing = [c for c in _needed_columns(caps, has_emg) if c not in table.columns]
     if missing:
+        plan.setdefault("skipped", []).append(filename)
         fr.notices.append(
             f"{filename}: pressure normalisation skipped, the breath table has no "
             f"{', '.join(missing)}")

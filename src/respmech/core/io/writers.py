@@ -989,7 +989,8 @@ def _write_run_report(result, settings, outputfolder: str,
             L.append("  No usable maximal-effort reference (normalised columns are blank):")
             for f in sorted(norm_plan["unresolved"]):
                 L.append(f"    {f}")
-        if not norm_plan.get("resolved") and not norm_plan.get("unresolved"):
+        if not norm_plan.get("resolved") and not norm_plan.get("unresolved") \
+                and not norm_plan.get("skipped"):
             L.append("  No file had anything to normalise (no Poes, Pdi or EMG summary).")
         L.append("")
 

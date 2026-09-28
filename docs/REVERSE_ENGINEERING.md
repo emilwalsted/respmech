@@ -1112,8 +1112,8 @@ rolling RMS over the whole breath) and `rms_max_ref_col_<channel>` (each channel
 peak). Over the breaths a link names, the largest finite value of each is used. Only breaths
 typed `max_insp` or `sniff` count; the kinds behind the reference are kept for Provenance.
 
-**Per tidal breath** (`n_bw` = the `calcptp` baseline window in samples, recovered from the
-breath as `len(insp flow) / ti` so a resampled run uses its own rate):
+**Per tidal breath** (`n_bw = max(1, round(ptp.baseline_window_s · fs))`, the `calcptp` baseline window,
+with `fs = len(insp flow) / ti` recovered from the breath so a resampled run uses its own rate):
 
 | column | formula |
 |---|---|
