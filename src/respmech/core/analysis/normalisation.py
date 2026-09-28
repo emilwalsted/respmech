@@ -276,6 +276,11 @@ def _attach_one_file(result, settings, filename, fr, plan) -> None:
     table = fr.breaths_table
     has_emg = bool(caps.emg) and "rms_insp_max" in table.columns
     if not (caps.poes or caps.pdi or has_emg):
+        if caps.emg:
+            plan.setdefault("skipped", []).append(filename)
+            fr.notices.append(
+                f"{filename}: pressure normalisation skipped, this file has no inspiratory "
+                "EMG summary to normalise (an EMG-only analysis has no inspiration phase)")
         return
     missing = [c for c in _needed_columns(caps, has_emg) if c not in table.columns]
     if missing:

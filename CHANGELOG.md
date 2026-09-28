@@ -21,7 +21,9 @@ EMG, `rms_insp_max_pct` and the neural respiratory drive index `nrdi` (EMG perce
 of maximum times breathing rate). A file with no reference reads blank, with one note
 saying why; the Provenance sheet and the run report name the reference used, including
 whether it was a sniff or a maximal inspiration, since those give different
-diaphragm pressures. Nothing else changes with it on or off. Independently of that setting, the
+diaphragm pressures. Nothing else changes with it on or off. Independently of that setting, the Manoeuvres sheet of a
+`max_insp`/`sniff` breath gains each EMG channel's own peak (`rms_max_ref_col_<channel>`), a
+sniff's pressure swings are now taken over the whole typed breath, and the
 shared EMG normalisation reference (`processing.emg.normalization_reference_file`, with
 `normalization = "per_file_max"`) is read at the file's typed `max_insp`/`sniff` breath when it has one (each channel against
 its own peak in that breath), which also lets a file containing nothing but the
