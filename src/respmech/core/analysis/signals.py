@@ -203,3 +203,38 @@ Capabilities.FULL = Capabilities(
     flow=True, volume=True, poes=True, pgas=True, pdi=True, emg=True, entropy=True,
     declared=frozenset({"flow", "poes", "pgas", "pdi", "emg"}), mode="full",
 )
+
+
+def _signal_order(declared) -> list:
+    """``SINGLE_SIGNALS`` order, ``emg`` last -- the one canonical order every
+    signal-set summary (``respmech validate``, run-report.txt, the Provenance
+    sheet) lists a signal set in, so the three can never disagree about it."""
+    order = [s for s in SINGLE_SIGNALS if s in declared]
+    if "emg" in declared:
+        order.append("emg")
+    return order
+
+
+def signals_text(settings) -> str:
+    """``'flow, poes (derived)'`` / ``'... (declared)'`` -- the signal list plus whether
+    it came from an explicit ``analysis.signals`` or was derived from the assigned
+    channels (M-13). The ONE place that decides both the order and the
+    derived/declared wording, reused by ``respmech validate``, run-report.txt and the
+    Provenance sheet so a saved analysis is never described in three different words."""
+    declared = effective_signals(settings)
+    analysis = getattr(settings, "analysis", None)
+    explicit = bool(getattr(analysis, "signals", None))
+    names = ", ".join(_signal_order(declared))
+    return f"{names} ({'declared' if explicit else 'derived'})"
+
+
+def off_signals_text(declared) -> "str | None":
+    """``'Pgas/Pdi'`` -- the core single-role signals (never ``emg``, which is an
+    orthogonal add-on rather than one of the four flow/pressure shapes -- see
+    ``_mode_for``) that are NOT in ``declared``, in canonical order. ``None`` when
+    every one of them is in play (a full/near-full signal set has nothing to report
+    as off)."""
+    off = [s for s in SINGLE_SIGNALS if s not in declared]
+    if not off:
+        return None
+    return "/".join(s[0].upper() + s[1:] for s in off)

@@ -718,6 +718,29 @@ def test_provenance_names_sample_entropy_only_when_it_is_computed(tmp_path):
     assert rows["Sample entropy"] == "m = 2, r = 0.1 × SD"
 
 
+def test_provenance_names_signals_and_analyses(tmp_path):
+    """M-13: the Provenance sheet gets 'Signals'/'Analyses' rows naming the signal set
+    an analysis actually uses and what it computes, ADDED (never replacing an existing
+    row) alongside the other rows this file's siblings already test above. A reduced
+    signal set (no Pgas/Pdi) also appends a note to the Signals row naming what is off
+    and why -- 'absent by signal set', deliberately NOT `respmech validate`'s own
+    'not in signal set' wording: a spreadsheet reader with the Provenance sheet open
+    and no terminal in sight gets its own, self-contained phrasing."""
+    from respmech.core.io.writers import _provenance_rows
+    s = synth_settings(tmp_path)   # full signal set: flow/poes/pgas/pdi/emg/entropy
+    rows = dict(_provenance_rows(s, datetime(2026, 7, 11)).values)
+    assert rows["Signals"] == "flow, poes, pgas, pdi, emg (derived)"
+    assert rows["Analyses"] == ("Breath timing, Work of breathing, Gastric pressure, "
+                                "Transdiaphragmatic pressure, Ventilatory muscle ratio, "
+                                "EMG, Sample entropy")
+
+    s2 = synth_settings(tmp_path, channels={"pgas": None, "pdi": None})
+    rows2 = dict(_provenance_rows(s2, datetime(2026, 7, 11)).values)
+    assert rows2["Signals"] == "flow, poes, emg (derived) — Pgas/Pdi absent by signal set"
+    assert "Gastric pressure" not in rows2["Analyses"]
+    assert "Transdiaphragmatic pressure" not in rows2["Analyses"]
+
+
 def test_provenance_names_the_wob_source(tmp_path):
     """D22 (UI-overhaul): the same average/individual choice the Preview & QC table's
     own header now names (see test_wob_table_note_* in test_preview_screen.py) also
@@ -830,6 +853,30 @@ def test_run_report_accounts_for_excluded_and_failed(tmp_path):
     assert "1 processed, 1 failed" in report
     assert "3 breaths (1 excluded → 2 used)" in report
     assert "[FAIL] bad.csv   ERROR: boom while loading" in report
+
+
+def test_run_report_input_block_names_signals_and_analyses(tmp_path):
+    """M-13: 'Signals:'/'Analyses:' are ADDED lines under INPUT, never a rewording of
+    the pre-existing Folder/Pattern/Sampling lines above them -- the acceptance
+    criterion is explicitly that run-report.txt is 'otherwise unchanged'."""
+    from types import SimpleNamespace
+    from respmech.core.io.writers import _write_run_report
+
+    ok = SimpleNamespace(breaths={1: {"ignored": False}}, error=None)
+    result = SimpleNamespace(ok_files={"good.csv": ok}, failed_files={})
+    s = synth_settings(tmp_path, channels={"pgas": None, "pdi": None})
+    path = _write_run_report(result, s, str(tmp_path), ["data/x.xlsx"], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    input_block = report.split("INPUT\n")[1].split("\n\n")[0]
+    assert f"  Folder:   {s.input.folder}" in input_block
+    assert f"  Pattern:  {s.input.files}" in input_block
+    assert "  Sampling: 1000 Hz" in input_block
+    assert "  Signals:  flow, poes, emg (derived)" in input_block
+    assert ("  Analyses: Breath timing, Work of breathing, EMG, Sample entropy"
+           in input_block)
+    # M-13's own scope note: the "absent by signal set" wording is _provenance_rows-only.
+    assert "absent by signal set" not in report
+    assert "not in signal set" not in report
 
 
 def test_run_report_files_line_distinguishes_typed_from_plainly_excluded_breaths(tmp_path):
