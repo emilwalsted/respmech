@@ -20,7 +20,6 @@ from PySide6.QtCore import QSize
 from PySide6.QtWidgets import (QComboBox, QDialog, QGridLayout, QHBoxLayout, QLabel,
                                QPushButton, QVBoxLayout)
 
-from respmech.core.analysis.references import REFERENCE_SLOTS, resolve_reference
 from respmech.core.settings import BreathRef
 from respmech.ui.help_text import tooltip as _tip
 
@@ -167,6 +166,8 @@ class ReferencePickerDialog(QDialog):
     """
 
     def __init__(self, target_file, settings, files, parent=None):
+        from respmech.core.analysis.references import REFERENCE_SLOTS, resolve_reference  # noqa: PLC0415
+
         super().__init__(parent)
         self.setWindowTitle(f"Reference manoeuvres — {target_file}")
         self.setModal(True)
