@@ -6,6 +6,43 @@ decision <date>" — never an internal ticket reference; this repo is public).
 
 ---
 
+**28-09-2026 — Normalisation to a maximal manoeuvre: a post-pass over the finished
+tables, one sheet, reference read from the manoeuvre extraction (author's decision
+28-09-2026).** Six points that are easy to undo by accident:
+
+1. **It is a post-pass, not a change to `compute`.** `core.analysis.normalisation.attach`
+   runs after the operating-lung-volume pass, reads the per-file tables and the raw breath
+   dicts, and stores its own table on `FileResult.pressure_normalised`. It never adds a
+   column to `breaths_table` or `average_row`, so no golden value, the cohort summary or the
+   `Average breathdata` workbook can move (pinned by a test that runs the same batch with the
+   analysis on and off and compares the tables). Off by default:
+   `processing.pressure.normalization.enabled`.
+2. **The reference is the existing `max_insp`/`sniff` resolution, with the LARGEST value of
+   each quantity taken over the breaths a link names.** The best of repeated maximal
+   efforts is the reference; the kind(s) behind it are recorded in Provenance and the run
+   report because sniff Pdi exceeds Pdi during a maximal inspiration (Miller et al. 1985).
+   A link that mixes the two kinds is allowed, with a notice, rather than refused.
+3. **Tension-time is written with the pressure-time integral:
+   `tt_es = int_oesinsp / (ttot * poes_max_ref)`.** That equals `(Pmean/Pmax)*(Ti/Ttot)`
+   (Bellemare & Grassino 1982) with `Ti` cancelled, so nothing new is measured. `tt_es` and
+   `tt_di` stay separate columns: TTmus is about 2.1 times TTdi (Ramonatxo et al. 1995), so
+   they cannot share a threshold.
+4. **Each EMG channel is normalised to its OWN peak in the maximal breath.** The extraction
+   now also writes `rms_max_ref_col_<channel>` beside the existing scalar `rms_max_ref` (the
+   largest channel peak). Summary columns across channels (`rms_max`, `rms_insp_max`, and the
+   `nrdi` input `rms_insp_max_pct`) use the scalar; a `_col_<channel>` column uses that
+   channel's own value. Dividing one channel by another channel's peak would not be a
+   percentage of its own maximum.
+5. **`nrdi = rms_insp_max_pct * bf`, per breath.** The breath rate is constant within a file,
+   so the file mean equals `mean(rms_insp_max_pct) * bf` (Murphy et al. 2011). It needs a
+   maximal-effort reference: against a file's own maximum every file would read 100 % by
+   construction, which is why the analysis has no per-file fallback.
+6. **A known asymmetry, left as it is.** The reference swing is measured from the maximal
+   breath's first inspiratory sample; the tidal swing from the mean over the same short
+   baseline window `calcptp` uses. On noise-level pressure differences this moves a
+   percentage by well under a percent, and changing the extraction would move the
+   Manoeuvres sheet, so it was not touched.
+
 **28-09-2026 — Modified Campbell diagram / PEEPi construction: built from the
 published literature, with five fixed design points, before any code is written
 (author's decision 28-09-2026).** No external code or correspondence is a
@@ -268,7 +305,7 @@ max(inspiration['pdi'])` — the absolute peak pressure, unlike `poes_ic_swing`/
 `pdi_ic_swing` above, which are already baseline-subtracted. Self-review flagged the
 inconsistency: a resting Poes baseline is typically −5 to −8 cmH₂O (balloon
 zero-offset, not physiological zero), so the absolute-peak form silently inflated the
-reference by that offset, and a later normalisation ratio (M-47, "this breath's swing
+reference by that offset, and a later normalisation ratio ("this breath's swing
 as a fraction of the max reference") would have divided a baseline-subtracted number
 by one that still carried it — never a physiologically meaningful ratio. Both are now
 swings from `inspiration[...][0]`, matching `poes_ic_swing`/`pdi_ic_swing` exactly.

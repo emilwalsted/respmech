@@ -108,10 +108,13 @@ def resolve_emg_reference(result, settings) -> "tuple[dict | None, str | None]":
     """M-30: wraps :func:`reference_values_for_batch` (contract UNCHANGED) with a
     notice for the one case that function itself cannot distinguish from "not
     configured at all" -- a reference file that IS named and IS present in the batch,
-    but has no breath table to read a reference from (a reference-only file, M-30,
-    has no tidal breaths and so no ``breaths_table``; shared-file EMG normalisation
-    reading a typed manoeuvre's own reference value instead is M-47's scope, not
-    this one's).
+    but has no breath table to read a reference from (a reference-only file has no
+    tidal breaths and so no ``breaths_table``).
+
+    When the named file has ``max_insp``/``sniff`` breaths typed in it, the reference
+    is read at THOSE breaths instead (the largest peak RMS they reach, per channel; see
+    ``core.analysis.normalisation.emg_reference_from_max_effort``), which also makes a
+    reference-only file a usable reference. Otherwise:
 
     Returns ``(values, None)`` unchanged whenever ``reference_values_for_batch``
     itself resolves a value. Every OTHER reason it returns ``None`` -- no reference
@@ -119,12 +122,21 @@ def resolve_emg_reference(result, settings) -> "tuple[dict | None, str | None]":
     unchanged, silent, already-documented behaviour and gets no notice here either;
     only the new, previously-silent "the reference resolved to a real file, but that
     file has nothing to read" case gets one."""
-    values = reference_values_for_batch(result, settings)
-    if values is not None:
-        return values, None
     emg = getattr(getattr(settings, "processing", None), "emg", None)
     ref_name = getattr(emg, "normalization_reference_file", None)
     mode = getattr(emg, "normalization", "none")
+    if ref_name and mode not in (None, "none"):
+        # A reference file that has typed max_insp/sniff breaths of its own is read at
+        # THOSE breaths (the largest peak RMS reached in them, per channel), not at the
+        # file's per-column maximum over all its breaths. Lazy import: references imports
+        # this module.
+        from respmech.core.analysis import normalisation
+        typed = normalisation.emg_reference_from_max_effort(result, settings, ref_name)
+        if typed is not None:
+            return typed, None
+    values = reference_values_for_batch(result, settings)
+    if values is not None:
+        return values, None
     if not ref_name or mode in (None, "none"):
         return None, None
     fr = getattr(result, "ok_files", {}).get(ref_name)
