@@ -417,6 +417,13 @@ class Trimmed:
     raw_emgcolumns: object
     ecg_diag: object = None
     emg_stages: object = None
+    # Soft per-file notices from applying processing.segmentation.overrides
+    # (an out-of-range/colliding cut, a join with no nearby automatic boundary) --
+    # always [] when the file has no override entry, or an entry with both cut_s
+    # and join_s empty (segment_file never even calls compute.apply_segmentation_
+    # overrides in that case -- see that function's own docstring on why this is
+    # what makes the empty-overrides byte-identity guarantee hold by construction).
+    segmentation_notices: list = field(default_factory=list)
 
 
 def segment_file(settings: Settings, s, path, *, cache=None, cancel_check=None,
@@ -498,6 +505,30 @@ def segment_file(settings: Settings, s, path, *, cache=None, cancel_check=None,
         s.processing.mechanics.separateby, filename, timecol, flow, volume,
         poes, pgas, pdi, entropycolumns, emgcolumns, s)
 
+    # Repair the automatic segmentation from processing.segmentation.overrides,
+    # if this file has an entry AND actually names a cut/join (an entry with both
+    # lists empty -- a no-op the UI could still leave behind -- is treated exactly
+    # like no entry at all). Restricted to a genuinely flow-/volume-bearing set:
+    # whole_file/separators already have their own manual-boundary mechanism
+    # (SeparatorEntry), and Settings.validate() never lets the two
+    # coexist for the same analysis. Guarding the CALL itself (rather than relying
+    # on apply_segmentation_overrides to be a no-op on empty input) is what makes
+    # "empty overrides is byte-identical" hold by construction, not by happenstance.
+    segmentation_notices: list = []
+    if not emg_only and s.processing.mechanics.separateby in ("flow", "volume"):
+        override = next(
+            (e for e in settings.processing.segmentation.overrides if e.file == filename), None)
+        if override is not None and (override.cut_s or override.join_s):
+            _emit(progress, ProgressEvent(
+                "stage", file=filename, message="applying segmentation overrides"))
+            breaths, _override_notices = compute.apply_segmentation_overrides(
+                filename, breaths, override.cut_s, override.join_s,
+                timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns,
+                s.input.format.samplingfrequency, s.processing.mechanics.breathseparationbuffer,
+                ignored_breaths=compute.ignorebreaths(filename, s),
+                kinds=compute.breathkinds(filename, s))
+            segmentation_notices = [notice.message for notice in _override_notices]
+
     trimmed = Trimmed(
         timecol=timecol, flow=flow, volume=volume, poes=poes, pgas=pgas, pdi=pdi,
         entropycolumns=entropycolumns, emgcolumns=emgcolumns,
@@ -507,6 +538,7 @@ def segment_file(settings: Settings, s, path, *, cache=None, cancel_check=None,
         raw_poes=poesraw, raw_pgas=pgasraw, raw_pdi=pdiraw,
         raw_emgcolumns=emgcolumnsraw,
         ecg_diag=ecg_diag, emg_stages=emg_stages,
+        segmentation_notices=segmentation_notices,
     )
     return breaths, trimmed
 
@@ -961,6 +993,10 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
             poesraw, pgasraw, pdiraw = trimmed.raw_poes, trimmed.raw_pgas, trimmed.raw_pdi
             emgcolumnsraw = trimmed.raw_emgcolumns
             ecg_diag, emg_stages = trimmed.ecg_diag, trimmed.emg_stages
+            for _msg in trimmed.segmentation_notices:
+                warnings.warn(f"{filename}: {_msg}")
+                file_notices.append(_msg)
+                _emit(progress, ProgressEvent("warning", file=filename, message=f"{filename}: {_msg}"))
 
             if len(emgcolumnsraw) > 0:
                 # ecg_auto_detect derives the shared detection parameters from ONE reference

@@ -2,8 +2,9 @@ import pytest
 
 from respmech.core.settings import (
     SCHEMA_VERSION, BreathCountEntry, BreathRef, CarriedOverState, ExcludeEntry,
-    GroupReferenceEntry, ReferenceEntry, SeparatorEntry, Settings, SettingsError,
-    SubjectEntry, _CARRIED_KINDS, carried_over_state, clear_carried_over, is_carried_folder,
+    GroupReferenceEntry, ReferenceEntry, SegmentationOverrideEntry, SeparatorEntry,
+    Settings, SettingsError, SubjectEntry, _CARRIED_KINDS, carried_over_state,
+    clear_carried_over, is_carried_folder,
 )
 
 
@@ -678,6 +679,71 @@ def test_separator_entry_zero_times_and_valid_settings_pass():
     s.validate()                                              # must not raise
 
 
+# -- SegmentationOverrideEntry (flow-/volume-bearing segmentation repair)
+# form/conflict checks -- same two-pass shape as SeparatorEntry above, checked
+# independently for cut_s and join_s.
+
+def test_segmentation_override_entry_that_is_not_even_a_table_is_rejected():
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.overrides.append(1)     # hand-edited `overrides = [1]`
+    with pytest.raises(SettingsError, match=r"overrides\[0\] must be a table"):
+        s.validate()
+
+
+@pytest.mark.parametrize("field_name", ["cut_s", "join_s"])
+def test_segmentation_override_entry_times_must_be_a_list_of_numbers(field_name):
+    s = Settings.from_dict(_minimal())
+    kwargs = {"file": "x.txt", field_name: [1.0, "two", 3.0]}
+    s.processing.segmentation.overrides.append(SegmentationOverrideEntry(**kwargs))
+    with pytest.raises(SettingsError, match=rf"{field_name} must be a list of numbers"):
+        s.validate()
+
+
+@pytest.mark.parametrize("bad_times", [
+    [1.0, float("nan"), 3.0],
+    [1.0, float("inf")],
+    [float("-inf"), 2.0],
+], ids=["nan", "inf", "-inf"])
+@pytest.mark.parametrize("field_name", ["cut_s", "join_s"])
+def test_segmentation_override_entry_rejects_non_finite_values(field_name, bad_times):
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.overrides.append(
+        SegmentationOverrideEntry(**{"file": "x.txt", field_name: bad_times}))
+    with pytest.raises(SettingsError, match=rf"{field_name} must be a list of numbers"):
+        s.validate()
+
+
+@pytest.mark.parametrize("field_name", ["cut_s", "join_s"])
+def test_segmentation_override_entry_times_must_be_strictly_increasing_and_non_negative(field_name):
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.overrides.append(
+        SegmentationOverrideEntry(**{"file": "x.txt", field_name: [3.0, 1.0]}))
+    with pytest.raises(SettingsError, match=r"non-negative and strictly increasing"):
+        s.validate()
+
+    s2 = Settings.from_dict(_minimal())
+    s2.processing.segmentation.overrides.append(
+        SegmentationOverrideEntry(**{"file": "x.txt", field_name: [-1.0, 2.0]}))
+    with pytest.raises(SettingsError, match=r"non-negative and strictly increasing"):
+        s2.validate()
+
+
+def test_segmentation_override_entry_duplicate_file_is_rejected():
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.overrides.append(SegmentationOverrideEntry(file="x.txt", cut_s=[1.0]))
+    s.processing.segmentation.overrides.append(SegmentationOverrideEntry(file="x.txt", join_s=[2.0]))
+    with pytest.raises(SettingsError, match=r"has more than one entry"):
+        s.validate()
+
+
+def test_segmentation_override_entry_empty_and_valid_settings_pass():
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.overrides.append(SegmentationOverrideEntry(file="x.txt"))
+    s.processing.segmentation.overrides.append(
+        SegmentationOverrideEntry(file="y.txt", cut_s=[1.0, 2.5], join_s=[4.0]))
+    s.validate()                                              # must not raise
+
+
 # -- carried-over per-folder state (ticket B06) -------------------------------
 # exclude_breaths/breath_counts/the noise reference key on the bare filename, which is
 # ambiguous the moment two recordings folders share a filename (the common multi-subject
@@ -895,6 +961,13 @@ def _setup_separator_files(s, folder):
     return "x.txt"
 
 
+def _setup_segmentation_override_files(s, folder):
+    from respmech.core.settings import SegmentationOverrideEntry
+    s.processing.segmentation.overrides.append(
+        SegmentationOverrideEntry(file="x.txt", cut_s=[1.0], join_s=[2.0], folder=folder))
+    return "x.txt"
+
+
 def _setup_reference_files(s, folder):
     s.processing.references.append(
         ReferenceEntry(file="x.txt", ic=BreathRef(file="x.txt", breaths=[1]), folder=folder))
@@ -920,6 +993,7 @@ _ROW_SETUP = {
     "normalization_reference": _setup_normalization_reference,
     "breath_type_files": _setup_breath_type_files,
     "separator_files": _setup_separator_files,
+    "segmentation_override_files": _setup_segmentation_override_files,
     "reference_files": _setup_reference_files,
     "group_reference_groups": _setup_group_reference_groups,
     "subject_keys": _setup_subject_keys,
