@@ -22,12 +22,16 @@ import pyqtgraph as pg
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
+from respmech.core.analysis.references import resolve_reference
 from respmech.core.analysis.signals import Capabilities
-from respmech.core.settings import BreathTypeEntry, ExcludeEntry
+from respmech.core.settings import (BreathRef, BreathTypeEntry, ExcludeEntry,
+                                    GroupReferenceEntry, ReferenceEntry)
+from respmech.core.summary import group_key
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
 from respmech.ui import plot_perf
 from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
+from respmech.ui.validation import matching_files
 from respmech.ui import wheel as _wheel
 from respmech.ui.flow_layout import (ElidingLabel, FlowLayout, cluster as _cluster,
                                      elide as _elide, install_flow as _install_flow)
@@ -96,6 +100,37 @@ _TYPE_MENU_STATUS_TIPS = {
     "rest": "Mark as a quiet-breathing reference segment for noise-profile estimation.",
     "other": "Mark as typed without extracting any manoeuvre values.",
 }
+
+#: slot -> the BreathTypeEntry.kind values that count as "this breath is already typed
+#: as slot" for the quick 'Use as IC reference for' submenu (M-37) -- mirrors
+#: core.analysis.references._OWN_TYPED_KINDS['ic'] exactly (only that one slot has a
+#: one-click shortcut here; the other three slots are only reachable through the full
+#: 'Reference manoeuvres…' picker).
+_IC_REFERENCE_KINDS = frozenset({"ic", "ic_fvc"})
+
+
+def _set_chip_text(chip, text, *, fixed_tooltip=None):
+    """``QLabel.setText``, but routed through ``ElidingLabel.setFullText`` when ``chip``
+    is one (``qc_overview``, M-37) so the FULL text -- not just whatever happens to be
+    displayed right now -- survives into the tooltip and can be re-elided on resize.
+    ``_update_qc_overview``/``_qc_overview_not_assessed``/``_reset_qc_overview`` share
+    this so a caller never has to know which chip type it was handed (``chip`` can also
+    be ``segments_qc_overview``, still a plain QLabel -- M-26, where ``fixed_tooltip`` is
+    silently ignored).
+
+    ``fixed_tooltip``: ``ElidingLabel.setFullText`` always overwrites the tooltip with
+    the text just set -- right for ``mech_window_label`` (the tooltip only ever needs to
+    recover the elided text itself), wrong here: ``qc_overview``'s tooltip is a STATIC
+    explanation of what the chip even measures ("the CURRENTLY PREVIEWED file's most
+    recent test run"), which the short QC verdict text alone does not say. Passing it
+    re-applies that fixed wording after ``setFullText``'s own overwrite, the same
+    two-step ``_set_analysis_window`` already does for ``mech_window_label``."""
+    if hasattr(chip, "setFullText"):
+        chip.setFullText(text)
+        if fixed_tooltip is not None:
+            chip.setToolTip(fixed_tooltip)
+    else:
+        chip.setText(text)
 
 
 def _short_boundary_note(notices):
@@ -510,12 +545,14 @@ class _MechanicsMixin:
         band.setMaximumHeight(40)
         bar = QHBoxLayout(band)
         bar.setContentsMargins(6, 0, 6, 0)
-        self.qc_overview = QLabel("")
+        # ElidingLabel (M-37, not a plain QLabel): the QC verdict text grows with the
+        # number of flags found (_update_qc_overview's "⚠ ..." suffix), and this chip
+        # sits in a fixed-height action band next to mech_window_label, which already
+        # needed the same fix for the same reason (see its own comment below).
+        self.qc_overview = ElidingLabel("")
         self.qc_overview.setProperty("banner", True)   # box baked at first polish (theme.py)
         self.qc_overview.setProperty("status", "muted")
-        self.qc_overview.setToolTip(
-            "Quality overview of the CURRENTLY PREVIEWED file's most recent test run — "
-            "not a batch summary. See the file rail for every file's exclusion count.")
+        self.qc_overview.setToolTip(self._QC_OVERVIEW_TOOLTIP)
         # D23 (UI-overhaul): the analysis window, at a PERSISTENT spot beside the QC chip —
         # not the shared status line (main_window.py connects every screen's status_changed
         # to one bar, so a Setup/EMG message lands a moment later and silently overwrites
@@ -551,6 +588,10 @@ class _MechanicsMixin:
         "breaths. The Mechanics channel stack's time axis is zero at the start of "
         "this window; the EMG tabs show the file's own untrimmed clock.")
 
+    _QC_OVERVIEW_TOOLTIP = (
+        "Quality overview of the CURRENTLY PREVIEWED file's most recent test run — "
+        "not a batch summary. See the file rail for every file's exclusion count.")
+
     def _process_this_file(self):
         name = self._previewed_file or self._selected_filename()
         if name:
@@ -571,10 +612,11 @@ class _MechanicsMixin:
         for chip in (self.qc_overview, getattr(self, "segments_qc_overview", None)):
             if chip is None:
                 continue
-            chip.setText("QC:  —")
+            _set_chip_text(chip, "QC:  —", fixed_tooltip=self._QC_OVERVIEW_TOOLTIP)
             chip.setProperty("status", "muted")
             chip.style().unpolish(chip)
             chip.style().polish(chip)
+        self._mech_window_base_text = ""
         self.mech_window_label.setFullText("")
         self.mech_window_label.setToolTip(self._MECH_WINDOW_TOOLTIP)
         self._process_ready = False
@@ -603,7 +645,8 @@ class _MechanicsMixin:
         ``chip`` (M-26): the segments tab's own QC chip for an EMG-only 'batch' run,
         defaulting to the Mechanics chip unchanged."""
         chip = chip if chip is not None else self.qc_overview
-        chip.setText(f"QC:  not assessed — {short_error(str(detail))}")
+        _set_chip_text(chip, f"QC:  not assessed — {short_error(str(detail))}",
+                      fixed_tooltip=self._QC_OVERVIEW_TOOLTIP)
         chip.setProperty("status", "warn")
         chip.style().unpolish(chip)
         chip.style().polish(chip)
@@ -621,8 +664,9 @@ class _MechanicsMixin:
             # quietly dropped every breath, directly contradicting the success status
             # line shown alongside it.
             n_typed = len(getattr(fr, "manoeuvres", None) or {})
-            chip.setText(f"QC:  {n_typed} typed manoeuvre breath"
-                        f"{'s' if n_typed != 1 else ''}, no tidal breathing")
+            _set_chip_text(chip, f"QC:  {n_typed} typed manoeuvre breath"
+                          f"{'s' if n_typed != 1 else ''}, no tidal breathing",
+                          fixed_tooltip=self._QC_OVERVIEW_TOOLTIP)
             chip.setProperty("status", "ok")
             chip.style().unpolish(chip)
             chip.style().polish(chip)
@@ -656,7 +700,7 @@ class _MechanicsMixin:
             status = "warn"
         else:
             msg += "   ·  no flags"
-        chip.setText(msg)
+        _set_chip_text(chip, msg, fixed_tooltip=self._QC_OVERVIEW_TOOLTIP)
         chip.setProperty("status", status)
         chip.style().unpolish(chip)
         chip.style().polish(chip)
@@ -667,11 +711,16 @@ class _MechanicsMixin:
         drawn from — ``startix``/``endix`` are indices into the file's own untrimmed
         arrays (``core.compute.trim``), and ``emg_flow`` is that untrimmed flow, so its
         length is the file's total duration regardless of whether trimming succeeded.
-        Purely presentational: no computed value is read or changed here."""
+        Purely presentational: no computed value is read or changed here.
+
+        M-37: the trim-window sentence is only HALF of what this label now shows —
+        ``_refresh_reference_chip`` appends the file's own resolved IC reference (if
+        any) inside the SAME eliding slot, so ``_mech_window_base_text`` (this method's
+        own half) is stashed for that method to read rather than recomputed there."""
         fs = data.get("fs")
         if not fs:
-            self.mech_window_label.setFullText("")
-            self.mech_window_label.setToolTip(self._MECH_WINDOW_TOOLTIP)
+            self._mech_window_base_text = ""
+            self._refresh_reference_chip()
             return
         total_s = len(data.get("emg_flow", ())) / fs
         if data.get("trim_error"):
@@ -689,8 +738,47 @@ class _MechanicsMixin:
             text = f"Analysis window {start_s:.2f}–{end_s:.2f} s of {total_s:.2f} s"
             if trimmed_s > 0.005:                       # hide a rounding-only "0.00 s trimmed"
                 text += f" ({trimmed_s:.2f} s trimmed)"
+        self._mech_window_base_text = text
+        self._refresh_reference_chip()
+
+    def _reference_chip_text(self, name):
+        """The short 'IC ref: …' fragment appended to ``mech_window_label`` (M-37), or
+        ``''`` when ``name`` has no resolved IC reference at all — a file that simply
+        does not use one shows no chip, rather than an unconditional 'IC ref: none'
+        cluttering every ordinary analysis. Reads ``resolve_reference`` (M-34), so this
+        already reports a group-default or the file's own typed breath, not only an
+        explicit ``processing.references`` entry — exactly like the chip's job
+        ('viser den') requires after ANY of the three ways a reference can resolve."""
+        if not name:
+            return ""
+        ref = resolve_reference(name, "ic", self.state.settings)
+        if ref is None:
+            return ""
+        where = "this file" if ref.file == name else ref.file
+        if not ref.breaths:
+            return f"IC ref: {where}"
+        n = len(ref.breaths)
+        breath_txt = f"breath {ref.breaths[0]}" if n == 1 else f"{n} breaths"
+        return f"IC ref: {where} ({breath_txt})"
+
+    def _refresh_reference_chip(self):
+        """Recompose ``mech_window_label`` from its stashed trim-window half
+        (``_mech_window_base_text``) plus a freshly-resolved reference chip for the
+        CURRENTLY SELECTED file — called both from a real render (``_set_analysis_
+        window``) and from every write path that can change what the reference
+        resolves to (``_set_reference``, ``_open_reference_picker``) without waiting
+        for the next full re-render. The combined text is stashed as the tooltip too
+        (appended after the fixed explanation, mirroring ``_set_chip_text``'s
+        ``fixed_tooltip`` two-step for ``qc_overview``) so the full, un-elided sentence
+        stays one hover away exactly like every other use of ElidingLabel here."""
+        base = getattr(self, "_mech_window_base_text", "")
+        ref_text = self._reference_chip_text(self._selected_filename())
+        text = f"{base}  ·  {ref_text}" if (base and ref_text) else (ref_text or base)
         self.mech_window_label.setFullText(text)
-        self.mech_window_label.setToolTip(self._MECH_WINDOW_TOOLTIP)
+        tip = self._MECH_WINDOW_TOOLTIP
+        if text:
+            tip += "\n\n" + text
+        self.mech_window_label.setToolTip(tip)
 
     # -- P17 crosshair + figure export -------------------------------------
     def _on_mech_mouse_moved(self, evt):
@@ -885,6 +973,29 @@ class _MechanicsMixin:
                           "processing.ptp.baseline_window_s",
                           "End-expiratory window whose mean is the PTP baseline.",
                           lo=0.0, hi=1.0, step=0.01, decimals=4, suffix=" s")),
+            # M-37: only the four fields the ticket names -- the rest of LungVolumeSettings/
+            # IcSettings (baseline_pattern, the EELV_UNSTABLE/NOT_REPEATABLE/LOW_EFFORT
+            # thresholds, reject_flags) stay TOML-only for now, same "surface the most-used
+            # fields, preserve the rest on round-trip" rule the whole dialog already follows.
+            ("lv", Field("require_references", "Require linked references", "bool",
+                        "processing.lung_volume.require_references",
+                        "Make a reference source named in Setup that is missing from the "
+                        "analysed files a hard error instead of a caution.")),
+            ("ic", Field("eelv_tracking", "EELV tracking", "choice",
+                        "processing.lung_volume.ic.eelv_tracking",
+                        "Whether each tidal breath's operating IC follows its own "
+                        "end-expiratory drift, same-file reference only.",
+                        options=[("None — reference IC held fixed", "none"),
+                                 ("Within this file", "within_file")])),
+            ("ic", Field("aggregate", "Repeat-IC aggregate", "choice",
+                        "processing.lung_volume.ic.aggregate",
+                        "How repeated IC manoeuvres in the same reference are combined.",
+                        options=[("Mean", "mean"), ("Median", "median")])),
+            ("ic", Field("preceding_breaths", "Preceding breaths for EELV baseline", "int",
+                        "processing.lung_volume.ic.preceding_breaths",
+                        "How many tidal breaths right before the manoeuvre set its "
+                        "end-expiratory baseline.",
+                        lo=0, hi=1000, step=1)),
         ]
         # M-17 (R7): "Work of breathing" and "Pressure–time product" are meaningless without
         # a Poes trace — WOB/PTP are never computed for a Poes-less analysis (M-14's
@@ -898,7 +1009,8 @@ class _MechanicsMixin:
         if not Capabilities.from_settings(s).poes:
             _hidden_without_poes = {"calc_from", "avg_resampling_obs", "baseline_window_s"}
             fields = [(grp, f) for grp, f in fields if f.key not in _hidden_without_poes]
-        owner = {"seg": seg, "peak": peak, "vol": vol, "samp": samp, "wob": wob, "ptp": ptp}
+        owner = {"seg": seg, "peak": peak, "vol": vol, "samp": samp, "wob": wob, "ptp": ptp,
+                "lv": s.processing.lung_volume, "ic": s.processing.lung_volume.ic}
         values = {f.key: getattr(owner[grp], f.key) for grp, f in fields}
         # breath counts round-trip as one 'file = count' line each, edited as text
         bc_field = Field("breath_counts", "Breath-count overrides", "text",
@@ -925,6 +1037,8 @@ class _MechanicsMixin:
                                       "trend_peak_min_distance_s", "trend_peak_min_height"]),
             ("Sampling", ["resample", "resample_to_frequency"]),
             ("Pressure–time product", ["baseline_window_s"]),
+            ("Lung volumes", ["require_references", "eelv_tracking", "aggregate",
+                              "preceding_breaths"]),
             # not "Breath-count overrides" — the one field on this card is already called
             # that, and a card whose title repeats its only row reads like a mistake
             ("Per-file overrides", ["breath_counts"]),
@@ -1753,8 +1867,9 @@ class _MechanicsMixin:
 
         ``kinds`` is the caller's choice of which real kinds to OFFER (``_handle_type_
         requested`` filters ``'rest'`` in/out by capability) — the disabled hint and the
-        two M-37 placeholders below are unconditional, since they are informational/
-        not-yet-wired rather than a choice ``kinds`` should ever need to suppress."""
+        M-37 reference actions below are unconditional, since they name a property of
+        the BREATH's current type (already decided, not something ``kinds`` should ever
+        need to suppress)."""
         menu = QMenu(self.plots)
         menu.setAttribute(Qt.WA_DeleteOnClose)
         # M-31: a plain, deterministic hint (manoeuvres.suggest_fvc) — the untyped
@@ -1772,18 +1887,157 @@ class _MechanicsMixin:
                 action.setStatusTip(tip)
             action.triggered.connect(
                 lambda _checked=False, k=kind: self._apply_breath_type_choice(breath_no, k))
-        # M-37 (not yet wired): reference-picker placeholders, visible so the menu's
-        # final shape is known now, disabled until the reference/subject model lands.
-        # A statusTip on each — every REAL choice above has one too — so a disabled,
-        # unclickable item still explains itself instead of just doing nothing.
+        # M-37: reference actions. 'Use as IC reference for' is a real submenu (Qt draws
+        # its own arrow — no manual '▸' needed), enabled only once THIS breath is already
+        # typed 'ic'/'ic_fvc' (_IC_REFERENCE_KINDS): pointing another file's reference at
+        # a breath that is not itself an IC manoeuvre would silently create a reference
+        # to nothing useful. 'Reference manoeuvres…' has no such precondition — the full
+        # picker lets any file's/breath's typed manoeuvres be linked regardless of what
+        # (if anything) this particular breath is typed as — so it stays enabled here;
+        # both funnels re-check the run lock themselves (same "gate the action, not the
+        # tab" split _set_breath_type already uses).
         menu.addSeparator()
-        ref_for = menu.addAction("Use as IC reference for ▸")
-        ref_for.setEnabled(False)
-        ref_for.setStatusTip("Not available yet — a later release.")
+        name = self._selected_filename()
+        current_kind = self._current_breath_kind(name, breath_no) if name else None
+        can_ref = current_kind in _IC_REFERENCE_KINDS
+        ref_for = menu.addMenu("Use as IC reference for")
+        ref_for.setEnabled(can_ref and bool(name))
+        ref_for.menuAction().setStatusTip(
+            "Point another file's (or this group's) IC reference at this manoeuvre."
+            if can_ref else
+            "Type this breath as an IC manoeuvre (or IC + FVC) first.")
+        if name:
+            group = group_key(name, self.state.settings)
+            a_file = ref_for.addAction("This file")
+            a_file.triggered.connect(
+                lambda _checked=False: self._set_reference(name, breath_no, "file"))
+            a_group = ref_for.addAction(f"All files of {group}")
+            a_group.triggered.connect(
+                lambda _checked=False: self._set_reference(name, breath_no, "group"))
+            a_all = ref_for.addAction("All files")
+            a_all.triggered.connect(
+                lambda _checked=False: self._set_reference(name, breath_no, "all"))
         ref_manoeuvres = menu.addAction("Reference manoeuvres…")
-        ref_manoeuvres.setEnabled(False)
-        ref_manoeuvres.setStatusTip("Not available yet — a later release.")
+        ref_manoeuvres.setStatusTip(
+            "Browse and link IC/FVC/baseline/maximal-effort manoeuvres across files.")
+        ref_manoeuvres.triggered.connect(
+            lambda _checked=False: self._open_reference_picker(name))
         return menu
+
+    def _current_breath_kind(self, file, breath_no):
+        """The ``BreathTypeEntry.kind`` already recorded for ``file``'s ``breath_no``,
+        or ``None`` if it is untyped (plain tidal, or excluded — neither is a
+        ``BreathTypeEntry``, see ``_set_breath_type``'s own three-state contract)."""
+        entry = next((t for t in self.state.settings.processing.breath_types
+                     if t.file == file and t.breath == breath_no), None)
+        return entry.kind if entry is not None else None
+
+    def _set_reference(self, file, breath_no, scope):
+        """M-37 funnel for the quick 'Use as IC reference for' submenu: point ``scope``
+        (``'file'`` | ``'group'`` | ``'all'``) at ``file``'s ``breath_no`` — already
+        typed ``'ic'``/``'ic_fvc'``, see ``_IC_REFERENCE_KINDS`` — as its IC reference.
+        Same run-lock / folder-stamp-only-on-creation / one ``settings_edited`` contract
+        as ``_set_breath_type``: an EXISTING ``ReferenceEntry``/``GroupReferenceEntry``'s
+        ``folder`` is never rewritten by this, only a brand-new one gets stamped. The
+        full slot/file/breath picker (``_open_reference_picker``) is the OTHER way to
+        write ``processing.references``/``reference_defaults``; this is the one-click
+        shortcut for the single most common case (this breath's own file IS the IC
+        source).
+
+        Returns ``scope`` again on success, or ``None`` if the write was blocked (a run
+        in progress) or ``scope`` is not one of the three recognised values."""
+        if self._run_active:
+            msg = "Reference editing is locked while a run is in progress."
+            self._set_status(msg)
+            self.write_action_blocked.emit(msg)
+            return None
+        if scope not in ("file", "group", "all"):
+            return None
+        proc = self.state.settings.processing
+        folder = self.state.settings.input.folder
+
+        def _point_file_at(target):
+            # A fresh BreathRef PER entry, never one shared instance handed to every
+            # target (self-review finding): a scope='all' write used to alias the SAME
+            # BreathRef — and its mutable .breaths LIST — across every file's
+            # ReferenceEntry.ic, so mutating one file's reference later (e.g. a future
+            # multi-breath edit) silently corrupted every other file's reference too.
+            entry = next((e for e in proc.references if e.file == target), None)
+            if entry is None:
+                entry = ReferenceEntry(file=target, folder=folder)
+                proc.references.append(entry)
+            entry.ic = BreathRef(file=file, breaths=[breath_no])
+
+        if scope == "file":
+            _point_file_at(file)
+            where = "this file"
+        elif scope == "group":
+            group = group_key(file, self.state.settings)
+            entry = next((e for e in proc.reference_defaults if e.group == group), None)
+            if entry is None:
+                entry = GroupReferenceEntry(group=group, folder=folder)
+                proc.reference_defaults.append(entry)
+            entry.ic = BreathRef(file=file, breaths=[breath_no])
+            where = f"all files of {group}"
+        else:                                              # "all"
+            targets = [os.path.basename(f) for f in matching_files(
+                self.state.settings.input.folder, self.state.settings.input.files)]
+            for target in targets:
+                _point_file_at(target)
+            where = "all files"
+
+        self.settings_edited.emit()
+        self._sync_rail_breath_state()
+        self._refresh_reference_chip()
+        self._request_batch_recompute()
+        self._set_status(f"{file}: breath {breath_no} set as the IC reference for {where}.")
+        return scope
+
+    def _open_reference_picker(self, filename=None):
+        """M-37: the full picker (``ReferencePickerDialog``) for all four reference
+        slots at once, opened from the type menu's 'Reference manoeuvres…' (the
+        currently previewed file) or from the file rail's row context menu
+        (``FileRail.referencesRequested``, a specific ``filename``). Same run-lock
+        contract as ``_set_reference``; writes nothing if the dialog is cancelled or
+        nothing was actually touched.
+
+        Only writes the slots ``dlg.touched_slots()`` reports (self-review finding: an
+        earlier version wrote every slot ``staged()`` returned whenever ANY slot
+        differed from the existing explicit entry, which silently truncated a
+        legitimate MULTI-breath own-typed-breath reference to the picker's
+        single-breath selection the instant the user touched a completely different
+        slot and clicked OK — see ``ReferencePickerDialog.staged()``'s own docstring)."""
+        if self._run_active:
+            msg = "Reference editing is locked while a run is in progress."
+            self._set_status(msg)
+            self.write_action_blocked.emit(msg)
+            return
+        name = filename or self._selected_filename()
+        if not name:
+            return
+        from respmech.ui.reference_picker_dialog import ReferencePickerDialog
+        s = self.state.settings
+        files = sorted({os.path.basename(f) for f in matching_files(
+            s.input.folder, s.input.files)} | {name})
+        dlg = ReferencePickerDialog(name, s, files, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        touched = dlg.touched_slots()
+        if not touched:
+            return
+        staged = dlg.staged()
+        proc = s.processing
+        entry = next((e for e in proc.references if e.file == name), None)
+        if entry is None:
+            entry = ReferenceEntry(file=name, folder=s.input.folder)
+            proc.references.append(entry)
+        for slot in touched:
+            setattr(entry, slot, staged[slot])
+        self.settings_edited.emit()
+        self._sync_rail_breath_state()
+        self._refresh_reference_chip()
+        self._request_batch_recompute()
+        self._set_status(f"{name}: reference manoeuvres updated.")
 
     def _apply_breath_type_choice(self, breath_no, kind):
         result = self._set_breath_type(breath_no, kind)
