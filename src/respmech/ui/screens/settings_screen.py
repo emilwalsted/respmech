@@ -299,6 +299,55 @@ class SettingsScreen(QWidget):
         self.ent_epochs.valueChanged.connect(self._update_entropy_caption)
         self.ent_tol.valueChanged.connect(self._update_entropy_caption)
 
+        # Intrinsic PEEP (PEEPi) ------------------------------------------------
+        # Opt-in (core.analysis.pressure): only meaningful when oesophageal pressure is
+        # declared, so it is a conditional card (_cond_cards) -- absent from a Flow-only
+        # analysis, present from Flow + Poes. Its four numbers are literature-informed
+        # starting values that have not yet been measured on real recordings, and the
+        # tooltips say so.
+        gpeepi = QGroupBox("Intrinsic PEEP (PEEPi)")
+        fpeepi = QFormLayout(gpeepi)
+        fpeepi.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        self.peepi_enabled = QCheckBox("Detect PEEPi and add threshold work of breathing")
+        self.peepi_enabled.setToolTip(_tip(
+            "processing.pressure.peepi.enabled",
+            "Measures the pre-flow drop in oesophageal pressure before each inspiration "
+            "and adds PEEPi columns and a hatched PEEPi rectangle to the Campbell diagram. "
+            "Only adds columns: every existing result is unchanged, on or off."))
+        fpeepi.addRow(self.peepi_enabled)
+        self.peepi_window = QDoubleSpinBox(); self.peepi_window.setRange(0.05, 10.0)
+        self.peepi_window.setDecimals(2); self.peepi_window.setSingleStep(0.1)
+        self.peepi_window.setSuffix(" s")
+        self._row(fpeepi, "Search window", self.peepi_window,
+                  "processing.pressure.peepi.search_window_s",
+                  "How far back into the preceding breath's expiration the start of the "
+                  "pre-flow pressure drop is searched for. A starting value, not yet "
+                  "measured on real recordings.")
+        self.peepi_smooth = QDoubleSpinBox(); self.peepi_smooth.setRange(0.0, 1.0)
+        self.peepi_smooth.setDecimals(3); self.peepi_smooth.setSingleStep(0.01)
+        self.peepi_smooth.setSuffix(" s")
+        self._row(fpeepi, "Smoothing", self.peepi_smooth,
+                  "processing.pressure.peepi.smooth_s",
+                  "Moving-average width applied to the search window before its slope is "
+                  "read; the pressures actually reported stay unsmoothed. A starting value, "
+                  "not yet measured on real recordings.")
+        self.peepi_slope = QDoubleSpinBox(); self.peepi_slope.setRange(0.01, 1.0)
+        self.peepi_slope.setDecimals(2); self.peepi_slope.setSingleStep(0.05)
+        self._row(fpeepi, "Onset slope fraction", self.peepi_slope,
+                  "processing.pressure.peepi.onset_slope_frac",
+                  "Walking back from the start of flow, the drop lasts while the pressure "
+                  "still falls faster than this fraction of the steepest fall in the window. "
+                  "Between 0 and 1. A starting value, not yet measured on real recordings.")
+        self.peepi_min = QDoubleSpinBox(); self.peepi_min.setRange(0.0, 50.0)
+        self.peepi_min.setDecimals(2); self.peepi_min.setSingleStep(0.1)
+        self.peepi_min.setSuffix(" cmH₂O")
+        self._row(fpeepi, "Minimum deflection", self.peepi_min,
+                  "processing.pressure.peepi.min_deflection",
+                  "A smaller drop than this is reported as no PEEPi (0). A starting value, "
+                  "not yet measured on real recordings.")
+        self.peepi_enabled.toggled.connect(self._sync_peepi_fields)
+        self._peepi_shown = {}
+
         # Subjects & lung volumes ---------------------------------------------
         # M-37: read-only -- input.subjects (SubjectEntry: TLC/VC/RV/FEV1/MVV per
         # participant, M-34) is written by the reference model itself (an analysis's own
@@ -406,13 +455,14 @@ class SettingsScreen(QWidget):
         self._card_input, self._card_channels = gin, gch
         self._card_output, self._card_entropy = gout, gent
         self._card_subjects = gsub
+        self._card_peepi = gpeepi
         rig = QWidget(); rig_col = QVBoxLayout(rig)
         rig_col.setContentsMargins(0, 0, 0, 0); rig_col.setSpacing(11)
         rig_col.addWidget(gin); rig_col.addWidget(gch)
         _rig_sp = rig.sizePolicy(); _rig_sp.setHeightForWidth(True); rig.setSizePolicy(_rig_sp)
         leverance = QWidget(); lev_col = QVBoxLayout(leverance)
         lev_col.setContentsMargins(0, 0, 0, 0); lev_col.setSpacing(11)
-        lev_col.addWidget(gout); lev_col.addWidget(gent); lev_col.addWidget(gsub)
+        lev_col.addWidget(gout); lev_col.addWidget(gent); lev_col.addWidget(gpeepi); lev_col.addWidget(gsub)
         _lev_sp = leverance.sizePolicy(); _lev_sp.setHeightForWidth(True); leverance.setSizePolicy(_lev_sp)
         self._rig, self._leverance = rig, leverance
         columns = QWidget()
@@ -511,6 +561,8 @@ class SettingsScreen(QWidget):
         self._cond_cards = [
             (gent, lambda: bool(self.state.settings.input.channels.entropy)),
             (gsub, lambda: bool(self.state.settings.input.subjects)),
+            # PEEPi needs oesophageal pressure: absent from Flow only (and EMG only)
+            (gpeepi, self._peepi_relevant),
         ]
         self._mode = "full"          # "full" = an opened/default analysis; "new" = guided
         self._flow_ready = True
@@ -700,6 +752,17 @@ class SettingsScreen(QWidget):
             self.out_folder.setText(s.output.folder)
             self.ent_epochs.setValue(s.processing.entropy.epochs)
             self.ent_tol.setValue(s.processing.entropy.tolerance)
+            _pp = s.processing.pressure.peepi
+            self.peepi_enabled.setChecked(_pp.enabled)
+            self.peepi_window.setValue(_pp.search_window_s)
+            self.peepi_smooth.setValue(_pp.smooth_s)
+            self.peepi_slope.setValue(_pp.onset_slope_frac)
+            self.peepi_min.setValue(_pp.min_deflection)
+            # what the four boxes SHOW after loading: a hand-edited value outside a box's
+            # range or precision is clipped/rounded on display, so to_state() writes a box
+            # back only once it has actually been edited (never a silent change to a number)
+            self._peepi_shown = {n: getattr(self, n).value() for n in self._PEEPI_BOXES}
+            self._sync_peepi_fields()
             _mi = self.matlab_variant.findData(s.input.format.matlab_variant)
             self.matlab_variant.setCurrentIndex(_mi if _mi >= 0 else 0)
             _di = self.decimal_sep.findData(s.input.format.decimal or ".")
@@ -747,6 +810,13 @@ class SettingsScreen(QWidget):
         s.output.folder = self.out_folder.text()
         s.processing.entropy.epochs = self.ent_epochs.value()
         s.processing.entropy.tolerance = self.ent_tol.value()
+        _pp = s.processing.pressure.peepi
+        _pp.enabled = self.peepi_enabled.isChecked()
+        for _name, _field in self._PEEPI_BOXES.items():
+            _v = getattr(self, _name).value()
+            if _v != self._peepi_shown.get(_name):
+                setattr(_pp, _field, _v)
+                self._peepi_shown[_name] = _v
         s.input.format.matlab_variant = self.matlab_variant.currentData()
         s.input.format.decimal = self.decimal_sep.currentData()
         if self.on_settings_changed:
@@ -893,12 +963,33 @@ class SettingsScreen(QWidget):
         # recompute.
         self.samp_freq.valueChanged.connect(self._on_sampling_frequency_changed)
         self.ent_tol.valueChanged.connect(self._on_field_changed)
+        for _sb in (self.peepi_window, self.peepi_smooth, self.peepi_slope, self.peepi_min):
+            _sb.valueChanged.connect(self._on_field_changed)
+        self.peepi_enabled.toggled.connect(self._on_field_changed)
         self.matlab_variant.currentIndexChanged.connect(self._on_field_changed)
         self.decimal_sep.currentIndexChanged.connect(self._on_field_changed)
         for chk in (self.save_average, self.save_bbb, self.save_processed,
                     self.include_ignored, self.save_pv_avg, self.save_pv_ind, self.save_raw_fig,
                     self.save_trimmed_fig, self.save_drift_fig, self.save_emg_fig):
             chk.toggled.connect(self._on_field_changed)
+
+    #: Setup box -> ``PeepiSettings`` field
+    _PEEPI_BOXES = {"peepi_window": "search_window_s", "peepi_smooth": "smooth_s",
+                    "peepi_slope": "onset_slope_frac", "peepi_min": "min_deflection"}
+
+    def _peepi_relevant(self):
+        """The PEEPi card applies once oesophageal pressure is declared. A malformed
+        hand-edited signal set (``_capabilities_for_view`` -> None) hides it rather than
+        crashing the card pass, the same degrade the channel door uses."""
+        caps = self._capabilities_for_view(self.state.settings)
+        return bool(caps is not None and caps.poes)
+
+    def _sync_peepi_fields(self, *_):
+        """The four thresholds only matter while the feature is on: grey them out otherwise
+        (kept visible, so the values a user has set are never hidden)."""
+        on = self.peepi_enabled.isChecked()
+        for w in (self.peepi_window, self.peepi_smooth, self.peepi_slope, self.peepi_min):
+            w.setEnabled(on)
 
     def _on_field_changed(self, *_):
         if self._loading:
