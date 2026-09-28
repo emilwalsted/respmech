@@ -156,6 +156,15 @@ reference for…", "Reference manoeuvres…") went live in a later release (see 
      participants, run_batch + write_batch, group_readout, check_links, the
      cohort summary) that no earlier ticket in this programme exercised
      together. -->
+<!-- changelog-skip d073670 test-infrastructure only: PREPARES (does not bake --
+     no production data exists in the build environment) a new production-golden
+     scenario, typed_ic_h5, that will exercise the same typed-IC/cross-file-
+     reference feature already described above against a real recording -- no
+     user-visible behaviour change, and no scenario is actually runnable yet
+     without a locally-authored settings file the maintainer still has to create.
+     Also adds a skip-marked test template for two of IcSettings' measured
+     threshold flags (EELV_UNSTABLE, NOT_REPEATABLE), with placeholder numbers,
+     pending calibration against that same real recording. -->
 
 **Explore with sample data follows the signal set.** The startup chooser's own
 'Explore with sample data' door still always opens the complete demo recording, but
