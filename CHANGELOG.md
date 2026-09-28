@@ -7,6 +7,17 @@ for the installers themselves.
 
 ## Unreleased
 
+**The noise profile's expiration mask now follows the analysis's own segmentation
+method and volume trend correction.** When shared-profile EMG noise reduction builds
+its reference clip from a rest/expiration window (or samples active/quiet EMG across
+the batch to auto-select the reduction strength), it used to always segment breaths by
+flow with no trend correction, regardless of what the analysis itself was configured
+to do. It now segments through the same trim/zero/drift/trend/segment sequence every
+other stage uses, so the mask is built from the same breaths the analysis actually
+runs on. This can change reported numbers for an analysis that both has EMG noise
+reduction enabled AND either segments breaths by volume or has volume trend correction
+on; every flow-method, no-trend analysis (the common case) is unaffected.
+
 **New `respmech init` command; `respmech validate` and the run report now name the
 signal set.** `respmech init new_settings.toml --signals flow,poes,emg [--folder DIR
 --files MASK --fs 1000]` writes a commented starting TOML file with only the channel

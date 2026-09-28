@@ -200,7 +200,7 @@ def _old_style_clip(settings, s):
     path = os.path.join(s.input.inputfolder, ref)
     fs = s.input.format.samplingfrequency
     if ns_cfg.use_expiration or not ns_cfg.reference_intervals:
-        emg_full, ins, ex = _emg_segmented(path, s)
+        emg_full, ins, ex = _emg_segmented(settings, s, path)
         return emg_full[ex]
     _load_result, emg_ecg, _diag = _load_and_ecg(path, s)
     parts = [emg_ecg[int(t0 * fs):int(t1 * fs)] for t0, t1 in ns_cfg.reference_intervals]
@@ -290,8 +290,8 @@ def test_expiration_mask_unchanged_without_any_typed_breath(tmp_path):
     s = synth_settings(tmp_path)
     legacy = to_legacy_ns(s)
     path = os.path.join(INPUT, "synth_case_A.csv")
-    _emg, ins_off, ex_off = _emg_segmented(path, legacy, exclude_typed_from_expiration=False)
-    _emg2, ins_on, ex_on = _emg_segmented(path, legacy, exclude_typed_from_expiration=True)
+    _emg, ins_off, ex_off = _emg_segmented(s, legacy, path, exclude_typed_from_expiration=False)
+    _emg2, ins_on, ex_on = _emg_segmented(s, legacy, path, exclude_typed_from_expiration=True)
     assert np.array_equal(ins_off, ins_on)
     assert np.array_equal(ex_off, ex_on)
 
@@ -303,8 +303,8 @@ def test_expiration_mask_excludes_a_typed_breaths_expiration_when_the_flag_is_se
         BreathTypeEntry(file="synth_case_A.csv", breath=1, kind="ic"))
     legacy = to_legacy_ns(s)
     path = os.path.join(INPUT, "synth_case_A.csv")
-    _emg_off, _ins_off, ex_off = _emg_segmented(path, legacy, exclude_typed_from_expiration=False)
-    _emg_on, _ins_on, ex_on = _emg_segmented(path, legacy, exclude_typed_from_expiration=True)
+    _emg_off, _ins_off, ex_off = _emg_segmented(s, legacy, path, exclude_typed_from_expiration=False)
+    _emg_on, _ins_on, ex_on = _emg_segmented(s, legacy, path, exclude_typed_from_expiration=True)
     # Filtering can only ever REMOVE True entries relative to the unfiltered mask, and
     # with a real typed breath present it must remove at least one.
     assert np.array_equal(ex_on & ex_off, ex_on)          # ex_on is a subset of ex_off
