@@ -1,0 +1,105 @@
+# V2_SCENARIOS golden fixture: 'typed_ic_crossfile' (M-40). Two flow-bearing
+# recordings, both matched by ONE glob and processed in the SAME batch:
+#
+# * synth_crossfile_ic.csv -- a dedicated, reference-only recording (its own
+#   RNG stream, own synth_crossfile_*.csv naming so it is never swept up by a
+#   sibling scenario's synth_case_*.csv/synth_manoeuvre_*.csv glob): a SINGLE
+#   breath, typed 'ic' below, and nothing else. core.pipeline.run_batch's M-30
+#   reference-only detection (every breath typed, no tidal breathing at all)
+#   gives it role="reference": no breaths_table/average_row of its own (skipped
+#   by run_scenario's own guard in golden_newcore.py, already built in an
+#   earlier ticket), but its typed breath still reaches
+#   core.analysis.manoeuvres.extract() and lands in BatchResult/FileResult
+#   .manoeuvres, exactly like a tidal file's own typed breath already does.
+# * synth_crossfile_stage.csv -- an ordinary tidal recording (make_file's own
+#   smooth sin^2 breath model, a fresh dedicated seed) with an EXPLICIT
+#   processing.references entry naming the IC file above as its IC source --
+#   the crossfile link core.analysis.references.attach (M-35) resolves at
+#   run time, in contrast to typed_ic_fvc_same_file.toml's SAME-FILE "own
+#   typed breath" fallback.
+#
+# processing.lung_volume.ic.eelv_tracking is left at its default "none": M-36's
+# own design reserves "within_file" tracking for a SAME-file IC reference (a
+# cross-file comparison has no shared volume zero to track drift against, and
+# would simply NaN with a notice instead) -- see docs/REVERSE_ENGINEERING.md
+# §5.14 and lungvol.py's own module docstring. Under "none" tracking, ic_op
+# (and therefore vol_eelv = vc - ic_op) is the SAME value for every breath in
+# the file -- this scenario's own dedicated test in test_golden.py pins that
+# exact, constant value, rather than the "same direction as vol_endexp" phrase
+# used for a DIFFERENT (within-file) tracking scenario in M-36's own analytical
+# unit test, which cannot apply here (see this scenario's own docstring in
+# test_golden.py for the reasoning).
+#
+# input.subjects supplies a VC for group "synth" (core.summary.group_key's
+# default leading-token rule groups every committed synth_*.csv fixture as
+# "synth" -- both files here included), so vol_eelv/vol_eilv/*_pct_vc resolve
+# to a real number instead of NaN (no TLC is entered, so the TLC-anchored
+# family stays NaN by design, exercising that path too).
+schema_version = 2
+
+[analysis]
+signals = ["flow", "poes", "pgas", "pdi", "emg"]
+
+[input]
+folder = "../input"
+files  = "synth_crossfile_*.csv"
+
+[input.format]
+sampling_frequency = 1000
+decimal            = "."
+
+[input.channels]
+flow    = 5
+volume  = 6
+poes    = 7
+pgas    = 8
+pdi     = 9
+emg     = [2, 3, 4]
+entropy = [10, 11, 12]
+
+[[input.subjects]]
+key   = "synth"
+vc_l  = 5.0
+
+[processing.segmentation]
+method = "flow"
+buffer = 200
+
+[processing.segmentation.peak]
+height     = 0.1
+distance_s = 0.1
+width_s    = 0.2
+
+[processing.volume]
+integrate_from_flow = false
+correct_drift       = true
+correct_trend       = false
+
+[processing.wob]
+calc_from          = "average"
+avg_resampling_obs = 300
+
+[processing.entropy]
+# Pinned to the same fixed configuration every other golden scenario uses (see
+# flow_only.toml's own comment) -- not the live GUI default.
+epochs    = 2
+tolerance = 0.1
+
+# generate_data.py's MANOEUVRE_CROSSFILE_IC_BREATH_NO (1) names the same breath
+# number -- keep both in sync if the generator's own breath sequence ever changes.
+[[processing.breath_types]]
+file   = "synth_crossfile_ic.csv"
+breath = 1
+kind   = "ic"
+
+[[processing.references]]
+file = "synth_crossfile_stage.csv"
+ic   = { file = "synth_crossfile_ic.csv", breaths = [1] }
+
+[output]
+folder = "output"
+
+[output.data]
+save_average          = true
+save_breath_by_breath = true
+save_processed        = false

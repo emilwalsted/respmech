@@ -125,3 +125,78 @@ def test_typed_ic_fvc_same_file_vol_ic_matches_analytical_value(current):
     assert row["ic_eelv_pre"] == pytest.approx(0.0, abs=1e-9)
     assert row["ic_eelv_pre_n"] == 3
     assert row["quality"] == []
+
+
+def test_typed_ic_crossfile_reference_only_file_is_skipped_from_per_file(current):
+    """M-40's own scope statement made mechanical: the reference-only
+    ``synth_crossfile_ic.csv`` (every breath typed, no tidal breathing at all —
+    ``core.pipeline.run_batch``'s M-30 detection) never gets a ``per_file`` /
+    breathdata entry (``golden_newcore.run_scenario``'s own
+    ``if fr.breaths_table is not None`` guard, already built by an earlier ticket in
+    this programme) — only the tidal ``synth_crossfile_stage.csv`` does."""
+    per_file = current["typed_ic_crossfile"]["per_file"]
+    assert "synth_crossfile_stage.csv.breathdata.xlsx" in per_file
+    assert "synth_crossfile_ic.csv.breathdata.xlsx" not in per_file
+
+
+def test_typed_ic_crossfile_vol_ic_matches_analytical_value(current):
+    """The reference file's own typed IC breath reports ``vol_ic`` == 3.0 exactly
+    (same ``_MANOEUVRE_IC`` trapezoid recipe and the same reasoning as
+    ``test_typed_ic_fvc_same_file_vol_ic_matches_analytical_value`` above — see that
+    test's docstring and ``generate_data.py``'s ``_manoeuvre_breath`` docstring for
+    why the match is exact rather than merely close).
+
+    Unlike ``typed_ic_fvc_same_file``'s breath #4 (which has 3 preceding tidal
+    breaths in the SAME file to average ``ic_eelv_pre`` over), this file has NO
+    tidal breaths at all: ``ic_eelv_pre`` falls back to the breath's own immediate
+    pre-inspiratory sample (``ic_eelv_pre_n == 1``, exactly 0.0 -- the trapezoid's own
+    ``vol_base``), and the breath is simultaneously the min- and max-numbered breath
+    among an EMPTY tidal set, so ``quality`` carries ``BOUNDARY`` (documented,
+    expected behaviour for a reference-only file's typed breath -- see
+    ``core.pipeline.run_batch``'s own comment on this: 'flags every manoeuvre
+    BOUNDARY -- there is no tidal context to judge low effort or eelv stability
+    against, which is the honest answer, not a bug'), NOT the empty list
+    `typed_ic_fvc_same_file`'s breath #4 gets."""
+    row = current["typed_ic_crossfile"]["manoeuvres"]["synth_crossfile_ic.csv"]["1"]
+    assert row["kind"] == "ic"
+    assert row["vol_ic"] == pytest.approx(3.0, abs=1e-9)
+    assert row["ic_eelv_pre"] == pytest.approx(0.0, abs=1e-9)
+    assert row["ic_eelv_pre_n"] == 1
+    assert row["quality"] == ["BOUNDARY"]
+
+
+def test_typed_ic_crossfile_stage_file_resolves_the_crossfile_reference(current):
+    """The tidal ``synth_crossfile_stage.csv`` resolves its explicit
+    ``processing.references`` entry to the reference file's own ``vol_ic`` (3.0):
+    every breath's ``vol_ic_ref``/``ic_ref_n``/``ic_ref_source`` (``core.analysis.
+    references.attach``, M-35) names the reference file, one accepted attempt.
+
+    ``core.analysis.lungvol.attach`` (M-36) then derives the operating-lung-volume
+    family from that constant reference. ``processing.lung_volume.ic.eelv_tracking``
+    is left at its default ``'none'`` here -- the only valid choice for a CROSS-file
+    reference (``'within_file'`` needs a SAME-file IC and NaNs otherwise, see
+    ``lungvol.py``'s own module docstring and this scenario's own TOML comment) -- so
+    ``ic_op`` is the SAME resolved reference IC for every breath in the file, which
+    in turn makes the VC-anchored ``vol_eelv = vc - ic_op`` an EXACT CONSTANT across
+    every breath too (it does not depend on ``vol_endexp`` at all under 'none'
+    tracking -- only 'within_file' tracking's ``d_eelv`` does). This is why this
+    test pins ``vol_eelv``'s exact, constant value analytically (``vc(5.0) -
+    ic_op(3.0) == 2.0``) rather than asserting it 'moves in the same direction as
+    vol_endexp' -- a phrase that describes 'within_file' tracking's own per-breath
+    drift term (already pinned by ``tests/unit/test_lungvol.py``'s analytical test
+    for THAT mode) and cannot be demonstrated by a scenario whose whole point is a
+    cross-file reference. ``vol_eelv_abs``/``tlc``/``delta_ic`` stay NaN (no TLC, no
+    baseline configured) -- exercising that side of the family too."""
+    pf = current["typed_ic_crossfile"]["per_file"]["synth_crossfile_stage.csv.breathdata.xlsx"]
+    n = len(pf["vol_ic_ref"])
+    assert n > 0
+    for i in range(n):
+        assert pf["vol_ic_ref"][i] == pytest.approx(3.0, abs=1e-9)
+        assert pf["ic_ref_n"][i] == pytest.approx(1.0, abs=1e-9)
+        assert pf["ic_ref_source"][i] == "synth_crossfile_ic.csv"
+        assert pf["ic_op"][i] == pytest.approx(3.0, abs=1e-9)
+        assert pf["vc"][i] == pytest.approx(5.0, abs=1e-9)
+        assert pf["vol_eelv"][i] == pytest.approx(2.0, abs=1e-9)
+        assert pf["tlc"][i] == "NaN"
+        assert pf["vol_eelv_abs"][i] == "NaN"
+        assert pf["delta_ic"][i] == "NaN"
