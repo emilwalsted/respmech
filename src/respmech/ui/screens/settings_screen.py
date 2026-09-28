@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 from PySide6.QtCore import Signal, QTimer, Qt
 
-from respmech.core.analysis.references import check_links
 from respmech.core.analysis.signals import Capabilities, SINGLE_SIGNALS, effective_signals
 from respmech.core.settings import BreathCountEntry, Settings, SettingsError
 from respmech.ui import column_stack as _cs
@@ -70,6 +69,8 @@ _CARRIED_PHRASES = {
         f"breath types for {SettingsScreen._named_by_filename(names)}"),
     "separator_files": lambda names: (
         f"separators for {SettingsScreen._named_by_filename(names)}"),
+    "segmentation_override_files": lambda names: (
+        f"manual cut/join overrides for {SettingsScreen._named_by_filename(names)}"),
     "reference_files": lambda names: (
         f"reference manoeuvres for {SettingsScreen._named_by_filename(names)}"),
     "group_reference_groups": lambda names: (
@@ -2098,6 +2099,7 @@ class SettingsScreen(QWidget):
         chain silently hides one behind another — a sub-1000 Hz recording would have masked
         the gated-peak prerequisite below, which is the one caution the user cannot diagnose
         from this screen."""
+        from respmech.core.analysis.references import check_links  # noqa: PLC0415
         s = self.state.settings
         ch = s.input.channels
         out = []
