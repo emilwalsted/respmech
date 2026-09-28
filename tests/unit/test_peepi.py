@@ -119,18 +119,72 @@ def test_lag_and_preflow_area_cover_the_deflection():
     assert cols["ptp_oes_preflow"] == pytest.approx(cols["int_oes_preflow"] * BCNT * VEFACTOR)
 
 
-def test_threshold_work_and_peepi_variants_follow_the_formulas():
+def test_boundary_in_the_pause_adds_nothing_the_existing_columns_already_hold():
+    """The segmenter's boundary lands in the pause BEFORE the deflection, so the existing
+    PTP baseline and the Campbell polygon's references are already the pre-deflection level
+    and contain the threshold: the ``*_peepi``/``*_thr`` columns equal the plain ones."""
     cols, _ = _run(_breaths(800), _settings(), 2)
-    expected_thr = (gd.PEEPI_DROP - gd.PEEPI_PGAS_DROP) * 0.8 * (98.0638 / 1000) * BCNT * VEFACTOR
+    assert cols["wob_in_thr"] == 0.0
+    assert cols["wob_in_total_thr"] == pytest.approx(1.0)
+    assert cols["wobtotal_thr"] == pytest.approx(1.5)
+    assert cols["int_oesinsp_peepi"] == pytest.approx(2.0, abs=1e-9)
+    assert cols["ptp_oesinsp_peepi"] == pytest.approx(2.0 * BCNT * VEFACTOR, abs=1e-9)
+    assert cols["int_pdiinsp_peepi"] == pytest.approx(3.0, abs=1e-9)
+    assert cols["ptp_pdiinsp_peepi"] == pytest.approx(3.0 * BCNT * VEFACTOR, abs=1e-9)
+
+
+def _late_boundary_pair(drop=3.0, pgas_drop=1.0, ramp_n=250, flat_n=500, insp_n=600):
+    """Two hand-built neighbouring breaths where the boundary lands AFTER the deflection
+    (the classic case: the fall happens under the previous breath's last expiratory
+    samples, and the new inspiratory phase starts with flow already running)."""
+    def phase(flow, poes, pgas, t0):
+        n = len(flow)
+        return {"time": (t0 + np.arange(n)) / FS, "flow": np.asarray(flow, float),
+                "poes": np.asarray(poes, float), "pgas": np.asarray(pgas, float),
+                "pdi": np.asarray(pgas, float) - np.asarray(poes, float)}
+    m = np.arange(1, ramp_n + 1) / ramp_n
+    exp = phase(np.full(flat_n + ramp_n, 0.01),
+                np.concatenate([np.full(flat_n, -5.0), -5.0 - drop * m]),
+                np.concatenate([np.full(flat_n, 9.0), 9.0 - pgas_drop * m]), 0)
+    k = np.arange(insp_n) / insp_n
+    insp = phase(-0.5 * np.ones(insp_n), -5.0 - drop - 6 * np.sin(np.pi * k) ** 2,
+                 8.0 + 1.5 * np.sin(np.pi * k) ** 2, len(exp["flow"]) + 1)
+    return ({"has_phases": True, "expiration": exp, "inspiration": {"time": [0.0]}},
+            {"has_phases": True, "expiration": exp, "inspiration": insp})
+
+
+def test_boundary_after_the_deflection_adds_the_full_peepi():
+    prev, this = _late_boundary_pair()
+    this = _with_mechanics(this)
+    notice = pressure.attach(this, prev, BCNT, VEFACTOR, _settings())
+    assert notice is None
+    cols = this["pressure_ext"]
+    assert cols["peepi_dyn"] == pytest.approx(3.0, abs=1e-9)
+    expected_thr = (3.0 - 1.0) * 0.8 * (98.0638 / 1000) * BCNT * VEFACTOR
     assert cols["wob_in_thr"] == pytest.approx(expected_thr, rel=1e-9)
     assert cols["wob_in_total_thr"] == pytest.approx(1.0 + expected_thr, rel=1e-9)
     assert cols["wobtotal_thr"] == pytest.approx(1.5 + expected_thr, rel=1e-9)
-    assert cols["int_oesinsp_peepi"] == pytest.approx(2.0 + gd.PEEPI_DROP * 1.2, abs=1e-9)
+    assert cols["int_oesinsp_peepi"] == pytest.approx(2.0 + 3.0 * 1.2, abs=1e-9)
     assert cols["ptp_oesinsp_peepi"] == pytest.approx(cols["int_oesinsp_peepi"] * BCNT * VEFACTOR)
-    # the diaphragm columns take the gastric-corrected value
-    assert cols["int_pdiinsp_peepi"] == pytest.approx(
-        3.0 + (gd.PEEPI_DROP - gd.PEEPI_PGAS_DROP) * 1.2, abs=1e-9)
-    assert cols["ptp_pdiinsp_peepi"] == pytest.approx(cols["int_pdiinsp_peepi"] * BCNT * VEFACTOR)
+    assert cols["int_pdiinsp_peepi"] == pytest.approx(3.0 + 2.0 * 1.2, abs=1e-9)
+
+
+def test_dynamic_source_uses_the_full_uncorrected_peepi_without_pgas():
+    prev, this = _late_boundary_pair()
+    caps = _caps(pgas=False, pdi=False, declared=frozenset({"flow", "poes"}))
+    this = _with_mechanics(this)
+    pressure.attach(this, prev, BCNT, VEFACTOR, _settings(caps))
+    assert this["pressure_ext"]["wob_in_thr"] == pytest.approx(
+        3.0 * 0.8 * (98.0638 / 1000) * BCNT * VEFACTOR, rel=1e-9)
+
+
+def test_true_flow_start_ignores_flow_noise_in_the_pause():
+    rng = np.random.default_rng(3)
+    pause = rng.normal(0, 0.003, 400)                     # 3 mL/s of noise, sign flips freely
+    insp = -np.sin(np.pi * (np.arange(1200) + 0.5) / 1200)
+    flow = np.concatenate([pause, insp])
+    t_flow = pressure.true_flow_start(flow)
+    assert 395 <= t_flow <= 420                            # the real start, not sample 0 or a stray dip
 
 
 def test_the_existing_wob_and_mechanics_are_left_alone():
@@ -194,8 +248,6 @@ def test_without_pgas_the_dynamic_value_feeds_the_threshold_work():
     cols, _ = _run(_breaths(800), _settings(caps), 2)
     assert "peepi_corr" not in cols and "peepi_pgas_drop" not in cols
     assert "int_pdiinsp_peepi" not in cols
-    assert cols["wob_in_thr"] == pytest.approx(
-        gd.PEEPI_DROP * 0.8 * (98.0638 / 1000) * BCNT * VEFACTOR, rel=1e-9)
     assert pressure.peepi_source(caps) == "dynamic"
     assert pressure.peepi_source(_caps()) == "corrected"
 
@@ -315,7 +367,7 @@ def test_pipeline_without_poes_skips_with_a_notice(tmp_path):
     res = _run_batch(tmp_path, enabled=True, signals=["flow"])
     fr = res.ok_files["synth_peepi_A.csv"]
     assert "peepi_dyn" not in fr.breaths_table.columns
-    assert any("no Poes" in n for n in fr.notices)
+    assert any("lacks Flow or Poes" in n for n in fr.notices)
 
 
 # --- measured on the built-in sample recording ---------------------------------------------
