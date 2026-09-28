@@ -71,6 +71,28 @@ _GOLDEN_UNIT_SNAPSHOT = {
     'integralemg_mean': 'a.u.·s',
     'max_ex_flow': 'L·s⁻¹',
     'max_in_flow': 'L·s⁻¹',
+    # M-42: placement of a tidal breath against the file's own resolved MEFV
+    # envelope (core.analysis.mfvl.attach/tidal_mfvl_ext), added to
+    # golden_reference.json's typed_ic_fvc_same_file scenario once the SAME
+    # own-typed FVC reference (already resolved for lungvol's VC fallback) gives
+    # this module a curve to place breaths against. efl_present/fvc_eofe_ok
+    # resolve via the registry (unit=""); ve_cap/mvv_est via the registry
+    # (unit='L·min⁻¹'); every *_pct* column already resolves via the pre-existing
+    # generic suffix rule.
+    'br_mvv_pct': '%',
+    'efl_coverage_pct': '%',
+    'efl_pct': '%',
+    'efl_present': '',
+    'ex_flow_pct_mfvl_max': '%',
+    'in_flow_pct_mfvl_max': '%',
+    'max_ex_flow_pct_mfvl_peak': '%',
+    'max_in_flow_pct_mfvl_peak': '%',
+    'mvv_est': 'L·min⁻¹',
+    'te_min_mfvl': 's',
+    've_cap': 'L·min⁻¹',
+    've_pct_cap': '%',
+    've_pct_mvv': '%',
+    've_reserve_pct': '%',
     'pdi_endexp': 'cmH₂O',
     'pdi_endinsp': 'cmH₂O',
     'pdi_maxinsp': 'cmH₂O',
