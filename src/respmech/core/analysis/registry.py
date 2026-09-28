@@ -166,7 +166,7 @@ _SEGMENT_EMG = (
     ColumnSpec(prefix="rms_file_max_col_", requires=frozenset({"emg"}), module="segment_emg", unit="a.u."),
     ColumnSpec(prefix="rms_file_top3_col_", requires=frozenset({"emg"}), module="segment_emg", unit="a.u."),
     # emg_burst neural timing (core.analysis.segments._neural_timing). EXPLICIT units
-    # (the ticket's rule): none of the five names matches core.quantities' exact-match
+    # (units are never left to inference for a new column): none of the five names matches core.quantities' exact-match
     # rules for the mechanical ti/te/ttot/ti_ttot/bf, so without these rows they would
     # come out with no unit at all.
     ColumnSpec(name="ti_emg", requires=frozenset({"emg"}), module="segment_emg", unit="s"),
