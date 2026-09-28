@@ -216,6 +216,12 @@ V2_SCENARIOS: dict = {
     # synth_crossfile_*.csv input pair (own RNG streams, never any other scenario's
     # glob).
     "typed_ic_crossfile": os.path.join("scenarios", "typed_ic_crossfile.toml"),
+    # One manual cut, mid-recording, on synth_case_A.csv only -- the full
+    # signal set (unlike flow_only/poes_only above), over the same committed
+    # synth_case_*.csv input every other full-channel scenario uses. Pins that an
+    # empty overrides entry (synth_case_B.csv, no entry at all) is untouched while a
+    # non-empty one (synth_case_A.csv) actually changes that file's own breath table.
+    "flow_separator_overrides": os.path.join("scenarios", "flow_separator_overrides.toml"),
 }
 
 # The union both test_golden.py (via golden_newcore.mg.SCENARIOS) and this
