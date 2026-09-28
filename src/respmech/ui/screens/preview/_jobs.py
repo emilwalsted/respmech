@@ -170,6 +170,16 @@ def _kinds_for_settings_path(path, caps=None):
     if (path.startswith("processing.volume.correct") or path.startswith("processing.volume.trend")
             or path.startswith("processing.exclude_breaths")):
         return frozenset(("mech", "batch", "noise"))
+    # M-37: reference manoeuvres / operating lung volumes / subject spirometry never
+    # touch a preview PANEL directly -- core.analysis.references.attach and
+    # core.analysis.lungvol both run inside the test run's own post-loop pass and only
+    # ever change the Average-breathdata table/Campbell numbers, never the raw channel
+    # traces, ECG/EMG conditioning or the noise frontier (which is why this mirrors the
+    # wob/ptp/entropy/breath_counts rule above rather than falling through to the wide
+    # default).
+    if (path.startswith("processing.references") or path.startswith("processing.reference_defaults")
+            or path.startswith("processing.lung_volume") or path.startswith("input.subjects")):
+        return frozenset(("batch",))
     # channels core / format / volume inverse+integrate (all applied inside load()),
     # channels.entropy (validated in every load path), input.folder/files,
     # processing.breath_types (M-19 typed breaths change the noise reference mask itself —

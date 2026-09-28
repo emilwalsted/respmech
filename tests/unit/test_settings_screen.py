@@ -204,6 +204,81 @@ def test_entropy_fields_are_named_and_explained_for_what_they_are(qapp, tmp_path
     win.close()
 
 
+def test_subjects_table_renders_the_declared_subjects_read_only(qapp, tmp_path):
+    """M-37: the 'Subjects && lung volumes' card is read-only (input.subjects has no
+    Setup widget of its own -- it is written by the reference model/an analysis's own
+    .toml) -- populated by _refresh_subjects_table, which _sync_widgets calls on load."""
+    from PySide6.QtCore import Qt
+    from respmech.core.settings import SubjectEntry
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    s.input.subjects = [
+        SubjectEntry(key="synth_case", tlc_l=6.5, vc_l=5.0, rv_l=None, fev1_l=4.1,
+                    mvv_lpm=150.0),
+    ]
+    win = MainWindow(AppState(s))
+    sc = win.settings_screen
+    sc._refresh_subjects_table()
+    t = sc.subjects_table
+    assert t.rowCount() == 1
+    assert t.item(0, 0).text() == "synth_case"
+    assert t.item(0, 1).text() == "6.5"
+    assert t.item(0, 2).text() == "5"
+    assert t.item(0, 3).text() == "—"                  # None renders as an em dash, not "None"
+    assert t.item(0, 4).text() == "4.1"
+    assert t.item(0, 5).text() == "150"
+    assert not (t.item(0, 0).flags() & Qt.ItemIsEditable)
+    win.close()
+
+
+def test_subjects_table_fits_under_windows_font_metrics(qapp, tmp_path, windows_metrics):
+    """Acceptance criterion: '...Subjects-kortet...består windows_metrics-ratiotests'.
+    Unlike a FlowLayout chip row, a QTableWidget does not elide its own header/cell
+    text at all -- the risk here is the CARD demanding an unreasonably wide window at
+    the runner's wider advance, not a silently-truncated string. Six columns' worth of
+    headers plus a real row is the card's own widest case."""
+    from respmech.core.settings import SubjectEntry
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    s.input.subjects = [SubjectEntry(key="synth_case", tlc_l=6.5, vc_l=5.0, rv_l=1.5,
+                                     fev1_l=4.1, mvv_lpm=150.0)]
+    win = MainWindow(AppState(s))
+    sc = win.settings_screen
+    sc._refresh_subjects_table()
+    card = sc._card_subjects
+    natural = card.sizeHint().width()
+    assert natural > 0
+    # A RATIO against an already-fitting sibling card (CLAUDE.md: "assert ratios, not
+    # pixel figures" -- a literal would just be a measurement of this developer's
+    # fonts). sc._card_input shares this same two-column layout and is exercised by
+    # test_window_fits_screen.py on the real Windows/macOS runners, so it is a proven
+    # floor: a table card wildly wider than it would be the thing pushing the whole
+    # two-column layout past its own budget, which sizeHint() > 0 alone cannot catch.
+    sibling = sc._card_input.sizeHint().width()
+    assert natural <= sibling * 1.5, (
+        f"Subjects card is {natural}px wide vs the Input card's {sibling}px -- looks "
+        "like the table is forcing the two-column layout wider than its siblings")
+    # the six header labels must survive intact -- a table never elides them itself,
+    # so this is a floor check against them having been dropped/emptied, not a ratio.
+    headers = [sc.subjects_table.horizontalHeaderItem(i).text() for i in range(6)]
+    assert headers == ["Key", "TLC (L)", "VC (L)", "RV (L)", "FEV1 (L)", "MVV (L/min)"]
+    win.close()
+
+
+def test_science_notes_include_check_links_cautions(qapp, tmp_path):
+    """M-37: Setup's own science-caution list (_science_notes) surfaces check_links'
+    cautions -- here, a reference_defaults group key that matches no analysed file."""
+    from respmech.core.settings import GroupReferenceEntry
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    s.processing.reference_defaults.append(GroupReferenceEntry(group="no_such_group"))
+    win = MainWindow(AppState(s))
+    sc = win.settings_screen
+    notes = sc._science_notes()
+    assert any("no_such_group" in n and "matches no analysed file" in n for n in notes)
+    win.close()
+
+
 def test_entropy_readout_states_m_and_r_in_the_apps_own_words(qapp, tmp_path):
     """The live caption under the two entropy fields does the m = epochs - 1 arithmetic for
     the user, in the terms a methods section would use, and follows every edit."""
