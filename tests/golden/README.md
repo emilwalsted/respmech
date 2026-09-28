@@ -154,6 +154,68 @@ the full match analysis (notably: the current code's PTP columns differ from the
 older pre-`1630c40` expected spreadsheets by design, and the EMG columns track a
 newer ECG-removal algorithm than `master`).
 
+### Production scenarios
+
+| Scenario | Covers | Legacy-comparable? |
+|---|---|---|
+| `zeros_debugging` | flow separation, volume drift/zeroing, WOB (no EMG) | yes |
+| `trimming_debugging` | breath trimming edge cases, flow separation (no EMG) | yes |
+| `resampling_volume_sep` | volume-based breath separation + EMG/ECG/noise | yes |
+| `emg_h5_ecg_noise_outlier` | ECG removal + noise reduction + RMS outlier processing + EMG RMS | yes |
+| `emg_h6_ecg_noise_outlier` | ECG removal + noise reduction + RMS outlier processing + EMG RMS | yes |
+| `typed_ic_h5` | typed IC reference (`RIU_H5_IC.txt`) + cross-file operating-lung-volume derivation on the `RIU_H5_*W.txt` workload recordings (M-41) | **no — v2-only** |
+
+The first five are `SCENARIO_CFG` entries in `regen_production_emg_golden.py`: their
+settings come from an existing legacy-style `settings.py` (`build_production_golden.py`'s
+`SCENARIOS` list) migrated via `migrate_dict`, so `build_production_golden.py`/
+`prod_runner.py` can ALSO run them through the frozen v1 oracle for a one-time
+comparison against Emil's hand-verified expected spreadsheets. `typed_ic_h5` cannot:
+breath typing (`processing.breath_types`) and cross-file references
+(`processing.references`) have no legacy-dict shape at all — the same reason the
+SYNTHETIC `typed_ic_crossfile`/`typed_ic_fvc_same_file` scenarios above are committed
+v2-native TOML files rather than `LEGACY_SCENARIOS` dict overrides. `typed_ic_h5`'s
+settings therefore live in a v2 TOML that is authored **locally**, under the gitignored
+`production/EMG processing fix test/` folder (`regen_production_emg_golden.py`'s own
+`TYPED_IC_TOML` dict names the exact path), and run straight through `run_batch` —
+never through `prod_runner.py`/the legacy oracle.
+
+**Preparing `typed_ic_h5` locally** (real breath numbers can only be read off a real
+recording — see `IcSettings`' own docstring and the K-035 lesson in
+`docs/beslutninger.md`):
+
+1. Get `RIU_H5_IC.txt` — a recording where every breath is a repeat inspiratory-capacity
+   manoeuvre for the same participant as `RIU_H5_*W.txt` — into
+   `tests/golden/production/EMG processing fix test/` alongside the existing H5 files.
+2. `respmech migrate "tests/golden/production/EMG processing fix test/RIU_H5_example.py" -o "tests/golden/production/EMG processing fix test/RIU_H5_typed_ic.toml"`
+   (or hand-author the TOML — either way it ends up at the path `TYPED_IC_TOML` names).
+   Point `[input] files` at the SINGLE glob `RIU_H5_*.txt` — like `typed_ic_crossfile.toml`
+   above, one glob matches both the reference-only IC file and the tidal `*W.txt`
+   files in the SAME batch (`match_input_files` does not split on `;`/multiple
+   patterns). `[input] folder` does not need editing — `_run_typed_ic_scenario`
+   overrides it to the local `EMG processing fix test/` folder at run time, same as
+   every `SCENARIO_CFG` entry does for its own settings_py.
+3. `respmech breaths "tests/golden/production/EMG processing fix test/RIU_H5_typed_ic.toml" RIU_H5_IC.txt`
+   — lists every breath's onset/duration; paste a `[[processing.breath_types]]` entry
+   typing EACH one `kind = "ic"` (every breath in this file is a repeat IC by design).
+4. Add a `[[processing.references]]` entry (or one `[[processing.reference_defaults]]`
+   group entry, if every `RIU_H5_*W.txt` file shares one participant group) naming
+   `RIU_H5_IC.txt`'s breath numbers as the `ic` source for the workload recordings —
+   see `tests/golden/scenarios/typed_ic_crossfile.toml`'s own `[[processing.references]]`
+   block for the exact TOML shape.
+5. `pytest tests/golden/test_production_golden.py -k typed_ic_h5 -v` — should now RUN
+   instead of skip (a `KeyError`/`AssertionError` here means step 6 has not happened
+   yet, not that anything is wrong).
+6. `python tests/golden/regen_production_emg_golden.py typed_ic_h5 --write` — freezes
+   the current code's own lung-volume numbers into `production_golden.json["typed_ic_h5"]`
+   (**only these derived numbers are committed — never the raw recording**, same
+   convention as every other production scenario here). Re-run step 5 to confirm it now
+   passes.
+7. Fill in `tests/unit/test_manoeuvres.py`'s `EELV_UNSTABLE_MEASURED_CASES`/
+   `NOT_REPEATABLE_MEASURED_CASES` (search for `PLACEHOLDER_`) with the preceding-EELV
+   spread / repeat-IC volumes actually measured in `RIU_H5_IC.txt`, remove their
+   `pytest.mark.skip`, and record the calibrated `eelv_tolerance_frac`/
+   `repeatability_frac` in `docs/beslutninger.md`.
+
 ## Environment
 
 The original code only runs faithfully on an older SciPy stack (see
