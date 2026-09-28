@@ -242,7 +242,7 @@ _CAMPBELL_YLABEL_VARIANTS = ("Oesophageal pressure  Poes (cmH₂O)", "Poes (cmH�
 #: tidal flow-volume loop, same axis-label ladder mechanics as the Campbell diagram above.
 _FV_XLABEL_VARIANTS = ("Lung volume (L)", "Volume (L)", "V (L)")
 _FV_YLABEL_VARIANTS = ("Flow (L/s)", "Flow")
-#: M-43: the same panel when the tidal loops sit inside the file's MFVL — TLC on the left.
+#: The same panel when the tidal loops sit inside the file's MFVL — TLC on the left.
 _MFVL_XLABEL_VARIANTS = ("Volume below TLC (L)", "Below TLC (L)", "V (L)")
 
 
@@ -1017,7 +1017,7 @@ class _MechanicsMixin:
                         "How many tidal breaths right before the manoeuvre set its "
                         "end-expiratory baseline.",
                         lo=0, hi=1000, step=1)),
-            # M-43: the four MFVL fields the ticket names; efl_present_min_pct stays TOML-only.
+            # The four MFVL fields most often changed; efl_present_min_pct stays TOML-only.
             ("mfvl", Field("source", "MFVL source", "choice",
                           "processing.mfvl.source",
                           "Which forced expiration the tidal breaths are placed against: the "
@@ -2661,7 +2661,7 @@ class _MechanicsMixin:
             self._update_qc_overview(fr, chip=self.segments_qc_overview)
         else:
             self._fill_table(fr.breaths_table)
-            self._campbell_manoeuvres = fr.manoeuvres     # M-43: read by the flow-only branch
+            self._campbell_manoeuvres = fr.manoeuvres     # read by the flow-only branch
             self._draw_campbell_or_loop(fr.breaths)
             self._update_qc_overview(fr)                  # P16 QC line, for THIS file only
             self._fill_manoeuvres_table(fr.manoeuvres_table, fr.manoeuvres)
@@ -2797,7 +2797,7 @@ class _MechanicsMixin:
         if caps is not None and caps.poes:
             self._draw_campbell(breaths, pal=pal)
             return
-        # M-43: no Poes but a forced vital capacity typed in this file -> the tidal loops
+        # No Poes but a forced vital capacity typed in this file -> the tidal loops
         # inside that file's own MFVL; anything else keeps the plain flow-volume loop.
         placed = self._placed_mfvl(breaths)
         if placed is not None:
