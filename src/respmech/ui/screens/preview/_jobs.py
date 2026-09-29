@@ -180,7 +180,9 @@ def _kinds_for_settings_path(path, caps=None):
     # PEEPi (opt-in, core.analysis.pressure): runs in the same post-mechanics pass and only
     # adds columns and the hatched rectangle on the Campbell panel -- like wob/ptp above,
     # never a raw trace, so it must not fall through to the wide default.
-    if path.startswith("processing.pressure"):
+    # Breathing pattern (opt-in, core.analysis.breathing_pattern): flow/volume columns added
+    # in the same pass, never a raw trace -- same rule.
+    if path.startswith("processing.pressure") or path.startswith("processing.breathing_pattern"):
         return frozenset(("batch",))
     if (path.startswith("processing.references") or path.startswith("processing.reference_defaults")
             or path.startswith("processing.lung_volume") or path.startswith("processing.mfvl")

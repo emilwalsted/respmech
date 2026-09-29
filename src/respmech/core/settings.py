@@ -474,6 +474,23 @@ class PressureSettings:
 
 
 @dataclass
+class BreathingPatternSettings:
+    """Opt-in breathing-pattern columns that need nothing but flow and volume
+    (``core.analysis.breathing_pattern``). Both flags are off by default, and switching
+    either on only ADDS columns, so every existing output is unchanged with them off.
+
+    ``extended``: per-breath mean inspiratory and expiratory flow (``mean_in_flow``,
+    ``mean_ex_flow``), the volume moved in each phase (``vol_insp``, ``vol_exp``), the
+    instantaneous breathing frequency (``bf_inst``) and the timing of the peak flows
+    (``t_peak_in_flow``, ``t_peak_ex_flow``, ``t_peak_in_flow_frac``).
+    ``variability``: per-file coefficients of variation of VT, Ti, Te, Ttot and Ti/Ttot
+    over the included breaths (``vt_cv`` ... ``ti_ttot_cv``) and the number of breaths
+    they rest on (``n_breaths``)."""
+    extended: bool = False
+    variability: bool = False
+
+
+@dataclass
 class IcSettings:
     """Inspiratory-capacity manoeuvre extraction (M-29, ``core.analysis.manoeuvres``).
 
@@ -729,6 +746,7 @@ class ProcessingSettings:
     lung_volume: LungVolumeSettings = field(default_factory=LungVolumeSettings)
     mfvl: MfvlSettings = field(default_factory=MfvlSettings)
     pressure: PressureSettings = field(default_factory=PressureSettings)
+    breathing_pattern: BreathingPatternSettings = field(default_factory=BreathingPatternSettings)
     exclude_breaths: list[ExcludeEntry] = field(default_factory=list)
     breath_counts: list[BreathCountEntry] = field(default_factory=list)
     breath_types: list[BreathTypeEntry] = field(default_factory=list)
@@ -1225,6 +1243,14 @@ class Settings:
         if not 0 < peepi.onset_slope_frac <= 1:
             raise SettingsError(
                 "processing.pressure.peepi.onset_slope_frac must be above 0 and at most 1")
+
+        # BreathingPatternSettings: two plain switches. A non-bool (hand-edited TOML, e.g.
+        # extended = "yes") would otherwise be truthy and silently turn the columns on.
+        bp = self.processing.breathing_pattern
+        for name in ("extended", "variability"):
+            if not isinstance(getattr(bp, name), bool):
+                raise SettingsError(
+                    f"processing.breathing_pattern.{name} must be true or false")
 
         # references/reference_defaults/subjects -- FORM only (validate() never resolves
         # a link or touches a file on disk; that is core.analysis.references' job). Same
