@@ -257,6 +257,17 @@ def _provenance_rows(settings, when, incomplete_note: str | None = None,
                      f"(search window {peepi.search_window_s:g} s, smoothing {peepi.smooth_s:g} s, "
                      f"onset slope {peepi.onset_slope_frac:g}, minimum deflection "
                      f"{peepi.min_deflection:g} cmH₂O)"))
+    bp = getattr(settings.processing, "breathing_pattern", None)
+    if bp is not None and caps.flow and (bp.extended or bp.variability):
+        # Names what the opt-in pattern columns are, since some share a stem with an
+        # ordinary column (bf_inst vs bf) and the CVs are per file, not per breath.
+        parts = []
+        if bp.extended:
+            parts.append("per-breath mean flows, phase volumes, instantaneous rate and peak-flow timing")
+        if bp.variability:
+            parts.append("per-file coefficients of variation (sample SD over mean, "
+                         "at least 3 breaths) of VT, Ti, Te, Ttot and Ti/Ttot")
+        rows.append(("Breathing pattern", "; ".join(parts)))
     if reference_note:
         # M-35: only present for a file whose IC reference actually resolved -- an
         # unresolved one is reported as a Quality notice instead (run-report.txt's
