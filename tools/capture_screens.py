@@ -124,6 +124,17 @@ except Exception as e:  # noqa: BLE001
     print(f"  dry run failed: {e}")
 shoot(win, "05_run_results")
 
+# --- A breath typed as a manoeuvre (Preview & QC ▸ Mechanics) ----------------
+# Right-click typing goes through the same single funnel the menu uses. Breath 6 of the
+# sample becomes an IC manoeuvre, which adds the Manoeuvres table under the per-breath one.
+win.tabs.setCurrentIndex(1)
+pv.subtabs.setCurrentIndex(0)
+pump(0.3)
+settle(pv)
+print(f"  typed breath 6 as IC: {pv._set_breath_type(6, 'ic')}")
+settle(pv)
+shoot(win, "05b_preview_typed_breath")
+
 # --- Dialogs ----------------------------------------------------------------
 # Patch BOTH QDialog.exec and AdvancedDialog.exec, not just the base class: the
 # Mechanics Advanced dialog is opened with modal=False, and AdvancedDialog.exec()
@@ -182,6 +193,34 @@ try:
 finally:
     QDialog.exec = orig_exec
     AdvancedDialog.exec = orig_advanced_exec
+
+# --- Signal-set picker (the choice a new analysis starts with) ----------------
+from respmech.ui.signal_set_dialog import SignalSetDialog
+
+sig_dlg = SignalSetDialog()
+sig_dlg.show()
+screen_fit.clamp_to_screen(sig_dlg, avail=AVAIL)
+pump(0.5)
+shoot(sig_dlg, "11_dlg_signal_set")
+sig_dlg.close()
+
+# --- EMG-only analysis: Preview & QC ▸ EMG – segments ---------------------------
+# Declaring the EMG-only set and asking for the sample "from the current signals" opens the
+# no-flow sample variant, already split into its own breaths by separators (nothing is
+# written outside the sample's temp folder). The typed breath above dirtied the analysis, so
+# mark it clean first: replacing a dirty analysis would ask to save it.
+win.settings_screen._mark_clean()
+win.state.settings.analysis.signals = ["emg"]
+ok = win.settings_screen.open_sample_analysis(use_current_signals=True)
+print(f"  EMG-only sample loaded: {ok}")
+win.tabs.setCurrentIndex(1)
+pump(0.5)
+pv.refresh_files()
+pv.subtabs.setCurrentIndex(0)
+pv._preview()
+print(f"  EMG-only preview settled: {settle(pv)}")
+shoot(win, "12_preview_emg_segments")
+win.settings_screen._mark_clean()
 
 # --- Startup chooser (its own window; shown last so it cannot block) --------
 from respmech.ui.startup_dialog import StartupDialog

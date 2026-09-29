@@ -80,6 +80,22 @@ Install extras with `pip install -e ".[<extra>]"` from a source checkout:
   yet published** — its url/sha256 are placeholders pending a release. Use PyPI, the
   installer, or a source checkout for now.
 
+## Analysis files and older versions
+
+An analysis (`.toml`) that uses typed breaths (`[[processing.breath_types]]`), reference
+manoeuvres (`[[processing.references]]`, `[[processing.reference_defaults]]`), subjects
+(`[[input.subjects]]`), separators (`[[processing.segmentation.separators]]` or
+`[[processing.segmentation.overrides]]`) or any of the newer `processing.*` tables (lung
+volumes, MFVL, PEEPi, pressure normalisation, EMG segmentation) **must not be opened and
+saved by RespMech older than 2.5.** A version that does not know a table cannot use it, and
+before 2.5 it also dropped the table when the file was saved, so those settings are lost for
+good. From 2.5 on, RespMech keeps every setting it does not recognise when it saves, so a
+file written by a newer version survives being opened and saved by 2.5 or later; the older
+versions cannot be fixed after the fact. If several people or installations share analysis
+files, update them together, and keep a copy of the file before opening it in an older
+version. The `analysis-used.toml` written next to every run's results records the exact
+settings used, and is safe to keep as that copy.
+
 ## Usage
 
 ```bash
