@@ -355,6 +355,30 @@ as configured)').
   breaths outside `mean ± outlierrmssdlimit·SD` of the other breaths have their
   `rms_max`/`rms_mean` replaced by the others' mean.
 
+### v2-only additions (§5.11–5.17)
+
+This document describes the v1 code, and §5.1–5.10 are what the v2 engine reproduces
+byte-for-byte (the golden tests). Sections 5.11–5.17 describe what only v2 does: none of
+it exists in RespMech 1.x, and none of it changes a number §5.1–5.10 produces, with one
+deliberate exception (sample entropy on a volume column, see below). Every new
+column is either absent (a signal the analysis does not use) or empty/off until its
+inputs are supplied. Read them in this order:
+
+| § | Topic | Switched on by |
+|---|---|---|
+| 5.11 | Optional pressure channels: reduced signal sets | `analysis.signals`, or simply not assigning a channel |
+| 5.12 | EMG-only segmentation: whole file, separators, fixed windows, EMG bursts | an EMG-only signal set |
+| 5.13 | Manoeuvre extraction from typed breaths (IC, FVC, maximal effort, sniff) | `processing.breath_types` |
+| 5.13a | Cross-file reference resolution | `processing.references`, `processing.reference_defaults` |
+| 5.14 | Operating lung volumes (EELV, EILV, IRV) | a resolved IC reference and `input.subjects` |
+| 5.15 | MFVL, expiratory flow limitation, ventilatory capacity | a typed FVC breath in the same file |
+| 5.16 | PEEPi and the modified Campbell diagram | `processing.pressure.peepi` |
+| 5.17 | Normalisation to a maximal manoeuvre, tension–time indices | `processing.pressure.normalization` |
+
+The user-facing description of each is in the README; the settings tables are documented,
+with a commented example of each, in `examples/settings.toml` and in §7a and §7b below.
+Decisions that cut across these sections are recorded in [`beslutninger.md`](beslutninger.md).
+
 ### 5.11 Optional pressure channels (v2-only)
 `calculateaveragebreaths()` and `calculatemechanics()` read
 `caps = getattr(settings, "capabilities", Capabilities.FULL)` (the same defensive
@@ -372,8 +396,8 @@ byte-identical).
 
 - **`calculateaveragebreaths`**: resamples Poes only `if caps.poes`, returning
   `(avgpoesin, avgpoesex) = (None, None)` otherwise. Volume averaging is never
-  guarded here (always computed, whatever the signal set) — volume itself becoming
-  optional is a later ticket's scope.
+  guarded here (always computed, whatever the signal set) — volume itself is optional
+  only when it is integrated from flow (`processing.volume.integrate_from_flow`).
 - **`calculatemechanics`**: `eilv`/`eelv`/`eilvavg`/`eelvavg` keep `[volume, NaN]`
   when `caps.poes` is `False`, instead of indexing an empty `poes`/`poesavg` array.
   `retbreath["wob"]` is set only `if caps.poes` (`calculatewob` needs Poes). Every
@@ -391,7 +415,7 @@ byte-identical).
   describe what they sound like — both survive unchanged on every signal set,
   including flow-only).
 - **`core/results.py`'s outlier guard** (`'poes_mininsp' in mechs.columns`, §5.10's
-  RMS outlier handling, owned by an earlier ticket) already reads correctly once
+  RMS outlier handling) already reads correctly once
   `poes_mininsp` is genuinely absent from a flow-only breath's mechanics — pinned at
   the compute level by `tests/unit/test_flow_only.py::test_outlier_guard_unchanged`.
   More generally, `core/pipeline.py`/`core/results.py` are written generically over
@@ -402,7 +426,7 @@ byte-identical).
   after it, `result.ok_files` contains the file with exactly the expected reduced
   column set). `tests/unit/test_flow_only.py::test_flow_only_reaches_run_batch_end_to_end`
   pins this; `results.py::build_processed_data` was already generic too (its own
-  `if len(breath[key]) == 0: continue` per-channel guard, from an earlier ticket),
+  `if len(breath[key]) == 0: continue` per-channel guard),
   and entropy is a signal-set-independent capability (R8) that was never gated on
   Poes/Pgas/Pdi in the first place — both pinned end to end by
   `test_processed_csv_has_only_present_channels`/`test_entropy_columns_equal_full_channel_run`
@@ -415,12 +439,12 @@ byte-identical).
   empty one — on both the normal path and the `TrimError` fallback. Every existing
   (full-channel) consumer is unaffected, since `capabilities.poes`/`pgas`/`pdi` are
   always `True` there.
-  **A reduced signal set is already reachable today**, though — an earlier ticket's
+  **A reduced signal set is reachable without the signal-set picker**, though — the
   channel-assignment dialog gates its OK button on the analysis's own *declared*
   roles (`ui/channel_setup_dialog.py::_enabled_analyses`/`_refresh_info`), not a
   hardcoded full set, so a Flow-only or Flow+Poes mapping can already be saved and
-  reach Preview & QC today, well before M-16/M-17's own UI work lands. Self-review
-  caught the consequence before this ticket closed: `ui/screens/preview/_mechanics.py`'s
+  reach Preview & QC even before the signal-set picker and the relevance-driven
+  layout are used. Self-review caught the consequence: `ui/screens/preview/_mechanics.py`'s
   channel-stack render loop indexed the now-narrower `series` dict unconditionally
   over its hardcoded 5-row `_CHANNELS` list, so it would raise `KeyError` on exactly
   that already-reachable configuration — a real regression, not a theoretical one,
@@ -428,12 +452,12 @@ byte-identical).
   `[c for c in _CHANNELS if c[0] in series]` before the loop, so it only ever
   iterates keys the dict actually carries. `_update_mech_stack_floor` still sizes
   the stack for a flat 5 rows regardless of how many are drawn — a cosmetic gap on a
-  reduced set, left for M-17's own relevance-driven layout, not a correctness issue.
+  reduced set, since resolved by the relevance-driven layout; never a correctness issue.
   `core/pipeline.py::segment_file`'s raw time axis (`timecolraw`) is built from the
   first non-empty of flow/volume/poes/pgas/pdi/emg (`_first_present_length()`)
   rather than assuming flow specifically — a no-op for today's E2 scope (flow is
   always present, so always first and chosen) but forward-compatible groundwork for
-  M-21's flow-less EMG-only segmentation.
+  the flow-less EMG-only segmentation (§5.12).
 - **Tests**: `tests/unit/test_flow_only.py` (flow only: no Poes/Pgas/Pdi) and
   `tests/unit/test_poes_only.py` (flow + Poes, no Pgas/Pdi) call
   `calculateaveragebreaths`/`calculatemechanics` directly on segments built from
@@ -589,7 +613,7 @@ split.
 A single breath can be TYPED (`processing.breath_types`, one `BreathTypeEntry` per
 breath — `ic`/`fvc`/`ic_fvc`/`max_insp`/`sniff`/`rest`/`other`) as a named manoeuvre
 rather than tidal breathing. On a flow-bearing signal set every typed kind is unioned
-into `excludebreaths` (`§5.3`'s exclusion mechanism, extended by M-19), so a typed
+into `excludebreaths` (`§5.3`'s exclusion mechanism, extended to typed breaths), so a typed
 breath **never reaches `calculatemechanics()`** — the ordinary mechanics loop's own
 `if breath["ignored"]: continue` skips it exactly like a manually excluded breath.
 `manoeuvres.extract(breath, kind, tidal_breaths, caps, s)` is called separately, once
@@ -651,14 +675,14 @@ output):
   the IC-specific acceptance checks do not apply to a maximal-effort breath.
 - **`fvc`** (pure, not combined with an IC): `validate_fvc_manoeuvre`'s
   `FVC_TOO_SHORT` flag only — the actual FVC/FEV1/PEF/flow-volume-curve numerics are
-  `core/analysis/mfvl.py`'s scope (a later ticket), not this module's.
+  `core/analysis/mfvl.py`'s scope (§5.15), not this module's.
   `suggest_fvc(breaths)` is a separate, pure UI-facing heuristic (not called from
   `extract()` or the pipeline): the untyped, non-ignored breath with the longest
   expiration in the file — a deterministic hint, never an automatic choice.
 - **`other`**: `{'kind': 'other', 'quality': []}` — recorded so the breath is visible
   in the Manoeuvres sheet, no numeric semantics defined for it. **`rest`** is never
   passed to `extract()` at all — the pipeline skips it (a noise-reference segment
-  label, not a manoeuvre — see M-22/`§5.12`'s `rest_segments` reference mode).
+  label, not a manoeuvre — see `§5.12`'s `rest_segments` reference mode).
 
 `core.pipeline.run_batch` builds `FileResult.manoeuvres` (`{breath_no: extract(...)
 result}`) and `.manoeuvres_table` (`core.results.build_manoeuvre_table`, `None` when
@@ -689,7 +713,7 @@ columns, in two passes around the ordinary main per-file loop:
   (this run's own file list — `only_files`-restricted or not). Each one is loaded and
   segmented through the SAME `segment_file()` entry point the main loop itself uses,
   and every TYPED breath in it is run through `manoeuvres.extract()` exactly like an
-  in-batch reference-only file (`§5.13`, M-30) already is — a source loaded here and
+  in-batch reference-only file (`§5.13`) already is — a source loaded here and
   one loaded as an ordinary in-batch file give byte-identical results for the same
   breath. Results land in `BatchResult.references`
   (`{source_filename: {breath_no: extract(...) result}}`); a source that fails to
@@ -752,30 +776,30 @@ columns, in two passes around the ordinary main per-file loop:
 `§5.13a`'s `references.attach` resolves a file's `vol_ic_ref` (the IC reference
 VALUE) but stops there — it does not turn that single number into what a tidal
 breath's own lung volumes actually are. `core.analysis.lungvol.attach`, wired into
-`core.pipeline.run_batch` immediately AFTER `references.attach` (M-36), does that:
+`core.pipeline.run_batch` immediately AFTER `references.attach`, does that:
 per-tidal-breath EELV/EILV/IRV (and their %VC/%TLC forms) plus four per-file scalars
 (`tlc`, `vc`, `delta_ic`, `delta_eelv`, `delta_ic_pct`).
 
 **Column family**: the SAME `resolve_reference(..., "ic", ...)` check
 `references.attach` already uses across `allfiles` — operating lung volumes are
-meaningless without a resolvable IC reference, so this ticket's family is exactly
+meaningless without a resolvable IC reference, so this column family is exactly
 that one. Once present, EVERY olv column is added to EVERY OK tidal file, never
 conditionally per file (a file with no subject VC/TLC simply gets NaN in the
 VC-/TLC-anchored triples) — this is what keeps a subset run's column SET identical
 to a full run's even when only some files' groups have a VC/TLC entered.
 
 **`ic_op` (the reference IC actually operating for this breath)**:
-`processing.lung_volume.ic.eelv_tracking` (declared and validated by M-29's
-`IcSettings`, unused until this ticket) decides how it moves:
+`processing.lung_volume.ic.eelv_tracking` (declared and validated with
+`IcSettings`) decides how it moves:
 
 - `"none"` (default): `ic_op = vol_ic_ref`, unchanged across the whole file — the
   ordinary "IC measured once, assumed constant" convention. No `d_eelv` column at
-  all in this mode (a settings-uniform family decision, simpler than M-35's own
-  multi-file family rule, since `eelv_tracking` is one flag for the whole analysis).
+  all in this mode (a settings-uniform family decision, simpler than the cross-file
+  reference rule of §5.13a, since `eelv_tracking` is one flag for the whole analysis).
 - `"within_file"`: `d_eelv = vol_endexp - ic_eelv_pre` (positive = EELV has RISEN
   since the reference IC's own end-expiratory level, i.e. hyperinflation), then
   `ic_op = vol_ic_ref - d_eelv` — a RISE in EELV SHRINKS the IC actually available
-  (the minus sign is load-bearing: an earlier draft of this ticket had it backwards,
+  (the minus sign is load-bearing: an earlier draft had it backwards,
   caught by the analytical test that pins the direction). `ic_eelv_pre` is the SAME
   `ic_cfg.aggregate` (mean/median) of the resolved IC breaths' own `ic_eelv_pre`
   field the reference itself was aggregated from — but ONLY for a SAME-FILE IC
@@ -798,10 +822,9 @@ to a full run's even when only some files' groups have a VC/TLC entered.
 volume at end-expiration — ERV by definition, no separate `vol_erv` column) is the
 PRIMARY family, because it needs only a spirometry-derived VC, not a measured TLC
 (`vc_src` = `input.subjects`' own `vc_l` for this file's group, else the linked
-`fvc` reference's own `fvc` field — always `None` today, since
-`manoeuvres.extract` computes no numeric FVC value until M-42's `mfvl.py` lands;
-the fallback is already wired to read whichever key is there, so it starts working
-unchanged the moment M-42 adds it). `vol_eelv_abs = tlc - ic_op` is the absolute,
+`fvc` reference's own `fvc` field — `None` unless a linked FVC manoeuvre
+has its own numeric FVC (`manoeuvres.extract` itself computes none; `mfvl.py`, §5.15,
+adds it to the manoeuvre's row, and the fallback reads whichever key is there). `vol_eelv_abs = tlc - ic_op` is the absolute,
 TLC-anchored value reported ALONGSIDE it, present only when `input.subjects` names a
 TLC for this file's group. `vol_eilv`/`vol_eilv_abs` add `vt`; `vol_irv = ic_op -
 vt`; every `_pct_vc`/`_pct_tlc` column divides by `vc`/`tlc`. Missing VC/TLC is the
@@ -818,9 +841,9 @@ mistake this column for that. The algebra (`vc - ic_op == eelv - rv` when
 only checks `rv_l < tlc_l`, nothing cross-checks `vc_l` against `tlc_l - rv_l`, and
 `rv_l` is not otherwise consumed anywhere in this codebase yet; an inconsistent
 subject entry produces a silently wrong split between the RV- and TLC-anchored
-families with no notice (self-review finding, not fixed by this ticket — flagged in
+families with no notice (self-review finding, not fixed in the same change — flagged in
 `docs/beslutninger.md`'s 26-09-2026 entry as a known gap). Separately, once
-`vc_src` can fall back to a linked FVC manoeuvre (M-42), note that a *forced*
+`vc_src` can fall back to a linked FVC manoeuvre (§5.15), note that a *forced*
 vital capacity under-reads true (slow) VC in obstructive disease (gas trapping) —
 that fallback will systematically UNDERESTIMATE `vol_eelv` in exactly the
 population dynamic-hyperinflation tracking is most useful for, once it is wired in.
@@ -884,14 +907,14 @@ without a registry entry.
 ### 5.15 MFVL, EFL and ventilatory capacity (v2-only) — `core/analysis/mfvl.py`
 
 `§5.13`'s `manoeuvres.extract` types a breath `fvc`/`ic_fvc` but computes no
-spirometric arithmetic for it at all — deliberately deferred to this module
-(M-42), kept SEPARATE rather than folded into `manoeuvres.py` so the boundary that
+spirometric arithmetic for it at all — deliberately deferred to this module,
+kept SEPARATE rather than folded into `manoeuvres.py` so the boundary that
 module's own docstring states stays real. Two independent pieces:
 
 **FVC/FEV1/PEF from ONE typed breath** (`mfvl.fvc_metrics`, merged into that
 breath's Manoeuvres row by `core.pipeline.run_batch` itself, both in the main loop
 and its `§5.13a` external-reference forepass — never by `manoeuvres.extract`,
-which stays untouched by this ticket): `V_TLC = insp['volume'][-1]`; the maximal
+which stays untouched): `V_TLC = insp['volume'][-1]`; the maximal
 expiratory flow-volume (MEFV) envelope `v = V_TLC − exp['volume']`, forced
 non-decreasing (`np.maximum.accumulate`, a numerical-noise guard, not a
 physiological correction); PEF over a ≥10 ms centred moving-average window (a
@@ -933,8 +956,8 @@ IC operating point this module resolves is therefore also its OWN, simpler
 `eelv_tracking='none'`-equivalent (`ic_op = vol_ic_ref`, held constant across the
 file — `mfvl.resolve_same_file_ic_op`), not `§5.14`'s full per-breath EELV
 tracking (which has not run yet at this point in the loop — `lungvol.attach` is
-still a post-loop pass). Both are documented, deliberate gaps for a future ticket
-to reconcile once the two loop-timing models can be aligned properly.
+still a post-loop pass). Both are documented, deliberate gaps, to reconcile later
+once the two loop-timing models can be aligned properly.
 
 **The flow-volume figure** (`mfvl.placed_tidal_loops`, drawn by
 `core.plots.draw_flow_volume_mfvl` for both `flow-volume (tidal in MFVL).pdf` and the
@@ -999,8 +1022,7 @@ derived FEV1 among this file's own resolved FVC attempts, the SAME preference
 `§5.14`'s VC-fallback comment already anticipated), `ve_pct_mvv`, `br_mvv_pct` —
 the last three independent of MEFV placement (MVV needs no placement at all), so
 they are NaN only when NO IC reference resolved, never merely for partial
-coverage. `fev1_source` (`'spirometry'` | `'recorded'`, the ticket's own explicit
-acceptance criterion) names which value fed `fev1_used` — a per-FILE constant,
+coverage. `fev1_source` (`'spirometry'` | `'recorded'`, the column is required in the output) names which value fed `fev1_used` — a per-FILE constant,
 written directly onto `breaths_table`/`average_row` by `core.pipeline.run_batch`
 itself AFTER `build_breath_table` has already run (self-review finding: a text
 column joined in through `breath['mfvl_ext']`, `tidal_mfvl_ext`'s usual path,
@@ -1060,7 +1082,7 @@ convention, so each is registered explicitly. `mfvl_peak_ex_flow`/
 `mfvl_peak_in_flow` (contain "flow") and every `_pct`/`_pct_` column already
 resolve via the generic rules, listed in `registry.py` for documentation only.
 
-**Golden**: `typed_ic_fvc_same_file` (`§5.13`) re-baked with this ticket's new
+**Golden**: `typed_ic_fvc_same_file` (`§5.13`) re-baked with the new
 keys — its own IC (breath #4) and FVC (breath #7) breaths do NOT share a common
 TLC in that fixture (a fixture limitation, not a code bug: `generate_data.py`'s
 own comment already noted "the actual FVC/FEV1/PEF numerics are a later feature's
@@ -1313,6 +1335,11 @@ important for "fully correct calculations":
 
 ## 7. Settings structure (current)
 
+_This section describes the v1 settings shape (a nested Python dict). The v2 shape is a
+declarative TOML file: its schema is `src/respmech/core/settings.py`, and
+`examples/settings.toml` is the annotated example. §7a and §7b below document the v2-only
+tables._
+
 Settings are a **nested Python dict** merged over an embedded JSON default
 (`defaultsettings` in `respmech.py`) via `applysettings()` (JSON → `SimpleNamespace`,
 recursive override). The effective shape:
@@ -1362,7 +1389,7 @@ migrated v1 analysis takes, since v1 always required all four pressure/flow role
 the effective set is *derived* instead: whichever of those roles has a channel
 assigned (`core/analysis/signals.py::derived_signals`/`effective_signals`). An
 explicit, non-empty list overrides that derivation outright — a `Settings.validate()`
-requirement gone as of this ticket: Poes/Pgas/Pdi may all be absent, as long as Flow or
+requirement now gone: Poes/Pgas/Pdi may all be absent, as long as Flow or
 EMG is present (a lone pressure channel with no Flow is still rejected, since breath
 segmentation needs Flow either way). A channel assigned without being named in an
 explicit list is reconciled upward on load (`Settings.from_dict`, never any other write
@@ -1405,10 +1432,10 @@ folder = "recordings"
 require_references = false         # true: an unresolved reference source becomes a
                                     # HARD path_problem() blocker instead of a soft
                                     # check_links() caution
-baseline_pattern = "(?i)baseline|rest"   # not yet read by any code path
+baseline_pattern = "(?i)baseline|rest"   # picks the baseline recording of a group (§5.14)
 [processing.lung_volume.ic]
-eelv_tracking = "none"             # "none" | "within_file" -- a later ticket's own
-                                    # arithmetic; only declared and validated here
+eelv_tracking = "none"             # "none": the reference IC is held constant |
+                                    # "within_file": it follows the end-expiratory volume (§5.14)
 ```
 
 `ic`/`fvc`/`baseline_ic`/`max_insp` are all `BreathRef | None` — a nested optional

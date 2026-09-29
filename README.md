@@ -355,6 +355,14 @@ in each output workbook's Provenance sheet whenever entropy is actually computed
 deviation, entropy values are only comparable across files and channels that share a sampling
 frequency (and resampling setting) and the same *m* and *r*.
 
+When the volume column is one of the entropy columns, its sample entropy is computed on
+the volume RespMech itself analyses (zeroed, and drift- and trend-corrected as configured),
+just as an EMG column is measured on the processed EMG. If volume is integrated from flow
+and has no column of its own, tick **Entropy on derived volume** in the same card
+(`input.channels.entropy_derived = ["volume"]`) to get the same three columns. Analyses
+written before this rule show a notice once when they are opened, since their volume-column
+entropy values change.
+
 _<a name="sampenref1">1</a>) Lozano-García M, Sarlabous L, Moxham J, Rafferty GF, Torres A, Jolley CJ, Jané R. Assessment of inspiratory muscle activation using surface diaphragm mechanomyography and crural diaphragm electromyography. Annu Int Conf IEEE Eng Med Biol Soc. 2018;2018:3342-3345. doi:10.1109/EMBC.2018.8513046._
 
 _<a name="sampenref2">2</a>) Aboy M, Cuesta-Frau D, Austin D, Micó-Tormos P. Characterization of sample entropy in the context of biomedical signal analysis. Annu Int Conf IEEE Eng Med Biol Soc. 2007;2007:5943-5946. doi:10.1109/IEMBS.2007.4353701._
