@@ -355,10 +355,10 @@ as configured)').
   breaths outside `mean ± outlierrmssdlimit·SD` of the other breaths have their
   `rms_max`/`rms_mean` replaced by the others' mean.
 
-### v2-only additions (§5.11–5.17)
+### v2-only additions (§5.11–5.18)
 
 This document describes the v1 code, and §5.1–5.10 are what the v2 engine reproduces
-byte-for-byte (the golden tests). Sections 5.11–5.17 describe what only v2 does: none of
+byte-for-byte (the golden tests). Sections 5.11–5.18 describe what only v2 does: none of
 it exists in RespMech 1.x, and none of it changes a number §5.1–5.10 produces, with the
 deliberate exceptions recorded in the changelog and `beslutninger.md` (for instance sample
 entropy on a volume column). Every new
@@ -375,6 +375,7 @@ inputs are supplied. Read them in this order:
 | 5.15 | MFVL, expiratory flow limitation, ventilatory capacity | a typed FVC breath in the same file |
 | 5.16 | PEEPi and the modified Campbell diagram | `processing.pressure.peepi` |
 | 5.17 | Normalisation to a maximal manoeuvre, tension–time indices | `processing.pressure.normalization` |
+| 5.18 | Breathing pattern and its variability from flow and volume | `processing.breathing_pattern` |
 
 The user-facing description of each is in the README; the settings tables are documented,
 with a commented example of each, in `examples/settings.toml` and in §7a and §7b below.
@@ -1311,8 +1312,8 @@ leaves NaN in that breath's new columns and adds one notice to the file, without
 `ttot_cv`, `ti_ttot_cv` and `n_breaths`. The CV is `100 · SD / mean` over the included
 breaths of the per-breath table, with the sample SD (ddof = 1) and only for a positive mean:
 the same convention as the cohort summary's `cv_pct` column (`core/summary.py`, `_stats_frame`).
-Below three included breaths the CVs are NaN, because a spread from two numbers is not a
-measure of variability; `n_breaths` still reports the count (Tobin et al. 1983 and Wysocki
+Below three included breaths (finite values, per column) the CVs are NaN, because a spread from two numbers is not a
+measure of variability; `n_breaths` is the number of rows of the per-breath table, so it counts a breath whose value in one column is NaN even though that column's CV leaves it out, and still reports the count (Tobin et al. 1983 and Wysocki
 et al. 2006 report these variables over series of breaths). The cross-file Average and the
 cohort summary aggregate these columns like any other column of the average row (the CV of a
 CV in the cohort summary is a property of that table, not a quantity to interpret).
@@ -1329,7 +1330,7 @@ literature names (VT/Ti). (b) The peak times are counted in samples from the pha
 they are quantised to `1 / fs`. (c) The CVs include every non-ignored breath, so an
 analysis that types some breaths as manoeuvres (which are not tidal and never reach the
 per-breath table) does not mix them in; excluding a breath in Preview & QC removes it from
-`n_breaths` and from the CVs. (d) Nothing is normalised for the recording's
+`n_breaths` and from the CVs. (d) The `bf_inst` on the average row is the mean of the per-breath rates, which is slightly above `bf` (the file's breath count per minute) whenever `ttot` varies (Jensen's inequality); it is not the file's rate. (e) Nothing is normalised for the recording's
 own trend: a slowly changing rate contributes to the CV, as it does in the published
 variability indices.
 

@@ -122,6 +122,8 @@ def test_cv_pct_is_nan_below_three_breaths_and_for_a_non_positive_mean():
     assert math.isnan(bp.cv_pct([-1.0, 0.0, 1.0]))          # zero mean
     # non-finite entries do not count towards the three
     assert math.isnan(bp.cv_pct([1.0, 2.0, float("nan")]))
+    # ...but a NaN among enough finite values is simply left out of the statistic
+    assert bp.cv_pct([1.0, 2.0, 3.0, float("nan")]) == pytest.approx(50.0, rel=1e-12)
 
 
 def test_file_variability_columns_and_count():
@@ -252,9 +254,10 @@ def test_switches_off_add_nothing_and_on_add_exactly_the_designed_columns(tmp_pa
 
     row = fr.average_row.iloc[0]
     assert row["n_breaths"] == len(t)
-    if len(t) >= bp.MIN_BREATHS_FOR_CV:
-        assert row["vt_cv"] == pytest.approx(bp.cv_pct(t["vt"]), rel=1e-12)
-        assert row["ti_ttot_cv"] == pytest.approx(bp.cv_pct(t["ti_ttot"]), rel=1e-12)
+    assert len(t) >= bp.MIN_BREATHS_FOR_CV
+    v = t["vt"].to_numpy(dtype=float)
+    assert row["vt_cv"] == pytest.approx(100.0 * v.std(ddof=1) / v.mean(), rel=1e-12)
+    assert row["ti_ttot_cv"] == pytest.approx(bp.cv_pct(t["ti_ttot"]), rel=1e-12)
     assert row["bf_inst"] == pytest.approx(float(t["bf_inst"].mean()), rel=1e-12)
 
 
@@ -297,18 +300,17 @@ def test_full_channel_run_gets_the_same_columns_as_flow_only(tmp_path):
 
 
 @requires_synth()
-def test_provenance_names_the_pattern_columns_only_when_on(tmp_path):
+@pytest.mark.parametrize("ext,var,expected", [(True, False, True), (False, True, True),
+                                              (True, True, True), (False, False, False)])
+def test_provenance_names_the_pattern_columns_only_when_on(tmp_path, ext, var, expected):
     from respmech.core.io import writers
     import datetime as dt
 
     s = synth_settings(tmp_path, channels=_FLOW_ONLY)
-    s.processing.breathing_pattern.extended = True
+    s.processing.breathing_pattern.extended = ext
+    s.processing.breathing_pattern.variability = var
     rows = writers._provenance_rows(s, dt.datetime(2026, 1, 1))
-    assert "Breathing pattern" in list(rows["Key"])
-
-    s.processing.breathing_pattern.extended = False
-    rows = writers._provenance_rows(s, dt.datetime(2026, 1, 1))
-    assert "Breathing pattern" not in list(rows["Key"])
+    assert ("Breathing pattern" in list(rows["Key"])) is expected
 
 
 def test_a_breathing_pattern_edit_reruns_only_the_batch_pass():
@@ -319,3 +321,41 @@ def test_a_breathing_pattern_edit_reruns_only_the_batch_pass():
     for path in ("processing.breathing_pattern.extended",
                  "processing.breathing_pattern.variability"):
         assert _kinds_for_settings_path(path) == frozenset(("batch",))
+
+
+@requires_synth()
+def test_excluded_breaths_are_left_out_of_the_cvs_and_the_count(tmp_path):
+    from respmech.core.pipeline import run_batch
+    from respmech.core.settings import ExcludeEntry
+
+    def _run(sub, exclude):
+        s = synth_settings(tmp_path / sub, channels=_FLOW_ONLY)
+        s.processing.breathing_pattern.variability = True
+        if exclude:
+            s.processing.exclude_breaths.append(ExcludeEntry(file="synth_case_A.csv", breaths=[1]))
+        fr = run_batch(s, only_files=["synth_case_A.csv"]).ok_files["synth_case_A.csv"]
+        return fr.breaths_table, fr.average_row.iloc[0]
+
+    t_all, row_all = _run("all", False)
+    t_ex, row_ex = _run("ex", True)
+    assert row_all["n_breaths"] == len(t_all)
+    assert row_ex["n_breaths"] == len(t_ex) == len(t_all) - 1
+    v = t_ex["vt"].to_numpy(dtype=float)
+    assert row_ex["vt_cv"] == pytest.approx(100.0 * v.std(ddof=1) / v.mean(), rel=1e-12)
+
+
+@requires_synth()
+def test_an_emg_only_analysis_skips_the_pattern_with_one_notice(tmp_path):
+    from respmech.core.pipeline import run_batch
+
+    s = synth_settings(tmp_path, channels={
+        "flow": None, "poes": None, "pgas": None, "pdi": None, "volume": None})
+    s.processing.segmentation.method = "whole_file"
+    s.processing.breathing_pattern.extended = True
+    s.processing.breathing_pattern.variability = True
+    result = run_batch(s, only_files=["synth_case_A.csv"])
+    assert result.failed_files == {}
+    fr = result.ok_files["synth_case_A.csv"]
+    assert not (set(fr.breaths_table.columns) & set(bp.EXTENDED_COLUMNS))
+    assert not (set(fr.average_row.columns) & set(bp.VARIABILITY_COLUMNS))
+    assert sum("Breathing pattern columns are enabled" in n for n in fr.notices) == 1
