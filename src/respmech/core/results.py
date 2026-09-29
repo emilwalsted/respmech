@@ -103,6 +103,14 @@ def build_breath_table(file, breaths, settings):
                 dfmech = dfmech.join(_getbreathdata(breath, "entropy_insp", "sample_entropy_insp_col_", ['sample_entropy_insp_max', 'sample_entropy_insp_min', 'sample_entropy_insp_mean'], entcols), how="outer", sort=False)
                 dfmech = dfmech.join(_getbreathdata(breath, "entropy_exp", "sample_entropy_exp_col_", ['sample_entropy_exp_max', 'sample_entropy_exp_min', 'sample_entropy_exp_mean'], entcols), how="outer", sort=False)
 
+        if "entropy_derived" in breath:
+            derived = list(settings.input.data.entropy_derived)
+            for key, prefix in (("entropy_derived", "sample_entropy_col_"),
+                                ("entropy_derived_insp", "sample_entropy_insp_col_"),
+                                ("entropy_derived_exp", "sample_entropy_exp_col_")):
+                if key in breath:
+                    dfmech = dfmech.join(_getbreathdata(breath, key, prefix, [], derived), how="outer", sort=False)
+
         mechs = dfmech if len(mechs) == 0 else pd.concat([mechs, dfmech], sort=False)
 
     if len(mechs) == 0:

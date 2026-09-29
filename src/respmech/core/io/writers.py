@@ -235,12 +235,18 @@ def _provenance_rows(settings, when, incomplete_note: str | None = None,
         # M-22: only meaningful once noise reduction is actually on -- an unresolved/
         # unused reference_mode on a disabled profile would just be noise in the sheet.
         rows.append(("Noise reference", _noise_reference_provenance_value(settings)))
-    if ip.channels.entropy:
+    if ip.channels.entropy or ip.channels.entropy_derived:
         # D11 (UI-overhaul): same m/r a reader would need for a methods section, in the same
         # words as the Setup screen's own read-out (settings_screen.py's ent_caption) — only
         # added when entropy is actually computed (an empty channel list means it is not).
         ent = settings.processing.entropy
         rows.append(("Sample entropy", f"m = {ent.epochs - 1}, r = {ent.tolerance:g} × SD"))
+    if "volume" in ip.channels.entropy_derived:
+        rows.append(("Entropy on derived volume",
+                     "conditioned (zero/drift/trend as configured)"))
+    elif ip.channels.entropy and ip.channels.volume in ip.channels.entropy:
+        rows.append(("Entropy on the volume column",
+                     "conditioned volume (zero/drift/trend as configured), not the raw column"))
     peepi = getattr(getattr(settings.processing, "pressure", None), "peepi", None)
     if peepi is not None and peepi.enabled and caps.flow and caps.poes:
         # Which PEEPi value fed the threshold work depends on the signal set (Pgas
