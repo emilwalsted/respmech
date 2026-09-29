@@ -1180,7 +1180,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
                 # an explicit signal set that names EMG must stop naming it too:
                 # Settings.validate() refuses 'emg' in analysis.signals without an EMG channel
                 # (an empty list means "derived", and derives the same reduced set already)
-                snap.analysis.signals = [x for x in snap.analysis.signals if x != "emg"]
+                snap.analysis.signals = [x for x in (snap.analysis.signals or []) if x != "emg"]
                 snap.processing.emg.remove_ecg = False
                 snap.processing.emg.ecg_auto_detect = False
                 snap.processing.emg.noise.enabled = False
