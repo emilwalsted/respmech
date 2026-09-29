@@ -456,7 +456,7 @@ the render instead of crashing the window). Three places consume it and must agr
   falls through to ALL kinds: erring wide only costs a recompute, erring narrow leaves a stale
   panel. `_schedule` gates the `segments` job to `caps.mode == 'emg_only'`, mirroring the
   tab plan, so the two can never disagree about which shape gets which preview.
-- **The breath menu** (`_mechanics.py`, `_segments.py`): typing a breath and the "Use as IC
+- **The breath menu** (built in `_mechanics.py`, reused by the segments tab): typing a breath and the "Use as IC
   reference for" submenu are item-level clicks on `BreathSpansItem` (see the item-level vs
   scene-signal section above); the reference picker dialog (`reference_picker_dialog.py`) is
   settings-only and reads `processing.breath_types`, never a recording.
