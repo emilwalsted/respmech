@@ -209,7 +209,7 @@ al., Eur Respir J 1997;10:522-9 (PMID 9072979) and Am J Respir Crit Care Med
 forced-vital-capacity curve resolves the FVC and IC references SAME-FILE ONLY,
 and uses a constant ("`eelv_tracking='none'`") IC operating point of its own
 rather than the within-file EELV-tracking arithmetic the operating-lung-volumes
-module already has (self-review, not fixed by this ticket).** The ticket asked
+module already has (self-review, not fixed in the same change).** The design asked
 for the placement columns to live in `breath['mfvl_ext']`, joined into the
 per-breath table exactly like `breath['wob']` already is — which happens INSIDE
 the main per-file processing loop, before that file's own table is built. The
@@ -320,7 +320,7 @@ well-defined but physiologically meaningless, and NaNs with a notice instead of
 silently reporting a number nobody should trust. See
 `docs/REVERSE_ENGINEERING.md` §5.14 for the full arithmetic.
 
-**Known gap, not fixed by this ticket (self-review, 27-09-2026):** the RV-anchored
+**Known gap, not fixed in the same change (self-review, 27-09-2026):** the RV-anchored
 family's whole rationale (`vc - ic_op` equals `eelv - rv`) depends on a subject's
 entered `tlc_l`/`vc_l`/`rv_l` being mutually consistent (`vc_l ≈ tlc_l - rv_l`).
 `Settings.validate()` only checks `rv_l < tlc_l`; nothing cross-checks `vc_l`
@@ -329,7 +329,7 @@ check today. An internally inconsistent subject entry therefore produces a
 silently wrong split between the two EELV families, with no notice — the module's
 own implausible-value checks (`vol_eelv < 0`, `vol_eelv_abs < 0`) cannot catch it,
 since both families can individually be non-negative and still disagree by exactly
-the inconsistency. Left open for a future ticket to either validate
+the inconsistency. Left open, to either validate
 `abs(tlc_l - vc_l - rv_l)` against a tolerance, or document `rv_l` as presently
 decorative.
 
@@ -453,7 +453,7 @@ pressure/flow signals the analysis otherwise declares.
 state built for the previous segmentation, after one confirmation (author's
 decision, 26-09-2026).** Removing or adding Flow changes which segmenter produces
 every breath number and kind, so a breath exclusion, breath-count override, or
-(once later tickets add them) a breath type, reference or manual separator made
+(once they exist) a breath type, reference or manual separator made
 under the old segmentation no longer describes anything real under the new one.
 The signal-set picker's one funnel (`apply_signal_set`) asks once, covering all of
 those lists together, and only when flow's membership of the set actually changes
