@@ -266,13 +266,16 @@ def _modular_screenshots(app, pump):
     win.tabs.setCurrentIndex(1)
     pv = win.preview_screen
     pv.refresh_files(); pv._preview()
-    _settle(app, pv)
+    if not _settle(app, pv):
+        raise SystemExit("the typed-breath preview did not settle")
     for i in range(pv.subtabs.count()):
         if pv.subtabs.tabText(i).lower().startswith("mechanics"):
             pv.subtabs.setCurrentIndex(i); break
     if pv._set_breath_type(6, "ic") is None:
         raise SystemExit("could not type breath 6 as an IC manoeuvre")
-    _settle(app, pv); pump(8)
+    if not _settle(app, pv):
+        raise SystemExit("the typed-breath re-run did not settle")
+    pump(8)
     win.grab().save(f"{OUT}/breath-types.png")
     win.settings_screen._mark_clean()        # typing a breath dirtied it; close() would ask to save
     win.close(); pump()
@@ -286,7 +289,9 @@ def _modular_screenshots(app, pump):
     win.tabs.setCurrentIndex(1)
     pv = win.preview_screen
     pv.refresh_files(); pv.subtabs.setCurrentIndex(0); pv._preview()
-    _settle(app, pv); pump(8)
+    if not _settle(app, pv):
+        raise SystemExit("the EMG-only preview did not settle")
+    pump(8)
     win.grab().save(f"{OUT}/emg-only.png")
     win.settings_screen._mark_clean()
     win.close(); pump()
@@ -300,6 +305,7 @@ def main():
     # user's data. (The onboarding writes its sample to a temp dir too, so the Setup
     # screenshot's path is faithful to what a first-time user actually sees.)
     work = tempfile.mkdtemp(prefix="respmech-readme-")
+    code = 1
     try:
         settings, result, fr, desc = _build(work)
         print(f"sample: {len(fr.breaths or {})} breaths, "
@@ -307,11 +313,12 @@ def main():
         _feature_figures(fr)
         app, pump = _screenshots(settings, result, desc["filename"])
         _modular_screenshots(app, pump)
+        print("done — 10 graphics written to docs/img/")
+        code = 0
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    print("done — 10 graphics written to docs/img/")
-    sys.stdout.flush()
-    os._exit(0)          # Qt worker threads can otherwise keep the process alive at exit
+        sys.stdout.flush()
+        os._exit(code)   # Qt worker threads can otherwise keep the process alive at exit, also after an error
 
 
 if __name__ == "__main__":
