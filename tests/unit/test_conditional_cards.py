@@ -159,3 +159,22 @@ def test_subjects_card_appears_once_a_subject_is_added(qapp, tmp_path):
     sc._update_disclosure()
     qapp.processEvents()
     assert card.isVisible()
+
+
+def test_entropy_on_derived_volume_box_follows_flow_and_integrated_volume(qapp, tmp_path):
+    """The 'Entropy on derived volume' box lives in the Sample entropy card and is offered only
+    when Flow is declared and the volume is integrated from it; ticking it writes
+    input.channels.entropy_derived, and the card shows even with no entropy column assigned."""
+    sc = _screen(qapp, tmp_path, entropy=())
+    card, box = _entropy_card(sc), sc.ent_derived_volume
+    assert not card.isVisible()
+    sc.state.settings.processing.volume.integrate_from_flow = True
+    sc._update_disclosure()
+    qapp.processEvents()
+    assert card.isVisible() and box.isVisible()
+    box.setChecked(True)
+    sc._on_field_changed()
+    assert sc.state.settings.input.channels.entropy_derived == ["volume"]
+    box.setChecked(False)
+    sc._on_field_changed()
+    assert sc.state.settings.input.channels.entropy_derived == []

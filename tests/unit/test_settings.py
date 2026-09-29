@@ -1045,3 +1045,24 @@ def test_every_folder_tag_path_round_trips(path, kind, tmp_path):
     assert bool(st) is True
     clear_carried_over(s2)
     assert not carried_over_state(s2)
+
+
+def _volume_entropy_settings(version, *, entropy, emg=()):
+    d = _minimal()
+    d["schema_version"] = version
+    d["input"]["channels"] = {**d["input"].get("channels", {}), "volume": 6,
+                              "entropy": list(entropy), "emg": list(emg)}
+    return d
+
+
+def test_schema_2_analysis_with_entropy_on_the_volume_column_gets_one_notice():
+    s = Settings.from_dict(_volume_entropy_settings(2, entropy=[6, 10]))
+    assert s.schema_version == SCHEMA_VERSION
+    assert len(s.notices) == 1 and "conditioned volume" in s.notices[0]
+
+
+def test_no_notice_without_entropy_on_the_volume_column_or_at_the_current_schema():
+    assert Settings.from_dict(_volume_entropy_settings(2, entropy=[10])).notices == []
+    assert Settings.from_dict(_volume_entropy_settings(SCHEMA_VERSION, entropy=[6])).notices == []
+    # an EMG column keeps the EMG rule, so no volume notice either
+    assert Settings.from_dict(_volume_entropy_settings(2, entropy=[6], emg=[6])).notices == []

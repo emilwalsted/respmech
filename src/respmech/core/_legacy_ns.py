@@ -104,6 +104,7 @@ def to_legacy_ns(s: Settings) -> SimpleNamespace:
                 column_volume=ch.volume if ch.volume is not None else math.nan,
                 column_flow=ch.flow if ch.flow is not None else math.nan,
                 columns_entropy=list(ch.entropy),
+                entropy_derived=list(ch.entropy_derived),
                 columns_emg=list(ch.emg),
             ),
         ),
