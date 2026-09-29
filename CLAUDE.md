@@ -79,8 +79,9 @@ sits alongside `docs/RELEASING.md` and `docs/SIGNING.md`.
   (a legacy-dict override, runnable by the frozen v1 oracle) and `V2_SCENARIOS` (a committed
   `tests/golden/scenarios/<name>.toml` for settings the legacy dict cannot express). New
   scenarios are almost always `V2_SCENARIOS`. `python tests/golden/golden_newcore.py --write`
-  adds or refreshes a v2 row and merges into `golden_reference.json`; it must not change a
-  legacy entry's numbers. A golden diff is a bug in the change unless the change is
+  regenerates the WHOLE `golden_reference.json` from the v2 core (legacy rows included), so
+  after it every legacy row must come out numerically unchanged: review the diff.
+  `make_golden.py --write` only regenerates the legacy scenarios and merges them in. A golden diff is a bug in the change unless the change is
   deliberate and re-baked in the same commit.
 - The **production golden** (`tests/golden/test_production_golden.py`, plus
   `test_production_emg_golden.py`) needs real recordings that are gitignored; it skips
@@ -394,14 +395,17 @@ instrument.
   inserted and removed, never recreated.
 - **Typed breaths.** Right-click (or Ctrl+left-click) a breath in the Mechanics plot opens
   the breath-type menu (`BREATH_KINDS` in `core/settings.py`: IC, FVC, IC + FVC, maximal
-  inspiratory effort, sniff, rest, other); the choice lands in `processing.breath_types`. On a flow-bearing set every typed breath is
+  inspiratory effort, sniff, rest, other, plus Tidal/Excluded; `rest` is offered only on the
+  EMG-only segments tab); the choice lands in `processing.breath_types`. On a flow-bearing set every typed breath is
   also excluded from the tidal mechanics loop, and its values come from
   `core.analysis.manoeuvres.extract`. A plain left click still toggles include/exclude.
 - **EMG-only recordings have no breaths to split.** `core.analysis.segments` cuts them
   by `processing.segmentation.method`: `whole_file`, `separators` (times the user places
   with "Place separators" on the segments tab, stored as `processing.segmentation.separators`),
-  `fixed_windows` or `emg_burst`. `separators` and both automatic methods are reachable only
-  for an EMG-only set; `Settings.validate()` enforces it.
+  `fixed_windows` or `emg_burst`. All four are reachable only for an EMG-only set;
+  `Settings.validate()` enforces it. Flow-bearing analyses have a separate "Place separators"
+  on the Mechanics tab, which edits `processing.segmentation.overrides` (cut/join of the
+  automatic breath split), not `separators`.
 - **Reference manoeuvres can live in another file.** A file's IC, FVC, baseline-IC and
   maximal-effort references default to its own typed breath, or come from a typed breath in
   another file through `processing.references` (per file, edited together in
