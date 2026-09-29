@@ -301,6 +301,29 @@ that entropy column within the analysed segment, recomputed for each segment (wh
 breath, inspiration, expiration); result `SampEn = −ln(A/B)`, reduced to max/min/mean
 across channels. Vendored pyEntropy implementation.
 
+**Which array an entropy column is computed on** (the coincidence rule, per role). An
+entropy column is normally the raw file column, sliced to the same trimmed window as
+everything else. Where the column is also an analysed channel, entropy follows the array
+the analysis itself uses: **EMG → the processed EMG** (ECG removal and noise reduction as
+configured); **flow, Poes, Pgas, Pdi → the raw trimmed column** (which is the mechanics'
+own array, up to a sign convention); **volume → the conditioned volume** (zeroed, then drift
+and trend corrected as configured, after `integrate_from_flow`/`inverse_volume`). The last
+rule is a deliberate change from earlier versions, which used the raw volume column
+(drift and trend are not a constant offset, so the numbers move; a constant offset alone
+would not change SampEn). It is applied before breath segmentation, so the whole-breath,
+inspiration and expiration windows all slice the same conditioned array. An EMG column
+that is also the volume column keeps the EMG rule. With `integrate_from_flow` on, "the volume"
+is the integrated volume, also for a volume column listed under `entropy`.
+
+**`input.channels.entropy_derived`** (only valid value: `"volume"`) computes entropy on a
+signal the analysis derives itself: the same conditioned volume, for a volume with no file
+column (`processing.volume.integrate_from_flow`). It gives the triplet
+`sample_entropy_col_volume`, `sample_entropy_insp_col_volume`, `sample_entropy_exp_col_volume`,
+numerically identical to what a volume column listed under `entropy` gives, and does not
+enter `sample_entropy_max/min/mean` (those stay a summary of the file columns). The
+Provenance sheet names the rule ('Entropy on derived volume: conditioned (zero/drift/trend
+as configured)').
+
 ### 5.10 EMG signal conditioning (optional)
 - **ECG removal** (`remove_ecg`, `emg.remove_ecg`): detect R-peaks (`find_peaks`,
   `minheight`/`mindistance`/`minwidth`), build a **time-aligned averaged ECG

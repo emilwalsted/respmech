@@ -7,6 +7,21 @@ for the installers themselves.
 
 ## Unreleased
 
+**Sample entropy on a volume column now uses the conditioned volume (numbers change for
+analyses with entropy on the volume column).** When the volume column is also ticked as an
+entropy column, its sample entropy is now computed on the volume RespMech itself analyses,
+after zeroing and drift/trend correction as configured, instead of on the raw file column,
+in the same way an EMG column that is also an entropy column already used the processed
+EMG. The sample-entropy values of an analysis with entropy on its volume column therefore
+change without anything else having been changed; a saved older analysis shows a notice
+once when it is opened, and the Provenance sheet names the rule. Flow and pressure columns
+are unchanged, and so is every analysis without entropy on the volume column. New: 'Entropy
+on derived volume' (Setup ▸ Sample entropy, or `input.channels.entropy_derived = ["volume"]`)
+computes entropy on the integrated volume when the volume has no column of its own, for the
+whole breath, inspiration and expiration (`sample_entropy_col_volume`,
+`sample_entropy_insp_col_volume`, `sample_entropy_exp_col_volume`), without changing
+`sample_entropy_max`, `_min` or `_mean`.
+
 **Tidal EMG-only recordings without separators.** The third question in the EMG-only signal
 set, 'Tidal breathing — detect bursts automatically', now works: each file is cut at the
 onset of every burst of inspiratory EMG activity, found on the envelope of the
