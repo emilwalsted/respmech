@@ -230,6 +230,10 @@ V2_SCENARIOS: dict = {
     # 0.4 s zero-flow pause carrying a known pre-flow Poes fall (see generate_data.py's
     # peepi_channels): peepi_dyn/peepi_corr have exact analytical values.
     "flow_peepi_on": os.path.join("scenarios", "flow_peepi_on.toml"),
+    # Sample entropy on the volume column itself (input.channels.entropy lists the volume
+    # column) with drift correction on: entropy is taken on the CONDITIONED volume, the
+    # deliberate numeric change described in docs/beslutninger.md.
+    "entropy_on_volume": os.path.join("scenarios", "entropy_on_volume.toml"),
 }
 
 # The union both test_golden.py (via golden_newcore.mg.SCENARIOS) and this

@@ -132,7 +132,7 @@ class Capabilities:
             emg="emg" in declared,
             # R8: sample entropy is not an EMG (or anything else) companion —
             # bool(ch.entropy) alone, never a function of `declared`.
-            entropy=bool(getattr(ch, "entropy", None)),
+            entropy=bool(getattr(ch, "entropy", None)) or bool(getattr(ch, "entropy_derived", None)),
             declared=declared,
             mode=_mode_for(declared),
         )
