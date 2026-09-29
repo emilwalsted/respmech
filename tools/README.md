@@ -37,8 +37,8 @@ purpose.
   `actions/setup-python` on `windows-latest` provides as English, at its
   default rather than overriding it to something else).
 
-**Cropping and renaming.** `capture_screens.py` writes eleven raw files
-(`00_startup` … `10_dlg_channel_setup`); the site uses ten of them, renamed,
+**Cropping and renaming.** `capture_screens.py` writes fourteen raw files
+(`00_startup` … `12_preview_emg_segments`); the site uses ten of them, renamed,
 plus one manual crop:
 
 | Raw file | Site file | Note |
@@ -55,7 +55,13 @@ plus one manual crop:
 | `10_dlg_channel_setup.png` | `channels.png` | |
 
 `08_dlg_ecg_advanced.png` and `09_dlg_noise_profile.png` are captured but not
-used anywhere on the site; ignore them. Save the renamed files to
+used anywhere on the site; ignore them. So are the three screens the modular
+analysis added, `05b_preview_typed_breath.png` (a breath typed as an IC manoeuvre,
+with the Manoeuvres table), `11_dlg_signal_set.png` (the signal-set picker) and
+`12_preview_emg_segments.png` (an EMG-only analysis, on the EMG – segments tab):
+they are captured with the same recipe so the site can use them, and the app
+repo's README shows the same three screens as `breath-types.png`, `signal-set.png`
+and `emg-only.png`, from `scripts/gen_readme_figures.py`. Save the renamed files to
 `respmech-website`'s `assets/img/docs/`.
 
 The site's three `index.html` screenshots (`setup.png`, `preview-mechanics.png`,
