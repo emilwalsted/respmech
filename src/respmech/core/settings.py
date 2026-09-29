@@ -857,6 +857,8 @@ class Settings:
                 "input.channels.volume is required unless "
                 "processing.volume.integrate_from_flow is true")
 
+        if len(set(ch.entropy_derived)) != len(ch.entropy_derived):
+            raise SettingsError("input.channels.entropy_derived lists the same signal twice")
         for name in ch.entropy_derived:
             if name != "volume":
                 raise SettingsError(

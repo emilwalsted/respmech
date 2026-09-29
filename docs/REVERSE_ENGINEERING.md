@@ -312,7 +312,8 @@ rule is a deliberate change from earlier versions, which used the raw volume col
 (drift and trend are not a constant offset, so the numbers move; a constant offset alone
 would not change SampEn). It is applied before breath segmentation, so the whole-breath,
 inspiration and expiration windows all slice the same conditioned array. An EMG column
-that is also the volume column keeps the EMG rule.
+that is also the volume column keeps the EMG rule. With `integrate_from_flow` on, "the volume"
+is the integrated volume, also for a volume column listed under `entropy`.
 
 **`input.channels.entropy_derived`** (only valid value: `"volume"`) computes entropy on a
 signal the analysis derives itself: the same conditioned volume, for a volume with no file
