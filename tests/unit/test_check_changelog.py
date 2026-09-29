@@ -350,3 +350,22 @@ def test_a_non_utf8_default_locale_does_not_crash_the_tool(repo: Path) -> None:
         "failure on Windows CI runners (cp1252 default), where this step is meant to "
         "NEVER fail the branch:\n" + out
     )
+
+
+def test_the_placeholder_in_an_html_comment_is_not_mistaken_for_the_live_entry(repo: Path) -> None:
+    """CHANGELOG.md keeps the live "Unreleased" at the top and, further down, the empty
+    template inside an HTML comment, which carries the same heading. The tool used to take
+    the LAST "## Unreleased" it found, i.e. the template, and judged every commit against
+    "(nothing pending)": each one was reported as missing from an entry that described it."""
+    (repo / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## Unreleased\n\n"
+        "- Added `ecg_auto_detect` so ECG detection can drive batch runs\n"
+        "- The Mechanics advanced dialog's detail fields now follow their checkbox\n\n"
+        "<!--\nThe template:\n\n## Unreleased\n\n(nothing pending)\n-->\n\n"
+        "## v1.0.0 - 2026-01-01\n\nFirst.\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "CHANGELOG.md")
+    _git(repo, "commit", "-m", "CHANGELOG: record the changes")
+    code, out = _run(repo)
+    assert code == 0, out
