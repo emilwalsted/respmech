@@ -23,8 +23,9 @@ pressure and EMG to a maximal effort with tension-time indices, automatic EMG-on
 segmentation (fixed windows and EMG bursts), manual repair of the breath detector, and
 the `respmech init` and `respmech breaths` commands. Everything new is off, empty or
 absent until it is asked for, an analysis that does not use it is read, run and written
-as before, and the earlier results are unchanged with one deliberate exception: sample
-entropy on a volume column (below). README has a section on each part, and
+as before. Earlier results change only where an entry below says so (sample entropy on a
+volume column, the default entropy template length, the noise-reduction reconstruction and
+the ECG R-wave detector). README has a section on each part, and
 `examples/settings.toml` a commented example of every new settings table.
 **An analysis that uses the new settings tables must not be opened and saved by RespMech
 older than 2.5**, which drops the tables it does not know (see `docs/INSTALL.md`).
