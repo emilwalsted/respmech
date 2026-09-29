@@ -3,7 +3,7 @@
 # A realistic starting point covering the common keys, with comments explaining each
 # block and the current schema default alongside anything overridden. Kept in sync
 # with the annotated example in documentation.html's "The settings file (TOML)"
-# section on respmech.dk — update both together (ticket K-046).
+# section on respmech.dk — update both together.
 #
 # Unlike the copy on the website, this file is directly runnable: input.folder /
 # input.files point at sample_recording.csv, the same small synthetic recording the
