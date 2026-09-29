@@ -291,6 +291,18 @@ class SettingsScreen(QWidget):
         _enthint = QLabel("Computed on the columns ticked as Entropy in the channel picker.")
         _enthint.setWordWrap(True); _enthint.setProperty("status", "muted")
         fent.addRow("", _enthint)
+        # Sample entropy on the volume RespMech integrates from flow (a volume with no column
+        # of its own): the conditioned volume, per breath and per phase. Only offered when
+        # Flow is declared and the volume is integrated (see _derived_volume_available).
+        self.ent_derived_volume = QCheckBox("Entropy on derived volume")
+        self.ent_derived_volume.setToolTip(
+            "input.channels.entropy_derived\n"
+            "Also compute sample entropy on the volume integrated from flow: the conditioned "
+            "volume (zeroed, drift- and trend-corrected as configured), for the whole breath, "
+            "inspiration and expiration. Reported as sample_entropy_col_volume, "
+            "sample_entropy_insp_col_volume and sample_entropy_exp_col_volume, and kept out of "
+            "sample_entropy_max/min/mean.")
+        fent.addRow("", self.ent_derived_volume)
         # Live read-out in the app's own vocabulary (m, not "template length"), so a user can
         # write their methods section straight off this line without opening the source.
         self.ent_caption = QLabel(""); self.ent_caption.setWordWrap(True)
@@ -559,7 +571,9 @@ class SettingsScreen(QWidget):
         # _apply_card_visibility) — Sample entropy's two parameters are meaningless unless a
         # column is actually assigned to entropy, in either mode.
         self._cond_cards = [
-            (gent, lambda: bool(self.state.settings.input.channels.entropy)),
+            (gent, lambda: bool(self.state.settings.input.channels.entropy)
+                    or bool(self.state.settings.input.channels.entropy_derived)
+                    or self._derived_volume_available()),
             (gsub, lambda: bool(self.state.settings.input.subjects)),
             # PEEPi needs oesophageal pressure: absent from Flow only (and EMG only)
             (gpeepi, self._peepi_relevant),
@@ -752,6 +766,7 @@ class SettingsScreen(QWidget):
             self.out_folder.setText(s.output.folder)
             self.ent_epochs.setValue(s.processing.entropy.epochs)
             self.ent_tol.setValue(s.processing.entropy.tolerance)
+            self.ent_derived_volume.setChecked("volume" in s.input.channels.entropy_derived)
             _pp = s.processing.pressure.peepi
             self.peepi_enabled.setChecked(_pp.enabled)
             self.peepi_window.setValue(_pp.search_window_s)
@@ -810,6 +825,12 @@ class SettingsScreen(QWidget):
         s.output.folder = self.out_folder.text()
         s.processing.entropy.epochs = self.ent_epochs.value()
         s.processing.entropy.tolerance = self.ent_tol.value()
+        # only the derived signals this screen owns are written; the list stays as loaded
+        # unless the box actually changed (an unknown future value is never dropped here)
+        _derived = [d for d in s.input.channels.entropy_derived if d != "volume"]
+        if self.ent_derived_volume.isChecked():
+            _derived.append("volume")
+        s.input.channels.entropy_derived = _derived
         _pp = s.processing.pressure.peepi
         _pp.enabled = self.peepi_enabled.isChecked()
         for _name, _field in self._PEEPI_BOXES.items():
@@ -963,6 +984,7 @@ class SettingsScreen(QWidget):
         # recompute.
         self.samp_freq.valueChanged.connect(self._on_sampling_frequency_changed)
         self.ent_tol.valueChanged.connect(self._on_field_changed)
+        self.ent_derived_volume.toggled.connect(self._on_field_changed)
         for _sb in (self.peepi_window, self.peepi_smooth, self.peepi_slope, self.peepi_min):
             _sb.valueChanged.connect(self._on_field_changed)
         self.peepi_enabled.toggled.connect(self._on_field_changed)
@@ -2144,6 +2166,13 @@ class SettingsScreen(QWidget):
         self._set_flow_ready(ready)
         self._set_status(self._validation_status())   # no Validate button: every edit re-checks
 
+    def _derived_volume_available(self):
+        """The 'Entropy on derived volume' box is offered when Flow is declared and the
+        volume is integrated from it: a volume without a column of its own."""
+        s = self.state.settings
+        return bool(s.input.channels.flow is not None
+                    and s.processing.volume.integrate_from_flow)
+
     def _apply_card_visibility(self):
         """Conditional cards only (B04 retired the staged reveal): Sample entropy stays
         hidden unless a column is actually assigned to it, in every mode. The one exemption
@@ -2153,6 +2182,8 @@ class SettingsScreen(QWidget):
             if card.isVisible() and card.isAncestorOf(QApplication.focusWidget()):
                 continue
             card.setVisible(relevant())
+        self.ent_derived_volume.setVisible(
+            self._derived_volume_available() or self.ent_derived_volume.isChecked())
 
     def _channel_collision(self):
         """A HARD channel-mapping error (message, else ''), delegating to the Qt-free
