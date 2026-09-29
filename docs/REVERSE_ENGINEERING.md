@@ -359,8 +359,9 @@ as configured)').
 
 This document describes the v1 code, and §5.1–5.10 are what the v2 engine reproduces
 byte-for-byte (the golden tests). Sections 5.11–5.17 describe what only v2 does: none of
-it exists in RespMech 1.x, and none of it changes a number §5.1–5.10 produces, with one
-deliberate exception (sample entropy on a volume column, see below). Every new
+it exists in RespMech 1.x, and none of it changes a number §5.1–5.10 produces, with the
+deliberate exceptions recorded in the changelog and `beslutninger.md` (for instance sample
+entropy on a volume column). Every new
 column is either absent (a signal the analysis does not use) or empty/off until its
 inputs are supplied. Read them in this order:
 
@@ -370,7 +371,7 @@ inputs are supplied. Read them in this order:
 | 5.12 | EMG-only segmentation: whole file, separators, fixed windows, EMG bursts | an EMG-only signal set |
 | 5.13 | Manoeuvre extraction from typed breaths (IC, FVC, maximal effort, sniff) | `processing.breath_types` |
 | 5.13a | Cross-file reference resolution | `processing.references`, `processing.reference_defaults` |
-| 5.14 | Operating lung volumes (EELV, EILV, IRV) | a resolved IC reference and `input.subjects` |
+| 5.14 | Operating lung volumes (EELV, EILV, IRV) | a resolved IC reference (`input.subjects` adds VC/TLC anchoring) |
 | 5.15 | MFVL, expiratory flow limitation, ventilatory capacity | a typed FVC breath in the same file |
 | 5.16 | PEEPi and the modified Campbell diagram | `processing.pressure.peepi` |
 | 5.17 | Normalisation to a maximal manoeuvre, tension–time indices | `processing.pressure.normalization` |
@@ -1022,7 +1023,7 @@ derived FEV1 among this file's own resolved FVC attempts, the SAME preference
 `§5.14`'s VC-fallback comment already anticipated), `ve_pct_mvv`, `br_mvv_pct` —
 the last three independent of MEFV placement (MVV needs no placement at all), so
 they are NaN only when NO IC reference resolved, never merely for partial
-coverage. `fev1_source` (`'spirometry'` | `'recorded'`, the column is required in the output) names which value fed `fev1_used` — a per-FILE constant,
+coverage. `fev1_source` (`'spirometry'` | `'recorded'`, the column is absent without a typed FVC or a FEV₁) names which value fed `fev1_used` — a per-FILE constant,
 written directly onto `breaths_table`/`average_row` by `core.pipeline.run_batch`
 itself AFTER `build_breath_table` has already run (self-review finding: a text
 column joined in through `breath['mfvl_ext']`, `tidal_mfvl_ext`'s usual path,
