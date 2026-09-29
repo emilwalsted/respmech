@@ -65,6 +65,10 @@ def build_breath_table(file, breaths, settings):
         if "pressure_ext" in breath:
             dfpress = pd.DataFrame(breath["pressure_ext"], index=[0])
             dfmech = dfmech.join(dfpress, how="outer", sort=False)
+        # core.analysis.breathing_pattern.attach (opt-in): flow/volume-only pattern columns.
+        if "breathing_pattern_ext" in breath:
+            dfbp = pd.DataFrame(breath["breathing_pattern_ext"], index=[0])
+            dfmech = dfmech.join(dfbp, how="outer", sort=False)
 
         has_phases = breath.get("has_phases", True)
 

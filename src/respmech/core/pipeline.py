@@ -29,6 +29,7 @@ import numpy as np
 
 from respmech.core import compute
 from respmech.core import emg as emglib
+from respmech.core.analysis import breathing_pattern as breathingpatternlib
 from respmech.core.analysis import lungvol as lungvollib
 from respmech.core.analysis import normalisation as normalisationlib
 from respmech.core.analysis import manoeuvres as manoeuvreslib
@@ -1213,6 +1214,16 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                 if (not emg_only and s.processing.pressure.peepi.enabled and not peepi_on):
                     file_notices.append(
                         "PEEPi analysis is enabled but this signal set lacks Flow or Poes -- skipped")
+                # Opt-in breathing pattern (core.analysis.breathing_pattern): flow and
+                # volume only, so it needs no pressure channel; an EMG-only set has no flow.
+                bp_settings = s.processing.breathing_pattern
+                bp_on = (not emg_only and bp_settings.extended and s.capabilities.flow)
+                if ((bp_settings.extended or bp_settings.variability)
+                        and (emg_only or not s.capabilities.flow)):
+                    file_notices.append(
+                        "Breathing pattern columns are enabled but this signal set has no "
+                        "flow -- skipped")
+                bp_notes: list = []
                 _order = list(breaths)
                 _prev_of = {k: (breaths[_order[i - 1]] if i else None) for i, k in enumerate(_order)}
                 peepi_notes: list = []
@@ -1263,6 +1274,10 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                                 _note = None
                             if _note:
                                 peepi_notes.append((breath["number"], _note))
+                        if bp_on:
+                            _bp_note = breathingpatternlib.attach(breath, s)
+                            if _bp_note:
+                                bp_notes.append((breath["number"], _bp_note))
                     done += 1
                     _emit(progress, ProgressEvent("breath", file=filename, breath=done, total_breaths=total))
 
@@ -1274,6 +1289,13 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                     _detail += f"; and {len(peepi_notes) - 5} more"
                 file_notices.append(
                     f"PEEPi reported as NaN for {len(peepi_notes)} breath(s) -- {_detail}")
+
+            if not reference_only and bp_notes:
+                _detail = "; ".join(f"#{n}: {m}" for n, m in bp_notes[:5])
+                if len(bp_notes) > 5:
+                    _detail += f"; and {len(bp_notes) - 5} more"
+                file_notices.append(
+                    f"Breathing pattern reported as NaN for {len(bp_notes)} breath(s) -- {_detail}")
 
             # M-29/M-30: typed (non-`rest`) breaths never reach calculatemechanics above
             # (M-19 unions every typed kind into `excludebreaths` on a flow-bearing set,
@@ -1360,6 +1382,12 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                 if mfvl_fev1_source is not None:
                     breaths_table["fev1_source"] = mfvl_fev1_source
                     average_row["fev1_source"] = mfvl_fev1_source
+                # Opt-in per-file variability (core.analysis.breathing_pattern): CVs of
+                # the ordinary timing/volume columns over the included breaths. Set on the
+                # average row only (a per-file value), like fev1_source above.
+                if (s.processing.breathing_pattern.variability and not emg_only
+                        and s.capabilities.flow):
+                    breathingpatternlib.attach_variability(breaths_table, average_row)
             processed = None
             if s.output.data.saveprocesseddata:
                 processed = build_processed_data(breaths, s)

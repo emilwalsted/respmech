@@ -157,6 +157,9 @@ def to_legacy_ns(s: Settings) -> SimpleNamespace:
             # v2-only passthrough (no legacy counterpart) -- read by
             # core.analysis.pressure.attach via s.processing.pressure.peepi.
             pressure=s.processing.pressure,
+            # v2-only passthrough -- read by core.analysis.breathing_pattern via
+            # s.processing.breathing_pattern.
+            breathing_pattern=s.processing.breathing_pattern,
             wob=SimpleNamespace(
                 calcwobfrom=wob.calc_from,
                 avgresamplingobs=wob.avg_resampling_obs,
