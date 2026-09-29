@@ -344,11 +344,47 @@ _PRESSURE_NORMALISATION = (
                unit="", sheet="Pressure normalised", trigger="pressure_normalisation"),
 )
 
+# Opt-in breathing pattern (core.analysis.breathing_pattern, triggers
+# `processing.breathing_pattern.extended` / `.variability`): flow and volume only. Most units
+# resolve through `_RULES` already (`t_*` -> s, `*_frac` -> dimensionless, `*_cv` -> %,
+# `*flow*` -> L/s, `vol_*` -> L); `bf_inst` and `n_breaths` do not match any rule, so their
+# explicit units here ARE the resolving path (`n_breaths` is a count: blank on purpose).
+_BREATHING_PATTERN = (
+    ColumnSpec(name="mean_in_flow", requires=_TIMING, module="breathing_pattern", unit="L·s⁻¹",
+               trigger="breathing_pattern"),
+    ColumnSpec(name="mean_ex_flow", requires=_TIMING, module="breathing_pattern", unit="L·s⁻¹",
+               trigger="breathing_pattern"),
+    ColumnSpec(name="vol_insp", requires=_TIMING, module="breathing_pattern", unit="L",
+               trigger="breathing_pattern"),
+    ColumnSpec(name="vol_exp", requires=_TIMING, module="breathing_pattern", unit="L",
+               trigger="breathing_pattern"),
+    ColumnSpec(name="bf_inst", requires=_TIMING, module="breathing_pattern", unit="min⁻¹",
+               trigger="breathing_pattern"),
+    ColumnSpec(name="t_peak_in_flow", requires=_TIMING, module="breathing_pattern", unit="s",
+               trigger="breathing_pattern"),
+    ColumnSpec(name="t_peak_ex_flow", requires=_TIMING, module="breathing_pattern", unit="s",
+               trigger="breathing_pattern"),
+    ColumnSpec(name="t_peak_in_flow_frac", requires=_TIMING, module="breathing_pattern",
+               unit=DIMLESS, trigger="breathing_pattern"),
+    ColumnSpec(name="vt_cv", requires=_TIMING, module="breathing_pattern", unit="%", level="file",
+               trigger="breathing_pattern"),
+    ColumnSpec(name="ti_cv", requires=_TIMING, module="breathing_pattern", unit="%", level="file",
+               trigger="breathing_pattern"),
+    ColumnSpec(name="te_cv", requires=_TIMING, module="breathing_pattern", unit="%", level="file",
+               trigger="breathing_pattern"),
+    ColumnSpec(name="ttot_cv", requires=_TIMING, module="breathing_pattern", unit="%", level="file",
+               trigger="breathing_pattern"),
+    ColumnSpec(name="ti_ttot_cv", requires=_TIMING, module="breathing_pattern", unit="%",
+               level="file", trigger="breathing_pattern"),
+    ColumnSpec(name="n_breaths", requires=_TIMING, module="breathing_pattern", unit="",
+               level="file", trigger="breathing_pattern"),
+)
+
 #: Every column/family this skeleton knows about. Later tickets append to this,
 #: never remove from or reorder ``LEGACY_MECHANICS_ORDER`` within it.
 REGISTRY = (LEGACY_MECHANICS_ORDER + (_ENTROPY, _EMG) + _SEGMENT_EMG + _MANOEUVRES
            + _REFERENCE_MANOEUVRES + _LUNG_VOLUMES + _MFVL + _PEEPI
-           + _PRESSURE_NORMALISATION)
+           + _PRESSURE_NORMALISATION + _BREATHING_PATTERN)
 
 # The Capabilities boolean fields resolve() is willing to read. Kept as an
 # explicit tuple (rather than e.g. dataclasses.fields(caps)) so a caller could

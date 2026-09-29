@@ -115,6 +115,9 @@ _FRIENDLY_SETTINGS_ERRORS = {
 _FRIENDLY_PREFIXES = (
     ("processing.pressure.peepi.",
      "A PEEPi setting is out of range (Setup ▸ Intrinsic PEEP (PEEPi))"),
+    ("processing.breathing_pattern.",
+     "A breathing-pattern setting must be on or off (Preview & QC ▸ Mechanics ▸ Advanced… ▸ "
+     "Breathing pattern)"),
     ("processing.mfvl.",
      "An MFVL setting must not be negative (Preview & QC ▸ Mechanics ▸ Advanced… ▸ "
      "Lung volumes; the presence threshold is in the analysis file)"),

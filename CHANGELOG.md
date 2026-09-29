@@ -116,6 +116,20 @@ shared EMG normalisation reference (`processing.emg.normalization_reference_file
 its own peak in that breath), which also lets a file containing nothing but the
 maximal manoeuvre serve as that reference.
 
+**Opt-in VT/Ti breathing-pattern columns and variability.** Two new switches,
+`processing.breathing_pattern.extended` and `.variability` (both off by default, in
+Preview & QC ▸ Mechanics ▸ Advanced… ▸ Breathing pattern), add columns that need nothing
+but flow and volume, so they work for a Flow-only analysis too. With `extended`, every
+breath gains its mean inspiratory and expiratory flow (`mean_in_flow`, `mean_ex_flow`, the
+VT/Ti drive component and its expiratory counterpart), the volume moved in each phase
+(`vol_insp`, `vol_exp`), the rate that single breath would give (`bf_inst`) and the time to
+peak inspiratory and expiratory flow (`t_peak_in_flow`, `t_peak_ex_flow`, and the
+inspiratory one as a fraction of Ti, `t_peak_in_flow_frac`). With `variability`, each
+file's row in the averages gains the coefficient of variation of VT, Ti, Te, Ttot and
+Ti/Ttot over its included breaths (`vt_cv`, `ti_cv`, `te_cv`, `ttot_cv`, `ti_ttot_cv`) and
+the number of breaths they rest on (`n_breaths`); the CVs read blank below three breaths. The
+Provenance sheet names what is on. Nothing else changes with them on or off.
+
 **Opt-in PEEPi-corrected work of breathing (modified Campbell diagram).** A new
 `processing.pressure.peepi` setting (off by default) measures intrinsic PEEP for every
 breath from the oesophageal-pressure deflection that precedes inspiratory flow — found
