@@ -238,6 +238,8 @@ place, click near an existing one to remove; any exclusion or type on a segment 
 it through a renumbering). 'Try it on sample data' opens a ready-made EMG-only demo,
 already split at its own natural breath boundaries. Tidal breathing, with nothing to
 place separators on, has its own door in the picker: see the next entry.
+<!-- changelog-skip 6f2151f developer project-memory files only (the three CLAUDE.md files);
+     nothing in the app or its user documentation changes. -->
 <!-- changelog-skip f4e19c8 documentation-only decision record (docs/beslutninger.md); no
      user-visible behaviour changes, the feature it describes lands in a later change. -->
 <!-- changelog-skip 72afcff the 'EMG – segments' tab landed in Preview & QC in this
