@@ -221,3 +221,38 @@ which specific timing window made `close()` insufficient this time.
 If the suite's macOS wall time or sandbox OOM recur, re-measure with `RESPMECH_NET_CENSUS`/
 `RESPMECH_NET_PROFILE` before assuming this is the same class of bug — the population
 this ticket targeted is gone.
+
+### `core/analysis` has an import budget: the GUI's startup path may not pull in numpy
+
+`core/analysis/signals.py` and `core/analysis/registry.py` are imported by
+`Settings.validate()` and `ui/validation.py`, which run before any recording is read, so
+they must stay free of Qt, numpy, scipy, pandas and `core.compute`/`core.pipeline` at
+module level (the numeric analysis modules beside them, such as `manoeuvres.py` and
+`segments.py`, are exempt). `tests/unit/test_startup_imports.py` pins this in a
+**subprocess** (in-process the compute core is long since imported, so an assertion there
+would pass whatever the modules do): `test_core_analysis_modules_import_no_numeric_stack`
+covers these two modules, and the `FORBIDDEN` list covers what importing the GUI shell must
+not drag in. A new helper that `Settings.validate()` or a UI render path will call belongs in
+one of those two modules, or it gets its own lazy in-function import. Adding a top-level
+`import numpy` to either is a red test, not a style choice.
+
+### Layout hazards the `windows_metrics` fixture has already caught (chips, rails, dialogs)
+
+`windows_metrics` (`tests/unit/conftest.py`) widens the application font's horizontal
+advance to model the Windows runner; use it for any test whose claim is "this row/dialog/
+column still fits". The findings so far, each with a worked fix in `src/respmech/ui/CLAUDE.md`:
+
+- **Chips wrap only where a layout can break them** (`FlowLayout` with one item per
+  caption+field pair, `install_flow` + `cluster`); a chip on a plain `QHBoxLayout` is one
+  unbreakable item.
+- **Table headers**: `QHeaderView.sectionSizeHint()` is the floor a column may never be
+  resized below, independent of any cap meant for oversized cell values (`result_table.py`).
+- **Elided labels**: never assert on a rendered `text()` that `flow_layout.elide` shortened;
+  assert on `toolTip()`, which holds the full string. A label that is the only thing naming
+  a panel needs its own floor (`titled_panel(title_floor_chars=...)`), never a raised global one.
+- **Action bands and modals** (the EMG – segments action band is the worked example,
+  `test_the_segments_action_band_fits_on_windows_metrics`; the signal-set and reference-picker dialogs have their own `..._fits_under_windows_font_metrics` tests): assert against a size measured in
+  the same run (the window's minimum size hint), never a pixel literal, and run it under
+  `windows_metrics`.
+- **Refit-on-resize** must be idempotent by skipping a redo at an already-fitted size, not by
+  out-rounding Windows' measurement jitter.
