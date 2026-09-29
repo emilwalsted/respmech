@@ -1065,6 +1065,39 @@ def calculateaveragebreaths(breaths, settings):
 
 # --- entropy ---------------------------------------------------------------
 
+def conditioned_entropy_columns(entropycolumns, volume, settings):
+    """The entropy input matrix with the conditioned volume worked in (run before breath
+    segmentation, so the whole-breath, inspiration and expiration windows all slice it).
+
+    Entropy on a column that IS the volume column is taken on the volume RespMech itself
+    analyses (zeroed, drift- and trend-corrected as configured), not on the raw file column
+    (an EMG column that is also an entropy column is handled the same way, per breath, in
+    ``calculateentropy``). Every signal in ``input.channels.entropy_derived`` (today only
+    "volume") is appended as an extra column after the file columns: the same conditioned
+    volume, for a volume that has no column of its own. Returns ``entropycolumns`` itself,
+    untouched, when neither applies (so every other analysis is byte-identical).
+    """
+    data = settings.input.data
+    vol_col = getattr(data, "column_volume", None)
+    derived = list(getattr(data, "entropy_derived", []) or [])
+    entcols = list(data.columns_entropy)
+    emg = list(data.columns_emg)
+    volume = np.asarray(volume, dtype=float)
+    if volume.size == 0:
+        return entropycolumns
+    on_volume = [i for i, c in enumerate(entcols)
+                 if vol_col is not None and not np.isnan(vol_col) and c == vol_col and c not in emg]
+    if not on_volume and not derived:
+        return entropycolumns
+    base = np.asarray(entropycolumns, dtype=float)
+    if base.size == 0:
+        base = np.empty((volume.size, 0))
+    out = np.column_stack([base] + [volume] * len(derived)) if derived else base.copy()
+    for i in on_volume:
+        out[:, i] = volume
+    return out
+
+
 def calculateentropy(breath, settings, phase=None, cancel_check=None):
     if phase is None:
         columns = breath["entcols"]
@@ -1167,14 +1200,28 @@ def compute_segment_emg(retbreath, breath, settings, cancel_check, peaks_s, dete
             retbreath["rms_exp"], retbreath["intemg_exp"] = emglib.calculate_rms(breath["expiration"]["emgcols"], settings.processing.emg.rms_s, settings.input.format.samplingfrequency)
         _add_gated_peaks(retbreath, breath, settings, peaks_s, detection_ok, detection_reason, phases=phases)
 
-    if len(settings.input.data.columns_entropy) > 0:
-        entropy = calculateentropy(breath, settings, cancel_check=cancel_check)
-        retbreath["entropy"] = np.append(entropy.T, [max(entropy.T), min(entropy.T), np.mean(entropy.T)])
+    n_file = len(settings.input.data.columns_entropy)
+    n_derived = len(getattr(settings.input.data, "entropy_derived", []) or []) if phases else 0
+    if n_file + n_derived > 0:
+        # ``entcols`` carries the file columns first, then the derived signals
+        # (``conditioned_entropy_columns``). Derived entropy is reported per column but kept
+        # out of sample_entropy_max/min/mean, which stay a summary of the file columns only.
+        def _split(entropy):
+            entropy = np.asarray(entropy, dtype=float)
+            return entropy[:n_file], entropy[n_file:]
+
+        entropy, derived = _split(calculateentropy(breath, settings, cancel_check=cancel_check))
+        retbreath["entropy"] = (np.append(entropy.T, [max(entropy.T), min(entropy.T), np.mean(entropy.T)])
+                                if n_file > 0 else [])
+        if n_derived:
+            retbreath["entropy_derived"] = derived
         if phases:
-            entropy_insp = calculateentropy(breath, settings, "inspiration", cancel_check=cancel_check)
-            entropy_exp = calculateentropy(breath, settings, "expiration", cancel_check=cancel_check)
-            retbreath["entropy_insp"] = np.append(entropy_insp.T, [max(entropy_insp.T), min(entropy_insp.T), np.mean(entropy_insp.T)])
-            retbreath["entropy_exp"] = np.append(entropy_exp.T, [max(entropy_exp.T), min(entropy_exp.T), np.mean(entropy_exp.T)])
+            for phase, key in (("inspiration", "entropy_insp"), ("expiration", "entropy_exp")):
+                entropy_p, derived_p = _split(calculateentropy(breath, settings, phase, cancel_check=cancel_check))
+                if n_file > 0:
+                    retbreath[key] = np.append(entropy_p.T, [max(entropy_p.T), min(entropy_p.T), np.mean(entropy_p.T)])
+                if n_derived:
+                    retbreath["entropy_derived_" + key.split("_")[1]] = derived_p
     else:
         retbreath["entropy"] = []
 

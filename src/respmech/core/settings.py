@@ -27,7 +27,11 @@ class SettingsError(ValueError):
     """Raised when settings are missing/invalid, with an actionable message."""
 
 
-SCHEMA_VERSION = 2
+# Schema 3: sample entropy on the volume column is taken on the conditioned volume, not the
+# raw file column (a deliberate numerical change). An analysis written before this, with
+# the volume column among its entropy channels, gets one plain-English notice on load; the
+# next save writes schema 3 and the notice does not come back.
+SCHEMA_VERSION = 3
 
 # schema 1 wrote processing.volume.trend_peak_min_height into every analysis, including
 # the ones that never touched trend correction — the GUI had no control for it, so the
@@ -58,6 +62,12 @@ class Channels:
     flow: int | None = None
     emg: list[int] = field(default_factory=list)
     entropy: list[int] = field(default_factory=list)
+    # Sample entropy on a signal the analysis derives itself, rather than on a file column.
+    # The only valid value is "volume": the conditioned volume (zeroed, drift- and
+    # trend-corrected as configured), for a volume that has no column of its own
+    # (processing.volume.integrate_from_flow). A volume that IS a column is covered by
+    # listing that column under ``entropy`` instead.
+    entropy_derived: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -846,6 +856,19 @@ class Settings:
             raise SettingsError(
                 "input.channels.volume is required unless "
                 "processing.volume.integrate_from_flow is true")
+
+        for name in ch.entropy_derived:
+            if name != "volume":
+                raise SettingsError(
+                    f"input.channels.entropy_derived contains an unknown signal '{name}' "
+                    "(the only valid value is 'volume')")
+        if "volume" in ch.entropy_derived and not (
+                "flow" in declared
+                and (self.processing.volume.integrate_from_flow or ch.volume is not None)):
+            raise SettingsError(
+                "input.channels.entropy_derived 'volume' needs a volume to analyse: declare "
+                "'flow' and either assign a volume column or set "
+                "processing.volume.integrate_from_flow")
 
         seg = self.processing.segmentation
         _SEGMENTATION_METHODS = (
@@ -1647,6 +1670,15 @@ def _upgrade(obj: "Settings", raw: dict) -> list[str]:
                 "tidal breathing. It is now unset, so end-expiratory troughs are detected "
                 "relative to each recording's own volume range. Set it explicitly under "
                 "Mechanics — Advanced… to reproduce an older analysis exactly.")
+    if version < 3:
+        ch = obj.input.channels
+        if ch.volume is not None and ch.volume in ch.entropy and ch.volume not in ch.emg:
+            notices.append(
+                "Sample entropy on the volume column (input.channels.entropy lists the "
+                "volume column) is now computed on the conditioned volume, the volume "
+                "RespMech itself analyses after zeroing and drift/trend correction, instead "
+                "of on the raw file column. Its sample-entropy values therefore differ from "
+                "those of earlier versions for this analysis; nothing else changes.")
     obj.schema_version = SCHEMA_VERSION
     return notices
 

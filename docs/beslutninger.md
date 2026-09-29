@@ -6,6 +6,34 @@ decision <date>" — never an internal ticket reference; this repo is public).
 
 ---
 
+**29-09-2026 — Sample entropy on a volume column is computed on the conditioned volume
+(author's decision 26-09-2026); deliberate numerical change, re-baked.** Four points:
+
+1. **The rule.** An entropy column that coincides with the volume column is computed on the
+   volume RespMech analyses (zeroed, drift- and trend-corrected as configured), exactly like
+   an EMG column that is also an entropy column is computed on the processed EMG. The
+   alternative, keeping the raw file column and offering the conditioned volume only as a
+   separate derived column, was recommended and rejected by the author: entropy of "the"
+   volume RespMech reports is what a reader expects. Flow, Poes, Pgas and Pdi are unchanged
+   (raw trimmed column = the mechanics' own array).
+2. **It is a numerical change for existing analyses** that list the volume column under
+   `entropy`; nothing else moves (the five committed golden scenarios and every scenario
+   without entropy on the volume column are byte-identical). It is re-baked in one new golden
+   scenario, `entropy_on_volume`, with drift correction on. Countermeasures: the changelog
+   says it in plain words, the settings schema is bumped to 3 so a saved older analysis gets
+   one plain-English notice when it is opened (and not again after it is saved), and the
+   Provenance sheet names the rule.
+3. **The window.** The conditioning is applied to the entropy input matrix before breath
+   segmentation, not per breath from the breath's own volume: a breath's own `volume` is the
+   inspiration and expiration joined, one sample shorter than the entropy window (the sample
+   between the two phases), so a per-breath substitution would have changed the window of
+   this one column relative to the others.
+4. **`input.channels.entropy_derived = ["volume"]`** covers a volume with no column of its
+   own (`integrate_from_flow`); its three columns equal what a volume column would give and
+   stay out of `sample_entropy_max/min/mean`.
+
+---
+
 **28-09-2026 — Normalisation to a maximal manoeuvre: a post-pass over the finished
 tables, one sheet, reference read from the manoeuvre extraction (author's decision
 28-09-2026).** Seven points that are easy to undo by accident:

@@ -539,6 +539,8 @@ def segment_file(settings: Settings, s, path, *, cache=None, cancel_check=None,
         driftvol = compute.correctdrift(zerovol, s) if s.processing.mechanics.correctvolumedrift else zerovol
         volume = compute.correcttrend(driftvol, s) if s.processing.mechanics.correctvolumetrend else driftvol
 
+    entropycolumns = compute.conditioned_entropy_columns(entropycolumns, volume, s)
+
     _emit(progress, ProgressEvent("stage", file=filename, message="segmenting breaths"))
     breaths = compute.separateintobreaths(
         s.processing.mechanics.separateby, filename, timecol, flow, volume,
