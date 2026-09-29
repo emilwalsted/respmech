@@ -572,6 +572,7 @@ class SettingsScreen(QWidget):
         # column is actually assigned to entropy, in either mode.
         self._cond_cards = [
             (gent, lambda: bool(self.state.settings.input.channels.entropy)
+                    or bool(self.state.settings.input.channels.entropy_derived)
                     or self._derived_volume_available()),
             (gsub, lambda: bool(self.state.settings.input.subjects)),
             # PEEPi needs oesophageal pressure: absent from Flow only (and EMG only)
