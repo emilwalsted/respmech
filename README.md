@@ -139,7 +139,7 @@ for, the panels Preview & QC shows, the columns and figures a run writes) follow
 | **Flow only** | Breath timing, tidal volume and ventilation from flow (and volume). Preview shows a flow–volume loop where the Campbell diagram would be. |
 | **Flow + Poes** | Adds work of breathing and the oesophageal-pressure descriptors. |
 | **Flow + Poes + Pgas + Pdi** | The complete set, and the default: adds gastric and transdiaphragmatic pressure. |
-| **… also EMG** | Any of the three above, plus the diaphragm-EMG and entropy analyses. |
+| **… also EMG** | Any of the three above, plus the diaphragm-EMG analyses. |
 | **EMG only** | No flow channel at all: see [EMG-only analyses](#emg-only-analyses). |
 
 Sample entropy is available in every set once a column is assigned to it. A channel whose
@@ -149,8 +149,9 @@ the analysis no longer declares. The choice is stored as an optional `[analysis]
 assigned, so an analysis written before signal sets existed behaves exactly as it did. A
 run's output only contains the columns of the signals it used, and `respmech validate`,
 the run report and each workbook's Provenance sheet name the set and what it computes.
-*Explore with sample data* opens a sample recording that matches the set the current
-analysis declares.
+*Explore with sample data* in the File menu opens a reduced sample recording when the
+current analysis is Flow only or Flow + Poes (without EMG), an EMG-only sample when it is EMG only, and the
+complete one otherwise.
 
 ## Breath types and reference manoeuvres
 
@@ -165,9 +166,9 @@ file's workbook:
 
 * An **IC manoeuvre** reports its inspiratory capacity (peak volume above the end-expiratory
   level of the tidal breaths just before it), timing, peak inspiratory flow and pressure
-  swings, with quality flags for a low effort, an unstable baseline, no held plateau, a
+  swings, with quality flags for a low effort, an unstable baseline, a
   measurement that does not repeat and a manoeuvre at the edge of the recording.
-* An **FVC manoeuvre** reports FVC, FEV₁ and its percentage of FVC, PEF, the
+* An **FVC manoeuvre** reports FVC, FEV₁ and FEV₁/FVC, PEF, the
   back-extrapolated volume and whether the forced expiration reached a genuine end
   (ATS/ERS 2019).
 * A **maximal inspiratory effort** or **sniff** reports its own peak pressures and EMG, the
@@ -178,7 +179,7 @@ analysed too; its Manoeuvres table stands in for the breath-by-breath data.
 
 **Where a reference comes from.** A file's IC, FVC, baseline-IC or maximal-effort reference
 can be a typed breath in the same file or in a *different* one, so one IC recording can
-serve all of a participant's exercise files. Right-click a typed breath and choose *Use as
+serve all of a participant's exercise files. Right-click a breath typed as an IC manoeuvre and choose *Use as
 IC reference for ▸ this file / all files of its group / all files*, or open *Reference
 manoeuvres…* (also on a file's row in the file rail) for the full picker. In the settings
 file the same choices are `[[processing.references]]` (one file) and
@@ -191,12 +192,12 @@ participant, keyed like the cohort summary's groups (the leading filename token,
 `processing.lung_volume.require_references` is set.
 
 `respmech breaths settings.toml [FILE]` lists every breath with its number, onset, duration
-and type, and suggests the untyped breath that looks most like a forced vital capacity
-manoeuvre, with a ready-to-paste `[[processing.breath_types]]` snippet.
+and type, and suggests the untyped breath with the longest expiration as a forced vital capacity
+candidate, with a ready-to-paste `[[processing.breath_types]]` snippet.
 
 If the automatic detector splits one breath in two (a flow wobble) or merges two (a flat
 expiration), repair it by hand in Preview & QC ▸ Mechanics: click a trace to **cut** a new
-boundary there, or click an existing boundary to **join** it away. This corrects the
+boundary there, or click an existing boundary to **join** it away (switch on *Place separators* first, or a click excludes the breath). This corrects the
 automatic segmentation; an analysis with no repair is unaffected.
 
 ## EMG-only analyses
@@ -207,10 +208,10 @@ the signal-set picker and say how each recording is cut into **segments**, the u
 integrated EMG and sample entropy are computed on:
 
 * **One maximal manoeuvre**: the whole file is one segment.
-* **Several efforts or breaths, I will place separators**: mark the boundaries yourself in
+* **Several efforts or breaths**: mark the boundaries yourself in
   Preview & QC ▸ **EMG – segments** (click to place, click near a separator to remove it;
   exclusions and types follow a segment through a renumbering).
-* **Tidal breathing, detect bursts automatically**: each file is cut at the onset of every
+* **Tidal breathing — detect bursts automatically**: each file is cut at the onset of every
   burst of inspiratory EMG activity, found on the envelope of the ECG-removed signal (a
   threshold with hysteresis and a minimum burst and gap length, after Hodges & Bui 1996).
   Each segment then reports the neural timing of its own cycle (`ti_emg`, `te_emg`,
@@ -231,7 +232,7 @@ EMG-only sample, already split into its own breaths, when the current analysis i
 ## Operating lung volumes, EFL and PEEPi
 
 Typed manoeuvres feed four optional analyses. All are **off or blank until their inputs
-exist**, they only *add* columns, and none changes an earlier result.
+exist**, and they only *add* columns.
 
 **Operating lung volumes.** Once a file has a resolved IC reference, every tidal breath
 reports its operating IC, EELV, EILV and inspiratory reserve volume, as a volume above
@@ -239,7 +240,8 @@ residual volume (from the participant's vital capacity in `[[input.subjects]]`) 
 TLC is entered, as an absolute value as well. The IC is by default held constant across the
 file (the usual reporting convention). `processing.lung_volume.ic.eelv_tracking =
 "within_file"` lets it move with the breath's own end-expiratory volume, which shows
-dynamic hyperinflation but is damped if drift or trend correction is on. The change in IC
+dynamic hyperinflation; it needs the IC reference to be in the same file, and is left
+blank when volume trend correction is on. The change in IC
 and EELV against a baseline recording is reported per file. The run report has a
 *LUNG VOLUMES* block naming the datum used.
 
@@ -248,7 +250,9 @@ breath places every tidal flow–volume loop inside that file's own maximal flow
 how much of the tidal expiration reaches the flow the maximal curve allows (expiratory flow
 limitation, as a percentage and a yes/no), the fastest the breath could have been exhaled,
 and the ventilatory capacity and breathing reserve that implies (against a supplied MVV or
-FEV₁ × 40). Preview & QC shows the figure whenever the previewed file has a typed FVC breath,
+FEV₁ × 40). This placement uses the file's own typed breaths only (a reference in another
+file is not used for it), and without an IC manoeuvre in the same file the
+placement-dependent columns are blank. Preview & QC shows the figure whenever the previewed file has a typed FVC breath,
 and a run writes `flow-volume (tidal in MFVL).pdf`.
 
 **PEEPi and the modified Campbell diagram.** `processing.pressure.peepi` measures

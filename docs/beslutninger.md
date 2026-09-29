@@ -18,8 +18,9 @@ cut across them.
    signal sets would give a ragged cohort table, which is why point 2 exists.
 2. **One channel layout per analysis.** `input.channels` applies to every file the
    analysis matches. An EMG-only manoeuvre recording and a full-channel exercise recording
-   are therefore two analyses, linked by references that name the other file by path (a
-   reference source need not be among the files being analysed). Analysing files of
+   are therefore two analyses. A reference source is read with the layout of the analysis
+   that names it, so a recording of another layout cannot be a reference source; a source
+   outside `input.files` is only a caution, and a blocker with `require_references`. Analysing files of
    different layouts in one batch (a `file_groups` idea) was considered and left out: it
    is the largest architectural change in the list and nothing needs it yet.
 3. **`analysis.signals = []` means "derived", not "none".** An empty list is what an
@@ -30,17 +31,17 @@ cut across them.
 4. **An unresolved reference is a caution, never an error.** A reference that names a
    file or breath that does not exist gives blank values, a note in the run report and a
    caution in `respmech validate`. Only `processing.lung_volume.require_references` turns
-   a missing reference *file* into a blocker. A batch of forty participants should not stop
+   a missing reference file, or an IC link that fails to resolve at run time, into a failure. A batch of forty participants should not stop
    because one IC recording was mislabelled, but the missing value must be visible.
-5. **A subset run writes the same columns as the full run.** Whether a lung-volume column
+5. **A subset run writes the same IC and lung-volume columns as the full run** (the MFVL
+   columns are decided per file). Whether a lung-volume column
    exists is decided from the settings across all matched files, never from the subset
    being run, and a reference source outside the subset is read only for its manoeuvres
    (nothing is written for it). Otherwise a test run on two files and the real batch would
    disagree about the shape of the table.
 6. **A spirometry FEV₁ wins over one derived from a typed FVC breath.** When
-   `input.subjects` supplies `fev1_l`, the placement of tidal breaths against the maximal
-   flow-volume curve and the ventilatory capacity use it (`fev1_source` records which one
-   was used); the value derived from the recording is the fallback, flagged as such. A
+   `input.subjects` supplies `fev1_l`, the MVV estimate (and so the breathing reserve) uses
+   it unless `mvv_lpm` is given (`fev1_source` records which one was used); the value derived from the recording is the fallback, flagged as such. A
    formal spirometer reading is the more trustworthy number.
 7. **References are typed breaths only.** A reference names breaths, not time intervals: a
    nasal sniff has no mouth flow to build an interval-based rule on, and a typed breath
