@@ -6,6 +6,58 @@ decision <date>" — never an internal ticket reference; this repo is public).
 
 ---
 
+**29-09-2026 — The modular analysis, in one place: seven choices that are easy to undo
+by accident (author's decisions, 26-09-2026).** The individual features each have their
+own entry here or a section in `docs/REVERSE_ENGINEERING.md` (§5.11-5.17); these seven
+cut across them.
+
+1. **A reduced signal set has absent columns, not NaN columns.** An analysis that does not
+   use Pgas, say, does not write `pgas_*` columns at all, in the breath table, the
+   workbooks or the cohort summary. NaN-filled columns for signals nobody recorded would
+   read as "measured, and missing". The price is that a batch mixing files of different
+   signal sets would give a ragged cohort table, which is why point 2 exists.
+2. **One channel layout per analysis.** `input.channels` applies to every file the
+   analysis matches. An EMG-only manoeuvre recording and a full-channel exercise recording
+   are therefore two analyses. A reference source is read with the layout of the analysis
+   that names it, so a recording of another layout cannot be a reference source; a source
+   outside `input.files` is only a caution, and a blocker with `require_references`. Analysing files of
+   different layouts in one batch (a `file_groups` idea) was considered and left out: it
+   is the largest architectural change in the list and nothing needs it yet.
+3. **`analysis.signals = []` means "derived", not "none".** An empty list is what an
+   analysis written before signal sets existed already looks like, so it must keep meaning
+   whatever channels are assigned. An explicit list is only stored while it differs from
+   the derived one, and a channel assigned but not named in an explicit list is reconciled
+   upward when the file is loaded (with a notice), never dropped.
+4. **An unresolved reference is a caution, never an error.** A reference that names a
+   file or breath that does not exist gives blank values, a note in the run report and a
+   caution in `respmech validate`. Only `processing.lung_volume.require_references` turns
+   a missing reference file, or an IC link that fails to resolve at run time, into a failure. A batch of forty participants should not stop
+   because one IC recording was mislabelled, but the missing value must be visible.
+5. **A subset run writes the same IC and lung-volume columns as the full run** (the MFVL
+   columns are decided per file). Whether a lung-volume column
+   exists is decided from the settings across all matched files, never from the subset
+   being run, and a reference source outside the subset is read only for its manoeuvres
+   (nothing is written for it). Otherwise a test run on two files and the real batch would
+   disagree about the shape of the table.
+6. **A spirometry FEV₁ wins over one derived from a typed FVC breath.** When
+   `input.subjects` supplies `fev1_l`, the MVV estimate (and so the breathing reserve) uses
+   it unless `mvv_lpm` is given (`fev1_source` records which one was used); the value derived from the recording is the fallback, flagged as such. A
+   formal spirometer reading is the more trustworthy number.
+7. **References are typed breaths only.** A reference names breaths, not time intervals: a
+   nasal sniff has no mouth flow to build an interval-based rule on, and a typed breath
+   carries its own quality flags. An interval form can be added later without changing the
+   settings that exist now.
+
+**Compatibility.** Every new field is empty or off by default, and an analysis that does
+not use a new table is read, run and written exactly as before (the golden scenarios pin
+this). Settings keys a version does not recognise now survive a save, but only from 2.5:
+an analysis that uses the new tables must not be opened and saved by an older version,
+which drops them, and that cannot be fixed after the fact. The changelog, `docs/INSTALL.md`
+and the website say so, and the desktop app shows the unknown keys once when a file that
+carries them is opened.
+
+---
+
 **29-09-2026 — Sample entropy on a volume column is computed on the conditioned volume
 (author's decision 26-09-2026); deliberate numerical change, re-baked.** Four points:
 
@@ -158,7 +210,7 @@ al., Eur Respir J 1997;10:522-9 (PMID 9072979) and Am J Respir Crit Care Med
 forced-vital-capacity curve resolves the FVC and IC references SAME-FILE ONLY,
 and uses a constant ("`eelv_tracking='none'`") IC operating point of its own
 rather than the within-file EELV-tracking arithmetic the operating-lung-volumes
-module already has (self-review, not fixed by this ticket).** The ticket asked
+module already has (self-review, not fixed in the same change).** The design asked
 for the placement columns to live in `breath['mfvl_ext']`, joined into the
 per-breath table exactly like `breath['wob']` already is — which happens INSIDE
 the main per-file processing loop, before that file's own table is built. The
@@ -269,7 +321,7 @@ well-defined but physiologically meaningless, and NaNs with a notice instead of
 silently reporting a number nobody should trust. See
 `docs/REVERSE_ENGINEERING.md` §5.14 for the full arithmetic.
 
-**Known gap, not fixed by this ticket (self-review, 27-09-2026):** the RV-anchored
+**Known gap, not fixed in the same change (self-review, 27-09-2026):** the RV-anchored
 family's whole rationale (`vc - ic_op` equals `eelv - rv`) depends on a subject's
 entered `tlc_l`/`vc_l`/`rv_l` being mutually consistent (`vc_l ≈ tlc_l - rv_l`).
 `Settings.validate()` only checks `rv_l < tlc_l`; nothing cross-checks `vc_l`
@@ -278,7 +330,7 @@ check today. An internally inconsistent subject entry therefore produces a
 silently wrong split between the two EELV families, with no notice — the module's
 own implausible-value checks (`vol_eelv < 0`, `vol_eelv_abs < 0`) cannot catch it,
 since both families can individually be non-negative and still disagree by exactly
-the inconsistency. Left open for a future ticket to either validate
+the inconsistency. Left open, to either validate
 `abs(tlc_l - vc_l - rv_l)` against a tolerance, or document `rv_l` as presently
 decorative.
 
@@ -402,7 +454,7 @@ pressure/flow signals the analysis otherwise declares.
 state built for the previous segmentation, after one confirmation (author's
 decision, 26-09-2026).** Removing or adding Flow changes which segmenter produces
 every breath number and kind, so a breath exclusion, breath-count override, or
-(once later tickets add them) a breath type, reference or manual separator made
+(once they exist) a breath type, reference or manual separator made
 under the old segmentation no longer describes anything real under the new one.
 The signal-set picker's one funnel (`apply_signal_set`) asks once, covering all of
 those lists together, and only when flow's membership of the set actually changes

@@ -126,6 +126,158 @@ Signals: flow, poes (derived) · Entropy: 3 columns · Analyses: Breath timing, 
 
 ---
 
+## Signal sets
+
+Not every recording has every channel, so an analysis declares which **signals** it uses.
+A new analysis starts with that choice, and everything after it (the channels Setup asks
+for, the panels Preview & QC shows, the columns and figures a run writes) follows it:
+
+![RespMech — choosing the signals an analysis uses](docs/img/signal-set.png)
+
+| Signal set | What you get |
+|---|---|
+| **Flow only** | Breath timing, tidal volume and ventilation from flow (and volume). Preview shows a flow–volume loop where the Campbell diagram would be. |
+| **Flow + Poes** | Adds work of breathing and the oesophageal-pressure descriptors. |
+| **Flow + Poes + Pgas + Pdi** | The complete set, and the default: adds gastric and transdiaphragmatic pressure. |
+| **… also EMG** | Any of the three above, plus the diaphragm-EMG analyses. |
+| **EMG only** | No flow channel at all: see [EMG-only analyses](#emg-only-analyses). |
+
+Sample entropy is available in every set once a column is assigned to it. A channel whose
+role leaves the set is cleared when you change the set, never left assigned to something
+the analysis no longer declares. The choice is stored as an optional `[analysis]` table
+(`signals = ["flow", "poes"]`); left out, the set is worked out from whichever channels are
+assigned, so an analysis written before signal sets existed behaves exactly as it did. A
+run's output only contains the columns of the signals it used, and `respmech validate`,
+the run report and each workbook's Provenance sheet name the set and what it computes.
+*Explore with sample data* in the File menu opens a reduced sample recording when the
+current analysis is Flow only or Flow + Poes (without EMG), an EMG-only sample when it is EMG only, and the
+complete one otherwise.
+
+## Breath types and reference manoeuvres
+
+Not every breath in a file is tidal breathing. **Right-click** a breath in Preview & QC ▸
+Mechanics (or Ctrl+left-click) and give it a type: *Tidal*, *Excluded*, *IC manoeuvre*,
+*FVC manoeuvre*, *IC + FVC*, *Maximal inspiratory effort*, *Sniff* or *Other…*. A typed
+breath is left out of the tidal averages exactly like an excluded one, and is measured
+separately in a **Manoeuvres** table below the per-breath table and in its own sheet of the
+file's workbook:
+
+![RespMech — a breath typed as an IC manoeuvre, with the Manoeuvres table](docs/img/breath-types.png)
+
+* An **IC manoeuvre** reports its inspiratory capacity (peak volume above the end-expiratory
+  level of the tidal breaths just before it), timing, peak inspiratory flow and pressure
+  swings, with quality flags for a low effort, an unstable baseline, a
+  measurement that does not repeat and a manoeuvre at the edge of the recording.
+* An **FVC manoeuvre** reports FVC, FEV₁ and FEV₁/FVC, PEF, the
+  back-extrapolated volume and whether the forced expiration reached a genuine end
+  (ATS/ERS 2019).
+* A **maximal inspiratory effort** or **sniff** reports its own peak pressures and EMG, the
+  reference [normalisation](#operating-lung-volumes-efl-and-peepi) uses.
+
+A dedicated recording in which every breath is typed (a separate IC or FVC file) is
+analysed too; its Manoeuvres table stands in for the breath-by-breath data.
+
+**Where a reference comes from.** A file's IC, FVC, baseline-IC or maximal-effort reference
+can be a typed breath in the same file or in a *different* one, so one IC recording can
+serve all of a participant's exercise files. Right-click a breath typed as an IC manoeuvre and choose *Use as
+IC reference for ▸ this file / all files of its group / all files*, or open *Reference
+manoeuvres…* (also on a file's row in the file rail) for the full picker. In the settings
+file the same choices are `[[processing.references]]` (one file) and
+`[[processing.reference_defaults]]` (a group). The order is always: an explicit entry for
+the file, then its group's entry, then the file's own typed breath. Per-participant
+spirometry (`[[input.subjects]]`: TLC, VC, RV, FEV₁, MVV) applies to every file of that
+participant, keyed like the cohort summary's groups (the leading filename token, or
+`output.group_regex`). An unresolved link is never a hard error: it is a caution in
+`respmech validate`, blank values and a note in the run report, unless
+`processing.lung_volume.require_references` is set.
+
+`respmech breaths settings.toml [FILE]` lists every breath with its number, onset, duration
+and type, and suggests the untyped breath with the longest expiration as a forced vital capacity
+candidate, with a ready-to-paste `[[processing.breath_types]]` snippet.
+
+If the automatic detector splits one breath in two (a flow wobble) or merges two (a flat
+expiration), repair it by hand in Preview & QC ▸ Mechanics: click a trace to **cut** a new
+boundary there, or click an existing boundary to **join** it away (switch on *Place separators* first, or a click excludes the breath). This corrects the
+automatic segmentation; an analysis with no repair is unaffected.
+
+## EMG-only analyses
+
+A recording with no flow channel, such as a maximal inspiratory or expiratory manoeuvre
+recorded on the EMG alone, has no inspiration or expiration to find. Choose **EMG only** in
+the signal-set picker and say how each recording is cut into **segments**, the units RMS,
+integrated EMG and sample entropy are computed on:
+
+* **One maximal manoeuvre**: the whole file is one segment.
+* **Several efforts or breaths**: mark the boundaries yourself in
+  Preview & QC ▸ **EMG – segments** (click to place, click near a separator to remove it;
+  exclusions and types follow a segment through a renumbering).
+* **Tidal breathing — detect bursts automatically**: each file is cut at the onset of every
+  burst of inspiratory EMG activity, found on the envelope of the ECG-removed signal (a
+  threshold with hysteresis and a minimum burst and gap length, after Hodges & Bui 1996).
+  Each segment then reports the neural timing of its own cycle (`ti_emg`, `te_emg`,
+  `ttot_emg`, `bf_emg`), and a recording without a clear burst fails with a named error
+  instead of being cut into noise. In the settings file, `method = "fixed_windows"` cuts
+  equal windows instead.
+
+![RespMech — Preview & QC ▸ EMG – segments, an EMG-only analysis split by separators](docs/img/emg-only.png)
+
+The burst thresholds are starting values that have been checked on synthetic recordings
+only: look at the shaded segments before trusting them on real ones. The noise reference for
+spectral noise reduction can be the periods between the bursts, or a segment you typed
+*Rest*. With `whole_file`, each EMG channel also reports where the file's peak fell and the
+mean of its three highest envelope values, a steadier peak level than the single maximum
+(which can land on a heartbeat when ECG removal is off). *Explore with sample data* opens an
+EMG-only sample, already split into its own breaths, when the current analysis is EMG only.
+
+## Operating lung volumes, EFL and PEEPi
+
+Typed manoeuvres feed four optional analyses. All are **off or blank until their inputs
+exist**, and they only *add* columns.
+
+**Operating lung volumes.** Once a file has a resolved IC reference, every tidal breath
+reports its operating IC, EELV, EILV and inspiratory reserve volume, as a volume above
+residual volume (from the participant's vital capacity in `[[input.subjects]]`) and, when a
+TLC is entered, as an absolute value as well. The IC is by default held constant across the
+file (the usual reporting convention). `processing.lung_volume.ic.eelv_tracking =
+"within_file"` lets it move with the breath's own end-expiratory volume, which shows
+dynamic hyperinflation; it needs the IC reference to be in the same file, and is left
+blank when volume trend correction is on. The change in IC
+and EELV against a baseline recording is reported per file. The run report has a
+*LUNG VOLUMES* block naming the datum used.
+
+**MFVL, expiratory flow limitation and ventilatory capacity.** A file with a typed FVC
+breath places every tidal flow–volume loop inside that file's own maximal flow–volume curve:
+how much of the tidal expiration reaches the flow the maximal curve allows (expiratory flow
+limitation, as a percentage and a yes/no), the fastest the breath could have been exhaled,
+and the ventilatory capacity and breathing reserve that implies (against a supplied MVV or
+FEV₁ × 40). This placement uses the file's own typed breaths only (a reference in another
+file is not used for it), and without an IC manoeuvre in the same file the
+placement-dependent columns are blank. Preview & QC shows the figure whenever the previewed file has a typed FVC breath,
+and a run writes `flow-volume (tidal in MFVL).pdf`.
+
+**PEEPi and the modified Campbell diagram.** `processing.pressure.peepi` measures
+intrinsic PEEP for every breath from the oesophageal-pressure deflection before inspiratory
+flow starts, and reports the extra work that threshold adds in new columns beside the
+existing ones (`peepi_dyn`, `wob_in_thr`, `wobtotal_thr` and the pressure–time products
+including it), drawn as a hatched rectangle on the Campbell diagram. The four detection
+thresholds are starting values that have not yet been measured on real recordings: treat
+small deflections with caution.
+
+**Normalisation to a maximal manoeuvre.** `processing.pressure.normalization` expresses
+tidal inspiratory oesophageal and transdiaphragmatic pressure, and EMG, as a percentage of
+the same person's typed maximal inspiratory effort or sniff, and adds the tension–time
+indices `tt_es` and `tt_di` and, with EMG, the neural respiratory drive index `nrdi`, on a
+"Pressure normalised" sheet. The run report and Provenance sheet name the reference, and
+whether it was a sniff or a maximal inspiration, since those give different diaphragm
+pressures.
+
+Each of these is described formula by formula, with its known limits, in
+[docs/REVERSE_ENGINEERING.md](docs/REVERSE_ENGINEERING.md) (§5.11–5.17, all marked v2-only,
+with no counterpart in RespMech 1.x). A commented example of every settings table is in
+[examples/settings.toml](examples/settings.toml).
+
+---
+
 ## Data recording requirements
 
 Input data do *not* need to be a specific length, but because some outputs are per-time
@@ -206,6 +358,14 @@ in each output workbook's Provenance sheet whenever entropy is actually computed
 *m* and *r* affect the value, and *r* is rescaled per segment against that segment's own standard
 deviation, entropy values are only comparable across files and channels that share a sampling
 frequency (and resampling setting) and the same *m* and *r*.
+
+When the volume column is one of the entropy columns, its sample entropy is computed on
+the volume RespMech itself analyses (zeroed, and drift- and trend-corrected as configured),
+just as an EMG column is measured on the processed EMG. If volume is integrated from flow
+and has no column of its own, tick **Entropy on derived volume** in the same card
+(`input.channels.entropy_derived = ["volume"]`) to get the same three columns. Analyses
+written before this rule show a notice once when they are opened, since their volume-column
+entropy values change.
 
 _<a name="sampenref1">1</a>) Lozano-García M, Sarlabous L, Moxham J, Rafferty GF, Torres A, Jolley CJ, Jané R. Assessment of inspiratory muscle activation using surface diaphragm mechanomyography and crural diaphragm electromyography. Annu Int Conf IEEE Eng Med Biol Soc. 2018;2018:3342-3345. doi:10.1109/EMBC.2018.8513046._
 

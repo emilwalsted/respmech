@@ -252,9 +252,13 @@ def entry(version: str | None):
         fejl('CHANGELOG.md findes ikke')
     t = open(CHANGELOG, encoding='utf-8').read()
     if version is None:
-        # Den SIDSTE "## Unreleased" er den levende; skabelonen i HTML-kommentaren
-        # ovenfor bærer samme overskrift og må ikke forveksles med den.
-        fund = list(re.finditer(r'^##\s+Unreleased\s*$(.*?)(?=^##\s|\Z)', t, re.S | re.M))
+        # Skabelonen i HTML-kommentaren bærer samme overskrift som den levende sektion og
+        # må ikke forveksles med den, uanset om den ligger før eller efter den (i
+        # CHANGELOG.md ligger den levende øverst og skabelonen længere nede): kommentarer
+        # fjernes derfor FØR overskriften søges, og den sidste tilbageværende er den levende.
+        # (changelog-skip-linjerne læses separat, af hele teksten; se waivers().)
+        synlig = re.sub(r'<!--.*?-->', '', t, flags=re.S)
+        fund = list(re.finditer(r'^##\s+Unreleased\s*$(.*?)(?=^##\s|\Z)', synlig, re.S | re.M))
         if not fund:
             fejl('CHANGELOG.md har ingen "## Unreleased"-sektion')
         return 'Unreleased', fund[-1].group(1)
