@@ -165,6 +165,8 @@ def test_empty_derived_list_adds_no_columns(tmp_path):
 
 
 def test_entropy_derived_validation(tmp_path):
+    with pytest.raises(SettingsError, match="twice"):
+        _settings(tmp_path, entropy=[10], derived=["volume", "volume"], integrate=True).validate()
     s = _settings(tmp_path, entropy=[10], derived=["flow"])
     with pytest.raises(SettingsError, match="unknown signal"):
         s.validate()
