@@ -437,3 +437,36 @@ explicitly cleared) in every renderer that can leave it stale, not just the one 
 ticket happens to introduce it — grep both `_render_preview_stage1` (`_mechanics.py`)
 and `_render_segments_preview` (`_segments.py`) before assuming one reset site is
 enough.
+
+### Preview's tabs, jobs and menus are driven by the signal-set shape, not by the channels alone
+
+Everything that asks "does this analysis have flow / Poes / EMG, and is it EMG-only?" reads a
+`core.analysis.signals.Capabilities` (built with `Capabilities.from_settings_or_none` on any
+UI path that runs before validation, so a hand-edited bare-string `analysis.signals` degrades
+the render instead of crashing the window). Three places consume it and must agree:
+
+- **The sub-tab bar**: `subtab_plan(caps)` in `screens/preview/_emg_noise.py` returns the
+  ordered `(widget, title)` pairs: Mechanics or, for an EMG-only set, EMG – segments first,
+  then the ECG and noise tabs whenever `caps.emg`. `_update_subtabs` inserts and removes the
+  existing widgets; never recreate them (cleanup-contract tests hold their identity).
+- **Which preview jobs a settings edit re-runs**: `_kinds_for_settings_path(path, caps=None)` in
+  `screens/preview/_jobs.py`. `caps=None` keeps the flow-bearing rule; under an EMG-only set an
+  EMG channel or `processing.emg.*` edit also re-dispatches `batch` and `segments`, because
+  the test run's mechanics are built from the EMG channels there. A path it does not classify
+  falls through to ALL kinds: erring wide only costs a recompute, erring narrow leaves a stale
+  panel. `_schedule` gates the `segments` job to `caps.mode == 'emg_only'`, mirroring the
+  tab plan, so the two can never disagree about which shape gets which preview.
+- **The breath menu** (`_mechanics.py`, `_segments.py`): typing a breath and the "Use as IC
+  reference for" submenu are item-level clicks on `BreathSpansItem` (see the item-level vs
+  scene-signal section above); the reference picker dialog (`reference_picker_dialog.py`) is
+  settings-only and reads `processing.breath_types`, never a recording.
+
+Relevance decides whether a card or tab EXISTS for this shape (`_cond_cards` /
+`_apply_card_visibility` in `screens/settings_screen.py`); the gating rule still decides
+whether an ACTION is enabled. Keep the two apart: hiding a surface because it does not apply is
+fine, hiding one because a precondition is unmet is not.
+
+Every new caption, including a new group box like *Subjects && lung volumes*, is covered by the
+lone-ampersand guard only if its dialog or window is built inside the existing scan in
+`tests/unit/test_ui_wording.py` (or its own test calling `_lone_ampersands(dlg)`, as
+`test_reference_picker.py` does).
