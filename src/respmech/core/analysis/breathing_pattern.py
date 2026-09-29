@@ -5,7 +5,7 @@ Everything here is computed from the raw breath dicts (or, for the per-file vari
 the per-breath table the ordinary mechanics already produced) and reads NO pressure channel,
 so it applies to a Flow-only analysis just as to a full one. Nothing here changes an existing
 column: with both flags off the module is never called, and with either on it only ADDS
-columns (docs/REVERSE_ENGINEERING.md §5.17).
+columns (docs/REVERSE_ENGINEERING.md §5.18).
 
 Per breath (``extended``), stored in ``breath["breathing_pattern_ext"]`` for
 ``core.results.build_breath_table`` to join after the other blocks:
