@@ -75,6 +75,18 @@ sits alongside `docs/RELEASING.md` and `docs/SIGNING.md`.
   what to do (report, don't fix) when a run finds another bug in there.
 - `tests/golden/` — characterisation tests that pin v2 output **byte-for-byte**
   against v1 references. `docs/REVERSE_ENGINEERING.md` = the formulas/units.
+- Golden scenarios come in two kinds (`tests/golden/make_golden.py`): `LEGACY_SCENARIOS`
+  (a legacy-dict override, runnable by the frozen v1 oracle) and `V2_SCENARIOS` (a committed
+  `tests/golden/scenarios/<name>.toml` for settings the legacy dict cannot express). New
+  scenarios are almost always `V2_SCENARIOS`. `python tests/golden/golden_newcore.py --write`
+  adds or refreshes a v2 row and merges into `golden_reference.json`; it must not change a
+  legacy entry's numbers. A golden diff is a bug in the change unless the change is
+  deliberate and re-baked in the same commit.
+- The **production golden** (`tests/golden/test_production_golden.py`, plus
+  `test_production_emg_golden.py`) needs real recordings that are gitignored; it skips
+  itself in CI and in any sandbox. Run `pytest tests/golden/test_production_golden.py` on the
+  maintainer's machine before a change that touches numbers is merged to master, and say in
+  the hand-off that it was or was not run.
 
 ### A boundary sample's sign is not evidence of truncation — compare durations instead (K-035, 06-09-2026)
 
@@ -367,6 +379,46 @@ instrument.
 - **A subset re-run NEVER rebuilds the cohort summary** — computing and committing
   a cohort summary are deliberately split operations.
 
+- **A modular analysis: the signal set decides the shape.** A new analysis starts by
+  choosing a **signal set** (`ui/signal_set_dialog.py`; later via Setup ▸ Signals ▸
+  Change…): Flow only, Flow + Poes, the complete set, each optionally with EMG, or EMG
+  only. It is stored as `analysis.signals` (empty means "derive it from the assigned
+  channels"). `core.analysis.signals.Capabilities.from_settings(settings)` turns it into
+  one hashable shape (`flow`, `volume`, `poes`, `pgas`, `pdi`, `emg`, `entropy`, plus a
+  `mode` of `full`, `poes_only`, `flow_only`, `emg_only` or `custom`); everything that
+  depends on "what does this analysis have" asks that object and nothing else.
+- **Preview & QC sub-tabs follow the signal set** (`subtab_plan` in
+  `ui/screens/preview/_emg_noise.py`): the first tab is Mechanics for every flow-bearing
+  set and the **EMG – segments** tab for an EMG-only set, and EMG – ECG reduction and
+  EMG – noise reduction appear whenever EMG channels are assigned. The tab widgets are
+  inserted and removed, never recreated.
+- **Typed breaths.** Right-click (or Ctrl+left-click) a breath in the Mechanics plot opens
+  the breath-type menu (`BREATH_KINDS` in `core/settings.py`: IC, FVC, IC + FVC, maximal
+  inspiratory effort, sniff, rest, other); the choice lands in `processing.breath_types`. On a flow-bearing set every typed breath is
+  also excluded from the tidal mechanics loop, and its values come from
+  `core.analysis.manoeuvres.extract`. A plain left click still toggles include/exclude.
+- **EMG-only recordings have no breaths to split.** `core.analysis.segments` cuts them
+  by `processing.segmentation.method`: `whole_file`, `separators` (times the user places
+  with "Place separators" on the segments tab, stored as `processing.segmentation.separators`),
+  `fixed_windows` or `emg_burst`. `separators` and both automatic methods are reachable only
+  for an EMG-only set; `Settings.validate()` enforces it.
+- **Reference manoeuvres can live in another file.** A file's IC, FVC, baseline-IC and
+  maximal-effort references default to its own typed breath, or come from a typed breath in
+  another file through `processing.references` (per file, edited together in
+  `ui/reference_picker_dialog.py`) or `processing.reference_defaults` (per participant
+  group, set from the breath menu's "Use as ... reference for" submenu).
+- **The Subjects card** (Setup ▸ *Subjects && lung volumes*) is a read-only view of the
+  `[[input.subjects]]` table: per-participant TLC, VC, RV, FEV1 and MVV under a `key`, applied
+  to every file of that participant. The card has no edit widgets of its own and is hidden
+  while the table is empty, so the values are entered in the settings file.
+- **Relevance-driven visibility does not contradict inverted gating.** Cards and controls
+  that mean nothing for the current signal set (PEEPi without oesophageal pressure, sample-entropy
+  parameters without an entropy column, the Subjects card without subjects) are hidden
+  by a relevance predicate (`_cond_cards` / `_apply_card_visibility` in
+  `ui/screens/settings_screen.py`; the PEEPi card reads `Capabilities.poes`). That is about *what exists*, not *what is allowed*: a
+  surface that does apply is always reachable, and only its ACTION is ever disabled, with the
+  reason spelled out where the action is.
+
 ## The single source of truth for each concern
 
 - `ui/manifest.py`: what a folder/batch contains (column counts, sampling rate,
@@ -384,6 +436,30 @@ instrument.
 - `core/settings.py::carried_over_state()`/`is_carried_folder()`: folder-tracked
   settings (`None` on either side always means unproven, never guessed;
   `normcase`+`normpath`).
+- `core/analysis/signals.py::Capabilities.from_settings()` (and `from_settings_or_none()`
+  for UI paths that run before validation and must not crash on a hand-edited bare-string
+  `analysis.signals`): the ONE place the signal-set shape is derived. Do not re-derive
+  "has Poes" or "is EMG-only" from channel assignments elsewhere. Qt- and numpy-free; the
+  import budget is pinned by `tests/unit/test_startup_imports.py`.
+- `core/analysis/registry.py::resolve(caps)`: which output modules would run for a
+  `Capabilities`, from the flat `REGISTRY` of `ColumnSpec` rows (each names the
+  capabilities it `requires`). Add a new output column there, with its `requires`, rather than
+  guarding it ad hoc.
+- `core/settings.py::resolve_noise_reference_mode()` (`..._or_none()` for the same
+  early-UI reason): where the shared EMG noise profile comes from: `expiration`,
+  `intervals`, `rest_segments`, `interburst` or `unresolved`. Preview and the pipeline both
+  ask it; neither re-implements the `auto` rule.
+- `core/analysis/references.py::check_links(settings, filenames)`: every advisory reason a
+  reference or subject link might not resolve once the real file list is known (basenames from
+  `core.pipeline.match_input_files`, not a manifest's column-count subset). It returns
+  cautions and never raises; only `Settings.validate()` blocks a run.
+- `core/settings.py::_CARRIED_KINDS` (imported by `settingsio/toml_io.py` as
+  `_FOLDER_TAG_PATHS`): one row per folder-tagged setting (exclusions, breath counts, typed
+  breaths, separators, references and subjects, the noise, ECG and normalisation references). A new
+  filename-keyed setting gets a row there, not its own carried-over logic.
+- `core/analysis/manoeuvres.py::extract()`: a pure function of ONE raw breath dict plus the
+  file's own tidal breaths, never of `calculatemechanics` output and never of another file, so
+  a subset run and a full run give the same value for the same file.
 - Errors with a known diagnosis go through `TextViewerDialog`'s `collapsed_detail`
   plus a DEDICATED exception type, never a bare `ValueError`; in
   `_build_noise_set`/`_reference_noise_clip` the exception TYPE is preserved on
