@@ -224,9 +224,9 @@ this ticket targeted is gone.
 
 ### `core/analysis` has an import budget: the GUI's startup path may not pull in numpy
 
-`core/analysis/signals.py` and `core/analysis/registry.py` are imported by
-`Settings.validate()` and `ui/validation.py`, which run before any recording is read, so
-they must stay free of Qt, numpy, scipy, pandas and `core.compute`/`core.pipeline` at
+`core/analysis/signals.py` is imported by `Settings.validate()` and `ui/validation.py`,
+which run before any recording is read; `registry.py` is not wired into the GUI (the
+`FORBIDDEN` list keeps it out of the GUI shell). Both must stay free of Qt, numpy, scipy, pandas and `core.compute`/`core.pipeline` at
 module level (the numeric analysis modules beside them, such as `manoeuvres.py` and
 `segments.py`, are exempt). `tests/unit/test_startup_imports.py` pins this in a
 **subprocess** (in-process the compute core is long since imported, so an assertion there
