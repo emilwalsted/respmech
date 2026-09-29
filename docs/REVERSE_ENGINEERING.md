@@ -1276,6 +1276,63 @@ end-expiratory Pdi is above zero, so do not read it against the classical 0.15 t
 noise reduction, so its `rms_max_ref` can differ from an in-batch source's; this predates
 normalisation and is not fixed here.
 
+### 5.18 Breathing pattern from flow and volume (v2-only, opt-in) — `core/analysis/breathing_pattern.py`
+
+Two switches, both off by default (`processing.breathing_pattern.extended` and
+`.variability`); either one only ADDS columns, so every existing output, and every golden
+scenario, is unchanged with them off. Nothing here reads a pressure channel, so it applies
+to a Flow-only analysis exactly as to a full one (a signal set with no flow, such as EMG
+only, skips it with one notice). The definitions follow the ordinary timing block of §5.4
+(`ti`, `te`, `ttot` are sample counts divided by the sampling frequency; `vt` is the range of
+the whole breath's volume) and use its sign convention (inspiratory flow negative,
+expiratory positive).
+
+**Per breath (`extended`), joined after the other per-breath blocks:**
+
+| Column | Definition | Unit |
+|---|---|---|
+| `mean_in_flow` | `vt / ti` (the drive component of the pattern; Milic-Emili & Grunstein 1976) | L·s⁻¹ |
+| `mean_ex_flow` | `vt / te` | L·s⁻¹ |
+| `vol_insp`, `vol_exp` | range (max − min) of the phase's volume trace | L |
+| `bf_inst` | `60 / ttot`: the rate this breath alone would give | min⁻¹ |
+| `t_peak_in_flow` | time from the start of inspiration to the most negative flow sample (`argmin / fs`) | s |
+| `t_peak_ex_flow` | time from the start of expiration to the largest flow sample | s |
+| `t_peak_in_flow_frac` | `t_peak_in_flow / ti` | — |
+
+`vt`, `ti` and `te` are used as they are in §5.4 rather than recomputed from the phases, so
+`mean_in_flow` and `mean_ex_flow` agree with the timing columns of the same row by
+construction. `vol_insp` and `vol_exp` equal `vt` for a clean breath and differ from it when
+the volume signal drifts inside the breath, which is why they are reported separately. `bf_inst`
+is not `bf`: `bf` is the file's breath count scaled to a minute and is the same on every row.
+A breath with an empty phase gives NaN for what it cannot define. A fault inside one breath
+leaves NaN in that breath's new columns and adds one notice to the file, without failing it.
+
+**Per file (`variability`), on the file's average row only:** `vt_cv`, `ti_cv`, `te_cv`,
+`ttot_cv`, `ti_ttot_cv` and `n_breaths`. The CV is `100 · SD / mean` over the included
+breaths of the per-breath table, with the sample SD (ddof = 1) and only for a positive mean:
+the same convention as the cohort summary's `cv_pct` column (`core/summary.py`, `_stats_frame`).
+Below three included breaths the CVs are NaN, because a spread from two numbers is not a
+measure of variability; `n_breaths` still reports the count (Tobin et al. 1983 and Wysocki
+et al. 2006 report these variables over series of breaths). The cross-file Average and the
+cohort summary aggregate these columns like any other column of the average row (the CV of a
+CV in the cohort summary is a property of that table, not a quantity to interpret).
+
+**Units** are resolved by the generic rules of `core/quantities.py` (`t_` → s, `_frac` → —,
+`_cv` → %, `flow` → L·s⁻¹, `vol_` → L); `bf_inst` and `n_breaths` match none of them and
+carry an explicit registry unit (`min⁻¹`; a count, blank on purpose). The Provenance sheet
+gains a "Breathing pattern" row naming what is on.
+
+**Choices and limits.** (a) `mean_in_flow` is `vt / ti`, not the mean of the absolute flow
+over inspiration (`vol_insp / ti`); the two are equal when the volume signal is the integral
+of the flow and differ by the within-breath drift otherwise, and the first is the quantity the
+literature names (VT/Ti). (b) The peak times are counted in samples from the phase start, so
+they are quantised to `1 / fs`. (c) The CVs include every non-ignored breath, so an
+analysis that types some breaths as manoeuvres (which are not tidal and never reach the
+per-breath table) does not mix them in; excluding a breath in Preview & QC removes it from
+`n_breaths` and from the CVs. (d) Nothing is normalised for the recording's
+own trend: a slowly changing rate contributes to the CV, as it does in the published
+variability indices.
+
 ---
 
 ## 6. Latent issues found (to fix deliberately in the refactor)

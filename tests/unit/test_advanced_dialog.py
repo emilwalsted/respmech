@@ -381,7 +381,8 @@ def test_wob_and_ptp_cards_are_hidden_without_poes(qapp, tmp_path, monkeypatch):
     Lung volumes, Per-file overrides) must stay exactly as many as before. Lung volumes
     (M-36/M-45) is unrelated to Poes — its fields (require_references/eelv_tracking/
     aggregate/preceding_breaths) are never filtered by the poes-gate below — so it stays
-    present for a flow-only signal set exactly as it does for the full one."""
+    present for a flow-only signal set exactly as it does for the full one, and so does
+    Breathing pattern (flow and volume only)."""
     from respmech.ui.screens.preview_screen import PreviewScreen
     from respmech.ui.state import AppState
 
@@ -396,7 +397,8 @@ def test_wob_and_ptp_cards_are_hidden_without_poes(qapp, tmp_path, monkeypatch):
     assert "Pressure–time product" not in seen["titles"]
     assert "Other" not in seen["titles"], "the hidden fields must not resurface as 'Other'"
     assert seen["titles"] == {"Breath detection", "Volume", "End-expiratory trend",
-                              "Sampling", "Lung volumes", "Per-file overrides"}
+                              "Sampling", "Lung volumes", "Breathing pattern",
+                              "Per-file overrides"}
     pv.shutdown()
 
     full = synth_settings(str(tmp_path), data_out=_OUT)
@@ -1219,3 +1221,57 @@ def test_mechanics_advanced_offers_and_commits_the_mfvl_fields(qapp, tmp_path, m
     assert s.processing.mfvl.efl_abs_tol_lps == pytest.approx(0.1)
     assert s.processing.mfvl.mvv_fev1_multiplier == pytest.approx(35.0)
     pv.shutdown()
+
+
+def test_mechanics_advanced_offers_and_commits_the_breathing_pattern_switches(qapp, tmp_path,
+                                                                             monkeypatch):
+    """The Breathing pattern card carries the two opt-in switches (both off by default); an
+    accepted edit lands on ``processing.breathing_pattern`` and a Cancel changes nothing.
+    Each control names its settings path in its tooltip (the shared help_text contract)."""
+    pv = _preview(qapp, tmp_path)
+    s = pv.state.settings
+    seen = {}
+
+    def _edit(d):
+        seen["titles"] = {c.title() for c in d.cards}
+        for key, path in (("extended", "processing.breathing_pattern.extended"),
+                          ("variability", "processing.breathing_pattern.variability")):
+            seen[key] = path in d.widget(key).toolTip()
+        d.widget("extended").setChecked(True)
+        d.widget("variability").setChecked(True)
+
+    _mech_stub(monkeypatch, _edit, accept=False)
+    pv._open_mech_advanced()
+    assert "Breathing pattern" in seen["titles"]
+    assert seen["extended"] and seen["variability"]
+    assert not s.processing.breathing_pattern.extended
+    assert not s.processing.breathing_pattern.variability
+
+    _mech_stub(monkeypatch, _edit, accept=True)
+    pv._open_mech_advanced()
+    assert s.processing.breathing_pattern.extended is True
+    assert s.processing.breathing_pattern.variability is True
+    pv.shutdown()
+
+
+def test_breathing_pattern_card_is_absent_without_flow(qapp, tmp_path, monkeypatch):
+    """Breathing pattern needs Flow: an EMG-only analysis is not offered the switches, and
+    the fields do not resurface under 'Other'."""
+    from respmech.ui.screens.preview_screen import PreviewScreen
+    from respmech.ui.state import AppState
+
+    emg_only = synth_settings(str(tmp_path), data_out=_OUT)
+    emg_only.analysis.signals = ["emg"]
+    emg_only.input.channels.flow = None
+    emg_only.input.channels.volume = None
+    emg_only.input.channels.poes = None
+    emg_only.input.channels.pgas = None
+    emg_only.input.channels.pdi = None
+    pv = PreviewScreen(AppState(emg_only))
+    seen = {}
+    _mech_stub(monkeypatch, lambda d: seen.setdefault("titles", {c.title() for c in d.cards}))
+    pv._open_mech_advanced()
+    pv.shutdown()
+    assert "titles" in seen, "the Mechanics dialog did not open for an EMG-only shape"
+    assert "Breathing pattern" not in seen["titles"]
+    assert "Other" not in seen["titles"]

@@ -1047,6 +1047,17 @@ class _MechanicsMixin:
                           "Multiplier that estimates maximal voluntary ventilation from FEV1 "
                           "when no measured MVV is given (ATS/ACCP 2003 uses 40).",
                           lo=0.0, hi=100.0, step=1.0, decimals=1)),
+            # Breathing pattern: two switches, both opt-in and both flow/volume only.
+            ("bp", Field("extended", "Extended per-breath pattern columns", "bool",
+                        "processing.breathing_pattern.extended",
+                        "Add mean inspiratory and expiratory flow, the volume moved in each "
+                        "phase, the instantaneous breathing rate and the timing of the peak "
+                        "flows to every breath.")),
+            ("bp", Field("variability", "Per-file variability (CV)", "bool",
+                        "processing.breathing_pattern.variability",
+                        "Add the coefficient of variation of VT, Ti, Te, Ttot and Ti/Ttot over "
+                        "the included breaths, and the number of breaths, to each file's "
+                        "average row (needs at least 3 breaths).")),
         ]
         # M-17 (R7): "Work of breathing" and "Pressure–time product" are meaningless without
         # a Poes trace — WOB/PTP are never computed for a Poes-less analysis (M-14's
@@ -1060,9 +1071,13 @@ class _MechanicsMixin:
         if not Capabilities.from_settings(s).poes:
             _hidden_without_poes = {"calc_from", "avg_resampling_obs", "baseline_window_s"}
             fields = [(grp, f) for grp, f in fields if f.key not in _hidden_without_poes]
+        # Breathing pattern is flow and volume only, so it needs Flow -- absent from an
+        # EMG-only analysis, where the card would offer switches with nothing to switch on.
+        if not Capabilities.from_settings(s).flow:
+            fields = [(grp, f) for grp, f in fields if grp != "bp"]
         owner = {"seg": seg, "peak": peak, "vol": vol, "samp": samp, "wob": wob, "ptp": ptp,
                 "lv": s.processing.lung_volume, "ic": s.processing.lung_volume.ic,
-                "mfvl": s.processing.mfvl}
+                "mfvl": s.processing.mfvl, "bp": s.processing.breathing_pattern}
         values = {f.key: getattr(owner[grp], f.key) for grp, f in fields}
         # breath counts round-trip as one 'file = count' line each, edited as text
         bc_field = Field("breath_counts", "Breath-count overrides", "text",
@@ -1092,6 +1107,7 @@ class _MechanicsMixin:
             ("Lung volumes", ["require_references", "eelv_tracking", "aggregate",
                               "preceding_breaths", "source", "efl_rel_tol",
                               "efl_abs_tol_lps", "mvv_fev1_multiplier"]),
+            ("Breathing pattern", ["extended", "variability"]),
             # not "Breath-count overrides" — the one field on this card is already called
             # that, and a card whose title repeats its only row reads like a mistake
             ("Per-file overrides", ["breath_counts"]),
