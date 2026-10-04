@@ -579,7 +579,7 @@ def test_refresh_files_prev_vanished_resets_overlays(qapp, tmp_path):
     win.close()
 
 
-def test_legend_click_does_not_toggle_breath(qapp, tmp_path):
+def test_legend_click_does_not_mark_breath(qapp, tmp_path):
     """A click landing on a plot's legend (which pyqtgraph leaves unaccepted) must
     not fall through and toggle the breath beneath it; a click that misses the legend
     still toggles. Fakes keep the guard branch deterministic without scene geometry."""
@@ -619,9 +619,10 @@ def test_legend_click_does_not_toggle_breath(qapp, tmp_path):
                 if e.file == "synth_case_A.csv" for b in e.breaths}
 
     pv._toggle_from_emg_click(_Ev(), [_Plot(legend_hit=True)], off)   # on the legend
-    assert num not in excluded()                                     # -> not toggled
+    assert pv._selected_breath is None                               # -> not marked
     pv._toggle_from_emg_click(_Ev(), [_Plot(legend_hit=False)], off)  # misses the legend
-    assert num in excluded()                                         # -> toggled
+    assert pv._selected_breath == num                                # -> marked...
+    assert num not in excluded()                                     # ...and NOT excluded
     win.close()
 
 

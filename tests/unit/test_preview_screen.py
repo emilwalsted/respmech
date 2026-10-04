@@ -782,13 +782,13 @@ def test_mech_caption_survives_render_and_toggle(qapp, tmp_path):
     pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     pv._render_preview(stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv")))
     cap = pv.mech_caption.fullText().lower()
-    assert "breath" in cap and "click a shaded breath to include/exclude" in cap
+    assert "breath" in cap and "click a shaded breath to mark it" in cap
     assert ", 0 excluded" not in cap                      # nothing excluded yet -> no count clause
     a_breath = next(iter(pv._breath_spans))
     pv._toggle_breath(a_breath)
     cap = pv.mech_caption.fullText().lower()
     assert ", 1 excluded" in cap
-    assert "click a shaded breath to include/exclude" in cap   # the instruction still there
+    assert "click a shaded breath to mark it" in cap   # the instruction still there
     win.close()
 
 

@@ -28,6 +28,7 @@ from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
 from respmech.ui import plot_perf
 from respmech.ui.plot_axis import MinPitchAxis, _next_nice
+from respmech.ui.theme import SELECTED_BREATH_RGB, SELECTED_BREATH_HEX  # noqa: F401
 from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
 from respmech.ui import wheel as _wheel
 from respmech.ui.flow_layout import (FlowLayout, cluster as _cluster,
@@ -336,10 +337,12 @@ class BreathSpansItem(pg.GraphicsObject):
     right-click or a Ctrl+left-click landing on an actual span emits ``typeRequested``
     instead of painting anything differently — the type menu it drives lives on the
     owning screen (``_mechanics.py``'s ``_set_breath_type``/``_build_type_menu``), never
-    here. A plain left click (no modifier) is deliberately left unhandled, exactly as
-    before this ticket: it still flows to the scene-level ``sigMouseClicked`` path
-    (``_on_plot_clicked``/``_toggle_from_emg_click``) that already does the include/
-    exclude toggle, unaffected by anything below.
+    here. A plain left click (no modifier) is deliberately left unhandled here: it still flows
+    to the scene-level ``sigMouseClicked`` path (``_on_plot_clicked``/
+    ``_toggle_from_emg_click``), which since the single-click-selects change MARKS that
+    breath (``_select_breath``) instead of toggling its exclusion; the exclusion now
+    lives in the right-click menu. The marked breath is painted by this item
+    (``set_selected``).
 
     Right-click needs one extra trick pyqtgraph's own docs call out for exactly this
     situation: ``ViewBox.mouseClickEvent`` also wants right-clicks (to raise its own
@@ -377,6 +380,7 @@ class BreathSpansItem(pg.GraphicsObject):
         super().__init__()
         self._spans = []      # [(t0, t1, QBrush, breath_no), ...] — order is paint (== z) order
         self._x0 = self._x1 = 0.0
+        self._selected = None     # breath_no of the marked breath, or None
         self.setAcceptHoverEvents(True)
         self.setAcceptedMouseButtons(Qt.LeftButton | Qt.RightButton)
 
@@ -400,6 +404,13 @@ class BreathSpansItem(pg.GraphicsObject):
         if 0 <= index < len(self._spans):
             t0, t1, _old, n = self._spans[index]
             self._spans[index] = (t0, t1, brush, n)
+            self.update()
+
+    def set_selected(self, breath_no):
+        """Mark ONE breath (by its number) with the selection green, or clear the mark
+        with ``None``. Paint only, like ``set_brush``: geometry is untouched."""
+        if breath_no != self._selected:
+            self._selected = breath_no
             self.update()
 
     def _breath_no_at(self, x):
@@ -426,6 +437,16 @@ class BreathSpansItem(pg.GraphicsObject):
         for t0, t1, brush, _n in self._spans:
             p.setBrush(brush)
             p.drawRect(QRectF(t0, top, t1 - t0, height))
+        if self._selected is not None:
+            for t0, t1, _brush, n in self._spans:
+                if n == self._selected:
+                    r, g, b = SELECTED_BREATH_RGB
+                    p.setBrush(pg.mkBrush(r, g, b, 70))
+                    pen = pg.mkPen(r, g, b, 230, width=2)
+                    pen.setCosmetic(True)          # 2 px on screen at any zoom
+                    p.setPen(pen)
+                    p.drawRect(QRectF(t0, top, t1 - t0, height))
+                    break
 
     def dataBounds(self, axis, frac=1.0, orthoRange=None):
         if axis == 0:

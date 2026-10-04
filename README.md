@@ -155,7 +155,7 @@ complete one otherwise.
 
 ## Breath types and reference manoeuvres
 
-Not every breath in a file is tidal breathing. **Right-click** a breath in Preview & QC ▸
+A plain click on a breath only **marks** it (green on the plots, in the table and in the loop diagram; click again to unmark). Not every breath in a file is tidal breathing. **Right-click** a breath in Preview & QC ▸
 Mechanics (or Ctrl+left-click) and give it a type: *Tidal*, *Excluded*, *IC manoeuvre*,
 *FVC manoeuvre*, *IC + FVC*, *Maximal inspiratory effort*, *Sniff* or *Other…*. A typed
 breath is left out of the tidal averages exactly like an excluded one, and is measured

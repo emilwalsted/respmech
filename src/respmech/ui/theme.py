@@ -28,6 +28,15 @@ from __future__ import annotations
 import os
 from string import Template
 
+
+#: The one green that marks the SELECTED breath everywhere it shows: the span fill and
+#: outline on every plot, its number label, its row in the result tables and its loop (with
+#: its legend entry) in the Campbell / flow-volume diagram. Deliberately a fixed colour, not
+#: a palette key: the included/excluded/typed breath fills are all blue/red/amber family, so
+#: a green mark cannot be mistaken for any of them in either theme.
+SELECTED_BREATH_RGB = (31, 148, 82)
+SELECTED_BREATH_HEX = "#1F9452"
+
 # --------------------------------------------------------------------------- #
 # Semantic colour constants (theme-independent, safe on white plot backgrounds).
 # These are the values widget/plot code should reach for when it needs a colour

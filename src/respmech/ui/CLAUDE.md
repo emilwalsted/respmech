@@ -359,8 +359,9 @@ Never a pixel literal in either.
 ### Item-level click vs scene-signal click: two different pyqtgraph mechanisms for two different buttons (M-20)
 
 `BreathSpansItem`'s right-click/Ctrl+left-click "request a breath-type menu" primitive
-and the pre-existing plain-left-click "toggle include/exclude" primitive
-(`_on_plot_clicked`/`_toggle_from_emg_click`, wired to `scene().sigMouseClicked`) look
+and the plain-left-click primitive (`_on_plot_clicked`/`_toggle_from_emg_click`, wired to
+`scene().sigMouseClicked`; since the single-click-selects change it MARKS a breath via
+`_select_breath`, exclusion lives in the right-click menu) look
 like the same kind of thing but are resolved through genuinely different pyqtgraph
 machinery, and mixing them up produces a menu that never opens or a ViewBox context
 menu that never goes away.
