@@ -69,3 +69,4 @@ jobs:
           name: screenshots-${{ matrix.os }}
           path: ${{ runner.temp }}/shots/
           if-no-files-found: error
+          retention-days: 14

@@ -73,6 +73,7 @@ jobs:
           name: RespMech-Windows-MSI
           path: dist/*.msi
           if-no-files-found: error
+          retention-days: 5
 
   macos-dmg:
     name: macOS dmg
@@ -199,6 +200,7 @@ jobs:
           name: RespMech-macOS-dmg
           path: dist/*.dmg
           if-no-files-found: error
+          retention-days: 5
 
   publish-release:
     name: Publish GitHub release

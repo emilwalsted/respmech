@@ -1,0 +1,109 @@
+# Frees GitHub Actions storage: deletes old workflow-run artifacts (they count
+# toward the account's Actions storage quota) and stale caches.
+#
+# Safety rules, so a run in progress or a build someone still wants is never hit:
+#   - artifacts younger than KEEP_HOURS are kept (protects in-flight runs that
+#     hand artifacts between jobs, e.g. a release build);
+#   - the newest artifact of each name is kept as long as it is younger than
+#     KEEP_NEWEST_DAYS (the latest installer/screenshot build stays downloadable);
+#   - caches are deleted only when not used for CACHE_IDLE_DAYS, or when they
+#     belong to a branch/PR ref other than the default branch and are older
+#     than KEEP_HOURS.
+# Uses only the runner's own gh CLI and GITHUB_TOKEN: no third-party actions,
+# so it passes every repo's permitted-actions policy.
+#
+# Runs once whenever this file changes (so introducing it cleans up at once),
+# weekly, and on demand (dry_run available).
+
+name: Ryd Actions-lager
+
+on:
+  push:
+    paths:
+      - .github/workflows/actions-storage-cleanup.yml
+  schedule:
+    - cron: '41 4 * * 0'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Only list what would be deleted'
+        type: boolean
+        default: false
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: actions-storage-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      DRY_RUN: ${{ inputs.dry_run || 'false' }}
+      KEEP_HOURS: '24'
+      KEEP_NEWEST_DAYS: '14'
+      CACHE_IDLE_DAYS: '7'
+    steps:
+      - name: Delete old artifacts
+        run: |
+          set -euo pipefail
+          now=$(date -u +%s)
+          gh api --paginate "repos/$REPO/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.expired == false) | [.id, .name, .size_in_bytes, .created_at] | @tsv' \
+            | sort -t$'\t' -k4,4r > artifacts.tsv
+          freed=0; deleted=0; kept=0
+          declare -A seen=()
+          while IFS=$'\t' read -r id name size created; do
+            age=$(( now - $(date -u -d "$created" +%s) ))
+            if (( age < KEEP_HOURS * 3600 )); then kept=$((kept+1)); seen[$name]=1; continue; fi
+            if [[ -z "${seen[$name]:-}" ]] && (( age < KEEP_NEWEST_DAYS * 86400 )); then
+              seen[$name]=1; kept=$((kept+1)); echo "keep newest: $name ($id)"; continue
+            fi
+            seen[$name]=1
+            echo "delete artifact $id $name $size bytes, created $created"
+            if [[ "$DRY_RUN" != "true" ]]; then
+              gh api -X DELETE "repos/$REPO/actions/artifacts/$id" --silent || { echo "::warning::could not delete artifact $id"; continue; }
+            fi
+            freed=$((freed+size)); deleted=$((deleted+1))
+          done < artifacts.tsv
+          echo "ARTIFACTS_DELETED=$deleted" >> "$GITHUB_ENV"
+          echo "ARTIFACTS_FREED=$freed" >> "$GITHUB_ENV"
+          echo "ARTIFACTS_KEPT=$kept" >> "$GITHUB_ENV"
+
+      - name: Delete stale caches
+        run: |
+          set -euo pipefail
+          now=$(date -u +%s)
+          DEFAULT_BRANCH=$(gh api "repos/$REPO" --jq .default_branch)
+          gh api --paginate "repos/$REPO/actions/caches?per_page=100" \
+            --jq '.actions_caches[] | [.id, .ref, .size_in_bytes, .last_accessed_at, .created_at] | @tsv' > caches.tsv
+          freed=0; deleted=0
+          while IFS=$'\t' read -r id ref size accessed created; do
+            idle=$(( now - $(date -u -d "$accessed" +%s) ))
+            age=$(( now - $(date -u -d "$created" +%s) ))
+            if (( idle > CACHE_IDLE_DAYS * 86400 )) || { [[ "$ref" != "refs/heads/$DEFAULT_BRANCH" ]] && (( age > KEEP_HOURS * 3600 )); }; then
+              echo "delete cache $id $ref $size bytes, last used $accessed"
+              if [[ "$DRY_RUN" != "true" ]]; then
+                gh api -X DELETE "repos/$REPO/actions/caches/$id" --silent || { echo "::warning::could not delete cache $id"; continue; }
+              fi
+              freed=$((freed+size)); deleted=$((deleted+1))
+            fi
+          done < caches.tsv
+          echo "CACHES_DELETED=$deleted" >> "$GITHUB_ENV"
+          echo "CACHES_FREED=$freed" >> "$GITHUB_ENV"
+
+      - name: Summary
+        run: |
+          mb() { awk -v b="$1" 'BEGIN { printf "%.1f MB", b/1048576 }'; }
+          {
+            echo "### Actions storage cleanup (dry run: $DRY_RUN)"
+            echo "- Artifacts deleted: $ARTIFACTS_DELETED ($(mb "$ARTIFACTS_FREED")), kept: $ARTIFACTS_KEPT"
+            echo "- Caches deleted: $CACHES_DELETED ($(mb "$CACHES_FREED"))"
+            echo "GitHub recalculates billed storage every 6-12 hours."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
