@@ -36,6 +36,16 @@ input.channels.emg must name at least one column" for an analysis with an explic
 `analysis.signals` that lists `emg`, such as the built-in sample, because the test run drops
 the EMG channels (the EMG tabs show that work) but kept naming EMG in the signal set.
 
+**The Subjects card is always there, and editable.** "Subjects && lung volumes" on Setup used
+to be a read-only table that hid itself while no participant was declared, so a new analysis,
+a file opened with `subjects = []` or a new analysis whose "Group files by" had just been
+edited had no card and the values could only be typed into the settings file. The card is now
+always shown, with Add subject, Add from files (one row per group of the matched files) and
+Remove selected, and every cell is edited in place (TLC, VC, RV, FEV1, MVV, sex, age, height;
+clear a cell to leave it unset; a value that is not a positive number is refused with the
+reason). Leaving FEV1 blank takes it from the file's linked FVC manoeuvre, as before; the card
+now says so.
+
 **A normal range behind the maximal flow-volume loop.** When a participant's sex, age and
 height are given in `[[input.subjects]]` (`sex`, `age_years`, `height_cm`, all optional and
 all three needed), the maximal flow-volume figure, in Preview & QC and in
@@ -250,9 +260,9 @@ as IC reference for ▸ this file / all files of its group / all files", or open
 "Reference manoeuvres…" (also on a file's row in the file rail) for the full picker
 across all four reference kinds and any file's typed breaths. A resolved IC reference
 now shows next to the analysis window; the Run screen's commitment sheet names how
-many files have one linked; and Setup gets a read-only "Subjects && lung volumes"
-card listing the per-participant spirometry (`[[input.subjects]]`) these calculations
-use.
+many files have one linked; and Setup gets a "Subjects && lung volumes"
+card with the per-participant spirometry (`[[input.subjects]]`) these calculations
+use, editable in place.
 
 **Operating lung volumes derived from a resolved IC reference.** Once a file has a
 resolved inspiratory-capacity reference (see above), every tidal breath now also

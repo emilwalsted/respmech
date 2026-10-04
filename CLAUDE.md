@@ -411,13 +411,21 @@ instrument.
   another file through `processing.references` (per file, edited together in
   `ui/reference_picker_dialog.py`) or `processing.reference_defaults` (per participant
   group, set from the breath menu's "Use as ... reference for" submenu).
-- **The Subjects card** (Setup ▸ *Subjects && lung volumes*) is a read-only view of the
-  `[[input.subjects]]` table: per-participant TLC, VC, RV, FEV1 and MVV under a `key`, applied
-  to every file of that participant. The card has no edit widgets of its own and is hidden
-  while the table is empty, so the values are entered in the settings file.
+- **The Subjects card** (Setup ▸ *Subjects && lung volumes*) edits the `[[input.subjects]]`
+  table in place: per-participant TLC, VC, RV, FEV1, MVV (and sex/age/height for the normal
+  range) under a `key`, applied to every file of that participant. It is ALWAYS visible (it is
+  not a `_cond_cards` entry: it used to hide while the table was empty, which left a new
+  analysis, an opened `subjects = []` file and a new analysis with an edited group pattern
+  with no way to name a participant). Add subject / Add from files / Remove selected and cell
+  edits write the model directly (`_on_subjects_item_changed`, then `_on_field_changed`);
+  `to_state()` never touches the list. A new row is stamped with the live `input.folder` (the
+  folder tag), an edit never restamps it. The card refuses only a non-number, a non-positive
+  number, an unknown sex and a missing/duplicate key; ranges stay with `Settings.validate()`.
+  A blank FEV1 is derived from the file's linked FVC manoeuvre (`core.analysis.mfvl`,
+  `fev1_source`), and a value typed here wins over it.
 - **Relevance-driven visibility does not contradict inverted gating.** Cards and controls
   that mean nothing for the current signal set (PEEPi without oesophageal pressure, sample-entropy
-  parameters without an entropy column, the Subjects card without subjects) are hidden
+  parameters without an entropy column) are hidden
   by a relevance predicate (`_cond_cards` / `_apply_card_visibility` in
   `ui/screens/settings_screen.py`; the PEEPi card reads `Capabilities.poes`). That is about *what exists*, not *what is allowed*: a
   surface that does apply is always reachable, and only its ACTION is ever disabled, with the

@@ -204,10 +204,10 @@ def test_entropy_fields_are_named_and_explained_for_what_they_are(qapp, tmp_path
     win.close()
 
 
-def test_subjects_table_renders_the_declared_subjects_read_only(qapp, tmp_path):
-    """M-37: the 'Subjects && lung volumes' card is read-only (input.subjects has no
-    Setup widget of its own -- it is written by the reference model/an analysis's own
-    .toml) -- populated by _refresh_subjects_table, which _sync_widgets calls on load."""
+def test_subjects_table_renders_the_declared_subjects(qapp, tmp_path):
+    """M-37: the 'Subjects && lung volumes' card shows input.subjects, populated by
+    _refresh_subjects_table, which _sync_widgets calls on load. (Editing it is covered by
+    test_subjects_card.py.)"""
     from PySide6.QtCore import Qt
     from respmech.core.settings import SubjectEntry
     from respmech.ui.main_window import MainWindow
@@ -227,7 +227,7 @@ def test_subjects_table_renders_the_declared_subjects_read_only(qapp, tmp_path):
     assert t.item(0, 3).text() == "—"                  # None renders as an em dash, not "None"
     assert t.item(0, 4).text() == "4.1"
     assert t.item(0, 5).text() == "150"
-    assert not (t.item(0, 0).flags() & Qt.ItemIsEditable)
+    assert t.item(0, 0).flags() & Qt.ItemIsEditable      # the card is edited in place
     win.close()
 
 

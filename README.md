@@ -191,7 +191,8 @@ file the same choices are `[[processing.references]]` (one file) and
 the file, then its group's entry, then the file's own typed breath. Per-participant
 spirometry (`[[input.subjects]]`: TLC, VC, RV, FEV₁, MVV) applies to every file of that
 participant, keyed like the cohort summary's groups (the leading filename token, or
-`output.group_regex`). An unresolved link is never a hard error: it is a caution in
+`output.group_regex`); the participants are edited in Setup ▸ *Subjects && lung volumes* or in the
+settings file. An unresolved link is never a hard error: it is a caution in
 `respmech validate`, blank values and a note in the run report, unless
 `processing.lung_volume.require_references` is set.
 

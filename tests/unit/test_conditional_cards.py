@@ -140,25 +140,19 @@ def test_editing_them_still_marks_the_analysis_modified(qapp, tmp_path):
 
 
 # -- Subjects && lung volumes (M-37) ------------------------------------------
-def _subjects_card(sc):
-    return _card(sc, "Subjects && lung volumes")
-
-
-def test_subjects_card_is_hidden_when_no_subjects_are_declared(qapp, tmp_path):
+def test_subjects_card_is_not_conditional_and_shows_with_no_subjects_declared(qapp, tmp_path):
+    """The card used to hide while ``input.subjects`` was empty, which left no way to name a
+    participant from Setup. It is an ordinary always-visible card now (see
+    test_subjects_card.py), so it is not in the conditional registry at all."""
     sc = _screen(qapp, tmp_path, entropy=())
     assert not sc.state.settings.input.subjects
-    assert not _subjects_card(sc).isVisible()
-
-
-def test_subjects_card_appears_once_a_subject_is_added(qapp, tmp_path):
+    assert sc._card_subjects.isVisible()
+    assert all(c is not sc._card_subjects for c, _pred in sc._cond_cards)
     from respmech.core.settings import SubjectEntry
-    sc = _screen(qapp, tmp_path, entropy=())
-    card = _subjects_card(sc)
-    assert not card.isVisible()
     sc.state.settings.input.subjects.append(SubjectEntry(key="synth_case", tlc_l=6.0))
     sc._update_disclosure()
     qapp.processEvents()
-    assert card.isVisible()
+    assert sc._card_subjects.isVisible()
 
 
 def test_entropy_on_derived_volume_box_follows_flow_and_integrated_volume(qapp, tmp_path):

@@ -361,31 +361,72 @@ class SettingsScreen(QWidget):
         self._peepi_shown = {}
 
         # Subjects & lung volumes ---------------------------------------------
-        # M-37: read-only -- input.subjects (SubjectEntry: TLC/VC/RV/FEV1/MVV per
-        # participant, M-34) is written by the reference model itself (an analysis's own
-        # .toml, or a later release's dedicated editor), never from a Setup widget, so
-        # there is no to_state() write-back for this card, unlike every other one on this
-        # screen. Hidden while empty (_cond_cards, same mechanism Sample entropy already
-        # uses) -- an empty table would just be clutter for an analysis that names no
-        # subjects at all.
+        # input.subjects (SubjectEntry: TLC/VC/RV/FEV1/MVV, and sex/age/height for the
+        # normal range, per participant) is edited HERE, in place, like the Preview-owned
+        # settings: an edit writes the model directly (_on_subjects_item_changed), and
+        # to_state() never touches the list, so a tab change cannot revert it. The card is
+        # ALWAYS visible (not a _cond_cards entry): it used to hide while the table was
+        # empty, which left a fresh analysis, an opened file with ``subjects = []`` and a
+        # new analysis with an edited group pattern with no way to name a participant at
+        # all short of editing the TOML by hand.
         gsub = QGroupBox("Subjects && lung volumes")
         vsub = QVBoxLayout(gsub)
-        self.subjects_table = QTableWidget(0, 9)
+        self.subjects_hint = QLabel(
+            "One row per participant. Key is the group name the files belong to (see "
+            "Group files by). Every value is optional. Leave FEV1 blank to take it from "
+            "the FVC reference manoeuvre linked for the file (Preview & QC); a FEV1 "
+            "entered here is used instead. Sex, age and height only draw the normal "
+            "flow-volume range.")
+        self.subjects_hint.setWordWrap(True)
+        vsub.addWidget(self.subjects_hint)
+        self.subjects_table = QTableWidget(0, len(self._SUBJECT_COLUMNS))
         self.subjects_table.setHorizontalHeaderLabels(
-            ["Key", "TLC (L)", "VC (L)", "RV (L)", "FEV1 (L)", "MVV (L/min)",
-             "Sex", "Age (y)", "Height (cm)"])
+            [label for label, _field in self._SUBJECT_COLUMNS])
         self.subjects_table.verticalHeader().setVisible(False)
-        self.subjects_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.subjects_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.subjects_table.setEditTriggers(
+            QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
+            | QAbstractItemView.AnyKeyPressed)
+        self.subjects_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.subjects_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.subjects_table.setToolTip(_tip(
             "input.subjects",
             "Per-participant spirometry, keyed on the same group as the cohort "
             "summary. Used by operating-lung-volume calculations (Preview & QC ▸ "
             "Mechanics ▸ Advanced… ▸ Lung volumes) when no per-file TLC/VC is "
-            "available another way. Sex, age and height are used only to draw the "
-            "normal flow-volume range (GLI 2022) behind the maximal flow-volume loop; "
-            "they are entered in the settings file (TOML)."))
+            "available another way. A blank FEV1 is derived from the file's linked FVC "
+            "reference manoeuvre. Sex, age and height are used only to draw the "
+            "normal flow-volume range (GLI 2022) behind the maximal flow-volume loop. "
+            "Double-click a cell to edit it; clear it to leave the value unset."))
+        self._subjects_loading = False
+        self.subjects_table.itemChanged.connect(self._on_subjects_item_changed)
         vsub.addWidget(self.subjects_table)
+        self.subjects_message = QLabel("")
+        self.subjects_message.setWordWrap(True)
+        self.subjects_message.setProperty("banner", True)
+        self.subjects_message.setProperty("status", "warn")
+        self.subjects_message.setVisible(False)
+        vsub.addWidget(self.subjects_message)
+        hsub = QHBoxLayout()
+        self.btn_subject_add = QPushButton("Add subject")
+        self.btn_subject_add.setProperty("compact", True)
+        self.btn_subject_add.setToolTip(
+            "Add a row, keyed on the first group of the matched files that has none yet "
+            "(rename it by double-clicking the key).")
+        self.btn_subject_add.clicked.connect(self._add_subject)
+        self.btn_subjects_from_files = QPushButton("Add from files")
+        self.btn_subjects_from_files.setProperty("compact", True)
+        self.btn_subjects_from_files.setToolTip(
+            "Add one row for every group of the matched files that has none yet.")
+        self.btn_subjects_from_files.clicked.connect(self._add_subjects_from_files)
+        self.btn_subject_remove = QPushButton("Remove selected")
+        self.btn_subject_remove.setProperty("compact", True)
+        self.btn_subject_remove.setToolTip("Remove the selected rows from the analysis.")
+        self.btn_subject_remove.clicked.connect(self._remove_selected_subjects)
+        hsub.addWidget(self.btn_subject_add)
+        hsub.addWidget(self.btn_subjects_from_files)
+        hsub.addWidget(self.btn_subject_remove)
+        hsub.addStretch(1)
+        vsub.addLayout(hsub)
 
         # 'What to save' lives inside the Output card now (one place for everything the run
         # produces and where it goes), so these rows attach to the Output form (fo). The two
@@ -577,7 +618,6 @@ class SettingsScreen(QWidget):
             (gent, lambda: bool(self.state.settings.input.channels.entropy)
                     or bool(self.state.settings.input.channels.entropy_derived)
                     or self._derived_volume_available()),
-            (gsub, lambda: bool(self.state.settings.input.subjects)),
             # PEEPi needs oesophageal pressure: absent from Flow only (and EMG only)
             (gpeepi, self._peepi_relevant),
         ]
@@ -892,22 +932,145 @@ class SettingsScreen(QWidget):
         self._update_entropy_caption()   # a loaded analysis may set m/r without a valueChanged
         self._refresh_subjects_table()   # M-37: a loaded analysis brings its own subjects
 
+    #: (header, SubjectEntry field) per column, in order.
+    _SUBJECT_COLUMNS = (
+        ("Key", "key"), ("TLC (L)", "tlc_l"), ("VC (L)", "vc_l"), ("RV (L)", "rv_l"),
+        ("FEV1 (L)", "fev1_l"), ("MVV (L/min)", "mvv_lpm"), ("Sex", "sex"),
+        ("Age (y)", "age_years"), ("Height (cm)", "height_cm"))
+
     def _refresh_subjects_table(self):
-        """Repopulate the read-only Subjects && lung volumes card from
-        ``input.subjects`` -- called wherever a loaded/opened/imported analysis can
-        change the list (``_sync_widgets``), never from a widget edit of its own (this
-        card has none, see its own construction comment)."""
+        """Repopulate the Subjects && lung volumes card from ``input.subjects`` -- called
+        wherever a loaded/opened/imported analysis or an edit can change the list
+        (``_sync_widgets``). Signals are blocked while it runs, so filling the cells does
+        not look like an edit."""
         subs = self.state.settings.input.subjects
-        self.subjects_table.setRowCount(len(subs))
-        for row, sub in enumerate(subs):
-            values = (sub.key, sub.tlc_l, sub.vc_l, sub.rv_l, sub.fev1_l, sub.mvv_lpm,
-                      sub.sex, sub.age_years, sub.height_cm)
-            for col, v in enumerate(values):
-                text = v if isinstance(v, str) else ("—" if v is None else f"{v:g}")
-                item = QTableWidgetItem(text)
-                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                self.subjects_table.setItem(row, col, item)
-        self.subjects_table.resizeColumnsToContents()
+        prev, self._subjects_loading = self._subjects_loading, True
+        try:
+            self.subjects_table.setRowCount(len(subs))
+            for row, sub in enumerate(subs):
+                for col, (_label, fld) in enumerate(self._SUBJECT_COLUMNS):
+                    v = getattr(sub, fld)
+                    text = v if isinstance(v, str) else ("—" if v is None else f"{v:g}")
+                    self.subjects_table.setItem(row, col, QTableWidgetItem(text))
+            self.subjects_table.resizeColumnsToContents()
+        finally:
+            self._subjects_loading = prev
+        self.btn_subjects_from_files.setEnabled(bool(self._missing_group_keys()))
+        self.btn_subject_remove.setEnabled(bool(subs))
+
+    def _file_group_keys(self):
+        """The distinct group keys of the matched files, in file order, never the
+        no-pattern-match fallback ``(all)``."""
+        from respmech.core.summary import group_key
+        m = getattr(self, "_manifest", None)
+        keys = []
+        for f in (m.files if m is not None else []):
+            k = group_key(f.filename, self.state.settings)
+            if k != "(all)" and k not in keys:
+                keys.append(k)
+        return keys
+
+    def _missing_group_keys(self):
+        have = {s.key for s in self.state.settings.input.subjects}
+        return [k for k in self._file_group_keys() if k not in have]
+
+    def _show_subjects_message(self, text):
+        self.subjects_message.setText(text)
+        self.subjects_message.setVisible(bool(text))
+
+    def _subjects_changed(self):
+        """A subjects edit has already been written to the model: refresh whatever shows
+        it and mark the analysis dirty, exactly like any other field edit."""
+        self._on_field_changed()
+
+    def _new_subject(self, key):
+        from respmech.core.settings import SubjectEntry
+        # stamped with the folder it is created in (B06) and never restamped by an edit
+        return SubjectEntry(key=key, folder=self.state.settings.input.folder)
+
+    def _add_subject(self, *_):
+        keys = self._missing_group_keys()
+        if keys:
+            key = keys[0]
+        else:
+            have = {s.key for s in self.state.settings.input.subjects}
+            n = len(have) + 1
+            while f"subject{n}" in have:
+                n += 1
+            key = f"subject{n}"
+        self.state.settings.input.subjects.append(self._new_subject(key))
+        self._show_subjects_message("")
+        self._subjects_changed()
+        self.subjects_table.selectRow(self.subjects_table.rowCount() - 1)
+
+    def _add_subjects_from_files(self, *_):
+        keys = self._missing_group_keys()
+        if not keys:
+            return
+        self.state.settings.input.subjects.extend(self._new_subject(k) for k in keys)
+        self._show_subjects_message("")
+        self._subjects_changed()
+
+    def _remove_selected_subjects(self, *_):
+        rows = sorted({i.row() for i in self.subjects_table.selectedItems()}, reverse=True)
+        subs = self.state.settings.input.subjects
+        rows = [r for r in rows if 0 <= r < len(subs)]
+        if not rows:
+            return
+        for r in rows:
+            del subs[r]
+        self._show_subjects_message("")
+        self._subjects_changed()
+
+    def _on_subjects_item_changed(self, item):
+        """Commit one edited cell to ``input.subjects``. A value that is not a positive
+        number (or an unknown sex, or a missing/duplicate key) is refused: the old value
+        is restored and the card says why. Ranges beyond that stay with
+        ``Settings.validate()``, whose message already points at this card."""
+        if self._subjects_loading:
+            return
+        row, col = item.row(), item.column()
+        subs = self.state.settings.input.subjects
+        if not (0 <= row < len(subs)) or not (0 <= col < len(self._SUBJECT_COLUMNS)):
+            return
+        label, fld = self._SUBJECT_COLUMNS[col]
+        sub = subs[row]
+        text = item.text().strip()
+        try:
+            value = self._parse_subject_cell(fld, text, row)
+        except ValueError as e:
+            self._show_subjects_message(f"{label}: {e}")
+            self._refresh_subjects_table()      # restore the cell from the model
+            return
+        setattr(sub, fld, value)
+        self._show_subjects_message("")
+        self._subjects_changed()
+
+    def _parse_subject_cell(self, fld, text, row):
+        """The new model value for one cell, or ``ValueError`` with the reason."""
+        import math
+        if fld == "key":
+            if not text:
+                raise ValueError("a participant needs a key")
+            if any(s.key == text for i, s in enumerate(self.state.settings.input.subjects)
+                   if i != row):
+                raise ValueError(f"the key {text!r} is already used by another row")
+            return text
+        if text in ("", "—", "-"):
+            return None
+        if fld == "sex":
+            from respmech.core.analysis.normal_range import normalise_sex
+            sex = normalise_sex(text)
+            if sex is None:
+                raise ValueError('enter "male" or "female" (or M / F)')
+            return sex
+        try:
+            v = float(text.replace(",", "."))
+        except ValueError:
+            raise ValueError("enter a number, or clear the cell to leave it unset") from None
+        if not math.isfinite(v) or v <= 0:
+            raise ValueError("enter a number above zero, or clear the cell to leave it unset")
+        return v
 
     def _update_save_preview(self):
         """The 'You will get' line under the output checklist — the deliverables the current
