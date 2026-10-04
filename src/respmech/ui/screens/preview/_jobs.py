@@ -32,8 +32,8 @@ from respmech.ui.flow_layout import (FlowLayout, cluster as _cluster,
                                      elide as _elide, install_flow as _install_flow)
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
-                                  stage_ecg_reduction, stage_mechanics_preview,
-                                  stage_noise_fidelity)
+                                  stage_ecg_reduction, stage_emg_segments_preview,
+                                  stage_mechanics_preview, stage_noise_fidelity)
 
 try:
     from respmech.ui import theme as _theme
@@ -47,44 +47,87 @@ except Exception:  # pragma: no cover
 # sub-tab titles — a leading chevron marks the intended flow: Mechanics › ECG reduction ›
 # noise reduction. Kept as constants so the insert code and the tests share one source.
 _TAB_MECH = "Mechanics"
+_TAB_SEGMENTS = "EMG – segments"
 _TAB_ECG = "› EMG – ECG reduction"
 _TAB_NOISE = "› EMG – noise reduction"
 
 _PANELS = {"mech": ["channels", "raw"], "batch": ["table", "campbell"],
            "ecg": ["ecg_capture", "ecg_stack"],
-           "emg_all": ["result"], "emg_detail": ["detail", "detail_psd"], "noise": ["fidelity"]}
+           "emg_all": ["result"], "emg_detail": ["detail", "detail_psd"], "noise": ["fidelity"],
+           # M-26: the segments tab's own stack — no longer shared with 'mech's 'raw'
+           # panel (which lives on the ECG-reduction/noise-reduction tabs and has nothing
+           # to do with an EMG-only set, which never shows those raw channels there).
+           "segments": ["segstack"]}
 _SPIN_TEXT = {"mech": "Loading channels…", "batch": "Running test…",
               "ecg": "Removing ECG…",
               "emg_all": "Conditioning channels…", "emg_detail": "Staging detail…",
-              "noise": "Measuring fidelity…"}
+              "noise": "Measuring fidelity…", "segments": "Segmenting…"}
 # human labels for status lines + panel error cards
 _KIND_LABEL = {"mech": "Channel preview", "batch": "Test run", "ecg": "ECG reduction",
                "emg_all": "EMG result", "emg_detail": "EMG detail",
-               "noise": "Noise fidelity"}
+               "noise": "Noise fidelity", "segments": "EMG segments"}
 # the kinds that run automatically (on file select / settings change / Refresh). The
 # test run ('batch') is now automatic too, but MECHANICS-ONLY (no ECG/EMG work).
-_AUTO_KINDS = ("mech", "batch", "ecg", "emg_all", "emg_detail", "noise")
+# 'segments' is the EMG-only counterpart of 'mech' -- see _schedule, which gates
+# each to its own signal-set shape (caps.flow / caps.mode == 'emg_only').
+_AUTO_KINDS = ("mech", "batch", "ecg", "emg_all", "emg_detail", "noise", "segments")
 # the kinds whose result depends on the SELECTED file. 'noise' is deliberately absent: the
 # fidelity/noise profile is test-wide (built from the reference file + the whole input set),
 # so switching the previewed file must NOT blank or rebuild it. See _begin_file_switch.
-_FILE_KINDS = ("mech", "batch", "ecg", "emg_all", "emg_detail")
+_FILE_KINDS = ("mech", "batch", "ecg", "emg_all", "emg_detail", "segments")
 
 
-def _kinds_for_settings_path(path):
+def panels_for(kind, caps=None):
+    """Which ``BusyOverlay`` panel keys ``kind``'s CURRENT dispatch owns, given the
+    shape's capabilities (M-26). Every kind's panel list is fixed except 'batch': an
+    EMG-only set renders its test run into the segments tab's own per-segment table
+    (``'segtable'``) rather than the Mechanics tab's table + Campbell diagram, which is
+    not even shown for that shape (``subtab_plan``) — the SAME test-run job
+    (``_schedule``'s 'batch' branch has always dispatched for every signal set), just a
+    different render target. ``caps=None`` (an unclassified shape, or every call site
+    that predates this ticket) reproduces the old, flow-bearing default unchanged.
+
+    Callers that already own a dispatched ``_Job`` should read ``job.panels`` instead
+    (frozen at dispatch time by ``PreviewScreen._launch``) rather than call this again —
+    settings can change while a job is in flight, and a stale job's own panels must stay
+    whatever they were WHEN IT STARTED, not whatever the caps say right now."""
+    if kind == "batch" and caps is not None and caps.mode == "emg_only":
+        return ["segtable"]
+    return _PANELS[kind]
+
+
+def _kinds_for_settings_path(path, caps=None):
     """Which auto kinds a changed Settings field (dotted path, as produced by
     ``dataclasses.asdict``) can affect, so a settings edit recomputes only the impacted
     panels. GOLDEN-SAFE: this only scopes the PREVIEW; the batch/CLI always use the real
     Settings, never this map. Erring WIDE is safe (over-recompute); erring narrow risks a
     stale panel — so any field NOT classified below falls through to ALL kinds. The
     exhaustive per-kind field lists were derived + adversarially verified against each
-    stage_* function; the coarse buckets here stay on the safe (wide) side of them."""
+    stage_* function; the coarse buckets here stay on the safe (wide) side of them.
+
+    ``caps`` (a :class:`respmech.core.analysis.signals.Capabilities`, or ``None``) makes
+    the EMG buckets capability-aware (M-24). ``caps=None`` — every call site that predates
+    this ticket, and the default — reproduces the old, flow-only rule byte-for-byte: 'the
+    mechanics test run strips EMG' is true for a flow-bearing signal set, where the test run
+    computes from flow/pressure and never touches EMG at all. It is FALSE for an EMG-only
+    set (``caps.mode == 'emg_only'``): there ``run_batch``'s own S2 branch (M-21) builds the
+    test run's mechanics FROM the EMG channels via ``core.analysis.segments``, so an
+    EMG-channel-set or ``processing.emg.*`` edit there must also re-dispatch 'batch' — and
+    the 'segments' preview job too (its own EMG-only counterpart of 'mech'; ``_schedule``
+    gates it to ``caps.mode == 'emg_only'``, so an edit under a flow-bearing set never
+    actually dispatches it, even though it is a member of ``_AUTO_KINDS``)."""
     # output / diagnostics and the optional pre-resample never surface in any preview panel
     if path == "output" or path.startswith("output.") or path.startswith("processing.sampling"):
         return frozenset()
+    emg_only = bool(caps is not None and caps.mode == "emg_only")
     # the EMG channel SET: mechanics shows the raw EMG traces and all EMG/noise panels use
-    # them; the mechanics test run strips EMG, so it is unaffected
+    # them; the mechanics test run strips EMG for a flow-bearing set (unaffected there), but
+    # for an EMG-only set the test run's own mechanics ARE built from these channels.
     if path == "input.channels.emg":
-        return frozenset(("mech", "ecg", "emg_all", "emg_detail", "noise"))
+        kinds = {"mech", "ecg", "emg_all", "emg_detail", "noise"}
+        if emg_only:
+            kinds |= {"batch", "segments"}
+        return frozenset(kinds)
     if path.startswith("processing.emg"):
         if path.startswith("processing.emg.robust_peak"):
             # Writes-only, draws-nothing — like output.* above. The cardiac-gated peak adds
@@ -99,9 +142,14 @@ def _kinds_for_settings_path(path):
                     "processing.emg.plot_yscale"):
             return frozenset(("emg_all", "emg_detail"))   # display/output-ish -> redraw EMG panels
         # EMG conditioning (remove_ecg / detect_channel / ecg_* / rms_window_s / remove_noise) +
-        # noise.* params: the ECG-reduction tab + the EMG/noise panels (the mechanics test run
-        # forces EMG + ECG + noise off, so it is unaffected)
-        return frozenset(("ecg", "emg_all", "emg_detail", "noise"))
+        # noise.* params: the ECG-reduction tab + the EMG/noise panels. For a flow-bearing set
+        # the mechanics test run forces EMG + ECG + noise off, so it is unaffected; for an
+        # EMG-only set this settles the test run's OWN mechanics (M-24), so 'batch'/'segments'
+        # join too.
+        kinds = {"ecg", "emg_all", "emg_detail", "noise"}
+        if emg_only:
+            kinds |= {"batch", "segments"}
+        return frozenset(kinds)
     # mechanics-only compute that feeds the test-run table/Campbell exclusively
     if (path.startswith("processing.wob") or path.startswith("processing.ptp")
             or path.startswith("processing.entropy") or path.startswith("processing.breath_counts")):
@@ -111,6 +159,9 @@ def _kinds_for_settings_path(path):
     # panels (which build NoiseProfile.from_clip on a buffer-dependent clip). So a
     # segmentation edit must recompute all five, or the EMG traces go stale when auto_prop
     # is off (nothing else re-dispatches them). The ECG cache keeps the extra work cheap.
+    # processing.segmentation.separators (M-21's EMG-only manual boundaries) falls through
+    # to this same wide rule, deliberately: it feeds `segment_file`/the noise reference clip's
+    # `rest_segments` branch exactly like `buffer` does.
     if path.startswith("processing.segmentation"):
         return frozenset(_AUTO_KINDS)
     # volume drift/trend + explicit breath exclusion: the mechanics panels (+ noise, a
@@ -119,9 +170,30 @@ def _kinds_for_settings_path(path):
     if (path.startswith("processing.volume.correct") or path.startswith("processing.volume.trend")
             or path.startswith("processing.exclude_breaths")):
         return frozenset(("mech", "batch", "noise"))
+    # M-37: reference manoeuvres / operating lung volumes / subject spirometry never
+    # touch a preview PANEL directly -- core.analysis.references.attach and
+    # core.analysis.lungvol both run inside the test run's own post-loop pass and only
+    # ever change the Average-breathdata table/Campbell numbers, never the raw channel
+    # traces, ECG/EMG conditioning or the noise frontier (which is why this mirrors the
+    # wob/ptp/entropy/breath_counts rule above rather than falling through to the wide
+    # default).
+    # PEEPi (opt-in, core.analysis.pressure): runs in the same post-mechanics pass and only
+    # adds columns and the hatched rectangle on the Campbell panel -- like wob/ptp above,
+    # never a raw trace, so it must not fall through to the wide default.
+    # Breathing pattern (opt-in, core.analysis.breathing_pattern): flow/volume columns added
+    # in the same pass, never a raw trace -- same rule.
+    if path.startswith("processing.pressure") or path.startswith("processing.breathing_pattern"):
+        return frozenset(("batch",))
+    if (path.startswith("processing.references") or path.startswith("processing.reference_defaults")
+            or path.startswith("processing.lung_volume") or path.startswith("processing.mfvl")
+            or path.startswith("input.subjects")):
+        return frozenset(("batch",))
     # channels core / format / volume inverse+integrate (all applied inside load()),
-    # channels.entropy (validated in every load path), input.folder/files, and anything not
-    # matched above -> recompute everything (safe default; never leaves a panel stale)
+    # channels.entropy (validated in every load path), input.folder/files,
+    # processing.breath_types (M-19 typed breaths change the noise reference mask itself —
+    # decision 11 — so they get the WIDE default here rather than the narrower
+    # exclude_breaths rule above), and anything else not matched above -> recompute
+    # everything (safe default; never leaves a panel stale)
     return frozenset(_AUTO_KINDS)
 
 
@@ -153,6 +225,20 @@ class _Job:
     thread: object
     worker: object
     error: object = None
+    # the panel keys THIS dispatch owns, frozen at launch time (see panels_for) — never
+    # re-derived from current settings once the job is running, so a stale job's own
+    # spinner/error bookkeeping stays consistent with what it actually rendered into.
+    panels: tuple = ()
+
+    def __post_init__(self):
+        # A caller that hand-constructs a _Job without ``panels=`` (every call site that
+        # predates M-26, incl. several tests) gets the OLD, static default for its kind —
+        # ``_launch`` is the only caller that ever needs the capability-aware list, and it
+        # always passes ``panels=`` explicitly (see ``panels_for``). Without this, such a
+        # job's frozen panels would be an empty tuple, and _on_job_done's `for p in
+        # job.panels:` would silently paint no error card / stop no spinner at all.
+        if not self.panels:
+            self.panels = tuple(_PANELS.get(self.kind, ()))
 
 
 # threads that would not stop within the shutdown budget are parked here (kept

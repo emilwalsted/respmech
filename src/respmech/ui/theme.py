@@ -28,6 +28,15 @@ from __future__ import annotations
 import os
 from string import Template
 
+
+#: The one green that marks the SELECTED breath everywhere it shows: the span fill and
+#: outline on every plot, its number label, its row in the result tables and its loop (with
+#: its legend entry) in the Campbell / flow-volume diagram. Deliberately a fixed colour, not
+#: a palette key: the included/excluded/typed breath fills are all blue/red/amber family, so
+#: a green mark cannot be mistaken for any of them in either theme.
+SELECTED_BREATH_RGB = (31, 148, 82)
+SELECTED_BREATH_HEX = "#1F9452"
+
 # --------------------------------------------------------------------------- #
 # Semantic colour constants (theme-independent, safe on white plot backgrounds).
 # These are the values widget/plot code should reach for when it needs a colour
@@ -72,7 +81,25 @@ _PLOT_LIGHT = {
                   (125, 91, 166), (14, 124, 123), (180, 80, 122), (92, 107, 122)],
     "breath_incl_brush": (44, 110, 155, 32), "breath_excl_brush": (180, 50, 42, 70),
     "breath_incl_label": (90, 107, 122), "breath_excl_label": (180, 50, 42),
+    # M-20: one brush/label pair per breath-type kind the type-menu can set (see the
+    # matching comment in _plot_helpers.py's _FALLBACK_PAL for the full reasoning).
+    # Self-review: an earlier draft reused the "channels"/"emg_cycle" hues verbatim
+    # (ic=volume's green, fvc=pgas's amber, rest=pdi's purple) — a typed breath then
+    # shaded the exact same colour as the trace running through it on the very stack
+    # that colour already names a channel on. These are deliberately DIFFERENT hues
+    # (olive/plum/slate-blue), checked to be no closer than ~40 units of Euclidean RGB
+    # distance from every channel/emg_cycle/incl/excl colour in both tables.
+    "breath_ic_brush": (110, 120, 40, 70), "breath_ic_label": (110, 120, 40),
+    "breath_fvc_brush": (120, 60, 110, 70), "breath_fvc_label": (120, 60, 110),
+    "breath_rest_brush": (80, 90, 160, 70), "breath_rest_label": (80, 90, 160),
+    "breath_other_brush": (140, 100, 60, 70), "breath_other_label": (140, 100, 60),
     "separator": (150, 165, 180), "noise_region": (44, 110, 155, 45),
+    # Manual segmentation-repair (cut/join) boundary markers on the Mechanics
+    # stack -- a magenta distinct from every other hue in this table (checked >= ~40
+    # units of Euclidean RGB distance, same convention as the breath-kind colours
+    # above), so an override marker never reads as an ordinary EMG-only separator
+    # (which uses "separator" above, a different tab).
+    "segmentation_override": (200, 40, 140),
     "raw_trace": (150, 165, 180), "noise_trace": (90, 150, 200),
     # Legend backing, kept for any future pyqtgraph legend: the EMG working views that
     # used to read it now name their traces in the panel band instead (_set_trace_key).
@@ -95,7 +122,15 @@ _PLOT_DARK = {
                   (180, 152, 226), (74, 200, 198), (230, 140, 182), (150, 166, 182)],
     "breath_incl_brush": (110, 172, 224, 42), "breath_excl_brush": (214, 92, 82, 62),
     "breath_incl_label": (150, 166, 182), "breath_excl_label": (234, 122, 112),
+    # M-20: dark-theme brightened equivalents of the light table's breath-kind keys —
+    # olive/plum/slate-blue, chosen (see _PLOT_LIGHT) to stay distinct from every
+    # channel/emg_cycle colour rather than reuse them.
+    "breath_ic_brush": (178, 190, 90, 62), "breath_ic_label": (178, 190, 90),
+    "breath_fvc_brush": (200, 130, 190, 62), "breath_fvc_label": (200, 130, 190),
+    "breath_rest_brush": (150, 160, 230, 62), "breath_rest_label": (150, 160, 230),
+    "breath_other_brush": (206, 168, 120, 62), "breath_other_label": (206, 168, 120),
     "separator": (98, 112, 128), "noise_region": (110, 172, 224, 55),
+    "segmentation_override": (235, 90, 150),
     "raw_trace": (128, 140, 156), "noise_trace": (118, 176, 224),
     "legend_bg": (22, 27, 33, 220),   # near-opaque dark backing so legend text stays legible over fills
     "mpl_bg": "#14181D",
@@ -694,6 +729,15 @@ QLabel[status="warn"] {
 }
 QLabel[status="error"] {
     color: $st_error_fg; background-color: $st_error_bg; border-color: $st_error_bd;
+}
+/* M-11: the Setup Signals row's chips (Flow/Poes/Pgas/Pdi/EMG) — a small, permanent pill,
+   never a 'status' colour (nothing here is a caution), so it gets its own property rather
+   than reusing 'banner' (whose box only applies on first polish, see the banner comment
+   above — a chip is always built fresh with the property already set, so that pitfall does
+   not apply, but a dedicated property keeps chip styling independently tunable from banners). */
+QLabel[chip="true"] {
+    background-color: $accent_soft; color: $text;
+    border-radius: 8px; padding: 2px 8px; font-weight: 600;
 }
 
 /* ---- application header bar ------------------------------------------- */

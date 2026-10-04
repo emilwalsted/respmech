@@ -1,8 +1,10 @@
 import pytest
 
 from respmech.core.settings import (
-    SCHEMA_VERSION, BreathCountEntry, CarriedOverState, ExcludeEntry, Settings,
-    SettingsError, carried_over_state, clear_carried_over, is_carried_folder,
+    SCHEMA_VERSION, BreathCountEntry, BreathRef, CarriedOverState, ExcludeEntry,
+    GroupReferenceEntry, ReferenceEntry, SegmentationOverrideEntry, SeparatorEntry,
+    Settings, SettingsError, SubjectEntry, _CARRIED_KINDS, carried_over_state,
+    clear_carried_over, is_carried_folder,
 )
 
 
@@ -20,6 +22,210 @@ def test_defaults_and_parse():
     assert s.processing.segmentation.method == "flow"
     assert s.processing.wob.calc_from == "average"
     assert s.processing.emg.rms_window_s == 0.050
+    assert s.processing.lung_volume.ic.preceding_breaths == 3
+    assert s.processing.lung_volume.ic.reject_flags == ["LOW_EFFORT"]
+
+
+def test_ic_settings_from_dict_round_trip():
+    """M-29: IcSettings is a nested dataclass field (processing.lung_volume.ic), built
+    by the same generic `_build`/`_coerce` mechanism as every other nested settings
+    block -- a hand-edited TOML table overrides its defaults, and `reject_flags` (a
+    plain `list[str]`, not a list of entry-dataclasses like `exclude_breaths`) survives
+    unchanged."""
+    d = _minimal()
+    d["processing"] = {"lung_volume": {"ic": {
+        "preceding_breaths": 5, "eelv_tolerance_frac": 0.3, "reject_flags": ["LOW_EFFORT", "BOUNDARY"],
+    }}}
+    s = Settings.from_dict(d).validate()
+    ic = s.processing.lung_volume.ic
+    assert ic.preceding_breaths == 5
+    assert ic.eelv_tolerance_frac == 0.3
+    assert ic.reject_flags == ["LOW_EFFORT", "BOUNDARY"]
+    assert ic.min_preceding_breaths == 2               # untouched fields keep their default
+    assert "processing.lung_volume" not in s.unknown
+
+
+def test_ic_settings_min_preceding_breaths_below_one_is_rejected():
+    """Self-review finding: 0 would let _ic_eelv_pre's mean-branch average ZERO
+    preceding breaths (an empty-array mean is NaN, silently poisoning vol_ic)."""
+    d = _minimal()
+    d["processing"] = {"lung_volume": {"ic": {"min_preceding_breaths": 0}}}
+    with pytest.raises(SettingsError, match=r"min_preceding_breaths must be at least 1"):
+        Settings.from_dict(d).validate()
+
+
+def test_ic_settings_preceding_breaths_below_the_minimum_is_rejected():
+    d = _minimal()
+    d["processing"] = {"lung_volume": {"ic": {"preceding_breaths": 1, "min_preceding_breaths": 2}}}
+    with pytest.raises(SettingsError, match=r"preceding_breaths must be >= min_preceding_breaths"):
+        Settings.from_dict(d).validate()
+
+
+def test_ic_settings_aggregate_typo_is_rejected_not_silently_treated_as_mean():
+    d = _minimal()
+    d["processing"] = {"lung_volume": {"ic": {"aggregate": "medain"}}}
+    with pytest.raises(SettingsError, match=r'aggregate must be "mean" or "median"'):
+        Settings.from_dict(d).validate()
+
+
+def test_ic_settings_negative_fractions_are_rejected():
+    d = _minimal()
+    d["processing"] = {"lung_volume": {"ic": {"repeatability_frac": -0.1}}}
+    with pytest.raises(SettingsError, match=r"repeatability_frac must not be negative"):
+        Settings.from_dict(d).validate()
+
+
+def test_ic_settings_eelv_tracking_enum_is_validated():
+    d = _minimal()
+    d["processing"] = {"lung_volume": {"ic": {"eelv_tracking": "always"}}}
+    with pytest.raises(SettingsError, match=r'eelv_tracking must be "none" or "within_file"'):
+        Settings.from_dict(d).validate()
+
+
+def test_ic_settings_eelv_tracking_defaults_to_none():
+    assert Settings().processing.lung_volume.ic.eelv_tracking == "none"
+
+
+# --------------------------------------------------------------------------- #
+# ReferenceEntry / GroupReferenceEntry / SubjectEntry / LungVolumeSettings
+# --------------------------------------------------------------------------- #
+
+def test_breath_ref_nested_optional_round_trips_via_toml(tmp_path):
+    """Acceptance criterion: a nested ``BreathRef | None`` field on a REAL production
+    dataclass (not the throwaway one in test_nested_optional_dataclass_round_trips)
+    round-trips through a save/load cycle, all four slots at once."""
+    from respmech.settingsio.toml_io import load_toml, save_toml
+
+    s = Settings()
+    s.input.format.sampling_frequency = 2000
+    s.input.folder = str(tmp_path)
+    s.processing.references.append(ReferenceEntry(
+        file="P03_peak.txt",
+        ic=BreathRef(file="P03_IC.txt", breaths=[2, 3, 4]),
+        fvc=BreathRef(file="P03_MFVL.txt", breaths=[1]),
+        baseline_ic=BreathRef(file="P03_rest.txt", breaths=[7]),
+        max_insp=BreathRef(file="P03_IC.txt", breaths=[4]),
+    ))
+    path = tmp_path / "a.toml"
+    save_toml(s, path)
+    loaded = load_toml(path)
+    r = loaded.processing.references[0]
+    assert r.file == "P03_peak.txt"
+    assert isinstance(r.ic, BreathRef) and r.ic.file == "P03_IC.txt" and r.ic.breaths == [2, 3, 4]
+    assert isinstance(r.fvc, BreathRef) and r.fvc.breaths == [1]
+    assert isinstance(r.baseline_ic, BreathRef) and r.baseline_ic.breaths == [7]
+    assert isinstance(r.max_insp, BreathRef) and r.max_insp.breaths == [4]
+
+
+def test_reference_entry_with_all_slots_unset_round_trips_to_none():
+    d = _minimal()
+    d["processing"] = {"references": [{"file": "P03_peak.txt"}]}
+    s = Settings.from_dict(d).validate()
+    r = s.processing.references[0]
+    assert r.file == "P03_peak.txt"
+    assert r.ic is None and r.fvc is None and r.baseline_ic is None and r.max_insp is None
+
+
+def test_group_reference_entry_round_trips():
+    d = _minimal()
+    d["processing"] = {"reference_defaults": [
+        {"group": "P03", "ic": {"file": "P03_IC.txt", "breaths": [2, 3, 4]}}]}
+    s = Settings.from_dict(d).validate()
+    g = s.processing.reference_defaults[0]
+    assert g.group == "P03"
+    assert g.ic == BreathRef(file="P03_IC.txt", breaths=[2, 3, 4])
+
+
+def test_subject_entry_round_trips():
+    d = _minimal()
+    d["input"] = {**d["input"], "subjects": [
+        {"key": "P03", "tlc_l": 6.12, "vc_l": 4.30, "fev1_l": 3.10, "mvv_lpm": 124.0}]}
+    s = Settings.from_dict(d).validate()
+    subj = s.input.subjects[0]
+    assert subj.key == "P03"
+    assert subj.tlc_l == 6.12
+    assert subj.vc_l == 4.30
+    assert subj.rv_l is None
+    assert subj.fev1_l == 3.10
+    assert subj.mvv_lpm == 124.0
+
+
+def test_lung_volume_settings_require_references_and_baseline_pattern_round_trip():
+    d = _minimal()
+    d["processing"] = {"lung_volume": {"require_references": True, "baseline_pattern": "rest"}}
+    s = Settings.from_dict(d).validate()
+    assert s.processing.lung_volume.require_references is True
+    assert s.processing.lung_volume.baseline_pattern == "rest"
+
+
+def test_lung_volume_settings_defaults():
+    lv = Settings().processing.lung_volume
+    assert lv.require_references is False
+    assert lv.baseline_pattern == r"(?i)baseline|rest"
+
+
+def test_reference_entry_duplicate_file_is_rejected():
+    d = _minimal()
+    d["processing"] = {"references": [{"file": "a.txt"}, {"file": "a.txt"}]}
+    with pytest.raises(SettingsError, match=r"processing\.references: a\.txt appears more "
+                        r"than once"):
+        Settings.from_dict(d).validate()
+
+
+def test_reference_entry_malformed_raises_settings_error_not_attribute_error():
+    """Self-review finding, same reasoning as breath_types/separators: a hand-edited
+    ``references = [1, 2]`` (a bare list of numbers, not tables) passes `_coerce`
+    through unchanged, so this must be the first code to reject it cleanly."""
+    d = _minimal()
+    d["processing"] = {"references": [1]}
+    with pytest.raises(SettingsError, match=r"processing\.references\[0\] must be a table "
+                        r"with file"):
+        Settings.from_dict(d).validate()
+
+
+def test_group_reference_entry_duplicate_group_is_rejected():
+    d = _minimal()
+    d["processing"] = {"reference_defaults": [{"group": "P03"}, {"group": "P03"}]}
+    with pytest.raises(SettingsError, match=r"processing\.reference_defaults: group P03 "
+                        r"appears more than once"):
+        Settings.from_dict(d).validate()
+
+
+def test_subject_entry_duplicate_key_is_rejected():
+    d = _minimal()
+    d["input"] = {**d["input"], "subjects": [{"key": "P03"}, {"key": "P03"}]}
+    with pytest.raises(SettingsError, match=r"input\.subjects: key P03 must be unique"):
+        Settings.from_dict(d).validate()
+
+
+@pytest.mark.parametrize("tlc_l", [-0.1, 15.1])
+def test_subject_entry_tlc_l_out_of_range_is_rejected(tlc_l):
+    d = _minimal()
+    d["input"] = {**d["input"], "subjects": [{"key": "P03", "tlc_l": tlc_l}]}
+    with pytest.raises(SettingsError, match=r"tlc_l must be between 0 and 15 L"):
+        Settings.from_dict(d).validate()
+
+
+@pytest.mark.parametrize("tlc_l", [0.0, 15.0, 6.0])
+def test_subject_entry_tlc_l_at_or_within_bounds_is_accepted(tlc_l):
+    d = _minimal()
+    d["input"] = {**d["input"], "subjects": [{"key": "P03", "tlc_l": tlc_l}]}
+    Settings.from_dict(d).validate()          # must not raise
+
+
+def test_subject_entry_rv_l_must_be_below_tlc_l():
+    d = _minimal()
+    d["input"] = {**d["input"], "subjects": [{"key": "P03", "tlc_l": 6.0, "rv_l": 6.0}]}
+    with pytest.raises(SettingsError, match=r"rv_l must be below tlc_l"):
+        Settings.from_dict(d).validate()
+
+
+def test_subject_entry_rv_l_alone_without_tlc_l_is_not_checked():
+    """rv_l < tlc_l is only meaningful once BOTH are known -- a subject who only ever
+    had RV measured must not be rejected for a comparison that cannot be made."""
+    d = _minimal()
+    d["input"] = {**d["input"], "subjects": [{"key": "P03", "rv_l": 1.5}]}
+    Settings.from_dict(d).validate()          # must not raise
 
 
 def test_unknown_keys_are_captured_not_fatal():
@@ -31,9 +237,170 @@ def test_unknown_keys_are_captured_not_fatal():
     assert s.processing.sampling.resample is True
 
 
-def test_missing_required_raises():
-    with pytest.raises(SettingsError):
-        Settings.from_dict({"input": {"format": {"matlab_variant": "mac"}}}).validate()
+def test_nested_optional_dataclass_round_trips():
+    """A PEP 604 ``T | None`` field on a dataclass must build ``T``, not leave the raw
+    dict, when the incoming value is a table. No production dataclass has an optional
+    nested-dataclass field yet (added by later tickets), so this exercises the generic
+    ``_build``/``_coerce``/``_unwrap_optional`` mechanism ``Settings.from_dict`` itself
+    is built on, with a throwaway dataclass standing in for a future ``Ref``-like field.
+
+    Before the fix: ``get_origin(Ref | None)`` is ``types.UnionType``, not
+    ``typing.Union``, so ``_unwrap_optional`` returned ``Ref | None`` unchanged;
+    ``is_dataclass(Ref | None)`` is False, so ``_coerce`` fell through and returned the
+    raw dict instead of a ``Ref`` instance."""
+    from dataclasses import dataclass as _dc
+
+    from respmech.core.settings import _build
+
+    @_dc
+    class Ref:
+        file: str = ""
+        breath: int = 0
+
+    @_dc
+    class Holder:
+        ref: Ref | None = None
+
+    unknown: dict = {}
+    obj = _build(Holder, {"ref": {"file": "a.txt", "breath": 3}}, unknown, path="")
+    assert isinstance(obj.ref, Ref)
+    assert obj.ref.file == "a.txt"
+    assert obj.ref.breath == 3
+    assert unknown == {}
+
+    # And a bare `ref = None`/absent key still leaves it None, same as before the fix.
+    obj2 = _build(Holder, {}, {}, path="")
+    assert obj2.ref is None
+
+
+@pytest.mark.parametrize("extra,unknown_key", [
+    # "analysis" is no longer an unknown top-level table as of this ticket
+    # (Settings.analysis: AnalysisSettings) -- a genuinely unrecognised table name
+    # covers the same archived shape instead.
+    pytest.param({"some_future_table": {"x": 1}}, "some_future_table",
+                 id="unknown_toplevel_table"),
+    pytest.param({"processing": {"lung_volumes": {"foo": 1}}}, "processing.lung_volumes",
+                 id="unknown_nested_table"),
+    # "processing.breath_types" and "processing.references"/"reference_defaults" are no
+    # longer unknown list-of-tables shapes (ProcessingSettings.breath_types/references/
+    # reference_defaults) -- "processing.fixed_windows" (still not backed by a settings
+    # list; "fixed_windows" is already a valid segmentation.method value, but nothing
+    # implements it yet) covers the same archived shape instead.
+    pytest.param({"processing": {"fixed_windows": [{"id": 1}]}}, "processing.fixed_windows",
+                 id="unknown_list_of_tables"),
+    pytest.param(
+        {"processing": {"exclude_breaths": [
+            {"file": "a.txt", "breaths": [1], "kind": "future"}]}},
+        "processing.exclude_breaths.[0].kind",
+        id="unknown_field_on_a_known_list_entry"),
+])
+def test_unknown_keys_survive_a_save(tmp_path, extra, unknown_key):
+    """All three archived shapes (a whole unknown table, top-level or nested; a whole
+    unknown list of tables; a single unrecognised field inside one element of a KNOWN
+    list dataclass) must come back unchanged after save_toml + load_toml, not just stay
+    in memory. The key form is taken from Settings.from_dict's OWN output, never
+    assumed, so a change to how _build paths a nested unknown entry would fail this
+    test rather than silently stop being covered."""
+    from respmech.settingsio.toml_io import load_toml, save_toml
+
+    d = _minimal()
+    for key, val in extra.items():
+        d.setdefault(key, {})
+        if isinstance(d[key], dict) and isinstance(val, dict):
+            d[key].update(val)
+        else:
+            d[key] = val
+    s = Settings.from_dict(d).validate()
+    assert unknown_key in s.unknown, f"test setup did not actually produce {unknown_key!r}"
+
+    path = tmp_path / "a.toml"
+    save_toml(s, path)
+    s2 = load_toml(path)
+    assert unknown_key in s2.unknown
+    assert s2.unknown[unknown_key] == s.unknown[unknown_key]
+
+
+def test_a_known_limitation_removing_an_earlier_list_entry_can_misattach_an_unknown_field(
+        tmp_path):
+    """Self-review finding, deliberately NOT fixed by this ticket (see _merge_unknown's
+    docstring): an unknown per-element field is archived by list POSITION at load time,
+    not by a stable identity. Removing an EARLIER entry from the in-memory list before a
+    save leaves the unknown value attached to whatever entry now sits at that index --
+    here it silently reattaches "kind" from the removed a.txt entry onto b.txt, which
+    never had it, instead of being dropped like a genuinely out-of-range index would be.
+    Nothing in today's code lets a carried-unknown list be edited in the same session,
+    so this cannot fire yet; pinned here so it stays a deliberate, tracked limitation
+    rather than a silent behaviour change the next time this function is touched."""
+    from respmech.settingsio.toml_io import load_toml, save_toml
+
+    d = _minimal()
+    d["processing"] = {"exclude_breaths": [
+        {"file": "a.txt", "breaths": [1], "kind": "future"},
+        {"file": "b.txt", "breaths": [2]},
+    ]}
+    s = Settings.from_dict(d).validate()
+    assert s.unknown["processing.exclude_breaths.[0].kind"] == "future"
+
+    # Simulate an earlier entry being removed before save (e.g. a future un-exclude
+    # action) -- Settings.unknown is a load-time snapshot and does not follow the move.
+    s.processing.exclude_breaths.pop(0)
+    assert [e.file for e in s.processing.exclude_breaths] == ["b.txt"]
+
+    path = tmp_path / "a.toml"
+    save_toml(s, path)
+    s2 = load_toml(path)
+    assert s2.processing.exclude_breaths[0].file == "b.txt"
+    # The documented (accepted, not desired) outcome: "kind" followed the INDEX, not
+    # the entry it was originally recorded against.
+    assert s2.unknown["processing.exclude_breaths.[0].kind"] == "future"
+
+
+def test_a_known_limitation_a_literal_dot_in_an_unknown_key_name_changes_shape_on_save(
+        tmp_path):
+    """Self-review finding, deliberately NOT fixed by this ticket (see _merge_unknown's
+    docstring): TOML allows a quoted key containing a literal '.' (e.g. "weird.key" = 5
+    as ONE flat key). Settings.from_dict archives it correctly as a single unknown entry
+    ("processing.weird.key" -> 5), but a save re-splits that same string on "." and
+    rebuilds it as a NESTED table (processing.weird.key = 5) instead of the original
+    flat key -- the value survives, the shape does not. Can never collide with a real
+    dataclass field (field names cannot contain '.'), so this only affects a
+    hand-edited or foreign-tool TOML file, never RespMech's own output."""
+    from respmech.settingsio.toml_io import load_toml, save_toml
+
+    d = _minimal()
+    d["processing"] = {"weird.key": 5}
+    s = Settings.from_dict(d).validate()
+    assert s.unknown == {"processing.weird.key": 5}
+
+    path = tmp_path / "a.toml"
+    save_toml(s, path)
+    s2 = load_toml(path)
+    # The value is preserved, but re-parented under a nested "weird" table -- the
+    # documented shape-changing limitation, not the original flat key.
+    assert s2.unknown == {"processing.weird": {"key": 5}}
+
+
+def test_a_24_shaped_file_gains_no_keys_on_save(tmp_path):
+    """An ordinary file with no unknown keys must not gain any on a save -- _merge_unknown
+    folding an EMPTY Settings.unknown back in is a no-op, not a source of new tables."""
+    from respmech.settingsio.toml_io import load_toml, save_toml
+
+    s = Settings.from_dict(_minimal()).validate()
+    assert s.unknown == {}
+    path = tmp_path / "a.toml"
+    save_toml(s, path)
+    s2 = load_toml(path)
+    assert s2.unknown == {}
+
+
+def test_missing_required_raises_neither_flow_nor_emg():
+    """R7: with no explicit ``analysis.signals`` and no channel assigned at all, the
+    effective signal set derives to empty -- the new, more specific message replacing
+    the old unconditional four-role loop."""
+    d = _minimal()
+    d["input"]["channels"] = {}
+    with pytest.raises(SettingsError, match=r"analysis\.signals must name at least one"):
+        Settings.from_dict(d).validate()
 
 
 def test_volume_required_unless_integrated():
@@ -249,6 +616,134 @@ def test_a_legacy_zero_trend_threshold_is_not_rejected():
         Settings.from_dict(_trend_settings(trend_peak_min_height=-0.5)).validate()
 
 
+# -- SeparatorEntry (EMG-only "separators" segmentation) form/conflict checks --
+
+def test_separator_entry_that_is_not_even_a_table_is_rejected():
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.separators.append(1)          # hand-edited `separators = [1]`
+    with pytest.raises(SettingsError, match=r"separators\[0\] must be a table"):
+        s.validate()
+
+
+def test_separator_entry_times_s_must_be_a_list_of_numbers():
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.separators.append(
+        SeparatorEntry(file="x.txt", times_s=[1.0, "two", 3.0]))
+    with pytest.raises(SettingsError, match=r"times_s must be a list of numbers"):
+        s.validate()
+
+
+@pytest.mark.parametrize("bad_times", [
+    [1.0, float("nan"), 3.0],
+    [1.0, float("inf")],
+    [float("-inf"), 2.0],
+], ids=["nan", "inf", "-inf"])
+def test_separator_entry_times_s_rejects_non_finite_values(bad_times):
+    """NaN/Inf ARE instances of float (so a bare isinstance check lets them through),
+    but neither compares meaningfully against 0 or a neighbour -- a malformed
+    hand-edited TOML (which has nan/inf literals) must not silently pass validate()
+    only to raise a bare ValueError/OverflowError later in core.analysis.segments."""
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.separators.append(SeparatorEntry(file="x.txt", times_s=bad_times))
+    with pytest.raises(SettingsError, match=r"times_s must be a list of numbers"):
+        s.validate()
+
+
+def test_separator_entry_times_s_must_be_strictly_increasing_and_non_negative():
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.separators.append(
+        SeparatorEntry(file="x.txt", times_s=[3.0, 1.0]))
+    with pytest.raises(SettingsError, match=r"non-negative and strictly increasing"):
+        s.validate()
+
+    s2 = Settings.from_dict(_minimal())
+    s2.processing.segmentation.separators.append(
+        SeparatorEntry(file="x.txt", times_s=[-1.0, 2.0]))
+    with pytest.raises(SettingsError, match=r"non-negative and strictly increasing"):
+        s2.validate()
+
+
+def test_separator_entry_duplicate_file_is_rejected():
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.separators.append(SeparatorEntry(file="x.txt", times_s=[1.0]))
+    s.processing.segmentation.separators.append(SeparatorEntry(file="x.txt", times_s=[2.0]))
+    with pytest.raises(SettingsError, match=r"has more than one entry"):
+        s.validate()
+
+
+def test_separator_entry_zero_times_and_valid_settings_pass():
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.separators.append(SeparatorEntry(file="x.txt", times_s=[]))
+    s.processing.segmentation.separators.append(
+        SeparatorEntry(file="y.txt", times_s=[1.0, 2.5, 4.0]))
+    s.validate()                                              # must not raise
+
+
+# -- SegmentationOverrideEntry (flow-/volume-bearing segmentation repair)
+# form/conflict checks -- same two-pass shape as SeparatorEntry above, checked
+# independently for cut_s and join_s.
+
+def test_segmentation_override_entry_that_is_not_even_a_table_is_rejected():
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.overrides.append(1)     # hand-edited `overrides = [1]`
+    with pytest.raises(SettingsError, match=r"overrides\[0\] must be a table"):
+        s.validate()
+
+
+@pytest.mark.parametrize("field_name", ["cut_s", "join_s"])
+def test_segmentation_override_entry_times_must_be_a_list_of_numbers(field_name):
+    s = Settings.from_dict(_minimal())
+    kwargs = {"file": "x.txt", field_name: [1.0, "two", 3.0]}
+    s.processing.segmentation.overrides.append(SegmentationOverrideEntry(**kwargs))
+    with pytest.raises(SettingsError, match=rf"{field_name} must be a list of numbers"):
+        s.validate()
+
+
+@pytest.mark.parametrize("bad_times", [
+    [1.0, float("nan"), 3.0],
+    [1.0, float("inf")],
+    [float("-inf"), 2.0],
+], ids=["nan", "inf", "-inf"])
+@pytest.mark.parametrize("field_name", ["cut_s", "join_s"])
+def test_segmentation_override_entry_rejects_non_finite_values(field_name, bad_times):
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.overrides.append(
+        SegmentationOverrideEntry(**{"file": "x.txt", field_name: bad_times}))
+    with pytest.raises(SettingsError, match=rf"{field_name} must be a list of numbers"):
+        s.validate()
+
+
+@pytest.mark.parametrize("field_name", ["cut_s", "join_s"])
+def test_segmentation_override_entry_times_must_be_strictly_increasing_and_non_negative(field_name):
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.overrides.append(
+        SegmentationOverrideEntry(**{"file": "x.txt", field_name: [3.0, 1.0]}))
+    with pytest.raises(SettingsError, match=r"non-negative and strictly increasing"):
+        s.validate()
+
+    s2 = Settings.from_dict(_minimal())
+    s2.processing.segmentation.overrides.append(
+        SegmentationOverrideEntry(**{"file": "x.txt", field_name: [-1.0, 2.0]}))
+    with pytest.raises(SettingsError, match=r"non-negative and strictly increasing"):
+        s2.validate()
+
+
+def test_segmentation_override_entry_duplicate_file_is_rejected():
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.overrides.append(SegmentationOverrideEntry(file="x.txt", cut_s=[1.0]))
+    s.processing.segmentation.overrides.append(SegmentationOverrideEntry(file="x.txt", join_s=[2.0]))
+    with pytest.raises(SettingsError, match=r"has more than one entry"):
+        s.validate()
+
+
+def test_segmentation_override_entry_empty_and_valid_settings_pass():
+    s = Settings.from_dict(_minimal())
+    s.processing.segmentation.overrides.append(SegmentationOverrideEntry(file="x.txt"))
+    s.processing.segmentation.overrides.append(
+        SegmentationOverrideEntry(file="y.txt", cut_s=[1.0, 2.5], join_s=[4.0]))
+    s.validate()                                              # must not raise
+
+
 # -- carried-over per-folder state (ticket B06) -------------------------------
 # exclude_breaths/breath_counts/the noise reference key on the bare filename, which is
 # ambiguous the moment two recordings folders share a filename (the common multi-subject
@@ -374,3 +869,200 @@ def test_clear_carried_over_is_a_no_op_when_nothing_is_carried():
     clear_carried_over(s)
     assert s.processing.exclude_breaths == [entry]
     assert s.processing.exclude_breaths[0] is entry      # same object, never touched
+
+
+def test_carried_over_state_default_constructor_has_no_kind():
+    """The dict-backed CarriedOverState (M-07) must construct with no args, same as
+    before it was generalized — every caller (including this test file's own
+    ``CarriedOverState()`` comparisons above) relies on that."""
+    assert CarriedOverState() == CarriedOverState()
+    assert not CarriedOverState()
+    assert CarriedOverState().kinds_present() == []
+
+
+def test_carried_over_state_ecg_and_normalization_references_follow_the_noise_pattern():
+    """The two references retrofitted by M-07 behave exactly like the existing noise
+    reference: a bool property, named in `kinds_present()`, and independent of one
+    another and of the noise reference."""
+    s = Settings()
+    s.input.folder = "/data/S02"
+    s.processing.emg.ecg_reference_file = "ecg.txt"
+    s.processing.emg.ecg_reference_folder = "/data/S01"                  # mismatch -> carried
+    s.processing.emg.normalization_reference_file = "norm.txt"
+    s.processing.emg.normalization_reference_folder = "/data/S02"        # matches -> not carried
+    st = carried_over_state(s)
+    assert st.ecg_reference is True
+    assert st.normalization_reference is False
+    assert ("ecg_reference", ["ecg.txt"]) in st.kinds_present()
+    assert not any(kind == "normalization_reference" for kind, _ in st.kinds_present())
+    assert bool(st) is True
+
+
+def test_clear_carried_over_resets_ecg_and_normalization_references_independently():
+    s = Settings()
+    s.input.folder = "/data/S02"
+    s.processing.emg.ecg_reference_file = "ecg.txt"
+    s.processing.emg.ecg_reference_folder = "/data/S01"
+    s.processing.emg.normalization_reference_file = "norm.txt"
+    s.processing.emg.normalization_reference_folder = "/data/S02"        # matches -> untouched
+    clear_carried_over(s)
+    assert s.processing.emg.ecg_reference_file is None
+    assert s.processing.emg.ecg_reference_folder is None
+    assert s.processing.emg.normalization_reference_file == "norm.txt"  # never touched
+    assert s.processing.emg.normalization_reference_folder == "/data/S02"
+
+
+# -- ticket M-07: _CARRIED_KINDS/_FOLDER_TAG_PATHS is ONE generalized table --------------
+# Every row gets the identical treatment (rebase at load, relativize at save, carried/
+# clear against the live input folder) — this proves the table-driven machinery itself
+# generalizes, not just the two kinds (exclude_breaths, noise) it originally shipped with.
+# The per-kind "how do I populate this row's data" mapping below is test-only scaffolding,
+# not a second copy of the production table: it drives scenarios FOR `_CARRIED_KINDS`,
+# it never redeclares which paths/kinds exist (those come from the import).
+
+def _setup_exclude_files(s, folder):
+    s.processing.exclude_breaths.append(ExcludeEntry(file="x.txt", breaths=[1], folder=folder))
+    return "x.txt"
+
+
+def _setup_breath_count_files(s, folder):
+    s.processing.breath_counts.append(BreathCountEntry(file="x.txt", count=5, folder=folder))
+    return "x.txt"
+
+
+def _setup_noise_reference(s, folder):
+    n = s.processing.emg.noise
+    n.reference_file, n.reference_intervals, n.reference_folder = "x.txt", [[0.0, 1.0]], folder
+    return "x.txt"
+
+
+def _setup_ecg_reference(s, folder):
+    s.processing.emg.ecg_reference_file = "x.txt"
+    s.processing.emg.ecg_reference_folder = folder
+    return "x.txt"
+
+
+def _setup_normalization_reference(s, folder):
+    s.processing.emg.normalization_reference_file = "x.txt"
+    s.processing.emg.normalization_reference_folder = folder
+    return "x.txt"
+
+
+def _setup_breath_type_files(s, folder):
+    from respmech.core.settings import BreathTypeEntry
+    s.processing.breath_types.append(BreathTypeEntry(file="x.txt", breath=1, kind="ic", folder=folder))
+    return "x.txt"
+
+
+def _setup_separator_files(s, folder):
+    from respmech.core.settings import SeparatorEntry
+    s.processing.segmentation.separators.append(
+        SeparatorEntry(file="x.txt", times_s=[1.0, 2.0], folder=folder))
+    return "x.txt"
+
+
+def _setup_segmentation_override_files(s, folder):
+    from respmech.core.settings import SegmentationOverrideEntry
+    s.processing.segmentation.overrides.append(
+        SegmentationOverrideEntry(file="x.txt", cut_s=[1.0], join_s=[2.0], folder=folder))
+    return "x.txt"
+
+
+def _setup_reference_files(s, folder):
+    s.processing.references.append(
+        ReferenceEntry(file="x.txt", ic=BreathRef(file="x.txt", breaths=[1]), folder=folder))
+    return "x.txt"
+
+
+def _setup_group_reference_groups(s, folder):
+    s.processing.reference_defaults.append(
+        GroupReferenceEntry(group="P03", ic=BreathRef(file="x.txt", breaths=[1]), folder=folder))
+    return "P03"
+
+
+def _setup_subject_keys(s, folder):
+    s.input.subjects.append(SubjectEntry(key="P03", tlc_l=6.0, folder=folder))
+    return "P03"
+
+
+_ROW_SETUP = {
+    "exclude_files": _setup_exclude_files,
+    "breath_count_files": _setup_breath_count_files,
+    "noise_reference": _setup_noise_reference,
+    "ecg_reference": _setup_ecg_reference,
+    "normalization_reference": _setup_normalization_reference,
+    "breath_type_files": _setup_breath_type_files,
+    "separator_files": _setup_separator_files,
+    "segmentation_override_files": _setup_segmentation_override_files,
+    "reference_files": _setup_reference_files,
+    "group_reference_groups": _setup_group_reference_groups,
+    "subject_keys": _setup_subject_keys,
+}
+
+
+@pytest.mark.parametrize(
+    "path,kind",
+    [(path, kind) for path, kind, _name_of, _clear_fn in _CARRIED_KINDS],
+    ids=[kind for _path, kind, _name_of, _clear_fn in _CARRIED_KINDS])
+def test_every_folder_tag_path_round_trips(path, kind, tmp_path):
+    import os
+    import tomllib
+    from respmech.core.settings import _walk
+    from respmech.settingsio.toml_io import load_toml, save_toml, _walk_dict
+
+    assert kind in _ROW_SETUP, f"no test scaffolding registered for new kind {kind!r}"
+    setup = _ROW_SETUP[kind]
+
+    # -- rebase at load, relativize at save (portable relative-path analysis) ----------
+    sub = tmp_path / "study"
+    sub.mkdir()
+    p = str(sub / "analysis.toml")
+    s = Settings()
+    s.input.format.sampling_frequency = 2000
+    s.input.folder = "input"
+    setup(s, "input")                       # same folder as input.folder -> relative
+    save_toml(s, p)
+    loaded = load_toml(p)                   # rebases to absolute for the run
+    container, attr = _walk(loaded, path)
+    val = getattr(container, attr)
+    got = val[0].folder if isinstance(val, list) else val
+    want_abs = os.path.normpath(str(sub / "input"))
+    assert got == want_abs
+    save_toml(loaded, p)                    # …and Save must re-relativize
+    with open(p, "rb") as f:
+        raw = tomllib.load(f)
+    parent, raw_attr = _walk_dict(raw, path)
+    raw_val = parent.get(raw_attr)
+    raw_got = raw_val[0]["folder"] if isinstance(raw_val, list) else raw_val
+    assert raw_got == "input"
+
+    # -- carried/clear against the live input folder ------------------------------------
+    s2 = Settings()
+    s2.input.folder = "/data/S02"
+    name = setup(s2, "/data/S01")           # mismatched folder -> carried
+    st = carried_over_state(s2)
+    assert (kind, [name]) in st.kinds_present()
+    assert bool(st) is True
+    clear_carried_over(s2)
+    assert not carried_over_state(s2)
+
+
+def _volume_entropy_settings(version, *, entropy, emg=()):
+    d = _minimal()
+    d["schema_version"] = version
+    d["input"]["channels"] = {**d["input"].get("channels", {}), "volume": 6,
+                              "entropy": list(entropy), "emg": list(emg)}
+    return d
+
+
+def test_schema_2_analysis_with_entropy_on_the_volume_column_gets_one_notice():
+    s = Settings.from_dict(_volume_entropy_settings(2, entropy=[6, 10]))
+    assert s.schema_version == SCHEMA_VERSION
+    assert len(s.notices) == 1 and "conditioned volume" in s.notices[0]
+
+
+def test_no_notice_without_entropy_on_the_volume_column_or_at_the_current_schema():
+    assert Settings.from_dict(_volume_entropy_settings(2, entropy=[10])).notices == []
+    assert Settings.from_dict(_volume_entropy_settings(SCHEMA_VERSION, entropy=[6])).notices == []
+    # an EMG column keeps the EMG rule, so no volume notice either
+    assert Settings.from_dict(_volume_entropy_settings(2, entropy=[6], emg=[6])).notices == []

@@ -2,7 +2,9 @@
 """Regenerate the production golden's EMG scenarios (H5/H6) from the NEW canonical
 core, and categorise every changed column so we can prove that only EMG (this
 milestone) and PTP (the earlier approved window-baseline, Commit B) changed —
-timing / WOB / pressures / entropy stay intact.
+timing / WOB / pressures / entropy stay intact. Also runs the v2-only production
+scenarios (TYPED_IC_SCENARIOS, M-41) that have no legacy-dict shape at all — see
+``_run_typed_ic_scenario``'s own docstring.
 
     python regen_production_emg_golden.py            # compare + report only
     python regen_production_emg_golden.py --write     # also update production_golden.json
@@ -22,6 +24,7 @@ sys.path.insert(0, HERE)
 
 import build_production_golden as bpg          # scenario defs + expected_files + PROD
 from respmech.settingsio.migrate import migrate_dict
+from respmech.settingsio.toml_io import load_toml
 from respmech.core.pipeline import run_batch
 
 GOLDEN = os.path.join(HERE, "production_golden.json")
@@ -40,6 +43,34 @@ SCENARIO_CFG = {
     "emg_h5_ecg_noise_outlier": {"files": "RIU_H5_*.txt", "noise_ref": "RIU_H5_Baseline.txt"},
     "emg_h6_ecg_noise_outlier": {"files": "RIU_H6_*.txt", "noise_ref": "RIU_H6_Baseline.txt"},
 }
+
+# v2-only production scenarios (typed IC + cross-file references, M-41): unlike every
+# entry in SCENARIO_CFG above, these have no legacy-dict shape at all (breath typing
+# and processing.references do not exist in the frozen v1 oracle -- exactly the reason
+# tests/golden/scenarios/typed_ic_crossfile.toml is a committed v2-native TOML rather
+# than a LEGACY_SCENARIOS dict override, see that file's own header comment). Each
+# entry names a settings TOML that lives LOCALLY under tests/golden/production/ (real
+# breath numbers for a real recording -- gitignored, never committed, same as every
+# other settings_py/expected/ file already under that tree) -- see
+# tests/golden/README.md's production-scenario table for what Emil authors there and
+# how (respmech migrate + respmech breaths, M-39's own CLI).
+TYPED_IC_TOML = {
+    "typed_ic_h5": os.path.join(bpg.PROD, "EMG processing fix test", "RIU_H5_typed_ic.toml"),
+}
+TYPED_IC_COVERS = {
+    "typed_ic_h5": "typed IC reference (RIU_H5_IC.txt) + cross-file operating-lung-volume "
+                   "derivation on the RIU_H5_*W.txt workload recordings",
+}
+TYPED_IC_SCENARIOS = list(TYPED_IC_TOML)
+
+# Deliberately NOT included: a bare `python regen_production_emg_golden.py --write`
+# (documented as the whole-suite invocation in docs/NOISE_ECG_OPTIMIZATION.md) runs
+# every name in ALL_SCENARIOS and only writes production_golden.json once, AFTER the
+# loop -- a typed_ic_h5 entry here would make that bare invocation raise
+# FileNotFoundError the moment RIU_H5_typed_ic.toml is not yet authored locally
+# (always true until the maintainer does step 6 of the README's how-to), losing the
+# regen of every scenario that already had data, not just this one. typed_ic_h5 is
+# reachable only by naming it explicitly, exactly as the README's own how-to does.
 ALL_SCENARIOS = list(SCENARIO_CFG)
 
 
@@ -58,8 +89,25 @@ def _jsonify(df):
     return out
 
 
+def _run_typed_ic_scenario(scname):
+    """Run a v2-only production scenario (TYPED_IC_TOML) straight from its committed-
+    locally TOML file -- no ``migrate_dict``, unlike every scenario in SCENARIO_CFG,
+    because breath typing / processing.references have no legacy-dict shape to migrate
+    FROM (the frozen v1 oracle predates both). Overrides input.folder/output.folder/
+    save_processed exactly like the legacy-derived path above -- so the committed TOML
+    never has to hardcode a machine-specific absolute input path, and a run here never
+    writes into the gitignored production/ tree itself."""
+    settings = load_toml(TYPED_IC_TOML[scname])
+    settings.input.folder = os.path.join(bpg.PROD, "EMG processing fix test")
+    settings.output.folder = os.path.join(HERE, "_prod_work_emg", scname)
+    settings.output.data.save_processed = False
+    return run_batch(settings)
+
+
 def run_scenario(scname):
     """Run the NEW canonical core on one production scenario (local paths)."""
+    if scname in TYPED_IC_TOML:
+        return _run_typed_ic_scenario(scname)
     sc = next(s for s in bpg.SCENARIOS if s["name"] == scname)
     cfg = SCENARIO_CFG[scname]
     raw = bpg.extract_settings(os.path.join(bpg.PROD, sc["settings_py"]))
@@ -76,7 +124,7 @@ def run_scenario(scname):
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     write = "--write" in sys.argv
-    scenarios = [a for a in args if a in SCENARIO_CFG] or ALL_SCENARIOS
+    scenarios = [a for a in args if a in SCENARIO_CFG or a in TYPED_IC_TOML] or ALL_SCENARIOS
     golden = json.load(open(GOLDEN))
     summary = {"changed": {"EMG": 0, "PTP": 0, "OTHER": 0}, "other_cols": [], "new_ok": []}
 
@@ -85,6 +133,11 @@ def main():
         res = run_scenario(scname)
         gold_files = golden.get(scname, {}).get("files", {})
         for fname, fr in sorted(res.ok_files.items()):
+            if fr.breaths_table is None:
+                # reference-only file (every breath typed, no tidal breathing at all --
+                # e.g. typed_ic_h5's own RIU_H5_IC.txt): nothing to freeze/compare here,
+                # same guard golden_newcore.py's run_scenario already uses.
+                continue
             new_tbl = fr.breaths_table.reset_index(drop=True)
             old = gold_files.get(fname, {})
             if old.get("status") != "ok" or "golden" not in old:
@@ -116,8 +169,12 @@ def main():
 
         # regenerate this scenario's file entries from the new core
         if write:
-            golden.setdefault(scname, {"covers": next(x['covers'] for x in bpg.SCENARIOS if x['name']==scname), "files": {}})
+            covers = (TYPED_IC_COVERS[scname] if scname in TYPED_IC_COVERS
+                      else next(x['covers'] for x in bpg.SCENARIOS if x['name'] == scname))
+            golden.setdefault(scname, {"covers": covers, "files": {}})
             for fname, fr in res.ok_files.items():
+                if fr.breaths_table is None:
+                    continue  # reference-only file -- nothing to freeze, see the guard above
                 golden[scname]["files"][fname] = {"status": "ok",
                                                   "golden": _jsonify(fr.breaths_table.reset_index(drop=True))}
             for fname, fr in res.failed_files.items():

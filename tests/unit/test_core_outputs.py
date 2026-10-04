@@ -46,6 +46,76 @@ def test_units_use_the_dot_notation_not_the_slash_form():
     assert "/" not in units.unit_for("ve")
 
 
+def test_units_generic_naming_conventions_pct_t_frac_peepi_tt_cv_db():
+    """Generic prefix/suffix naming-convention rules, for names no existing column
+    happens to use yet, so a future column that opts into one of these conventions
+    gets the right unit without a bespoke registry entry. Each check exercises a
+    boundary against a rule that would otherwise misclassify it: a '_pct' name
+    starting with 'rms' or containing 'flow'; a name that is both a suffix hit
+    (_frac/_cv/_db) AND would also match one of this block's own prefix rules
+    (t_/peepi/tt_), where the suffix must win since it is the more specific,
+    intentional convention (e.g. a coefficient of variation of a timing or PEEPi
+    value)."""
+    from respmech.core import quantities as units
+    assert units.unit_for("rms_col_2_pct") == "%"          # not the EMG 'rms' rule
+    assert units.unit_for("t_peak_in_flow") == "s"          # not the 'flow' rule
+    assert units.unit_for("efl_pct") == "%"
+    assert units.unit_for("peepi_lag") == "s"               # not the general 'peepi' rule
+    assert units.unit_for("peepi_dyn") == "cmH₂O"
+    assert units.unit_for("some_frac") == "—"
+    assert units.unit_for("tt_musc") == "—"
+    assert units.unit_for("vt_cv") == "%"
+    assert units.unit_for("noise_db") == "dB"
+    # Suffix beats this block's own prefix rules, not just the older EMG/flow rules:
+    assert units.unit_for("t_peak_cv") == "%"               # not the 't_' prefix rule
+    assert units.unit_for("t_x_frac") == "—"                # not the 't_' prefix rule
+    assert units.unit_for("peepi_dyn_cv") == "%"             # not the 'peepi' prefix rule
+    assert units.unit_for("peepi_db") == "dB"                # not the 'peepi' prefix rule
+    assert units.unit_for("tt_musc_db") == "dB"              # not the 'tt_' prefix rule
+
+
+def test_units_registry_fallback_is_used_only_when_rules_leave_a_name_blank():
+    """The registry (ColumnSpec.unit) is consulted for a name _RULES doesn't
+    classify, but every entry today is unit=None (registry.py's own pinned test),
+    so this is currently a no-op in practice — legacy columns keep resolving via
+    _RULES exactly as before (vmr/tlr_insp stay blank)."""
+    from respmech.core import quantities as units
+    assert units.unit_for("vmr") == ""
+    assert units.unit_for("tlr_insp") == ""
+    # An entirely unknown name (no _RULES match, no registry entry) is also "".
+    assert units.unit_for("totally_unregistered_column_xyz") == ""
+
+
+def test_units_resolve_manoeuvre_columns():
+    """M-29's Manoeuvres-sheet columns — the ones _RULES' generic prefix/suffix
+    conventions cannot already classify (see core/analysis/registry.py::_MANOEUVRES'
+    own docstring for which ones ARE already covered by _RULES alone). Every column
+    `extract()` can emit is here, including the four already covered by _RULES alone
+    (poes_ic_eelv, poes_ic_peakvol, pdi_ic_max, pdi_max_ref)."""
+    from _helpers import assert_units
+    assert_units({
+        "ic_eelv_pre": "L", "ic_eelv_pre_sd": "L", "ic_eelv_pre_n": "", "ic_ti": "s",
+        "ic_plateau_s": "s", "quality": "",
+        # already covered by _RULES alone (vol_/flow/poes-pgas-pdi/rms prefixes) —
+        # pinned here anyway so a reader sees the WHOLE Manoeuvres family at once.
+        "vol_ic": "L", "ic_peak_in_flow": "L·s⁻¹",
+        "poes_ic_min": "cmH₂O", "poes_ic_eelv": "cmH₂O", "poes_ic_swing": "cmH₂O",
+        "poes_ic_peakvol": "cmH₂O", "pdi_ic_max": "cmH₂O", "pdi_ic_swing": "cmH₂O",
+        "pgas_ic_peakvol": "cmH₂O", "poes_max_ref": "cmH₂O", "pdi_max_ref": "cmH₂O",
+        "rms_max_ref": "a.u.",
+    })
+
+
+def test_units_resolve_reference_manoeuvre_columns():
+    """M-35's cross-file-reference columns. `vol_ic_ref` is already covered by
+    _RULES' `vol_` prefix alone (pinned here anyway, same precedent as
+    test_units_resolve_manoeuvre_columns above); `ic_ref_n`/`ic_ref_source` are
+    neither a volume nor any other _RULES-matched shape, so their registry
+    `unit=""` IS the resolving path here, not merely documentation."""
+    from _helpers import assert_units
+    assert_units({"vol_ic_ref": "L", "ic_ref_n": "", "ic_ref_source": ""})
+
+
 def test_display_for_falls_back_to_the_column_identifier():
     """The registry has room for a human-readable name (ticket A04), but the name
     table itself is deliberately not populated yet — see quantities.py's docstring.
@@ -215,6 +285,156 @@ def test_emg_normalization_reference_file_falls_back_when_absent():
     assert reference_values_for_batch(result, settings_unset) is None
 
 
+def test_resolve_emg_reference_notices_when_the_reference_file_has_no_breath_table():
+    """M-30: ``resolve_emg_reference`` is a thin wrapper around
+    ``reference_values_for_batch`` (unchanged, see the test above) that ALSO returns a
+    notice for the one case that function itself cannot distinguish from "not
+    configured" -- the reference file IS present in the batch, but has nothing to read
+    (a reference-only file, M-30, has no ``breaths_table``). Every other
+    None-returning case stays silent, exactly as before."""
+    from respmech.core.summary import resolve_emg_reference
+
+    result = SimpleNamespace(ok_files={
+        "manoeuvre.csv": SimpleNamespace(breaths_table=None),
+        "subject_a.csv": SimpleNamespace(breaths_table=pd.DataFrame({"rms_max": [2.0]})),
+    })
+    settings = SimpleNamespace(processing=SimpleNamespace(emg=SimpleNamespace(
+        normalization="per_file_max", normalization_reference_file="manoeuvre.csv")))
+    values, notice = resolve_emg_reference(result, settings)
+    assert values is None
+    assert notice is not None and "manoeuvre.csv" in notice
+
+    settings_missing = SimpleNamespace(processing=SimpleNamespace(emg=SimpleNamespace(
+        normalization="per_file_max", normalization_reference_file="missing.csv")))
+    assert resolve_emg_reference(result, settings_missing) == (None, None)
+
+    settings_off = SimpleNamespace(processing=SimpleNamespace(emg=SimpleNamespace(
+        normalization="none", normalization_reference_file="manoeuvre.csv")))
+    assert resolve_emg_reference(result, settings_off) == (None, None)
+
+    settings_unset = SimpleNamespace(processing=SimpleNamespace(emg=SimpleNamespace(
+        normalization="per_file_max", normalization_reference_file=None)))
+    assert resolve_emg_reference(result, settings_unset) == (None, None)
+
+    settings_ok = SimpleNamespace(processing=SimpleNamespace(emg=SimpleNamespace(
+        normalization="per_file_max", normalization_reference_file="subject_a.csv")))
+    values_ok, notice_ok = resolve_emg_reference(result, settings_ok)
+    assert values_ok == {"rms_max": 2.0}
+    assert notice_ok is None
+
+
+def test_reference_only_file_as_emg_reference_notices_in_the_run_report_end_to_end(tmp_path):
+    """M-30, end to end through the real pipeline (not just the pure-function test
+    above): configuring a reference-only file as
+    ``processing.emg.normalization_reference_file`` must not silently drop the
+    notice on the floor -- ``write_batch`` has to actually attach it to that file's
+    own notices so it reaches the written run-report.txt. The rest of the batch (a
+    real tidal file) keeps its own per-file EMG normalisation as a graceful
+    fallback, rather than losing the feature entirely."""
+    import openpyxl
+    from respmech.core.io.writers import write_batch
+    from respmech.core.pipeline import run_batch
+    from respmech.core.settings import BreathTypeEntry
+
+    s = synth_settings(str(tmp_path))
+    for n in range(1, 7):
+        s.processing.breath_types.append(
+            BreathTypeEntry(file="synth_case_B.csv", breath=n, kind="ic"))
+    s.processing.emg.normalization = "per_file_max"
+    s.processing.emg.normalization_reference_file = "synth_case_B.csv"
+    s.validate()
+    result = run_batch(s)
+    write_batch(result, s, str(tmp_path))
+
+    report = open(os.path.join(str(tmp_path), "run-report.txt"), encoding="utf-8").read()
+    assert ("synth_case_B.csv: EMG normalisation reference 'synth_case_B.csv' has no "
+           "breath table") in report
+
+    wb_a = openpyxl.load_workbook(
+        os.path.join(str(tmp_path), "data", "synth_case_A.csv.breathdata.xlsx"))
+    assert "EMG normalised" in wb_a.sheetnames        # fell back to its own reference
+
+
+# --------------------------------------------------------------------------- #
+# M-29 — Manoeuvres sheet (typed IC/FVC/max_insp/sniff breaths)
+# --------------------------------------------------------------------------- #
+def test_build_manoeuvre_table_is_none_when_empty():
+    from respmech.core.results import build_manoeuvre_table
+    assert build_manoeuvre_table({}) is None
+
+
+def test_build_manoeuvre_table_joins_quality_flags_into_one_cell():
+    from respmech.core.results import build_manoeuvre_table
+    df = build_manoeuvre_table({
+        4: {"kind": "ic", "vol_ic": 3.0, "quality": ["LOW_EFFORT", "BOUNDARY"]},
+        7: {"kind": "other", "quality": []},
+    })
+    assert list(df["breath_no"]) == [4, 7]
+    assert list(df["kind"]) == ["ic", "other"]
+    row4 = df[df["breath_no"] == 4].iloc[0]
+    assert row4["quality"] == "LOW_EFFORT, BOUNDARY"
+    assert row4["vol_ic"] == 3.0
+    row7 = df[df["breath_no"] == 7].iloc[0]
+    assert row7["quality"] == ""                          # empty list -> blank, not "[]"
+
+
+def test_write_batch_adds_manoeuvres_sheet_for_a_typed_breath(tmp_path):
+    """End to end through the real pipeline: a breath typed 'ic' produces a
+    'Manoeuvres' sheet on that file's breathdata workbook, the Data sheet stays
+    exactly as it would without the typing (the excluded breath just isn't in it —
+    the same behaviour any manually excluded breath already has), and a file with NO
+    typed breath gets no such sheet at all."""
+    import openpyxl
+    from respmech.core.pipeline import run_batch
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.core.io.writers import write_batch
+
+    s = synth_settings(str(tmp_path))
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=4, kind="ic"))
+    s.validate()
+    result = run_batch(s)
+    write_batch(result, s, str(tmp_path))
+
+    wb_a = openpyxl.load_workbook(os.path.join(tmp_path, "data", "synth_case_A.csv.breathdata.xlsx"))
+    assert "Manoeuvres" in wb_a.sheetnames
+    sheet = wb_a["Manoeuvres"]
+    header = [c.value for c in next(sheet.iter_rows(min_row=1, max_row=1))]
+    assert "vol_ic" in header and "kind" in header and "quality" in header
+
+    wb_b = openpyxl.load_workbook(os.path.join(tmp_path, "data", "synth_case_B.csv.breathdata.xlsx"))
+    assert "Manoeuvres" not in wb_b.sheetnames               # no typed breath in this file
+
+    # breath #4 is now excluded from the Data sheet, same as any excluded breath
+    data_a = pd.read_excel(os.path.join(tmp_path, "data", "synth_case_A.csv.breathdata.xlsx"),
+                           sheet_name="Data")
+    assert 4 not in set(data_a["breath_no"])
+
+
+def test_low_effort_flag_is_identical_between_a_subset_batch_and_a_full_batch(tmp_path):
+    """Acceptance criterion, exercised through the REAL pipeline (not just a unit-level
+    call to `extract` with a hand-built tidal list — see test_manoeuvres.py's
+    test_extract_is_deterministic_given_the_same_tidal_breaths for that half): a batch
+    restricted to synth_case_A.csv alone (`only_files=`, the shape `BatchWorker` uses
+    for a single-file test run) must compute the EXACT SAME `FileResult.manoeuvres` for
+    that file as a full batch that also processes synth_case_B.csv — LOW_EFFORT (and
+    every other extracted value) is a function of the file's own tidal breaths alone,
+    never of what else is in the batch."""
+    from respmech.core.pipeline import run_batch
+    from respmech.core.settings import BreathTypeEntry
+
+    s = synth_settings(str(tmp_path))
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=4, kind="ic"))
+    s.validate()
+
+    full = run_batch(s)
+    subset = run_batch(s, only_files=["synth_case_A.csv"])
+
+    assert full.files["synth_case_A.csv"].manoeuvres == subset.files["synth_case_A.csv"].manoeuvres
+    assert full.files["synth_case_A.csv"].manoeuvres[4]["kind"] == "ic"   # the comparison isn't vacuous
+
+
 # --------------------------------------------------------------------------- #
 # P11 — diagnostic figures
 # --------------------------------------------------------------------------- #
@@ -236,6 +456,78 @@ def test_figures_written_and_flag_driven(tmp_path):
     assert len(names) == len(result.ok_files)
     for p in written:
         assert os.path.getsize(p) > 0
+
+
+def test_figure_jobs_channel_aware_per_mode(tmp_path):
+    """``per_file_figure_jobs`` (the one list both the plan and the writer read) is
+    channel-aware. Full channels: Campbell jobs present (Poes is there). Flow-only: no
+    Campbell job, but the drift/trend/volume jobs stay (``Capabilities.volume`` is True
+    whenever flow is and a volume channel/``integrate_from_flow`` is set, per
+    ``Settings.validate``). A THIRD settings object turns ``integrate_from_flow`` off and
+    removes the volume channel too — not reachable through ``Settings.validate()`` on its
+    own path but perfectly constructible without going through it (this test never calls
+    ``validate()``) — pinning that the drift/trend/volume group answers to
+    ``Capabilities.volume`` specifically, not to ``Capabilities.poes`` as a stand-in."""
+    from respmech.core import plots
+
+    s_full = synth_settings(tmp_path / "full")
+    for flag in ("save_pv_average", "save_pv_individual", "save_drift"):
+        setattr(s_full.output.diagnostics, flag, True)
+    labels_full = {label for label, _fn, _suffix in plots.per_file_figure_jobs(s_full)}
+    assert {"PV average", "PV individual", "volume correction", "trend", "drift"} <= labels_full
+
+    s_fo = synth_settings(
+        tmp_path / "flow_only", channels={"poes": None, "pgas": None, "pdi": None, "emg": []}
+    )
+    for flag in ("save_pv_average", "save_pv_individual", "save_drift"):
+        setattr(s_fo.output.diagnostics, flag, True)
+    labels_fo = {label for label, _fn, _suffix in plots.per_file_figure_jobs(s_fo)}
+    assert "PV average" not in labels_fo and "PV individual" not in labels_fo
+    assert {"volume correction", "trend", "drift"} <= labels_fo   # flow implies volume here
+
+    s_novol = synth_settings(
+        tmp_path / "no_volume", channels={"poes": None, "pgas": None, "pdi": None, "emg": []}
+    )
+    for flag in ("save_pv_average", "save_pv_individual", "save_drift"):
+        setattr(s_novol.output.diagnostics, flag, True)
+    s_novol.input.channels.volume = None
+    s_novol.processing.volume.integrate_from_flow = False
+    labels_novol = {label for label, _fn, _suffix in plots.per_file_figure_jobs(s_novol)}
+    assert not ({"volume correction", "trend", "drift"} & labels_novol)
+
+
+def test_figure_jobs_skip_raw_and_trimmed_signals_for_an_emg_only_set(tmp_path):
+    """EMG-only segmentation: _signals_raw/_signals_trimmed only ever draw flow/volume/
+    poes/pgas/pdi panels, never EMG -- an emg_only capability set has none of those, so
+    the job must not even be offered (it would otherwise build a figure with zero
+    subplots and crash on fig.axes[-1]). save_raw/save_trimmed default True, so this is
+    the default-settings shape for the feature, not a corner case."""
+    from respmech.core import plots
+
+    s = synth_settings(tmp_path, channels={
+        "flow": None, "poes": None, "pgas": None, "pdi": None, "volume": None})
+    s.output.diagnostics.save_raw = True
+    s.output.diagnostics.save_trimmed = True
+    labels = {label for label, _fn, _suffix in plots.per_file_figure_jobs(s)}
+    assert "raw signals" not in labels and "trimmed signals" not in labels
+
+
+def test_write_figures_does_not_crash_for_an_emg_only_whole_file_run(tmp_path):
+    """End-to-end regression for the same fix: a real run_batch + write_batch on an
+    EMG-only whole_file analysis, with the default diagnostics settings (save_raw/
+    save_trimmed both True), must not raise and must produce the EMG diagnostic figure
+    it CAN draw."""
+    from respmech.core.pipeline import run_batch
+    from respmech.core.io.writers import write_batch
+
+    s = synth_settings(tmp_path, channels={
+        "flow": None, "poes": None, "pgas": None, "pdi": None, "volume": None})
+    s.processing.segmentation.method = "whole_file"
+    s.input.files = "synth_case_A.csv"
+    result = run_batch(s)
+    written = write_batch(result, s, str(tmp_path))
+    assert any(p.endswith("Raw EMG.pdf") for p in written)
+    assert not any("signals (raw)" in p or "signals (trimmed)" in p for p in written)
 
 
 def test_drift_figure_renders_from_volume_endpoints(tmp_path):
@@ -426,6 +718,29 @@ def test_provenance_names_sample_entropy_only_when_it_is_computed(tmp_path):
     assert rows["Sample entropy"] == "m = 2, r = 0.1 × SD"
 
 
+def test_provenance_names_signals_and_analyses(tmp_path):
+    """M-13: the Provenance sheet gets 'Signals'/'Analyses' rows naming the signal set
+    an analysis actually uses and what it computes, ADDED (never replacing an existing
+    row) alongside the other rows this file's siblings already test above. A reduced
+    signal set (no Pgas/Pdi) also appends a note to the Signals row naming what is off
+    and why -- 'absent by signal set', deliberately NOT `respmech validate`'s own
+    'not in signal set' wording: a spreadsheet reader with the Provenance sheet open
+    and no terminal in sight gets its own, self-contained phrasing."""
+    from respmech.core.io.writers import _provenance_rows
+    s = synth_settings(tmp_path)   # full signal set: flow/poes/pgas/pdi/emg/entropy
+    rows = dict(_provenance_rows(s, datetime(2026, 7, 11)).values)
+    assert rows["Signals"] == "flow, poes, pgas, pdi, emg (derived)"
+    assert rows["Analyses"] == ("Breath timing, Work of breathing, Gastric pressure, "
+                                "Transdiaphragmatic pressure, Ventilatory muscle ratio, "
+                                "EMG, Sample entropy")
+
+    s2 = synth_settings(tmp_path, channels={"pgas": None, "pdi": None})
+    rows2 = dict(_provenance_rows(s2, datetime(2026, 7, 11)).values)
+    assert rows2["Signals"] == "flow, poes, emg (derived) — Pgas/Pdi absent by signal set"
+    assert "Gastric pressure" not in rows2["Analyses"]
+    assert "Transdiaphragmatic pressure" not in rows2["Analyses"]
+
+
 def test_provenance_names_the_wob_source(tmp_path):
     """D22 (UI-overhaul): the same average/individual choice the Preview & QC table's
     own header now names (see test_wob_table_note_* in test_preview_screen.py) also
@@ -439,6 +754,58 @@ def test_provenance_names_the_wob_source(tmp_path):
     s.processing.wob.calc_from = "individual"
     rows = dict(_provenance_rows(s, datetime(2026, 7, 11)).values)
     assert rows["Work of breathing"] == "individual breaths"
+
+
+def test_provenance_names_the_ic_reference_when_resolved(tmp_path):
+    """M-35: only present when a `reference_note` is actually passed (a file whose IC
+    reference resolved) -- write_batch derives it from FileResult.references_used;
+    _provenance_rows itself is tested directly here, same convention as the WOB/
+    entropy rows above."""
+    from respmech.core.io.writers import _provenance_rows
+    s = synth_settings(tmp_path)
+    rows = dict(_provenance_rows(s, datetime(2026, 7, 11)).values)
+    assert "IC reference" not in rows
+
+    note = "synth_manoeuvre_A.csv #4 → 1 accepted, 3 L"
+    rows = dict(_provenance_rows(s, datetime(2026, 7, 11), reference_note=note).values)
+    assert rows["IC reference"] == note
+
+
+def test_ic_reference_provenance_value_formats_source_breaths_and_aggregate():
+    from respmech.core.io.writers import _ic_reference_provenance_value
+    text = _ic_reference_provenance_value(
+        {"source": "P03_IC.txt", "breaths": [2, 3, 4], "n": 2, "value": 3.0512345})
+    assert text == "P03_IC.txt #2, 3, 4 → 2 accepted, 3.05 L"
+
+
+def test_write_batch_writes_the_ic_reference_provenance_row_end_to_end(tmp_path):
+    """End to end through the real pipeline and write_batch: a file whose IC
+    reference resolved gets an 'IC reference' Provenance row; a file with no
+    reference at all (the family absent) gets none."""
+    import openpyxl
+    from respmech.core.pipeline import run_batch
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.core.io.writers import write_batch
+
+    s = synth_settings(str(tmp_path))
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=4, kind="ic"))
+    s.validate()
+    result = run_batch(s)
+    write_batch(result, s, str(tmp_path))
+
+    vol_ic = result.files["synth_case_A.csv"].manoeuvres[4]["vol_ic"]   # own value, not a guess
+    wb_a = openpyxl.load_workbook(
+        os.path.join(tmp_path, "data", "synth_case_A.csv.breathdata.xlsx"))
+    prov_a = {row[0].value: row[1].value
+             for row in wb_a["Provenance"].iter_rows(min_row=2) if row[0].value}
+    assert prov_a["IC reference"] == f"synth_case_A.csv #4 → 1 accepted, {vol_ic:.3g} L"
+
+    wb_b = openpyxl.load_workbook(
+        os.path.join(tmp_path, "data", "synth_case_B.csv.breathdata.xlsx"))
+    prov_b = {row[0].value: row[1].value
+             for row in wb_b["Provenance"].iter_rows(min_row=2) if row[0].value}
+    assert "IC reference" not in prov_b
 
 
 def test_provenance_and_run_report_record_the_environment(tmp_path):
@@ -486,6 +853,77 @@ def test_run_report_accounts_for_excluded_and_failed(tmp_path):
     assert "1 processed, 1 failed" in report
     assert "3 breaths (1 excluded → 2 used)" in report
     assert "[FAIL] bad.csv   ERROR: boom while loading" in report
+
+
+def test_run_report_input_block_names_signals_and_analyses(tmp_path):
+    """M-13: 'Signals:'/'Analyses:' are ADDED lines under INPUT, never a rewording of
+    the pre-existing Folder/Pattern/Sampling lines above them -- the acceptance
+    criterion is explicitly that run-report.txt is 'otherwise unchanged'."""
+    from types import SimpleNamespace
+    from respmech.core.io.writers import _write_run_report
+
+    ok = SimpleNamespace(breaths={1: {"ignored": False}}, error=None)
+    result = SimpleNamespace(ok_files={"good.csv": ok}, failed_files={})
+    s = synth_settings(tmp_path, channels={"pgas": None, "pdi": None})
+    path = _write_run_report(result, s, str(tmp_path), ["data/x.xlsx"], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    input_block = report.split("INPUT\n")[1].split("\n\n")[0]
+    assert f"  Folder:   {s.input.folder}" in input_block
+    assert f"  Pattern:  {s.input.files}" in input_block
+    assert "  Sampling: 1000 Hz" in input_block
+    assert "  Signals:  flow, poes, emg (derived)" in input_block
+    assert ("  Analyses: Breath timing, Work of breathing, EMG, Sample entropy"
+           in input_block)
+    # M-13's own scope note: the "absent by signal set" wording is _provenance_rows-only.
+    assert "absent by signal set" not in report
+    assert "not in signal set" not in report
+
+
+def test_run_report_files_line_distinguishes_typed_from_plainly_excluded_breaths(tmp_path):
+    """M-30: the FILES line's accounting must tell a manually-excluded breath apart
+    from a TYPED manoeuvre breath (both are ``ignored`` for the tidal average, but
+    only one names what it actually is) -- lightweight fakes again, no full batch."""
+    from types import SimpleNamespace
+    from respmech.core.io.writers import _write_run_report
+
+    ok = SimpleNamespace(breaths={
+        1: {"ignored": True, "kind": None},          # a plain manual exclusion
+        2: {"ignored": True, "kind": "ic"},
+        3: {"ignored": True, "kind": "ic"},
+        4: {"ignored": False, "kind": None},
+        5: {"ignored": False, "kind": None},
+        6: {"ignored": False, "kind": None},
+        7: {"ignored": False, "kind": None},
+        8: {"ignored": False, "kind": None},
+        9: {"ignored": False, "kind": None},
+    }, error=None)
+    result = SimpleNamespace(ok_files={"mixed.csv": ok}, failed_files={})
+    s = synth_settings(tmp_path)
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "9 breaths (1 excluded, 2 typed: IC #2,#3 → 6 used)" in report
+
+
+def test_run_report_files_line_never_goes_negative_for_a_typed_but_kept_emg_only_breath(tmp_path):
+    """Self-review finding: on an EMG-only signal set, only 'rest'-typed segments are
+    unioned into exclude_breaths (_legacy_ns._merged_exclude_breaths) -- a segment
+    typed e.g. 'ic' stays NOT ignored (a manoeuvre effort kept in the used count).
+    ``_typed_breath_numbers`` must not count that breath as one of the file's
+    EXCLUDED breaths, or ``plain_excl = excl - n_typed`` would go negative."""
+    from types import SimpleNamespace
+    from respmech.core.io.writers import _write_run_report
+
+    ok = SimpleNamespace(breaths={
+        1: {"ignored": False, "kind": None},
+        2: {"ignored": False, "kind": "ic"},     # typed but NOT ignored (EMG-only, non-rest)
+        3: {"ignored": False, "kind": None},
+    }, error=None)
+    result = SimpleNamespace(ok_files={"seg.csv": ok}, failed_files={})
+    s = synth_settings(tmp_path)
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "-1 excluded" not in report
+    assert "[ok]   seg.csv   3 breaths\n" in report  # no exclusion note at all -- none excluded
 
 
 def test_run_report_lists_unknown_settings_keys(tmp_path):
@@ -538,6 +976,46 @@ def test_run_report_processing_block_lists_overrides_exclusions_and_grouping(tmp
     assert r"Cohort grouping:         ^(P\d+)" in report
 
 
+def test_run_report_processing_block_lists_breath_types(tmp_path):
+    """M-30: which breaths are typed as a manoeuvre is a study-level setting like
+    breath-count overrides/exclusions above -- 'rest' (an EMG-only background segment,
+    M-28) is deliberately left out, since it names a segment to discard, not a
+    manoeuvre a reader would want counted here."""
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.core.io.writers import _write_run_report
+
+    result = SimpleNamespace(ok_files={}, failed_files={})
+    s = synth_settings(tmp_path)
+    s.processing.breath_types = [
+        BreathTypeEntry(file="P02.csv", breath=4, kind="ic"),
+        BreathTypeEntry(file="P02.csv", breath=5, kind="fvc"),
+        BreathTypeEntry(file="P03.csv", breath=1, kind="rest"),
+    ]
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "Breath types:            P02.csv: #4 IC, #5 FVC" in report
+    assert "P03.csv" not in report.split("Breath types:")[1].split("\n")[0]
+
+
+def test_run_report_processing_block_lists_reference_manoeuvres(tmp_path):
+    """M-35: what processing.references/reference_defaults CONFIGURE (never what
+    actually resolved -- that is the REFERENCE MANOEUVRES block's own job), same
+    study-level register as Breath-count overrides/Excluded breaths/Breath types."""
+    from respmech.core.settings import BreathRef, GroupReferenceEntry, ReferenceEntry
+    from respmech.core.io.writers import _write_run_report
+
+    result = SimpleNamespace(ok_files={}, failed_files={})
+    s = synth_settings(tmp_path)
+    s.processing.references = [ReferenceEntry(
+        file="P03_peak.txt", ic=BreathRef(file="P03_IC.txt", breaths=[2, 3, 4]))]
+    s.processing.reference_defaults = [GroupReferenceEntry(
+        group="P04", fvc=BreathRef(file="P04_MFVL.txt", breaths=[1]))]
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert ("Reference manoeuvres:    P03_peak.txt: ic=P03_IC.txt; "
+           "group P04: fvc=P04_MFVL.txt") in report
+
+
 def test_run_report_processing_block_names_none_when_unset(tmp_path):
     from respmech.core.io.writers import _write_run_report
 
@@ -547,7 +1025,108 @@ def test_run_report_processing_block_names_none_when_unset(tmp_path):
     report = open(path, encoding="utf-8").read()
     assert "Breath-count overrides:  none" in report
     assert "Excluded breaths:        none" in report
+    assert "Reference manoeuvres:    none" in report
+    assert "Breath types:            none" in report
     assert "Cohort grouping:         leading filename token" in report
+
+
+def test_run_report_processing_block_segmentation_line(tmp_path):
+    """EMG-only segmentation methods (whole_file/separators) report a 'Segmentation:'
+    line, never 'Breath separation: ... buffer N' (buffer is a flow/volume-only
+    concept) — and the Provenance sheet's own row (read via _provenance_rows, which
+    _write_xlsx would otherwise be the only caller of) says the same thing."""
+    from respmech.core.settings import SeparatorEntry
+    from respmech.core.io.writers import _provenance_rows, _write_run_report
+
+    result = SimpleNamespace(ok_files={}, failed_files={})
+    s = synth_settings(tmp_path, channels={
+        "flow": None, "poes": None, "pgas": None, "pdi": None, "volume": None})
+    s.processing.segmentation.method = "whole_file"
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "Segmentation:            whole file" in report
+    assert "Breath separation" not in report
+    assert "buffer" not in report
+    prov = _provenance_rows(s, datetime(2026, 7, 11))
+    row = prov.loc[prov["Key"] == "Segmentation", "Value"].iloc[0]
+    assert row == "whole file"
+
+    s.processing.segmentation.method = "separators"
+    s.processing.segmentation.separators = [
+        SeparatorEntry(file="a.csv", times_s=[1.0, 2.0]),
+        SeparatorEntry(file="b.csv", times_s=[1.0, 2.0]),
+    ]
+    path2 = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report2 = open(path2, encoding="utf-8").read()
+    assert "Segmentation:            separators (2 per file)" in report2
+
+
+def test_run_report_processing_block_noise_reference_line(tmp_path):
+    """M-22: a new 'Noise reference:' line names which of the resolved sources
+    (expiration/intervals/rest-typed segments) the shared profile was actually built
+    from -- shown only once noise reduction is on, and the SAME text on the
+    Provenance sheet's own row (_provenance_rows), so the two can never disagree."""
+    from respmech.core.io.writers import _provenance_rows, _write_run_report
+
+    result = SimpleNamespace(ok_files={}, failed_files={})
+    s = synth_settings(tmp_path, noise=True)          # use_expiration=False + intervals
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "EMG noise removal:       yes" in report
+    assert "Noise reference:         explicit reference intervals" in report
+    prov = _provenance_rows(s, datetime(2026, 7, 11))
+    row = prov.loc[prov["Key"] == "Noise reference", "Value"].iloc[0]
+    assert row == "explicit reference intervals"
+
+    # disabled: the line (and the Provenance row) disappear entirely -- nothing to
+    # report about a reference that will never be read.
+    s.processing.emg.noise.enabled = False
+    path2 = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report2 = open(path2, encoding="utf-8").read()
+    assert "Noise reference:" not in report2
+    prov2 = _provenance_rows(s, datetime(2026, 7, 11))
+    assert "Noise reference" not in set(prov2["Key"])
+
+
+def test_noise_reference_line_never_crashes_on_an_unrecognised_mode(tmp_path):
+    """resolve_noise_reference_mode() passes an explicit, non-'auto' reference_mode
+    through UNVALIDATED by design -- a settings object that reaches the writer without
+    Settings.validate() having run first (a test double, a future caller) could carry a
+    value the human-text table has no entry for. Self-review finding: a bare dict
+    lookup there would crash report generation with a KeyError over a cosmetic label;
+    the raw, unrecognised string is shown instead, matching the sibling
+    _segmentation_provenance_value's own "never crash on an unmapped value" stance."""
+    from respmech.core.io.writers import _provenance_rows, _write_run_report
+
+    result = SimpleNamespace(ok_files={}, failed_files={})
+    s = synth_settings(tmp_path, noise=True)
+    s.processing.emg.noise.reference_mode = "not_a_real_mode"   # bypasses validate()
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "Noise reference:         not_a_real_mode" in report
+    prov = _provenance_rows(s, datetime(2026, 7, 11))
+    row = prov.loc[prov["Key"] == "Noise reference", "Value"].iloc[0]
+    assert row == "not_a_real_mode"
+
+
+def test_partial_run_report_omits_the_cohort_figure_without_poes(tmp_path):
+    """Self-review finding: the PARTIAL RUN block's ``cohort_bits`` list only checked
+    ``save_pv_individual``, so a flow-only analysis (no Poes -- no Campbell figure ever
+    exists, per-file or cohort) still claimed one was 'UNCHANGED by this run' for a
+    subset write. It must also check the signal set has Poes, the same way
+    ``core.io.plan``/``core.plots`` themselves gate the figure job."""
+    from respmech.core.io.writers import _write_run_report
+
+    result = SimpleNamespace(ok_files={}, failed_files={})
+    s = synth_settings(
+        tmp_path, channels={"poes": None, "pgas": None, "pdi": None, "emg": []}
+    )
+    s.output.diagnostics.save_pv_individual = True   # ticked, but Poes is absent
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11),
+                             cohort_outputs=False)
+    report = open(path, encoding="utf-8").read()
+    assert "cohort Campbell figure" not in report
+    assert "PARTIAL RUN" in report
 
 
 def test_channel_label_defensive_fallbacks():
@@ -607,6 +1186,49 @@ def test_diagnostics_carries_per_file_quality_notices(tmp_path):
     assert "Quality notices:" in report
     assert "synth_case_A.csv: cardiac-gated peak EMG reported as NaN — only 2 R-peaks " \
            "detected" in report
+
+
+def test_run_report_omits_reference_manoeuvres_block_when_nothing_to_say(tmp_path):
+    """M-35: the block is left out entirely when the IC family is absent from this
+    analysis and no external source was loaded or failed -- the overwhelming common
+    case today, same convention DIAGNOSTICS already follows above."""
+    from respmech.core.io.writers import _write_run_report
+
+    s = synth_settings(tmp_path)
+    result = SimpleNamespace(ok_files={}, failed_files={}, noise_report=None,
+                             ecg_auto_report=None)
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "REFERENCE MANOEUVRES" not in report
+
+
+def test_run_report_reference_manoeuvres_block(tmp_path):
+    """M-35: per-RUN outcomes (never study-wide settings, see the PROCESSING-block
+    test above) -- external sources loaded, resolved/unresolved files, and forepass
+    errors, hand-built the same way test_diagnostics_carries_per_file_quality_notices
+    above builds a fake result rather than running the real pipeline."""
+    from respmech.core.io.writers import _write_run_report
+
+    s = synth_settings(tmp_path)
+    result = SimpleNamespace(
+        ok_files={}, failed_files={}, noise_report=None, ecg_auto_report=None,
+        references={"P03_IC.txt": {2: {}, 3: {}, 4: {}}},
+        reference_errors={("P04_IC.txt", None): "FileNotFoundError: no such file"},
+        analysis_plan={"ic": {
+            "family": True,
+            "resolved": {"P03_peak.txt": {
+                "source": "P03_IC.txt", "breaths": [2, 3, 4], "n": 2, "value": 3.05}},
+            "unresolved": ["P05_walk.txt"],
+        }})
+    path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 7, 11))
+    report = open(path, encoding="utf-8").read()
+    assert "REFERENCE MANOEUVRES" in report
+    assert "External sources loaded" in report and "P03_IC.txt: 3 typed breaths" in report
+    assert "IC reference resolved:" in report
+    assert "P03_peak.txt: P03_IC.txt #2, 3, 4 → 2 accepted, 3.05 L" in report
+    assert "IC reference NOT resolved" in report and "P05_walk.txt" in report
+    assert "Reference source errors:" in report
+    assert "P04_IC.txt: FileNotFoundError: no such file" in report
 
 
 def test_full_run_with_failures_marks_cohort_files_incomplete_in_report_and_workbooks(tmp_path):
@@ -873,18 +1495,29 @@ def _rel(paths, base):
     return {os.path.relpath(p, str(base)).replace(os.sep, "/") for p in paths}
 
 
-def test_plan_contains_every_path_a_real_run_writes(tmp_path):
+@pytest.mark.parametrize("mode,channels", [
+    ("full", None),
+    ("flow_only", {"poes": None, "pgas": None, "pdi": None}),
+    ("poes_only", {"pgas": None, "pdi": None}),
+])
+def test_plan_contains_every_path_a_real_run_writes(tmp_path, mode, channels):
     """The regression this ticket exists for. Measured before the fix: a dry run of the
     bundled sample settings said 4 files where a real run wrote 14 (missing Cohort
     summary.xlsx and every diagnostics/ figure); on a bigger batch, 7 vs 45. For the SAME
     settings and the SAME files, every path write_batch actually writes must be a member
     of plan_outputs' ceiling — proven here with every diagnostic figure, EMG overview,
-    EMG audio and cohort output turned on at once."""
+    EMG audio and cohort output turned on at once.
+
+    Parametrized over full/flow_only/poes_only: the invariant must hold whichever
+    signal set is in play, in particular that neither the plan nor the writer promises a
+    Campbell path a reduced signal set can never draw — a channel-blind plan would have
+    kept listing it (and ``plan.is_cap`` would have hidden the gap, since it is already
+    an upper bound for other reasons)."""
     from respmech.core.io.plan import plan_outputs
     from respmech.core.io.writers import write_batch
     from respmech.core.pipeline import run_batch
 
-    s = synth_settings(tmp_path, noise=True)          # ECG removal + shared-profile noise
+    s = synth_settings(tmp_path, noise=True, channels=channels)   # ECG removal + shared-profile noise
     s.output.data.save_processed = True
     s.processing.emg.save_sound = True
     for flag in ("save_pv_average", "save_pv_individual", "save_raw", "save_trimmed",
@@ -894,6 +1527,10 @@ def test_plan_contains_every_path_a_real_run_writes(tmp_path):
     files = [os.path.join(INPUT, "synth_case_A.csv"), os.path.join(INPUT, "synth_case_B.csv")]
     plan = plan_outputs(s, files)
     assert plan.is_cap                                 # figures/EMG-audio are ceilings, not promises
+    if mode == "flow_only":
+        assert not any("Campbell" in p for p in plan.all_paths())
+    else:                                              # full and poes_only both have Poes
+        assert any("Campbell" in p for p in plan.all_paths())
 
     result = run_batch(s)
     written = write_batch(result, s, str(tmp_path))
@@ -901,7 +1538,7 @@ def test_plan_contains_every_path_a_real_run_writes(tmp_path):
     rel_written = _rel(written, tmp_path)
     rel_plan = set(plan.all_paths())
     missing = rel_written - rel_plan
-    assert not missing, f"written but not in the plan: {sorted(missing)}"
+    assert not missing, f"[{mode}] written but not in the plan: {sorted(missing)}"
     assert plan.total_count >= len(written)            # a ceiling, never smaller than reality
 
 
@@ -1044,3 +1681,224 @@ def test_write_planned_honours_the_plans_cohort_outputs_flag(tmp_path):
     written = write_planned(subset_result, s, subset_plan, outputfolder=str(elsewhere))
     assert not any(os.path.basename(p) in ("Average breathdata.xlsx", "Cohort summary.xlsx")
                   for p in written)
+
+
+# ---------------------------------------------------------------------------
+# Presence guards (a channel/column can become absent in a later signal set)
+# ---------------------------------------------------------------------------
+def test_processed_csv_row_count_uses_time_length():
+    """Row count in the processed-data CSV is derived from breath['time'], never
+    breath['flow'] — flow is the channel most likely to become the ABSENT one (an empty
+    float array, the existing absent-channel convention) once a Poes-only/EMG-only signal
+    set exists, while time is present on every breath regardless of which channels it
+    carries. Also covers the companion fix: an absent channel is skipped entirely rather
+    than merged as an empty column (which would collapse the whole result to zero rows
+    via dropna)."""
+    from respmech.core.results import build_processed_data
+    from respmech.core.settings import Settings
+    from respmech.core._legacy_ns import to_legacy_ns
+
+    s = Settings()
+    s.input.format.sampling_frequency = 1000
+    s.output.data.include_ignored_breaths = True
+    ns = to_legacy_ns(s)
+    n = 6
+    breaths = {
+        1: {
+            "number": 1, "ignored": False,
+            "time": np.arange(n, dtype=float),
+            "flow": np.array([]),                       # absent channel
+            "volume": np.arange(n, dtype=float) * 0.2,
+            "poes": np.array([]),
+            "pgas": np.array([]),
+            "pdi": np.array([]),
+            "emgcols": [],
+        },
+    }
+    df = build_processed_data(breaths, ns)
+    assert len(df) == n - 1
+    assert "Flow" not in df.columns
+    assert "Poes" not in df.columns and "Pgas" not in df.columns and "Pdi" not in df.columns
+    assert list(df["Volume"]) == list(np.arange(n - 1, dtype=float) * 0.2)
+
+
+def test_outlier_filter_skips_when_poes_mininsp_absent():
+    """K-204's guard (test_outlier_filter_guard.py) already covers 'no EMG channels
+    configured'; this extends it to 'EMG channels configured but no poes_mininsp column'
+    (a future Poes-less analysis) — the older guard alone would still try to build
+    the rms/poes ratio in processoutliers and KeyError."""
+    from respmech.core.results import build_breath_table
+    from respmech.core.settings import Settings
+    from respmech.core._legacy_ns import to_legacy_ns
+
+    s = Settings()
+    s.input.format.sampling_frequency = 1000
+    s.input.channels.emg = [2, 3]
+    s.processing.emg.outlier_rms_sd_limit = 3.0
+    ns = to_legacy_ns(s)
+
+    def _breath(n):
+        rms = [1.0, 1.0, 1.0, 1.0]                       # 2 channels + max + mean
+        return {
+            "number": n, "ignored": False,
+            "mechanics": {"m": float(n)},                # deliberately no poes_mininsp
+            "wob": {"w": float(n)},
+            "rms": rms, "rms_insp": rms, "rms_exp": rms,
+            "intemg": rms, "intemg_insp": rms, "intemg_exp": rms,
+        }
+
+    breaths = {1: _breath(1), 2: _breath(2), 3: _breath(3)}
+    per_breath, average_row = build_breath_table("x.csv", breaths, ns)
+    assert len(per_breath) == 3
+    assert "rms_col_2" in per_breath.columns
+    assert average_row["file"].iloc[0] == "x.csv"
+
+
+# --------------------------------------------------------------------------- #
+# flow-volume (tidal in MFVL).pdf
+# --------------------------------------------------------------------------- #
+def _mfvl_settings(tmp_path, *, ic=True, fvc=True, **kw):
+    """The dedicated manoeuvre recording (tidal breathing + one IC + one FVC breath)."""
+    from respmech.core.settings import BreathTypeEntry
+    s = synth_settings(str(tmp_path), **kw)
+    s.input.files = "synth_manoeuvre_*.csv"
+    if ic:
+        s.processing.breath_types.append(
+            BreathTypeEntry(file="synth_manoeuvre_A.csv", breath=4, kind="ic"))
+    if fvc:
+        s.processing.breath_types.append(
+            BreathTypeEntry(file="synth_manoeuvre_A.csv", breath=7, kind="fvc"))
+    s.validate()
+    return s
+
+
+def test_mfvl_figure_job_is_planned_only_with_a_typed_fvc(tmp_path):
+    from respmech.core import plots
+    plain = synth_settings(str(tmp_path))
+    assert not any("MFVL" in label for label, _f, _s in plots.per_file_figure_jobs(plain))
+    with_fvc = _mfvl_settings(tmp_path)
+    jobs = plots.per_file_figure_jobs(with_fvc)
+    assert [sfx for label, _f, sfx in jobs if "MFVL" in label] == [
+        "flow-volume (tidal in MFVL).pdf"]
+    with_fvc.output.diagnostics.save_flow_volume = False
+    assert not any("MFVL" in label for label, _f, _s in plots.per_file_figure_jobs(with_fvc))
+    only_ic = _mfvl_settings(tmp_path, fvc=False)
+    assert not any("MFVL" in label for label, _f, _s in plots.per_file_figure_jobs(only_ic))
+
+
+def test_mfvl_figure_job_needs_flow_and_volume(tmp_path):
+    from respmech.core import plots
+    s = _mfvl_settings(tmp_path, channels={"poes": None, "pgas": None, "pdi": None,
+                                           "emg": [], "entropy": []})
+    assert any("MFVL" in label for label, _f, _s in plots.per_file_figure_jobs(s))
+    s.input.channels.flow = None
+    s.input.channels.volume = None
+    assert not any("MFVL" in label for label, _f, _s in plots.per_file_figure_jobs(s))
+
+
+@requires_synth()
+def test_mfvl_figure_is_in_the_plan_and_actually_written(tmp_path):
+    from respmech.core import plots
+    from respmech.core.io.plan import plan_outputs
+    from respmech.core.pipeline import run_batch
+
+    s = _mfvl_settings(tmp_path)
+    for flag in ("save_pv_average", "save_pv_individual", "save_raw", "save_trimmed",
+                 "save_drift", "save_emg"):
+        setattr(s.output.diagnostics, flag, False)
+    plan = plan_outputs(s, [os.path.join(INPUT, "synth_manoeuvre_A.csv")])
+    name = "synth_manoeuvre_A.csv – flow-volume (tidal in MFVL).pdf"
+    assert any(p.endswith(name) for p in plan.all_paths())
+
+    result = run_batch(s)
+    written, failures = plots.write_figures(result, s, str(tmp_path))
+    assert not failures
+    pdfs = [p for p in written if p.endswith(name)]
+    assert len(pdfs) == 1 and os.path.getsize(pdfs[0]) > 0
+    assert _rel(pdfs, tmp_path) <= set(plan.all_paths())
+
+
+@requires_synth()
+def test_mfvl_figure_without_an_ic_reference_still_draws_the_envelope(tmp_path):
+    from respmech.core import plots
+    from respmech.core.pipeline import run_batch
+
+    s = _mfvl_settings(tmp_path, ic=False)
+    fr = run_batch(s).files["synth_manoeuvre_A.csv"]
+    out = str(tmp_path / "fv.pdf")
+    assert plots._flow_volume_mfvl(fr, "synth_manoeuvre_A.csv", out, s) == out
+    assert os.path.getsize(out) > 0
+
+
+@requires_synth()
+def test_mfvl_figure_is_none_for_a_file_without_a_resolved_fvc(tmp_path):
+    from respmech.core import plots
+    from respmech.core.pipeline import run_batch
+
+    s = _mfvl_settings(tmp_path)
+    s.input.files = "synth_case_A.csv"                 # typed entries name another file
+    fr = run_batch(s).files["synth_case_A.csv"]
+    assert plots._flow_volume_mfvl(fr, "synth_case_A.csv", str(tmp_path / "x.pdf"), s) is None
+    assert not (tmp_path / "x.pdf").exists()
+
+
+def _drawn(placed):
+    from matplotlib.figure import Figure
+    from respmech.core import plots
+    ax = Figure().add_subplot(111)
+    plots.draw_flow_volume_mfvl(ax, placed)
+    return ax
+
+
+@requires_synth()
+def test_mfvl_figure_draws_every_tidal_loop_the_mean_and_the_markers(tmp_path):
+    from respmech.core.analysis import mfvl
+    from respmech.core.pipeline import run_batch
+    from respmech.core.settings import ExcludeEntry
+
+    s = _mfvl_settings(tmp_path)
+    s.processing.exclude_breaths.append(
+        ExcludeEntry(
+            file="synth_manoeuvre_A.csv", breaths=[2]))
+    fr = run_batch(s).files["synth_manoeuvre_A.csv"]
+    placed = mfvl.placed_tidal_loops(fr.breaths, fr.manoeuvres, s.processing.mfvl,
+                                     s.processing.lung_volume.ic)
+    n_tidal = sum(1 for b in fr.breaths.values() if not b["ignored"])
+    assert len(placed["loops"]) == n_tidal and fr.breaths[2]["ignored"]
+    ax = _drawn(placed)
+    labels = [ln.get_label() for ln in ax.lines]
+    assert "MFVL" in labels and "average tidal breath" in labels
+    # one line per loop, plus the mean, the envelope, two dotted markers and the zero line
+    assert len(ax.lines) == n_tidal + 5
+    assert {t.get_text().strip() for t in ax.texts} >= {"EELV", "EILV"}
+
+
+def test_mfvl_figure_notes_a_missing_ic_and_loops_outside_the_envelope():
+    from respmech.core.analysis import mfvl
+    import numpy as np
+    env = {"mefv_v": np.array([0.0, 2.0]), "mefv_flow": np.array([3.0, 0.0]), "v_tlc": 2.0,
+           "loops": [], "mean": None, "eelv": None, "eilv": None}
+    ax = _drawn({**env, "ic_op": None, "in_domain_pct": None})
+    assert any("inspiratory-capacity reference" in t.get_text() for t in ax.texts)
+    x = np.array([2.5, 3.0]); f = np.array([0.1, 0.1])
+    ax = _drawn({**env, "ic_op": 3.0, "loops": [(x, f)], "mean": (x, f), "eelv": 3.0,
+                 "eilv": 2.5, "in_domain_pct": 0.0})
+    assert any("outside" in t.get_text() for t in ax.texts)
+    ax = _drawn({**env, "ic_op": 3.0, "loops": [(x, f)], "mean": (x, f), "eelv": 3.0,
+                 "eilv": 2.5, "in_domain_pct": 100.0})
+    assert not any("outside" in t.get_text() or "inspiratory" in t.get_text() for t in ax.texts)
+
+
+@requires_synth()
+def test_mfvl_figure_is_not_written_or_planned_when_switched_off(tmp_path):
+    from respmech.core import plots
+    from respmech.core.io.plan import plan_outputs
+    from respmech.core.pipeline import run_batch
+
+    s = _mfvl_settings(tmp_path)
+    s.output.diagnostics.save_flow_volume = False
+    plan = plan_outputs(s, [os.path.join(INPUT, "synth_manoeuvre_A.csv")])
+    assert not any("tidal in MFVL" in p for p in plan.all_paths())
+    written, failures = plots.write_figures(run_batch(s), s, str(tmp_path))
+    assert not failures and not any("tidal in MFVL" in p for p in written)
+

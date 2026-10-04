@@ -29,6 +29,14 @@ FORBIDDEN = (
     "respmech.core.io.loaders",
     "pandas",
     "scipy.interpolate",
+    # core/analysis/registry.py is not wired into the GUI yet (a later ticket does
+    # that — the compute-guards/CLI tickets) — pinning its absence here means an
+    # accidental eager import doesn't creep back in unnoticed before that wiring
+    # deliberately adds it. core/analysis/signals.py is DELIBERATELY wired in as of
+    # this ticket (Settings.validate() imports it; see core/settings.py) and stays
+    # numpy/Qt-free per test_core_analysis_modules_import_no_numeric_stack below, so
+    # its presence in sys.modules here is expected, not a regression.
+    "respmech.core.analysis.registry",
 )
 
 # The marker keeps parsing unambiguous: a clean run prints "LEAKED:" with nothing after
@@ -57,6 +65,34 @@ def test_gui_startup_does_not_import_the_compute_core():
         "importing respmech.ui.main_window pulled in the compute core: "
         + ", ".join(leaked)
         + "\nKeep these imports lazy — see ui/validation.py and ui/workers.py."
+    )
+
+
+def test_core_analysis_modules_import_no_numeric_stack():
+    """``core/analysis/signals.py`` and ``registry.py`` are the import-budget the
+    module docstrings promise: importable on their own without pulling in numpy,
+    pandas, the compute core, or Qt. Also a subprocess, for the same reason as
+    above — these are long since imported by the time the rest of the unit suite
+    has run."""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = SRC + os.pathsep + env.get("PYTHONPATH", "")
+    probe = (
+        "import sys\n"
+        "import respmech.core.analysis.signals, respmech.core.analysis.registry\n"
+        "forbidden = {'numpy', 'pandas', 'respmech.core.compute', 'PySide6', 'PyQt6'}\n"
+        "print('LEAKED:' + ','.join(m for m in forbidden if m in sys.modules))\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True, text=True, env=env, cwd=ROOT, timeout=60,
+    )
+    assert proc.returncode == 0, f"probe failed:\n{proc.stderr}"
+    marker = [ln for ln in proc.stdout.splitlines() if ln.startswith("LEAKED:")]
+    assert marker, f"probe produced no result line:\n{proc.stdout}\n{proc.stderr}"
+    leaked = [m for m in marker[-1][len("LEAKED:"):].split(",") if m]
+    assert not leaked, (
+        "importing core.analysis.signals/registry pulled in the numeric stack: "
+        + ", ".join(leaked)
     )
 
 

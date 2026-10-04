@@ -291,9 +291,9 @@ def test_breath_brush_hatches_a_carried_exclusion_not_an_ordinary_one(qapp):
     from respmech.ui.main_window import MainWindow
     s = synth_settings("")
     win = MainWindow(AppState(s)); pv = win.preview_screen
-    assert pv._breath_brush(False, carried=True).style() == pv._breath_brush(False, carried=False).style()
-    solid = pv._breath_brush(True, carried=False)
-    hatched = pv._breath_brush(True, carried=True)
+    assert pv._breath_brush(None, carried=True).style() == pv._breath_brush(None, carried=False).style()
+    solid = pv._breath_brush("excluded", carried=False)
+    hatched = pv._breath_brush("excluded", carried=True)
     assert solid.style() == Qt.SolidPattern
     assert hatched.style() != Qt.SolidPattern
     assert solid.style() != hatched.style()
@@ -782,13 +782,13 @@ def test_mech_caption_survives_render_and_toggle(qapp, tmp_path):
     pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
     pv._render_preview(stage_mechanics_preview(s, os.path.join(INPUT, "synth_case_A.csv")))
     cap = pv.mech_caption.fullText().lower()
-    assert "breath" in cap and "click a shaded breath to include/exclude" in cap
+    assert "breath" in cap and "click a shaded breath to mark it" in cap
     assert ", 0 excluded" not in cap                      # nothing excluded yet -> no count clause
     a_breath = next(iter(pv._breath_spans))
     pv._toggle_breath(a_breath)
     cap = pv.mech_caption.fullText().lower()
     assert ", 1 excluded" in cap
-    assert "click a shaded breath to include/exclude" in cap   # the instruction still there
+    assert "click a shaded breath to mark it" in cap   # the instruction still there
     win.close()
 
 
@@ -967,6 +967,79 @@ def test_wob_table_note_clears_on_a_soft_precondition_error(qapp, tmp_path):
     win.close()
 
 
+# ---------------------------------------------------------------------------
+# M-30 — a reference-only test-run file (every breath typed, none tidal) previews
+# without an error, showing the Manoeuvres table instead
+# ---------------------------------------------------------------------------
+def test_reference_only_test_run_shows_manoeuvres_not_not_processed(qapp, tmp_path):
+    """A file where EVERY breath is typed used to reach the results layer's
+    NoBreathsError, which the Preview & QC error path (_SOFT_FILE_ERRORS) rendered as
+    'Not processed'. M-30 makes it a normal, non-error outcome instead: no error card,
+    no 'Not processed' overlay, the Manoeuvres table shown, and a plain status line
+    naming how many typed breaths were found."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    from respmech.core.settings import BreathTypeEntry
+
+    s = synth_settings(str(tmp_path))
+    for n in range(1, 7):                    # synth_case_B.csv has 6 breaths, type them all
+        s.processing.breath_types.append(
+            BreathTypeEntry(file="synth_case_B.csv", breath=n, kind="ic"))
+    s.validate()
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_B.csv")
+
+    result = run_batch(s, only_files=["synth_case_B.csv"])
+    fr = result.ok_files["synth_case_B.csv"]
+    assert fr.error is None and fr.role == "reference"      # the fixture actually exercises M-30
+
+    pv._on_batch_result(result)
+
+    assert "Not processed" not in pv.status.text()
+    assert "Reference manoeuvres only" in pv.status.text()
+    assert "6 typed" in pv.status.text()
+    for p in pv._panels_for("batch"):
+        assert not pv._overlays[p].isVisible()
+    assert pv.table.model().rowCount() == 6
+    assert pv._table_panel._title_label.fullText() == "Manoeuvres (reference-only file)"
+    assert "excluded" not in pv.qc_overview.text().lower()   # not a QC dropout — every breath was typed
+    assert "6 typed manoeuvre" in pv.qc_overview.text()
+    # M-32: fr.role rides through mark_result into the rail's own badge/tooltip state —
+    # not just re-derived from the bare FileResult this test already checked above.
+    assert pv.file_rail.entry("synth_case_B.csv").role == "reference"
+    win.close()
+
+
+def test_reference_only_test_run_still_applies_the_noise_report(qapp, tmp_path):
+    """Self-review finding: an earlier version of the reference-only branch above
+    returned before ``result.noise_report`` was ever applied. That report is built
+    once per WHOLE TEST (independent of any one file's role) whenever EMG channels
+    and noise reduction are configured, so skipping it for a reference-only file
+    would silently drop the batch's auto-tuned suppression strength and never
+    re-condition the EMG views."""
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    from respmech.core.settings import BreathTypeEntry
+
+    s = synth_settings(str(tmp_path), noise=True)
+    for n in range(1, 7):
+        s.processing.breath_types.append(
+            BreathTypeEntry(file="synth_case_B.csv", breath=n, kind="ic"))
+    s.validate()
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_B.csv")
+
+    result = run_batch(s, only_files=["synth_case_B.csv"])
+    assert result.noise_report is not None            # the fixture actually exercises this path
+    assert result.ok_files["synth_case_B.csv"].role == "reference"
+
+    pv._on_batch_result(result)
+
+    assert s.processing.emg.noise.prop_decrease == pytest.approx(
+        result.noise_report["prop_decrease"])
+    win.close()
+
+
 def test_wob_table_note_survives_an_empty_but_column_bearing_table(qapp, tmp_path):
     """All breaths in a file can end up excluded without raising NoBreathsError (that
     fires earlier, at breath separation) — the breaths table can still come back with
@@ -1101,11 +1174,11 @@ def test_toggle_breath_recolours_the_shared_span_item_through_the_new_drawing_pa
     breath_no = next(iter(pv._breath_spans))
     item_idx = next(idx for (it, idx) in pv._breath_regions[breath_no] if it is item)
     incl_rgb = item._spans[item_idx][2].color().getRgb()
-    assert incl_rgb == pv._breath_brush(False).color().getRgb()
+    assert incl_rgb == pv._breath_brush(None).color().getRgb()
 
     pv._toggle_breath(breath_no)                    # exclude it
     excl_rgb = item._spans[item_idx][2].color().getRgb()
-    assert excl_rgb == pv._breath_brush(True).color().getRgb()
+    assert excl_rgb == pv._breath_brush("excluded").color().getRgb()
     assert excl_rgb != incl_rgb
 
     pv._toggle_breath(breath_no)                    # re-include it
@@ -1438,4 +1511,174 @@ def test_batch_snapshot_drops_ecg_auto_detect_with_the_rest_of_emg(qapp, monkeyp
     snap = captured[0]._settings
     assert snap.processing.emg.ecg_auto_detect is False
     snap.validate()                                   # the actual regression: this raised
+    win.close()
+
+
+# --------------------------------------------------------------------------- #
+# M-31: the Manoeuvres table under the per-breath table, same panel
+# --------------------------------------------------------------------------- #
+def _shown(qapp, win, pv):
+    """QWidget.isVisible() ANDs a widget's own shown state with its whole ancestor
+    chain's — a never-.show()'d MainWindow reports isVisible() == False for every
+    child regardless of setVisible(True)/(False), which would make every assertion
+    below trivially pass no matter what _fill_manoeuvres_table actually did (see
+    the existing precedent a few tests up, around 'win.show(); win.activateWindow()').
+    Shows the window on the Preview & QC tab and pumps the event loop so isVisible()
+    reflects the widget's OWN explicit state."""
+    win.resize(1000, 700)
+    win.show()
+    win.tabs.setCurrentWidget(pv)
+    for _ in range(5):
+        qapp.processEvents()
+
+
+def test_manoeuvres_section_is_hidden_until_a_run_types_a_breath(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _shown(qapp, win, pv)
+    assert pv._manoeuvres_section.isVisible() is False    # never shown before any run
+
+    result = run_batch(s, only_files=["synth_case_A.csv"])
+    pv._on_batch_result(result)
+    assert pv._manoeuvres_section.isVisible() is False    # an ordinary all-tidal file
+    win.close()
+
+
+def test_manoeuvres_section_shows_below_the_per_breath_table_for_a_mixed_file(qapp, tmp_path):
+    """synth_case_A.csv has 8 breaths; type ONE of them 'ic' and leave the rest tidal —
+    this is the M-31 shape the ticket exists for (mixed in one file), distinct from
+    M-30's reference-only (every breath typed, no tidal table at all)."""
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    s = synth_settings(str(tmp_path))
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=1, kind="ic"))
+    s.validate()
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _shown(qapp, win, pv)
+
+    result = run_batch(s, only_files=["synth_case_A.csv"])
+    fr = result.ok_files["synth_case_A.csv"]
+    assert fr.role == "tidal"                             # still has tidal breaths
+    assert fr.breaths_table is not None and len(fr.breaths_table) > 0
+    assert fr.manoeuvres_table is not None and len(fr.manoeuvres_table) == 1
+
+    pv._on_batch_result(result)
+    assert pv._manoeuvres_section.isVisible() is True
+    assert pv._manoeuvres_model._df is not None
+    assert pv.manoeuvres_table.model().rowCount() == 1
+    # the PRIMARY table is unaffected — it still shows the ordinary breath-by-breath data
+    assert pv.table.model().rowCount() == len(fr.breaths_table)
+    win.close()
+
+
+def test_manoeuvres_section_is_hidden_for_a_reference_only_file(qapp, tmp_path):
+    """M-30's reference-only file already shows its manoeuvres AS the primary table
+    (retitled 'Manoeuvres (reference-only file)') — the separate stacked section must
+    stay hidden, or the same rows would appear twice."""
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    s = synth_settings(str(tmp_path))
+    for n in range(1, 7):
+        s.processing.breath_types.append(
+            BreathTypeEntry(file="synth_case_B.csv", breath=n, kind="ic"))
+    s.validate()
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _shown(qapp, win, pv)
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_B.csv")
+
+    result = run_batch(s, only_files=["synth_case_B.csv"])
+    pv._on_batch_result(result)
+    assert pv._manoeuvres_section.isVisible() is False
+    assert "Manoeuvres" in pv._table_panel._title_label.fullText()
+    win.close()
+
+
+def test_manoeuvres_section_hides_again_on_a_soft_file_error(qapp, tmp_path):
+    """A precondition-failure ('not processed') result must clear + hide the Manoeuvres
+    section exactly like it already clears the primary table and the Campbell diagram —
+    not leave a stale typed-breath table showing over an error card."""
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch, BatchResult, FileResult
+    s = synth_settings(str(tmp_path))
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=1, kind="ic"))
+    s.validate()
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _shown(qapp, win, pv)
+
+    result = run_batch(s, only_files=["synth_case_A.csv"])
+    pv._on_batch_result(result)
+    assert pv._manoeuvres_section.isVisible() is True     # precondition: shown once
+
+    soft = BatchResult(files={"synth_case_A.csv": FileResult(
+        file="synth_case_A.csv", error="TrimError: no usable flow signal",
+        error_kind="TrimError")})
+    pv._on_batch_result(soft)
+    assert pv._manoeuvres_section.isVisible() is False
+    assert pv._manoeuvres_model._df is None
+    win.close()
+
+
+def test_manoeuvres_section_is_cleared_on_a_file_switch(qapp, tmp_path):
+    """Self-review finding: _clear_file_panels/_clear_all_panels blanked the primary
+    table and Campbell on a file switch but not the Manoeuvres section — the "table"
+    BusyOverlay is parented to self.table alone, not the whole panel, so the PREVIOUS
+    file's typed-breath rows would otherwise stay visible, uncovered, under the new
+    file's spinner/error card."""
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.pipeline import run_batch
+    s = synth_settings(str(tmp_path))
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=1, kind="ic"))
+    s.validate()
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _shown(qapp, win, pv)
+    pv._refresh_files(); pv.file_rail.select_filename("synth_case_A.csv")
+
+    result = run_batch(s, only_files=["synth_case_A.csv"])
+    pv._on_batch_result(result)
+    assert pv._manoeuvres_section.isVisible() is True      # precondition: shown once
+
+    pv.file_rail.select_filename("synth_case_B.csv")       # -> _begin_file_switch -> _clear_file_panels
+    assert pv._manoeuvres_section.isVisible() is False
+    assert pv._manoeuvres_model._df is None
+    win.close()
+
+
+def test_manoeuvres_section_is_cleared_on_a_rendering_bug_in_the_batch_render(
+        qapp, tmp_path, monkeypatch):
+    """Self-review finding: the 'table' BusyOverlay/error card (_on_job_done's generic
+    Exception handler) is parented to self.table alone, not the whole panel — without
+    this fix a rendering bug would leave a PREVIOUS successful run's Manoeuvres rows
+    showing right under the 'display error' card, exactly like the file-switch gap
+    above but for the display-error path instead of the file-switch path."""
+    from PySide6.QtCore import QThread
+    from respmech.core.settings import BreathTypeEntry
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.screens.preview_screen import _Job
+    from respmech.core.pipeline import run_batch
+    s = synth_settings(str(tmp_path))
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=1, kind="ic"))
+    s.validate()
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _shown(qapp, win, pv)
+    result = run_batch(s, only_files=["synth_case_A.csv"])
+    pv._on_batch_result(result)
+    assert pv._manoeuvres_section.isVisible() is True       # precondition: shown once
+
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(pv, "_fill_table", _boom)
+    job = _Job("batch", pv._tokens["batch"], QThread(), object())
+    pv._jobs["batch"] = job
+    pv._on_job_done(job, result)
+    assert pv._manoeuvres_section.isVisible() is False
     win.close()

@@ -22,6 +22,8 @@ import os
 import threading
 from collections import OrderedDict
 
+from respmech.core.settings import resolve_noise_reference_mode
+
 _CAP = 4   # entries per cache — a handful of recently-tuned files is plenty
 
 # The preview launches emg_all + emg_detail + noise on SEPARATE QThreads that hit these
@@ -127,7 +129,13 @@ def _exclude_key(settings):
     # breaths) alone already invalidates, but a folder restamp with an unchanged breath set
     # (a click that only confirms, never edits, the current selection) would not. Include
     # it so a cache hit can never silently outlive either kind of change.
-    return tuple((x.file, tuple(x.breaths), x.folder) for x in settings.processing.exclude_breaths)
+    #
+    # M-20: processing.breath_types is unioned into core's own ignored-breath set exactly
+    # like exclude_breaths is (core._legacy_ns.to_legacy_ns), so a typed breath changes the
+    # SAME cached mechanics/EMG output a manual exclusion would — a cache key that only
+    # watched exclude_breaths would silently serve a stale preview after typing a breath.
+    return (tuple((x.file, tuple(x.breaths), x.folder) for x in settings.processing.exclude_breaths),
+           tuple((t.file, t.breath, t.kind, t.folder) for t in settings.processing.breath_types))
 
 
 def ecg_matrix_key(settings, file_path):
@@ -139,27 +147,137 @@ def ecg_matrix_key(settings, file_path):
     return ("ecg", tok, _load_key(settings), _ecg_key(settings))
 
 
+def _separators_for(settings, filename):
+    """``filename``'s manual segment-boundary times (M-21's ``SeparatorEntry``,
+    ``processing.segmentation.separators``) -- part of :func:`ref_clip_key`'s
+    ``rest_segments`` branch: the file's rest-typed segments are numbered relative to
+    THESE boundaries (``core.pipeline.segment_file``), so a boundary edit changes which
+    samples 'segment 2' even is, without touching a single kind."""
+    for se in settings.processing.segmentation.separators:
+        if se.file == filename:
+            return tuple(se.times_s)
+    return ()
+
+
+def _kinds_for(settings, filename):
+    """``filename``'s typed-breath (here: typed-SEGMENT) kinds (M-19's ``BreathTypeEntry``,
+    ``processing.breath_types``) -- part of :func:`ref_clip_key`'s ``rest_segments`` branch:
+    which segment numbers are 'rest' (and so feed the clip) can change independently of the
+    separator times above."""
+    return tuple(sorted((t.breath, t.kind) for t in settings.processing.breath_types
+                        if t.file == filename))
+
+
+def _emg_seg_key(settings):
+    """The parameters of the two automatic EMG-only segmentations (``processing.
+    segmentation.emg``): window/step and the four burst thresholds. Part of every key
+    whose clip or mask is built from segments that method places -- an edit to any one
+    of them moves the segment (or burst) boundaries without touching a single other
+    setting, so it must miss."""
+    e = settings.processing.segmentation.emg
+    return (e.window_s, e.hop_s, e.burst_threshold_frac, e.burst_min_s, e.burst_smooth_s,
+            e.burst_min_contrast)
+
+
+def _method_sensitive_key(settings):
+    """Every setting ``core.pipeline.segment_file``'s trim/zero/drift/trend/segment
+    sequence can read, beyond ``segmentation.method``/``buffer`` themselves (already
+    carried separately by every branch below that needs ``seg.method``). M-23:
+    ``_emg_segmented`` builds its mask through ``segment_file``, so ANY cache key that
+    already depends on ``seg.method`` must also depend on these, or an edit to one of
+    them can be served a stale hit.
+
+    Volume drift AND trend correction both feed ``separateintobreathsbyvolume``'s peak
+    search directly (an absolute-height comparison against the drift-and-trend-corrected
+    volume, via ``scipy.signal.find_peaks``) -- for ``method == 'volume'`` this is not
+    just trend: drift correction alone measurably shifts which samples are detected as
+    inspiratory/expiratory peaks (confirmed empirically during review: toggling
+    ``correct_drift`` alone, with ``correct_trend`` off, changed the mask). The
+    ``expiration`` branch's docstring below previously claimed drift was "never a
+    source of staleness" -- true only for ``method == 'flow'`` (drift/trend correct
+    the VALUES `_phase_dicts` copies into a breath's ``volume`` key, never the
+    flow-sign-driven phase BOUNDARIES `_emg_segmented`'s mask is built from), false for
+    ``method == 'volume'``; the claim is corrected here rather than repeated. Volume
+    PEAK thresholds (``segmentation.peak.*``) gate the same peak search and are
+    included for the same reason. Included unconditionally (cheap; a flow-method
+    analysis simply never triggers a miss on these) rather than gated on
+    ``seg.method == 'volume'``, matching this module's own "erring toward MORE key
+    fields" philosophy (see the file docstring)."""
+    vol = settings.processing.volume
+    peak = settings.processing.segmentation.peak
+    return (vol.correct_drift, vol.correct_trend, vol.trend_method,
+            vol.trend_peak_min_prominence_frac, vol.trend_peak_min_height,
+            vol.trend_peak_min_distance_s, peak.height, peak.distance_s, peak.width_s)
+
+
 def ref_clip_key(settings, ref_path):
-    """Key for the reference noise clip. Branch-split on use_expiration: the expiration
-    branch depends on breath segmentation; the explicit-intervals branch does not. Excludes
-    the noise STFT params + prop_decrease (the clip is prop/profile-independent) and volume
-    drift/trend (the EMG clip comes from flow-based masks, unaffected by drift correction)."""
+    """Key for the reference noise clip. Branch-split on the RESOLVED mode (M-22's
+    ``resolve_noise_reference_mode`` -- M-24), not the raw ``use_expiration``/
+    ``reference_intervals`` pair directly: an EMG-only set ignores ``use_expiration``
+    entirely (see the resolver's own docstring), so keying on it directly could hand out a
+    stale hit across two settings the resolver treats identically, or (worse) two settings
+    it resolves DIFFERENTLY as though they were the same.
+
+    * ``expiration``: depends on breath segmentation + which breaths are excluded/typed
+      (the clip is built from a flow-bearing file's own quiet-expiration mask).
+    * ``rest_segments``: depends on the SAME segmentation method/buffer (``segment_file``
+      builds the segments the same way the analysis itself will), plus which of THIS file's
+      segments are separated where (:func:`_separators_for`) and typed 'rest'
+      (:func:`_kinds_for`) -- two settings differing in only one separator time or one
+      segment's kind must miss. Never needs :func:`_method_sensitive_key`'s volume
+      drift/trend/peak fields: ``segment_file``'s ``emg_only`` branch (the only branch
+      an EMG-only signal set -- the only set ``rest_segments`` is even reachable for --
+      can take) skips zero/drift/trend correction and volume-peak segmentation
+      entirely, so none of those settings can ever affect this branch's clip.
+    * ``intervals``: an explicit ``[t0, t1]`` span plus the sampling rate that turns it into
+      sample indices -- independent of segmentation entirely.
+    * ``interburst``: the periods between the bursts ``segment_file`` finds with the
+      ``emg_burst`` method, so it depends on that method's parameters
+      (:func:`_emg_seg_key`) and on nothing a flow-bearing set reads.
+    * ``unresolved``: no clip-building implementation exists
+      (:func:`respmech.core.pipeline._reference_noise_clip` raises, and
+      ``Settings.validate()`` rejects it before a batch can even start) -- nothing beyond
+      the common base below is meaningful to key on.
+
+    Excludes the noise STFT params + prop_decrease (the clip is prop/profile-independent)
+    in every branch, as before."""
     tok = file_token(ref_path)
     if tok is None:
         return None
-    n = settings.processing.emg.noise
-    branch_a = bool(n.use_expiration or not n.reference_intervals)
-    base = ("refclip", tok, _load_key(settings), _ecg_key(settings), branch_a)
-    if branch_a:
-        return base + (settings.processing.segmentation.buffer, _exclude_key(settings))
-    return base + (tuple(tuple(iv) for iv in n.reference_intervals),
-                   settings.input.format.sampling_frequency)
+    mode = resolve_noise_reference_mode(settings)
+    base = ("refclip", tok, _load_key(settings), _ecg_key(settings), mode)
+    seg = settings.processing.segmentation
+    if mode == "expiration":
+        # M-23: `_emg_segmented` now builds its mask through `segment_file`, which
+        # applies the configured segmentation method, volume drift AND trend
+        # correction -- before M-23 it hardcoded flow-method segmentation and never
+        # trend-corrected, so none of those inputs (beyond drift, which the old code
+        # already applied per-settings) could ever change this branch's mask.
+        # `seg.method` was already included pre-emptively (a no-op until M-23
+        # landed); `_method_sensitive_key` is the other half of that same fix, added
+        # now that these settings can actually change the mask -- without them, a
+        # preview cached before one of these edits could be served stale forever.
+        return base + (seg.buffer, seg.method, _method_sensitive_key(settings),
+                       _exclude_key(settings))
+    if mode == "rest_segments":
+        name = os.path.basename(ref_path)
+        return base + (seg.method, seg.buffer, _separators_for(settings, name),
+                       _kinds_for(settings, name), _exclude_key(settings),
+                       _emg_seg_key(settings))
+    if mode == "interburst":
+        return base + (seg.method, _emg_seg_key(settings))
+    if mode == "intervals":
+        n = settings.processing.emg.noise
+        return base + (tuple(tuple(iv) for iv in n.reference_intervals),
+                       settings.input.format.sampling_frequency)
+    return base                          # 'unresolved' -- see docstring
 
 
 def noise_report_key(settings, ref_path, files):
     """Key for the test-wide noise report: the reference-clip key (load/ECG/segmentation +
     ref file), a freshness token for EVERY file in the auto_prop gather set, the STFT
-    params, and auto/target (+ the fixed prop only when auto_prop is off)."""
+    params, the segmentation method, and auto/target (+ the fixed prop only when auto_prop
+    is off)."""
     rc = ref_clip_key(settings, ref_path)
     if rc is None:
         return None
@@ -167,15 +285,31 @@ def noise_report_key(settings, ref_path, files):
     if any(t is None for t in toks):
         return None
     n = settings.processing.emg.noise
+    seg = settings.processing.segmentation
     key = ("noise", rc, toks, n.n_fft, n.hop_length, n.win_length, n.n_std_thresh,
            n.n_grad_freq, n.n_grad_time, bool(n.auto_prop), n.fidelity_target,
-           (None if n.auto_prop else n.prop_decrease))
+           (None if n.auto_prop else n.prop_decrease), seg.method)
     if n.auto_prop:
-        # the auto_prop gather (pipeline._build_noise_set) segments EVERY file by flow to
-        # pick prop_decrease, which reads segmentation.buffer — and ref_clip_key only carries
-        # it in the expiration branch. Add it here so a buffer edit invalidates the report in
-        # the explicit-intervals branch too (else a stale fidelity frontier is shown).
-        key += (settings.processing.segmentation.buffer,)
+        # the auto_prop gather (pipeline._build_noise_set) segments EVERY file through
+        # segment_file (M-23: with the configured method/drift/trend/peak settings, not
+        # hardcoded flow) to pick prop_decrease, which reads segmentation.buffer — and
+        # ref_clip_key only carries seg.buffer/_method_sensitive_key in the expiration
+        # branch. Add them here UNCONDITIONALLY (not just when mode == 'expiration') so
+        # a buffer/method/drift/trend/peak edit invalidates the report in the
+        # explicit-intervals and rest_segments branches too (else a stale fidelity
+        # frontier is shown) — the gather loop runs on every batch file regardless of
+        # which mode the single reference CLIP happens to resolve to.
+        #
+        # M-24: also carry each gathered file's OWN separators/typed-kinds. auto_prop is
+        # rejected by Settings.validate() for an EMG-only signal set today, so this is inert
+        # in practice (no set that can carry separators/breath_types can also reach here with
+        # auto_prop=True) -- included for completeness (KEY COMPLETENESS above) rather than
+        # assume that pairing can never change, since ref_clip_key itself only ever sees ONE
+        # file (the reference), never the whole gather set this report is keyed on.
+        names = tuple(os.path.basename(f) for f in files)
+        key += (seg.buffer, _method_sensitive_key(settings), _emg_seg_key(settings),
+               tuple(_separators_for(settings, name) for name in names),
+               tuple(_kinds_for(settings, name) for name in names))
     return key
 
 

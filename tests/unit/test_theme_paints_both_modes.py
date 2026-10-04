@@ -114,6 +114,12 @@ def _all_windows(qapp, tmp_path):
     report = MigrationReport(mapped=["a.b -> c.d"], normalised=["e.f changed meaning"],
                              dropped=["g.h (unused)"])
     windows["MigrationReportDialog"] = MigrationReportDialog(report)
+    from respmech.ui.signal_set_dialog import EmgRecordingContentDialog, SignalSetDialog
+    windows["SignalSetDialog"] = SignalSetDialog()
+    windows["EmgRecordingContentDialog"] = EmgRecordingContentDialog()
+    from respmech.ui.reference_picker_dialog import ReferencePickerDialog
+    windows["ReferencePickerDialog"] = ReferencePickerDialog(
+        "synth_case_A.csv", s, ["synth_case_A.csv", "synth_case_B.csv"])
     return windows
 
 
@@ -188,9 +194,35 @@ def test_the_plot_palette_is_legible_on_its_own_plot_ground(qapp, dark, request)
     faint += [(k, pal[k], contrast(pal[k], pal["mpl_bg"]))
               for k in ("mpl_accent", "mpl_ok", "mpl_warn", "mpl_error")
               if contrast(pal[k], pal["mpl_bg"]) < _CONTRAST_FLOOR]
+    # M-20: every breath-kind label (the per-breath number drawn on the overlay) is real
+    # text and must clear the same floor — breath_incl/excl predate this ticket but were
+    # never actually checked here; breath_ic/fvc/rest/other are the ones it adds.
+    faint += [(k, pal[k], contrast(pal[k], ground))
+              for k in pal if k.startswith("breath_") and k.endswith("_label")
+              if contrast(pal[k], ground) < _CONTRAST_FLOOR]
     assert not faint, (
         f"{'dark' if dark else 'light'} plot ground {ground}: "
         + "; ".join(f"{r} {v} is {c:.2f}:1" for r, v, c in faint))
+
+
+def test_the_three_plot_palettes_share_one_key_set():
+    """The plot palette exists in THREE places — theme.py's light/dark tables and
+    _plot_helpers.py's _FALLBACK_PAL (used only if theme fails to import, which never
+    happens in practice, but must still be a faithful stand-in) — and nothing enforced
+    that a new key (M-20's breath_ic/fvc/rest/other_brush/_label) actually landed in
+    all three. A key present in the light/dark tables but missing from _FALLBACK_PAL
+    would only surface as a KeyError in the theme-import-failed branch, which nothing
+    else exercises; a key missing from light/dark but present in _FALLBACK_PAL would
+    silently paint differently depending on whether theme.py loaded."""
+    from respmech.ui import theme
+    from respmech.ui.screens.preview._plot_helpers import _FALLBACK_PAL
+    light, dark = set(theme._PLOT_LIGHT), set(theme._PLOT_DARK)
+    fallback = set(_FALLBACK_PAL)
+    assert light == dark == fallback, (
+        f"light-only: {light - dark - fallback}; dark-only: {dark - light - fallback}; "
+        f"fallback-only: {fallback - light - dark}; "
+        f"light\\dark: {light - dark}; dark\\light: {dark - light}; "
+        f"light\\fallback: {light - fallback}; fallback\\light: {fallback - light}")
 
 
 @pytest.mark.parametrize("dark", [False, True])

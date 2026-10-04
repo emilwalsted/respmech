@@ -8,7 +8,7 @@ import os
 
 import numpy as np
 import pytest
-
+from PySide6.QtCore import Qt
 
 
 
@@ -57,6 +57,39 @@ def test_breath_overlays_and_toggle(qapp, tmp_path):
     assert pv._toggle_breath(a_breath) is False
     assert all(e.file != name for e in win.state.settings.processing.exclude_breaths)
     assert "included" in pv.status.text()
+
+
+def test_toggling_a_second_breath_in_an_existing_carried_entry_still_reports_carried(qapp, tmp_path):
+    """M-20 carried-fix (B06): _toggle_breath/_set_breath_type must compute the rail
+    badge's carried flag fresh each time via is_carried_folder, never hardcode False.
+    An EXISTING entry's folder is never restamped by a plain toggle (see
+    _set_breath_type's own comment on why), so before this fix a click that merely
+    added a SECOND breath to an already-carried entry made the rail badge silently
+    forget the entry was carried at all — even though the entry's folder tag never
+    actually changed to match the folder now loaded."""
+    from respmech.core.settings import ExcludeEntry
+    from respmech.ui.main_window import MainWindow
+    s = _settings(str(tmp_path))
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))
+    name = pv.file_rail.current_filename()
+    b1, b2 = sorted(pv._breath_spans)[:2]
+    s.processing.exclude_breaths.append(
+        ExcludeEntry(file=name, breaths=[b1], folder="/a/different/folder"))
+    pv._render_preview(_stage_mech(pv, s, "synth_case_A.csv"))   # repaint with the carried entry already there
+    b1_item, b1_idx = pv._breath_regions[b1][0]
+    assert b1_item._spans[b1_idx][2].style() != Qt.SolidPattern, "b1 must start out hatched"
+
+    assert pv._toggle_breath(b2) is True                # excludes a SECOND breath in the SAME entry
+    entry = next(e for e in s.processing.exclude_breaths if e.file == name)
+    assert entry.folder == "/a/different/folder", "an existing entry's folder is never restamped"
+    assert set(entry.breaths) == {b1, b2}
+    assert pv.file_rail.entry(name).excluded_carried is True, (
+        "the rail badge must still read carried after a click touched one of this "
+        "entry's OTHER breaths")
+    # b1's own overlay brush, untouched by the b2 click, is still exactly as painted
+    assert b1_item._spans[b1_idx][2].style() != Qt.SolidPattern
 
 
 # -- Feature B: select a noise-profile region on the graph ------------------
@@ -220,6 +253,7 @@ def test_emg_subtab_visibility_tracks_channels(qapp, tmp_path):
     # with EMG channels -> all three sub-tabs, in the pipeline order (Mechanics › ECG › noise)
     win = MainWindow(AppState(_settings(str(tmp_path))))
     pv = win.preview_screen
+    mech_tab, ecg_tab, emg_tab = pv._mech_tab, pv._ecg_tab, pv._emg_tab
     titles = [pv.subtabs.tabText(i) for i in range(pv.subtabs.count())]
     assert titles == ["Mechanics", "› EMG – ECG reduction", "› EMG – noise reduction"]
     # remove the EMG channels and re-sync -> both EMG sub-tabs disappear, Mechanics stays
@@ -229,6 +263,108 @@ def test_emg_subtab_visibility_tracks_channels(qapp, tmp_path):
     assert titles == ["Mechanics"]
     # the widgets still exist (just not shown), so nothing referencing them breaks
     assert pv.emg_channel.count() == 0
+    # M-17: rebuilding the sub-tab bar (subtab_plan) never recreates a tab widget — the
+    # same three objects back every plan, only inserted/removed (emg_channel/cleanup-
+    # contract tests rely on this).
+    assert (pv._mech_tab, pv._ecg_tab, pv._emg_tab) == (mech_tab, ecg_tab, emg_tab)
+    # add the EMG channels back and re-sync -> same objects reappear, not new ones
+    win.state.settings.input.channels.emg = [10, 11]
+    pv.sync_from_settings()
+    titles = [pv.subtabs.tabText(i) for i in range(pv.subtabs.count())]
+    assert titles == ["Mechanics", "› EMG – ECG reduction", "› EMG – noise reduction"]
+    assert (pv._mech_tab, pv._ecg_tab, pv._emg_tab) == (mech_tab, ecg_tab, emg_tab)
+    # M-17: a genuine Flow-only signal set (Poes/Pgas/Pdi never assigned, not merely
+    # cleared after the fact) reaches the same result through Capabilities rather than the
+    # old bare has-EMG-channels boolean.
+    flow_only = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT,
+                               channels={"poes": None, "pgas": None, "pdi": None, "emg": []})
+    win2 = MainWindow(AppState(flow_only))
+    titles = [win2.preview_screen.subtabs.tabText(i)
+             for i in range(win2.preview_screen.subtabs.count())]
+    assert titles == ["Mechanics"]
+    win2.close()
+
+
+def test_malformed_signals_degrades_preview_subtabs_and_campbell_title(qapp, tmp_path):
+    """CI-blocking regression: PreviewScreen's own render path (_update_subtabs,
+    _update_campbell_panel_title, both called from _build()) called
+    Capabilities.from_settings unprotected, on MainWindow's own construction (the
+    command-line/drag-drop open path, which has no surrounding try/except at all) —
+    crashing the window BEFORE settings_screen.py's own guard (_capabilities_for_view,
+    added earlier) was ever reached. Both now use from_settings_or_none and degrade to
+    the safest shape: no EMG-driven sub-tabs, poes-less Campbell/flow-volume title."""
+    from respmech.core.settings import Settings
+    from respmech.ui.main_window import MainWindow
+    s = Settings()
+    s.analysis.signals = "flow"          # malformed: a bare string, not a list
+    win = MainWindow(AppState(s))         # must not raise
+    pv = win.preview_screen
+    titles = [pv.subtabs.tabText(i) for i in range(pv.subtabs.count())]
+    assert titles == ["Mechanics"]
+    assert pv.btn_export_fig.text() == "Export flow-volume…"
+    win.close()
+
+
+def test_malformed_signals_with_a_noise_reference_set_does_not_crash_the_noise_readout(qapp):
+    """M-24 self-review finding: the sibling regression the test above does NOT cover.
+    _refresh_noise_readout/_refresh_noise_reference_band (_emg_noise.py) now call
+    resolve_noise_reference_mode on every construction/sync, same unprotected path as
+    Capabilities.from_settings above -- but ONLY once noise.reference_file is actually set
+    (both have an early 'not set'/hidden-band return otherwise, see their own guards), which
+    the test above's bare Settings() never does. Pin the actual crash scenario: a hand-edited
+    bare-string analysis.signals on a settings object that ALSO already has a noise
+    reference configured (the realistic case: an existing analysis file, hand-edited or
+    corrupted, reopened)."""
+    from respmech.core.settings import Settings
+    from respmech.ui.main_window import MainWindow
+    s = Settings()
+    s.analysis.signals = "flow"                          # malformed: a bare string
+    s.processing.emg.noise.reference_file = "ref.csv"     # the vulnerable guard is skipped
+    win = MainWindow(AppState(s))                          # must not raise
+    pv = win.preview_screen
+    # degrades to the 'unresolved' branch text, not a crash and not a stale/wrong readout
+    assert "unresolved" in pv.noise_ref_readout.toolTip().lower()
+    assert pv._noise_region.isVisible() is False           # no single span to shade either
+    win.close()
+
+
+def test_subtab_plan_per_preset(qapp, tmp_path):
+    """subtab_plan(caps) itself, independent of any rebuild — the ordered (widget, title)
+    pairs a Capabilities shape maps to, for the two presets M-17 activates plus the default
+    full family. Widget IDENTITY is asserted too: the same three tab objects back every
+    plan, never rebuilt (the whole point of building the bar from a plan instead of
+    recreating widgets)."""
+    from respmech.core.analysis.signals import Capabilities
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState(_settings(str(tmp_path))))
+    pv = win.preview_screen
+    full_caps = Capabilities.from_settings(win.state.settings)
+    assert full_caps.emg is True
+    plan = pv.subtab_plan(full_caps)
+    assert [t for _w, t in plan] == ["Mechanics", "› EMG – ECG reduction", "› EMG – noise reduction"]
+    assert [w for w, _t in plan] == [pv._mech_tab, pv._ecg_tab, pv._emg_tab]
+
+    flow_only_caps = Capabilities.from_settings(
+        synth_settings(str(tmp_path), channels={"poes": None, "pgas": None, "pdi": None,
+                                                 "emg": []}))
+    assert flow_only_caps.mode == "flow_only"
+    plan = pv.subtab_plan(flow_only_caps)
+    assert [t for _w, t in plan] == ["Mechanics"]
+    assert [w for w, _t in plan] == [pv._mech_tab]
+
+    poes_caps = Capabilities.from_settings(
+        synth_settings(str(tmp_path), channels={"pgas": None, "pdi": None, "emg": []}))
+    assert poes_caps.mode == "poes_only"
+    plan = pv.subtab_plan(poes_caps)
+    assert [t for _w, t in plan] == ["Mechanics"]      # Poes alone still carries no EMG
+
+    # caps=None (Capabilities.from_settings_or_none's "nothing safe to derive" signal for a
+    # malformed analysis.signals) degrades the same way as no EMG channels at all, rather
+    # than raising on the `caps.emg` attribute access a bare None would otherwise crash on.
+    plan = pv.subtab_plan(None)
+    assert [t for _w, t in plan] == ["Mechanics"]
+    assert [w for w, _t in plan] == [pv._mech_tab]
+    win.close()
 
 
 # -- Moved noise-window options live on the EMG tab, gated on a reference ----
@@ -443,7 +579,7 @@ def test_refresh_files_prev_vanished_resets_overlays(qapp, tmp_path):
     win.close()
 
 
-def test_legend_click_does_not_toggle_breath(qapp, tmp_path):
+def test_legend_click_does_not_mark_breath(qapp, tmp_path):
     """A click landing on a plot's legend (which pyqtgraph leaves unaccepted) must
     not fall through and toggle the breath beneath it; a click that misses the legend
     still toggles. Fakes keep the guard branch deterministic without scene geometry."""
@@ -483,9 +619,10 @@ def test_legend_click_does_not_toggle_breath(qapp, tmp_path):
                 if e.file == "synth_case_A.csv" for b in e.breaths}
 
     pv._toggle_from_emg_click(_Ev(), [_Plot(legend_hit=True)], off)   # on the legend
-    assert num not in excluded()                                     # -> not toggled
+    assert pv._selected_breath is None                               # -> not marked
     pv._toggle_from_emg_click(_Ev(), [_Plot(legend_hit=False)], off)  # misses the legend
-    assert num in excluded()                                         # -> toggled
+    assert pv._selected_breath == num                                # -> marked...
+    assert num not in excluded()                                     # ...and NOT excluded
     win.close()
 
 

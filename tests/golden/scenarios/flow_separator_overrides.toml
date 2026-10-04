@@ -1,0 +1,88 @@
+# V2_SCENARIOS golden fixture: 'flow_separator_overrides'. Full signal set
+# (matching make_golden.py's base_settings()) over the SAME committed synthetic
+# recordings every other golden scenario uses (tests/golden/input), with ONE
+# processing.segmentation.overrides entry (a single cut, mid-recording, on
+# synth_case_A.csv) -- there is no legacy-dict shape for `overrides` (v2-only), so
+# this is baked directly from the v2 core (golden_newcore.py --write) rather than run
+# through the frozen v1 oracle, exactly like every other V2_SCENARIOS entry -- see
+# make_golden.py's V2_SCENARIOS/LEGACY_SCENARIOS split and tests/golden/README.md.
+# synth_case_B.csv has NO override entry, so its own breath table stays identical to
+# every other full-channel scenario's synth_case_B.csv breath table -- this scenario
+# characterises the override applying to exactly the file it names, nothing else. Do
+# not hand-edit golden_reference.json's "flow_separator_overrides" entry; regenerate
+# it with golden_newcore.py --write after a deliberate change here.
+schema_version = 2
+
+[input]
+folder = "../input"
+files  = "synth_case_*.csv"
+
+[input.format]
+sampling_frequency = 1000
+decimal            = "."
+
+[input.channels]
+flow    = 5
+volume  = 6
+poes    = 7
+pgas    = 8
+pdi     = 9
+emg     = [2, 3, 4]
+entropy = [10, 11, 12]
+
+[processing.segmentation]
+method = "flow"
+buffer = 200
+
+[processing.segmentation.peak]
+height     = 0.1
+distance_s = 0.1
+width_s    = 0.2
+
+# ONE cut, well inside the recording (synth_case_A.csv is ~24 s at 8 breaths of 3 s
+# period) and chosen off any round second to make an accidental exact collision with
+# an automatic breath boundary vanishingly unlikely. It lands inside the ORIGINAL
+# breath 4's own inspiration (which runs to roughly 10.97 s), so the FIRST of the two
+# resulting breaths (renumbered #4) has no expiration at all -- an inherent property
+# of bisecting a single insp/exp cycle with one cut, not a bug (see
+# test_cut_mid_inspiration_also_conserves_total_ti_plus_te) -- excluded below exactly
+# as a user would exclude a genuinely unusable stub breath, which ALSO exercises the
+# renumbering the UI reuses from the EMG-only separators feature (the SECOND
+# resulting breath, #5, is a normal, full-expiration breath and stays in the
+# average).
+[[processing.segmentation.overrides]]
+file   = "synth_case_A.csv"
+cut_s  = [10.37]
+join_s = []
+
+[[processing.exclude_breaths]]
+file    = "synth_case_A.csv"
+breaths = [4]
+
+[processing.volume]
+integrate_from_flow = false
+correct_drift       = true
+correct_trend       = false
+
+[processing.wob]
+calc_from          = "average"
+avg_resampling_obs = 300
+
+[processing.emg]
+rms_window_s = 0.050
+remove_ecg   = false
+
+[processing.entropy]
+# Pinned to match the LEGACY_SCENARIOS' own fixed configuration (make_golden.py's
+# base_settings()), not the live GUI default -- see flow_only.toml's own comment on
+# why this must be set explicitly for a v2-only scenario.
+epochs    = 2
+tolerance = 0.1
+
+[output]
+folder = "output"
+
+[output.data]
+save_average          = true
+save_breath_by_breath = true
+save_processed         = false

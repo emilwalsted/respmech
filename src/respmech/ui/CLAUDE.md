@@ -4,6 +4,19 @@ Qt/GUI gotchas for the PySide6 app: layout and font-metric budgets, styling, wor
 threads and queued signals, deferred rendering, and pyqtgraph. The project-wide rules
 stay in the repo-root `CLAUDE.md`; test-side hazards are in `tests/CLAUDE.md`.
 
+### A literal `&` in any button, group-box, menu/action, tab or buddy-label caption must be doubled
+
+Qt treats a single `&` as a mnemonic marker: it is swallowed and the following character
+underlined, which silently eats a whole word when that character is a space ("Run &
+results" rendered as "Run _results" in a shipped release). Every caption in this app that
+wants a literal ampersand doubles it ("Preview && QC", "Process && write this file"), and
+`tests/unit/test_ui_wording.py::test_no_caption_anywhere_turns_an_ampersand_into_a_mnemonic`
+enforces it across the whole window — not just push buttons, but `QGroupBox` titles,
+every menu/menu-bar `QAction`, `QTabBar` captions and buddy `QLabel`s too, via the shared
+`_lone_ampersands(root)` helper in `tests/unit/_helpers.py`. A new dialog or window does
+not need its own copy of this guard: construct it once inside the existing test (or add
+it to whichever window the test already builds) so the scan reaches it.
+
 ### A `QDialog` without `Qt.WA_DeleteOnClose` is never destroyed by its own `accept()`/`close()`
 
 Set the attribute explicitly on any one-shot dialog, or use the `prior=` pattern for
@@ -342,3 +355,119 @@ modelled one (`..._labels_fit_or_hide_for_cause_in_windows_metrics`) asserts the
 mechanism: a shown label is never wider than its axis, and a hidden one is hidden only
 because the name at the smallest allowed font (`SciAxis._label_sizes()`) is wider still.
 Never a pixel literal in either.
+
+### Item-level click vs scene-signal click: two different pyqtgraph mechanisms for two different buttons (M-20)
+
+`BreathSpansItem`'s right-click/Ctrl+left-click "request a breath-type menu" primitive
+and the plain-left-click primitive (`_on_plot_clicked`/`_toggle_from_emg_click`, wired to
+`scene().sigMouseClicked`; since the single-click-selects change it MARKS a breath via
+`_select_breath`, exclusion lives in the right-click menu) look
+like the same kind of thing but are resolved through genuinely different pyqtgraph
+machinery, and mixing them up produces a menu that never opens or a ViewBox context
+menu that never goes away.
+
+**The plain left-click toggle is scene-level and always fires.** `GraphicsScene.
+sendClickEvent` calls `self.sigMouseClicked.emit(ev)` unconditionally at the end,
+regardless of which item's (if any) `mouseClickEvent` accepted the event first — so a
+handler connected to that signal (as this app's toggle handlers are) sees EVERY click,
+and must check `ev.isAccepted()`/`ev.button()` itself to ignore what it doesn't want.
+
+**The right-click-for-a-menu primitive is item-level, and item-level resolution order
+is NOT what it looks like.** `GraphicsScene.itemsNearEvent` sorts candidate items by
+their absolute z-value (each item's own `zValue()` summed up its `parentItem()` chain),
+descending. Measured directly (`pyqtgraph.graphicsItems.ViewBox.ViewBox` itself has
+`zValue() == -100`): a `BreathSpansItem` painted at its usual `zValue(-10)` (so its
+translucent breath fill stays visually BEHIND the channel traces) has an absolute z of
+`-110` — BELOW the ViewBox it sits inside, which is itself an eligible click candidate
+with `mouseClickEvent` (it accepts a right-click to raise its own context menu,
+`menuEnabled()` permitting). The naive fix — raise the item's zValue so it is checked
+before ViewBox — collides with the paint requirement, since raising it to 0 (ViewBox's
+threshold) makes it paint on top of same-z-value trace curves instead of behind them.
+
+**The fix pyqtgraph itself provides for exactly this ambiguity is `HoverEvent.
+acceptClicks(button)`**, documented on `HoverEvent` in `pyqtgraph/GraphicsScene/
+mouseEvents.py`: an item's `hoverEvent()` can claim a SPECIFIC button ahead of the
+actual click, and `GraphicsScene.sendClickEvent` checks that claim FIRST — if claimed,
+the item's own `mouseClickEvent` is called directly, and the whole z-ordered
+`itemsNearEvent` loop (where ViewBox would otherwise win) never runs at all for that
+button. `BreathSpansItem.hoverEvent` claims `Qt.RightButton` only when the hover
+position is over an actual breath span (never a gap, so a right-click that misses every
+span still reaches ViewBox's own menu unclaimed, unmodified zValue and all). Ctrl+left-
+click needs no such claim: `ViewBox.mouseClickEvent` never accepts the left button
+regardless of modifiers, so the ordinary z-ordered fallback already reaches
+`BreathSpansItem` for that button without any hover trick — verified empirically (a
+small offscreen `pg.PlotWidget` + simulated hover/press/release), not assumed from
+reading pyqtgraph's source alone; the class docstring has the exact measured numbers.
+
+**Rule for any future "claim a button ahead of a competing item" need on a pyqtgraph
+item:** reach for `HoverEvent.acceptClicks`, not for a zValue fight — it is the
+documented mechanism for precisely this, and it decouples click-priority from paint
+order, which a zValue change never can.
+
+### A transient popup `QMenu` needs `Qt.WA_DeleteOnClose` or it never gets cleaned up
+
+`_MechanicsMixin._build_type_menu` (M-20) constructs a brand-new `QMenu` on every
+right-click/Ctrl+left-click (parented to `self.plots`, so `_lone_ampersands`'s
+`findChildren(QMenu)` scan reaches it — an unparented menu is invisible to that scan).
+Popped up with `.popup()`, not `.exec()`, matching pyqtgraph's own `ViewBox.
+raiseContextMenu` convention (non-blocking; the choice is handled via each action's
+`triggered` signal instead of `.exec()`'s blocking return value). Without
+`setAttribute(Qt.WA_DeleteOnClose)` the closed menu is never destroyed — Qt does not
+garbage-collect a widget just because it lost focus or hid — so a long interactive
+session accumulates one dead `QMenu` QObject per right-click, forever. The same
+`WA_DeleteOnClose` gotcha this file already documents for a one-shot `QDialog` applies
+identically here.
+
+### One click-menu-building code path serves two mutually-exclusive tabs — state it caches must be reset in BOTH renderers (M-31)
+
+`_build_type_menu`/`_handle_type_requested` are shared between the flow-bearing
+Mechanics stack and the EMG-only 'EMG – segments' tab (M-26's own docstring on
+`_draw_breath_overlays` explains why: the two never render breaths at once, so sharing
+the overlay/click machinery is safe). M-31 added `self._suggested_fvc` — the breath
+number `core.analysis.manoeuvres.suggest_fvc()` points at, read by the menu's disabled
+"Suggested: FVC" hint — as more such shared, cached state, and it has the SAME trap
+`_breath_spans`/`_breath_regions`/etc. already had before this ticket touched them: it
+is only ever WRITTEN by `_render_preview_stage1` (Mechanics) and `_render_segments_
+preview` (Segments), never by a shared reset routine both paths funnel through. Setting
+it in one and forgetting the other silently lets a suggestion computed against one
+file/tab's breath numbering survive into a DIFFERENT file/tab's menu, where the number
+means something else entirely — the failure is not a crash, just a hint pointing at the
+wrong breath, which is easy to miss in review since neither render path errors. Any
+FUTURE per-file/per-tab cache added to this shared machinery needs to be written (or
+explicitly cleared) in every renderer that can leave it stale, not just the one whose
+ticket happens to introduce it — grep both `_render_preview_stage1` (`_mechanics.py`)
+and `_render_segments_preview` (`_segments.py`) before assuming one reset site is
+enough.
+
+### Preview's tabs, jobs and menus are driven by the signal-set shape, not by the channels alone
+
+Everything that asks "does this analysis have flow / Poes / EMG, and is it EMG-only?" reads a
+`core.analysis.signals.Capabilities` (built with `Capabilities.from_settings_or_none` on any
+UI path that runs before validation, so a hand-edited bare-string `analysis.signals` degrades
+the render instead of crashing the window). Three places consume it and must agree:
+
+- **The sub-tab bar**: `subtab_plan(caps)` in `screens/preview/_emg_noise.py` returns the
+  ordered `(widget, title)` pairs: Mechanics or, for an EMG-only set, EMG – segments first,
+  then the ECG and noise tabs whenever `caps.emg`. `_update_subtabs` inserts and removes the
+  existing widgets; never recreate them (cleanup-contract tests hold their identity).
+- **Which preview jobs a settings edit re-runs**: `_kinds_for_settings_path(path, caps=None)` in
+  `screens/preview/_jobs.py`. `caps=None` keeps the flow-bearing rule; under an EMG-only set an
+  EMG channel or `processing.emg.*` edit also re-dispatches `batch` and `segments`, because
+  the test run's mechanics are built from the EMG channels there. A path it does not classify
+  falls through to ALL kinds: erring wide only costs a recompute, erring narrow leaves a stale
+  panel. `_schedule` gates the `segments` job to `caps.mode == 'emg_only'`, mirroring the
+  tab plan, so the two can never disagree about which shape gets which preview.
+- **The breath menu** (built in `_mechanics.py`, reused by the segments tab): typing a breath and the "Use as IC
+  reference for" submenu are item-level clicks on `BreathSpansItem` (see the item-level vs
+  scene-signal section above); the reference picker dialog (`reference_picker_dialog.py`) is
+  settings-only and reads `processing.breath_types`, never a recording.
+
+Relevance decides whether a card or tab EXISTS for this shape (`_cond_cards` /
+`_apply_card_visibility` in `screens/settings_screen.py`); the gating rule still decides
+whether an ACTION is enabled. Keep the two apart: hiding a surface because it does not apply is
+fine, hiding one because a precondition is unmet is not.
+
+Every new caption, including a new group box like *Subjects && lung volumes*, is covered by the
+lone-ampersand guard only if its dialog or window is built inside the existing scan in
+`tests/unit/test_ui_wording.py` (or its own test calling `_lone_ampersands(dlg)`, as
+`test_reference_picker.py` does).

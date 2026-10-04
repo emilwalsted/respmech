@@ -2,6 +2,7 @@
 state, replacing Preview & QC's plain ``file_combo`` and Run & results' ``files_table``.
 Pure widget-level tests against :class:`respmech.ui.file_rail.FileRail` — no
 ``MainWindow``/screen needed, since the widget carries no dependency on either."""
+import shiboken6
 from PySide6.QtCore import Qt
 
 from respmech.ui.file_rail import FileRail
@@ -273,3 +274,242 @@ def test_manifest_from_filenames_has_no_caveats():
     assert [f.filename for f in m.files] == ["a.csv", "b.csv"]
     assert m.outliers == () and m.freq_mismatches == ()
     assert all(f.included for f in m.files)
+
+
+# --------------------------------------------------------------------------- #
+# typed manoeuvres / reference / segments / role (M-32)
+# --------------------------------------------------------------------------- #
+def test_typed_glyph_and_tooltip_breakdown(qapp):
+    rail = FileRail()
+    rail.set_manifest(_manifest(["a.csv", "b.csv"]))
+    rail.set_typed_state("b.csv", {"ic": 2, "fvc": 1})
+    text = rail._model.data(rail._model.index(1))
+    assert "◆" in text
+    plain_text = rail._model.data(rail._model.index(0))
+    assert "◆" not in plain_text                        # untyped file gets no glyph
+    tip = rail._model.data(rail._model.index(1), role=Qt.ToolTipRole)
+    assert "3 breaths typed as a manoeuvre" in tip
+    assert "ic ×2" in tip and "fvc ×1" in tip
+
+
+def test_typed_carried_flag_gets_its_own_tooltip_note(qapp):
+    rail = FileRail()
+    rail.set_manifest(_manifest(["a.csv", "b.csv"]))
+    rail.set_typed_state("a.csv", {"ic": 1}, carried=False)
+    rail.set_typed_state("b.csv", {"ic": 1}, carried=True)
+    tip_plain = rail._model.data(rail._model.index(0), role=Qt.ToolTipRole)
+    tip_carried = rail._model.data(rail._model.index(1), role=Qt.ToolTipRole)
+    assert "carried over" not in tip_plain
+    assert "carried over" in tip_carried
+
+
+def test_typed_state_survives_a_manifest_rebuild_for_persisting_filenames(qapp):
+    rail = FileRail()
+    rail.set_manifest(_manifest(["a.csv"]))
+    rail.set_typed_state("a.csv", {"ic": 2}, carried=True)
+    rail.set_manifest(_manifest(["a.csv", "b.csv"]))
+    e = rail.entry("a.csv")
+    assert e.typed_counts == {"ic": 2} and e.typed_carried is True
+
+
+def test_typed_state_can_be_cleared_back_to_empty(qapp):
+    """A second analysis over the same folder/mask that types nothing for a file the
+    FIRST analysis had typed breaths in must not leave the first analysis's stale glyph
+    on screen — same zeroing requirement B06 established for exclusions."""
+    rail = FileRail()
+    rail.set_manifest(_manifest(["a.csv"]))
+    rail.set_typed_state("a.csv", {"ic": 1})
+    assert rail.entry("a.csv").typed_counts
+    rail.set_typed_state("a.csv", {})
+    assert rail.entry("a.csv").typed_counts == {}
+    assert "◆" not in rail._model.data(rail._model.index(0))
+
+
+def test_reference_glyphs_linked_and_missing(qapp):
+    rail = FileRail()
+    rail.set_manifest(_manifest(["a.csv", "b.csv", "c.csv"]))
+    rail.set_reference("a.csv", "linked")
+    rail.set_reference("b.csv", "missing")
+    text_a = rail._model.data(rail._model.index(0))
+    text_b = rail._model.data(rail._model.index(1))
+    text_c = rail._model.data(rail._model.index(2))
+    assert "⇢" in text_a and "⇢?" not in text_a
+    assert "⇢?" in text_b
+    assert "⇢" not in text_c and "⇢?" not in text_c   # unresolved (None) shows nothing
+    tip_b = rail._model.data(rail._model.index(1), role=Qt.ToolTipRole)
+    assert "not resolved" in tip_b
+
+
+def test_segments_count_shown_in_tooltip_but_not_as_a_row_glyph(qapp):
+    rail = FileRail()
+    rail.set_manifest(_manifest(["a.csv"]))
+    rail.set_segments("a.csv", 3)
+    text = rail._model.data(rail._model.index(0))
+    assert "3" not in text                               # no dedicated row badge (ticket scope)
+    tip = rail._model.data(rail._model.index(0), role=Qt.ToolTipRole)
+    assert "3 EMG segments" in tip
+
+
+def test_segments_singular_grammar_at_exactly_one(qapp):
+    rail = FileRail()
+    rail.set_manifest(_manifest(["a.csv"]))
+    rail.set_segments("a.csv", 1)
+    tip = rail._model.data(rail._model.index(0), role=Qt.ToolTipRole)
+    assert "1 EMG segment" in tip and "1 EMG segments" not in tip
+
+
+def test_tooltip_combines_typed_excluded_and_caveat_all_at_once(qapp):
+    """The real-world worst case for row formatting: a file that is simultaneously
+    typed, excluded and manifest-flagged. Every line must be present in the tooltip
+    regardless of the others."""
+    rail = FileRail()
+    rail.set_manifest(_manifest(["a.csv"], outliers=["a.csv"]))
+    rail.set_typed_state("a.csv", {"ic": 1})
+    rail.set_excluded_count("a.csv", 2)
+    tip = rail._model.data(rail._model.index(0), role=Qt.ToolTipRole)
+    assert "1 breath typed as a manoeuvre (ic ×1)" in tip
+    assert "2 breaths manually excluded" in tip
+    assert "⚠" in tip and rail.entry("a.csv").caveat in tip
+
+
+def test_role_is_set_by_mark_result_and_cleared_on_failure(qapp):
+    rail = FileRail()
+    rail.set_manifest(_manifest(["a.csv"]))
+    rail.mark_result("a.csv", ok=True, breaths=0, role="reference")
+    e = rail.entry("a.csv")
+    assert e.role == "reference"
+    tip = rail._model.data(rail._model.index(0), role=Qt.ToolTipRole)
+    assert "Reference manoeuvres only" in tip
+    rail.mark_result("a.csv", ok=False, error="boom")
+    assert rail.entry("a.csv").role is None              # cleared like breaths is on failure
+
+
+def test_typed_reference_segments_role_default_to_empty_none(qapp):
+    """A plain, untouched row must not accidentally render any M-32 badge."""
+    rail = FileRail()
+    rail.set_manifest(_manifest(["a.csv"]))
+    e = rail.entry("a.csv")
+    assert e.typed_counts == {} and e.typed_carried is False
+    assert e.reference is None and e.segments is None and e.role is None
+    text = rail._model.data(rail._model.index(0))
+    assert "◆" not in text and "⇢" not in text
+
+
+# --------------------------------------------------------------------------- #
+# eliding delegate — a long filename must never push a state glyph off-screen
+# --------------------------------------------------------------------------- #
+def test_a_long_filename_with_every_badge_fits_the_rail_on_windows_metrics(windows_metrics):
+    """M-32's own acceptance criterion: a long filename with every badge active either
+    fits the 280 px rail or is elided, but the state glyphs/badges are never the part
+    that gets cut. Modelled on the Windows runner's wider font metrics (macOS is the
+    friendliest platform we ship to — see tests/CLAUDE.md)."""
+    from PySide6.QtGui import QFontMetrics
+
+    from respmech.ui.file_rail import (_RAIL_ITEM_PADDING_PX, FileRailEntry,
+                                       _elided_row_text, _row_text)
+
+    long_name = "a_very_long_synthetic_recording_name_32c.csv"   # 32+ characters
+    assert len(long_name) >= 32
+    e = FileRailEntry(filename=long_name, verdict="ok", typed_counts={"ic": 2},
+                      reference="missing", excluded_count=3, excluded_carried=True,
+                      caveat="detected 500 Hz sampling — settings say 1000 Hz")
+    fm = QFontMetrics(windows_metrics.font())
+    avail = 280 - _RAIL_ITEM_PADDING_PX
+    full = _row_text(e)
+    elided = _elided_row_text(e, fm, avail)
+
+    # every glyph/badge is present, whether or not the filename needed shortening
+    for badge in ("◆", "⇢?", "[3 excl ↺]", "⚠"):
+        assert badge in elided, f"{badge!r} missing from {elided!r}"
+    # the filename itself was actually shortened under this budget (fixed segments alone
+    # eat most of a 280 px rail once every badge is active)
+    assert fm.horizontalAdvance(elided) < fm.horizontalAdvance(full)
+    assert fm.horizontalAdvance(elided) <= avail + 2       # +2px rounding slack
+
+
+def test_a_short_filename_with_no_badges_is_not_elided(qapp):
+    """The common case (a short name, nothing active) must round-trip unchanged — the
+    delegate must not shorten a filename that already fits."""
+    from PySide6.QtGui import QFontMetrics
+
+    from respmech.ui.file_rail import FileRailEntry, _elided_row_text, _row_text
+
+    e = FileRailEntry(filename="a.csv", verdict="ok")
+    fm = QFontMetrics(qapp.font())
+    elided = _elided_row_text(e, fm, 280)
+    assert elided == _row_text(e)
+
+
+def test_existing_rail_badges_are_unaffected_by_the_m32_fields(qapp):
+    """Acceptance criterion: the pre-M-32 exclusion badge is unchanged in shape."""
+    rail = FileRail()
+    rail.set_manifest(_manifest(["a.csv"]))
+    rail.set_excluded_count("a.csv", 2, carried=True)
+    text = rail._model.data(rail._model.index(0))
+    assert "[2 excl ↺]" in text
+
+
+# --------------------------------------------------------------------------- #
+# row context menu — plumbing for M-37 (M-32)
+# --------------------------------------------------------------------------- #
+def test_row_context_menu_emits_references_requested_for_the_right_row(qapp):
+    rail = FileRail()
+    rail.set_manifest(_manifest(["a.csv", "b.csv"]))
+    requested = []
+    rail.referencesRequested.connect(requested.append)
+    menu = rail._build_row_context_menu("b.csv")
+    actions = menu.actions()
+    assert len(actions) == 1
+    assert "Reference manoeuvres" in actions[0].text()
+    actions[0].trigger()
+    assert requested == ["b.csv"]
+    # QMenu is a Window (Qt::Popup) even when parented, so it is its own entry in
+    # QApplication.topLevelWidgets(). A plain close() (the pattern the sibling
+    # _build_type_menu tests use, test_breath_typing_ui.py) schedules a deleteLater()
+    # that depends on the event loop draining it before the NEXT test's window-reaping
+    # teardown scans topLevelWidgets() — here the triggered action's own lambda closure
+    # over `rail` (needed to bind the right filename) keeps the whole rail alive via a
+    # genuine Python reference cycle (view -> connected bound methods -> rail), so the
+    # cycle is only broken by gc's cyclic collector rather than plain refcounting, and
+    # collecting a still-parented top-level QObject mid-cycle is exactly the known py3.11
+    # "mid-destruction pointer" hazard conftest.py's own comment documents. Deleting the
+    # C++ object immediately and deterministically (never queued, no GC-timing
+    # dependency) sidesteps it entirely.
+    shiboken6.delete(menu)
+
+
+def test_delegate_prepare_option_disables_style_elision_and_protects_badges(qapp):
+    """Exercises the REAL delegate code path (``_RailItemDelegate._prepare_option``, the
+    method ``paint()`` itself calls), not just the standalone ``_elided_row_text`` pure
+    function the other elision tests use — proves the delegate forces
+    ``Qt.TextElideMode.ElideNone`` so the STYLE can never re-elide (and potentially eat a
+    badge) on top of the already-correct manual eliding."""
+    from PySide6.QtWidgets import QStyleOptionViewItem
+
+    rail = FileRail()
+    rail.set_manifest(_manifest(["a_very_long_synthetic_recording_name_32c.csv"]))
+    rail.set_typed_state("a_very_long_synthetic_recording_name_32c.csv", {"ic": 2})
+    rail.set_excluded_count("a_very_long_synthetic_recording_name_32c.csv", 3, carried=True)
+    index = rail._proxy.index(0, 0)
+
+    base = QStyleOptionViewItem()
+    base.rect.setWidth(280)
+    opt = rail._delegate._prepare_option(base, index)
+
+    assert opt.textElideMode == Qt.TextElideMode.ElideNone
+    assert "◆" in opt.text                          # ◆ typed glyph
+    assert "[3 excl ↺]" in opt.text                  # exclusion badge + carried mark
+
+
+def test_context_menu_at_an_invalid_position_never_emits(qapp):
+    """A right-click below the last row (or on an empty rail) must not pop up a menu at
+    all — _on_context_menu's own indexAt()/name guards, not just the pure menu-builder
+    the test above exercises."""
+    from PySide6.QtCore import QPoint
+
+    rail = FileRail()
+    rail.set_manifest(_manifest(["a.csv"]))
+    requested = []
+    rail.referencesRequested.connect(requested.append)
+    rail._on_context_menu(QPoint(5, 10_000))    # far below any real row
+    assert requested == []

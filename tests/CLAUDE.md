@@ -190,6 +190,69 @@ calling `close_plots()`, never re-fetch it after (see the `close_plots()`-adjace
 in `test_column_stack.py`/`test_channel_summary.py`/`test_channel_setup.py`/
 `test_preview_screen.py` for the pattern).
 
+### A test-built `QMenu`/popup whose action closure captures the widget under test needs `shiboken6.delete()`, not just `close()`
+
+M-32's own context-menu test (`test_file_rail.py`) built a `QMenu` via a factory method
+whose action connects a `lambda: self.referencesRequested.emit(name)` — `self` there is the
+`FileRail` widget under test, captured by the closure. `menu.close()` +
+`Qt.WA_DeleteOnClose` is the established pattern for a transient popup menu (see
+`ui/CLAUDE.md`'s "A transient popup QMenu needs Qt.WA_DeleteOnClose", used successfully by
+`test_breath_typing_ui.py`'s `_build_type_menu` tests) and DOES work in isolation — but
+paired with this specific test in the same file, it segfaulted `_close_top_level_windows`'s
+own reaper on Python 3.11, the exact "unreferenced window's C++ half may be mid-destruction"
+hazard that reaper's comment already documents for a DIFFERENT cause.
+
+Root cause: the widget-under-test's own pre-existing internal signal wiring (`self.view.
+…connect(self._on_view_current_changed)` — a bound method, capturing `self`) already forms
+a Python reference cycle through the widget's children. Adding the test's own closure over
+`self` via the menu action gives that cycle an EXTRA path to hang off, so the widget is no
+longer freed by plain refcounting the instant the test function returns — it now needs
+`gc`'s cyclic collector to notice it, and reclaiming a still-parented top-level QObject
+during a cyclic collection pass (rather than deterministic refcounting) is exactly the
+timing the reaper's comment warns is unsafe. `close()`'s `deleteLater()` is a QUEUED
+request — it depends on the event loop draining it before the NEXT test's reaper scans
+`topLevelWidgets()`, and that ordering is what a reference cycle can perturb.
+
+Fix: `shiboken6.delete(menu)` deletes the C++ object immediately and deterministically, with
+no event-loop/GC-timing dependency at all — use it (not `close()`) for any test-built popup
+whose own action/signal closures capture the widget under test itself, rather than debugging
+which specific timing window made `close()` insufficient this time.
+
 If the suite's macOS wall time or sandbox OOM recur, re-measure with `RESPMECH_NET_CENSUS`/
 `RESPMECH_NET_PROFILE` before assuming this is the same class of bug — the population
 this ticket targeted is gone.
+
+### `core/analysis` has an import budget: the GUI's startup path may not pull in numpy
+
+`core/analysis/signals.py` is imported by `Settings.validate()` and `ui/validation.py`,
+which run before any recording is read; `registry.py` is not wired into the GUI (the
+`FORBIDDEN` list keeps it out of the GUI shell). Both must stay free of Qt, numpy, scipy, pandas and `core.compute`/`core.pipeline` at
+module level (the numeric analysis modules beside them, such as `manoeuvres.py` and
+`segments.py`, are exempt). `tests/unit/test_startup_imports.py` pins this in a
+**subprocess** (in-process the compute core is long since imported, so an assertion there
+would pass whatever the modules do): `test_core_analysis_modules_import_no_numeric_stack`
+covers these two modules, and the `FORBIDDEN` list covers what importing the GUI shell must
+not drag in. A new helper that `Settings.validate()` or a UI render path will call belongs in
+one of those two modules, or it gets its own lazy in-function import. Adding a top-level
+`import numpy` to either is a red test, not a style choice.
+
+### Layout hazards the `windows_metrics` fixture has already caught (chips, rails, dialogs)
+
+`windows_metrics` (`tests/unit/conftest.py`) widens the application font's horizontal
+advance to model the Windows runner; use it for any test whose claim is "this row/dialog/
+column still fits". The findings so far, each with a worked fix in `src/respmech/ui/CLAUDE.md`:
+
+- **Chips wrap only where a layout can break them** (`FlowLayout` with one item per
+  caption+field pair, `install_flow` + `cluster`); a chip on a plain `QHBoxLayout` is one
+  unbreakable item.
+- **Table headers**: `QHeaderView.sectionSizeHint()` is the floor a column may never be
+  resized below, independent of any cap meant for oversized cell values (`result_table.py`).
+- **Elided labels**: never assert on a rendered `text()` that `flow_layout.elide` shortened;
+  assert on `toolTip()`, which holds the full string. A label that is the only thing naming
+  a panel needs its own floor (`titled_panel(title_floor_chars=...)`), never a raised global one.
+- **Action bands and modals** (the EMG – segments action band is the worked example,
+  `test_the_segments_action_band_fits_on_windows_metrics`; the signal-set and reference-picker dialogs have their own `..._fits_under_windows_font_metrics` tests): assert against a size measured in
+  the same run (the window's minimum size hint), never a pixel literal, and run it under
+  `windows_metrics`.
+- **Refit-on-resize** must be idempotent by skipping a redo at an already-fitted size, not by
+  out-rounding Windows' measurement jitter.

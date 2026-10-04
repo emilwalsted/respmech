@@ -11,7 +11,9 @@ import re
 
 import pytest
 
-from respmech.core.settings import Settings, SettingsError
+from respmech.core.settings import (
+    BreathTypeEntry, ExcludeEntry, GroupReferenceEntry, ReferenceEntry, SeparatorEntry,
+    Settings, SettingsError, SubjectEntry)
 from respmech.ui.validation import blockers, friendly_settings_error
 
 #: what every SettingsError message's technical key looks like — the same pattern
@@ -58,15 +60,54 @@ _CASES = [
     ("volume channel missing, not derived from flow",
      lambda s: setattr(s.input.channels, "volume", None),
      ["volume"]),
-    ("flow channel missing",                          # dead path via blockers() (channel_
-     lambda s: setattr(s.input.channels, "flow", None),  # collision intercepts first), but
-     ["flow"]),                                        # _validation_status() calls validate()
-    ("segmentation method invalid",                     # directly and has no such gate
+    # R7: "flow channel missing" now takes TWO distinct paths depending on whether the
+    # signal set is DERIVED (from assigned channels) or EXPLICIT (analysis.signals) --
+    # each raises a different message, both must translate cleanly. Dead paths via
+    # blockers() (channel_collision intercepts first), but _validation_status() calls
+    # validate() directly and has no such gate.
+    ("flow channel missing, derived signal set falls back to a pressure-only set",
+     lambda s: setattr(s.input.channels, "flow", None),
+     ["flow"]),
+    ("flow channel missing, explicitly declared alongside poes",
+     lambda s: (setattr(s.input.channels, "flow", None),
+               s.analysis.signals.extend(["flow", "poes"])),
+     ["flow"]),
+    ("segmentation method invalid",
      lambda s: setattr(s.processing.segmentation, "method", "pressure"),
-     ["breath", "segment"]),
+     ["breath"]),
+    ("segmentation method requires flow (an EMG-only signal set keeps the flow-based "
+     "default method)",
+     lambda s: (setattr(s.input.channels, "emg", [2, 3]),
+               s.analysis.signals.append("emg")),
+     ["flow"]),
+    ("segmentation method is for an EMG-only signal set while flow is still declared",
+     lambda s: setattr(s.processing.segmentation, "method", "whole_file"),
+     ["emg"]),
+    ("no analysable signal at all",
+     lambda s: (setattr(s.input.channels, "flow", None),
+               setattr(s.input.channels, "poes", None),
+               setattr(s.input.channels, "pgas", None),
+               setattr(s.input.channels, "pdi", None)),
+     ["signal"]),
+    ("unknown signal name in analysis.signals",
+     lambda s: s.analysis.signals.append("bogus"),
+     ["signal"]),
+    ("channel required by an explicit signal set (poes) not yet assigned",
+     lambda s: (setattr(s.input.channels, "poes", None),
+               s.analysis.signals.extend(["flow", "poes"])),
+     ["poes"]),
+    ("emg declared without an emg channel assigned",
+     lambda s: s.analysis.signals.extend(["flow", "emg"]),
+     ["emg"]),
+    ("analysis.signals is not a list (self-review finding, malformed hand-edited file)",
+     lambda s: setattr(s.analysis, "signals", "flow"),
+     ["signal"]),
     ("segmentation buffer not an int",
      lambda s: setattr(s.processing.segmentation, "buffer", 12.5),
      ["breath", "buffer", "segment"]),
+    ("breathing pattern switch not a bool",
+     lambda s: setattr(s.processing.breathing_pattern, "extended", "yes"),
+     ["breathing pattern"]),
     ("wob calc_from invalid",
      lambda s: setattr(s.processing.wob, "calc_from", "median"),
      ["work of breathing"]),
@@ -83,6 +124,53 @@ _CASES = [
      lambda s: (setattr(s.processing.emg, "remove_ecg", True),
                setattr(s.processing.emg, "ecg_auto_detect", True)),
      ["ecg", "emg"]),
+    ("emg-only noise reduction with no usable rest reference",
+     lambda s: (setattr(s.input.channels, "flow", None),
+               setattr(s.input.channels, "poes", None),
+               setattr(s.input.channels, "pgas", None),
+               setattr(s.input.channels, "pdi", None),
+               setattr(s.input.channels, "volume", None),
+               setattr(s.input.channels, "emg", [2]),
+               s.analysis.signals.append("emg"),
+               setattr(s.processing.segmentation, "method", "whole_file"),
+               setattr(s.processing.emg, "remove_ecg", True),
+               setattr(s.processing.emg.noise, "enabled", True)),
+     ["rest reference"]),
+    ("emg-only noise reduction with auto_prop left on",
+     lambda s: (setattr(s.input.channels, "flow", None),
+               setattr(s.input.channels, "poes", None),
+               setattr(s.input.channels, "pgas", None),
+               setattr(s.input.channels, "pdi", None),
+               setattr(s.input.channels, "volume", None),
+               setattr(s.input.channels, "emg", [2]),
+               s.analysis.signals.append("emg"),
+               setattr(s.processing.segmentation, "method", "whole_file"),
+               s.processing.breath_types.append(
+                   BreathTypeEntry(file="x.txt", breath=1, kind="rest")),
+               setattr(s.processing.emg.noise, "reference_file", "x.txt"),
+               setattr(s.processing.emg, "remove_ecg", True),
+               setattr(s.processing.emg.noise, "enabled", True)),
+     ["automatic"]),
+    ("noise reference_mode is not a valid value",
+     lambda s: setattr(s.processing.emg.noise, "reference_mode", "bogus"),
+     ["noise reference"]),
+    ("noise reference_mode='rest_segments' with a flow channel declared",
+     lambda s: setattr(s.processing.emg.noise, "reference_mode", "rest_segments"),
+     ["noise reference", "emg-only"]),
+    ("noise reference_mode='interburst' while noise reduction is enabled",
+     lambda s: (setattr(s.input.channels, "flow", None),
+               setattr(s.input.channels, "poes", None),
+               setattr(s.input.channels, "pgas", None),
+               setattr(s.input.channels, "pdi", None),
+               setattr(s.input.channels, "volume", None),
+               setattr(s.input.channels, "emg", [2]),
+               s.analysis.signals.append("emg"),
+               setattr(s.processing.segmentation, "method", "whole_file"),
+               setattr(s.processing.emg.noise, "reference_mode", "interburst"),
+               setattr(s.processing.emg.noise, "reference_file", "ref.csv"),
+               setattr(s.processing.emg, "remove_ecg", True),
+               setattr(s.processing.emg.noise, "enabled", True)),
+     ["inter-burst"]),
     ("trend prominence out of range",
      lambda s: (setattr(s.processing.volume, "correct_trend", True),
                setattr(s.processing.volume, "trend_peak_min_prominence_frac", 1.5)),
@@ -95,6 +183,93 @@ _CASES = [
      lambda s: (setattr(s.processing.volume, "correct_trend", True),
                setattr(s.processing.volume, "trend_peak_min_distance_s", 0.0001)),
      ["trend"]),
+    # M-19: BreathTypeEntry's own form/conflict checks.
+    ("breath type entry is not even a table (malformed hand-edited TOML)",
+     lambda s: s.processing.breath_types.append(1),
+     ["breath type", "right-click"]),
+    ("breath type entry has an unknown kind",
+     lambda s: s.processing.breath_types.append(
+         BreathTypeEntry(file="x.txt", breath=1, kind="bogus")),
+     ["breath type", "right-click"]),
+    ("breath type entry's breath number is not a positive integer",
+     lambda s: s.processing.breath_types.append(
+         BreathTypeEntry(file="x.txt", breath=0, kind="ic")),
+     ["breath type", "right-click"]),
+    ("same breath typed twice",
+     lambda s: (s.processing.breath_types.append(
+                    BreathTypeEntry(file="x.txt", breath=3, kind="ic")),
+               s.processing.breath_types.append(
+                    BreathTypeEntry(file="x.txt", breath=3, kind="fvc"))),
+     ["conflicting"]),
+    ("a breath both typed and excluded",
+     lambda s: (s.processing.exclude_breaths.append(ExcludeEntry(file="x.txt", breaths=[5])),
+               s.processing.breath_types.append(
+                    BreathTypeEntry(file="x.txt", breath=5, kind="ic"))),
+     ["conflicting"]),
+    ("a typed breath above 1 under whole_file segmentation",
+     lambda s: (setattr(s.input.channels, "flow", None),
+               setattr(s.input.channels, "poes", None),
+               setattr(s.input.channels, "pgas", None),
+               setattr(s.input.channels, "pdi", None),
+               setattr(s.input.channels, "volume", None),
+               setattr(s.input.channels, "emg", [2]),
+               s.analysis.signals.append("emg"),
+               setattr(s.processing.segmentation, "method", "whole_file"),
+               s.processing.breath_types.append(
+                    BreathTypeEntry(file="x.txt", breath=2, kind="rest"))),
+     ["whole-file", "manual separators"]),
+    # SeparatorEntry's own form checks (a separator time not strictly increasing).
+    ("a separator entry's times_s is not strictly increasing",
+     lambda s: s.processing.segmentation.separators.append(
+         SeparatorEntry(file="x.txt", times_s=[5.0, 3.0])),
+     ["separator"]),
+    ("a separator entry's times_s contains a negative time",
+     lambda s: s.processing.segmentation.separators.append(
+         SeparatorEntry(file="x.txt", times_s=[-1.0, 3.0])),
+     ["separator"]),
+    ("a separator entry's times_s contains NaN",
+     lambda s: s.processing.segmentation.separators.append(
+         SeparatorEntry(file="x.txt", times_s=[1.0, float("nan")])),
+     ["separator"]),
+    ("a separator entry is not even a table",
+     lambda s: s.processing.segmentation.separators.append(1),
+     ["separator"]),
+    ("a separator entry is duplicated for the same file",
+     lambda s: (s.processing.segmentation.separators.append(
+                    SeparatorEntry(file="x.txt", times_s=[1.0])),
+               s.processing.segmentation.separators.append(
+                    SeparatorEntry(file="x.txt", times_s=[2.0]))),
+     ["separator", "duplicat"]),
+    ("eelv_tracking is not a valid enum value",
+     lambda s: setattr(s.processing.lung_volume.ic, "eelv_tracking", "always"),
+     ["eelv", "subject"]),
+    ("a reference entry is not even a table",
+     lambda s: s.processing.references.append(1),
+     ["reference"]),
+    ("a reference entry is duplicated for the same file",
+     lambda s: (s.processing.references.append(ReferenceEntry(file="x.txt")),
+               s.processing.references.append(ReferenceEntry(file="x.txt"))),
+     ["reference", "duplicat"]),
+    ("a group reference entry is not even a table",
+     lambda s: s.processing.reference_defaults.append(1),
+     ["reference"]),
+    ("a group reference entry is duplicated for the same group",
+     lambda s: (s.processing.reference_defaults.append(GroupReferenceEntry(group="P03")),
+               s.processing.reference_defaults.append(GroupReferenceEntry(group="P03"))),
+     ["reference", "duplicat"]),
+    ("a subject entry is not even a table",
+     lambda s: s.input.subjects.append(1),
+     ["subject"]),
+    ("a subject key is duplicated",
+     lambda s: (s.input.subjects.append(SubjectEntry(key="P03")),
+               s.input.subjects.append(SubjectEntry(key="P03"))),
+     ["subject", "duplicat"]),
+    ("a subject's tlc_l is out of range",
+     lambda s: s.input.subjects.append(SubjectEntry(key="P03", tlc_l=20.0)),
+     ["subject"]),
+    ("a subject's rv_l is not below tlc_l",
+     lambda s: s.input.subjects.append(SubjectEntry(key="P03", tlc_l=5.0, rv_l=5.0)),
+     ["subject"]),
 ]
 
 
@@ -174,4 +349,62 @@ def test_save_blocker_never_shows_a_raw_dotted_key(qapp):
     assert not _DOTTED_KEY.search(blocker)
     assert "volume" in blocker.lower()
     assert sc.can_save() is False
-    win.close()
+
+
+# --------------------------------------------------------------------------- #
+# ui.validation.channel_collision — M-12: scoped to the DECLARED signal set
+# --------------------------------------------------------------------------- #
+def test_channel_collision_never_names_an_undeclared_pressure(qapp):
+    """The bug this ticket fixes: a "Flow + Poes" analysis (Pdi/Pgas not declared) must
+    never be told Pdi/Pgas are "not assigned" — they were never part of this analysis."""
+    from respmech.ui.validation import channel_collision
+    s = _valid_settings()
+    s.analysis.signals = ["flow", "poes"]
+    s.input.channels.pgas = None
+    s.input.channels.pdi = None
+    assert channel_collision(s) is None
+
+
+def test_channel_collision_names_a_missing_declared_role(qapp):
+    from respmech.ui.validation import channel_collision
+    s = _valid_settings()
+    s.analysis.signals = ["flow", "poes"]
+    s.input.channels.poes = None
+    msg = channel_collision(s)
+    assert msg is not None and "poes" in msg.lower() and "not assigned" in msg.lower()
+
+
+def test_channel_collision_leaves_emg_list_requirement_to_validate(qapp):
+    """EMG's own requirement (a non-empty column LIST) is enforced by
+    ``Settings.validate()``, not by ``channel_collision`` — see its own docstring: only
+    single-column roles can "point at the time axis" or "collide on a column"."""
+    from respmech.ui.validation import channel_collision
+    s = _valid_settings()
+    s.analysis.signals = ["flow", "emg"]
+    s.input.channels.emg = []
+    assert channel_collision(s) is None
+    s.input.channels.flow = None
+    msg = channel_collision(s)
+    assert msg is not None and "flow" in msg.lower()
+
+
+def test_channel_collision_reports_nothing_declared_at_all(qapp):
+    """A brand-new analysis: no explicit signals, no channel assigned at all."""
+    from respmech.core.settings import Settings
+    from respmech.ui.validation import channel_collision
+    s = Settings()
+    s.input.format.sampling_frequency = 1000
+    msg = channel_collision(s)
+    assert msg is not None
+    assert "no signal assigned" in msg.lower()
+    assert "signal set" in msg.lower()
+
+
+def test_channel_collision_does_not_crash_on_a_malformed_signal_set(qapp):
+    """A hand-edited bare-string ``analysis.signals`` must degrade to 'no collision found
+    here', leaving Settings.validate() (already translated for exactly this message) to
+    report it — never crash channel_collision itself."""
+    from respmech.ui.validation import channel_collision
+    s = _valid_settings()
+    s.analysis.signals = "flow"          # malformed: a bare string, not a list
+    assert channel_collision(s) is None

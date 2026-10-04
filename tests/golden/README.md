@@ -13,17 +13,73 @@ within a tight tolerance.
 
 ## What is covered
 
-`make_golden.py` runs a matrix of settings scenarios over two synthetic recordings
+`make_golden.py` runs a matrix of settings scenarios over synthetic recordings
 (`input/synth_case_A.csv`, `input/synth_case_B.csv`, produced by
 `generate_data.py`):
 
-| Scenario | Separation | WOB method | EMG | Notes |
-|---|---|---|---|---|
-| `flow_wob_average`    | flow | average    | on  | core mechanics + WOB + entropy + EMG RMS |
-| `flow_wob_individual` | flow | individual | on  | per-breath WOB path |
-| `flow_integratevol`   | flow | average    | on  | volume integrated from flow (`cumtrapz`) |
-| `flow_exclude_emg`    | flow | average    | on  | `excludebreaths` + `breathcounts` with the EMG pipeline active |
-| `flow_exclude_noemg`  | flow | average    | off | `excludebreaths` + `breathcounts` override + processed-data export |
+| Scenario | Oracle | Separation | WOB method | EMG | Notes |
+|---|---|---|---|---|---|
+| `flow_wob_average`    | legacy | flow | average    | on  | core mechanics + WOB + entropy + EMG RMS |
+| `flow_wob_individual` | legacy | flow | individual | on  | per-breath WOB path |
+| `flow_integratevol`   | legacy | flow | average    | on  | volume integrated from flow (`cumtrapz`) |
+| `flow_exclude_emg`    | legacy | flow | average    | on  | `excludebreaths` + `breathcounts` with the EMG pipeline active |
+| `flow_exclude_noemg`  | legacy | flow | average    | off | `excludebreaths` + `breathcounts` override + processed-data export |
+| `flow_only`           | v2     | flow | average    | off | `analysis.signals = ["flow"]`, no pressure channels — entropy columns [10,11,12] kept, to prove entropy stays signal-set-independent |
+| `poes_only`           | v2     | flow | average    | off | `analysis.signals = ["flow", "poes"]` — work of breathing, no Pgas/Pdi |
+| `emg_only_whole_file`  | v2     | n/a (EMG-only) | n/a | on | `analysis.signals = ["emg"]`, `processing.segmentation.method = "whole_file"` — each entire file is one segment, over a DEDICATED `input/synth_emgonly_*.csv` pair (own RNG stream, never `synth_case_*.csv`) |
+| `emg_only_separators`  | v2     | n/a (EMG-only) | n/a | on | same EMG-only input pair, `processing.segmentation.method = "separators"` — one manual boundary list PER FILE, giving a DIFFERENT segment count per file (4 and 3) |
+| `typed_ic_fvc_same_file` | v2  | flow | average    | on  | `processing.breath_types` marks breath #4 as an inspiratory-capacity manoeuvre and breath #7 as a forced-vital-capacity manoeuvre, IN THE SAME FILE — over a DEDICATED `input/synth_manoeuvre_A.csv` (own RNG stream, trapezoid breath shapes, never `synth_case_*.csv`). `test_typed_ic_fvc_same_file_vol_ic_matches_analytical_value` (`test_golden.py`) checks the extracted `vol_ic` against the literal analytical constant `3.0` (not just the committed reference), to `abs_tol=1e-9` — see `generate_data.py`'s `make_manoeuvre_file()`/`_manoeuvre_breath()` docstring for why the generator's plateau design makes that exact, not merely close. **First extension, cross-file references (`core.analysis.references.attach`):** breath #4's own typed IC already makes `resolve_reference`'s "own typed breath" fallback resolve THIS SAME file as its own IC reference — no new `processing.references`/`reference_defaults` entry needed — so `vol_ic_ref`/`ic_ref_n`/`ic_ref_source` (self-referencing: source = `synth_manoeuvre_A.csv` itself, `n=1`, value = breath #4's own `vol_ic`) are added to the scenario's average/breath tables, keys added only. **v2-scenarios are extended by later work in the same programme**: operating-lung-volume derivation and FVC/MFVL numerics will each ADD further keys to this SAME scenario and regenerate it with their own justification — an added key alone is not a regression here. |
+| `typed_ic_crossfile` | v2 | flow | average | on | The CROSS-file counterpart of `typed_ic_fvc_same_file` above: a dedicated, reference-only recording `input/synth_crossfile_ic.csv` (own RNG stream, own `synth_crossfile_*.csv` naming — never `synth_case_*.csv`/`synth_manoeuvre_*.csv`, each already a SIBLING scenario's own committed glob; reusing either prefix would silently pull this file into that scenario's own batch too) holds a SINGLE IC-typed breath and no tidal breathing at all, so `core.pipeline.run_batch`'s own detection gives it `role="reference"` — `golden_newcore.run_scenario`'s own `if fr.breaths_table is not None` guard (already built for an earlier scenario) is what skips it from `per_file`, exactly as `run_scenario`'s own comment already anticipated. The SECOND file, `input/synth_crossfile_stage.csv` (ordinary tidal breathing, `make_file`'s own smooth sin² model, its own fresh seed), names the IC file via an EXPLICIT `processing.references` entry — `resolve_reference`'s cross-file path, not `typed_ic_fvc_same_file`'s same-file "own typed breath" fallback. `[[input.subjects]]` supplies a VC (5.0 L) for group `"synth"` (both files' shared leading-token group) so the VC-anchored operating-lung-volume family (`vol_eelv`/`vol_eilv`/`*_pct_vc`) resolves to real numbers rather than NaN; no TLC is entered, exercising that side's NaN path too. `processing.lung_volume.ic.eelv_tracking` is left at its default `"none"` — the ONLY valid choice for a cross-file reference (`"within_file"` needs a SAME-file IC and NaNs otherwise, per `lungvol.py`'s own module docstring) — which makes `ic_op`, and therefore `vol_eelv = vc - ic_op`, an EXACT CONSTANT across every breath in the stage file (it never reads `vol_endexp` under `"none"` tracking). `test_typed_ic_crossfile_vol_ic_matches_analytical_value`/`test_typed_ic_crossfile_stage_file_resolves_the_crossfile_reference`/`test_typed_ic_crossfile_reference_only_file_is_skipped_from_per_file` (`test_golden.py`) pin: the reference file's own `vol_ic == 3.0` (same exact-match reasoning as `typed_ic_fvc_same_file`, but with `ic_eelv_pre_n == 1` and `quality == ["BOUNDARY"]` — NOT the empty list that scenario's breath #4 gets, since this breath is simultaneously the min- and max-numbered breath among an EMPTY tidal set, a documented, expected `run_batch` behaviour for a reference-only file's typed breath, not a bug); the stage file's constant `vol_eelv == 2.0` (`vc(5.0) − ic_op(3.0)`, exactly — analytically pinned rather than described as "moving in some direction", which only applies to `"within_file"` tracking's own per-breath drift term, already covered by `tests/unit/test_lungvol.py`'s own analytical test for THAT mode); and that the reference file never gets a `per_file` breathdata entry. The companion end-to-end workflow test, `tests/unit/test_workflow_ic_file_per_participant.py`, exercises the SAME feature stack through a realistic multi-file-per-participant batch (`reference_defaults` GROUP resolution across two participants, `run_batch` + `write_batch`, `group_readout`, `check_links`, `build_cohort_summary`, `respmech validate`) that no earlier golden scenario or unit test ran end to end. |
+| `flow_peepi_on` | v2 | flow | average | off | `analysis.signals = ["flow", "poes", "pgas", "pdi"]`, `processing.pressure.peepi.enabled = true`, `buffer = 800` — over a DEDICATED `input/synth_peepi_A.csv` (own RNG stream, never `synth_case_*.csv`; `generate_data.peepi_channels`). Every breath but the first follows a 0.4 s zero-flow pause (the segmenter's boundary lands in the pause, 400 samples before flow starts) whose last 0.25 s carries a linear Poes fall of `PEEPI_DROP = 3.0` cmH2O and a Pgas fall of `PEEPI_PGAS_DROP = 1.0`, so `peepi_dyn`/`peepi_corr` have exact analytical values (3.0/2.0, checked to 1e-9 by `test_flow_peepi_on_matches_the_analytical_pre_flow_fall`); breath #1 has no predecessor and is NaN. The other scenarios run with the feature off and stay byte-identical. |
+
+`Oracle` names which generator is authoritative for that scenario's committed
+numbers: `legacy` = the frozen v1 oracle (`make_golden.py --write`, cross-checked
+by `golden_newcore.py`); `v2` = bagt directly from the v2 core
+(`golden_newcore.py --write`), for a scenario whose settings the legacy dict/
+`migrate_dict` path has no shape at all. `flow_only`/`poes_only`/`emg_only_whole_file`/
+`emg_only_separators`/`typed_ic_fvc_same_file` are all `v2` rows — each a committed
+`tests/golden/scenarios/<name>.toml`, since `analysis.signals` (and, for the two
+EMG-only rows, `processing.segmentation.method`/`separators`; for `typed_ic_fvc_same_file`,
+`processing.breath_types`) has no legacy-dict shape to express it in; `V2_SCENARIOS` in
+`make_golden.py` is the table a feature ticket adds a `v2` row to.
+
+**Regenerating `golden_reference.json` after adding a `v2` scenario merges, it never
+overwrites.** `golden_newcore.py --write` recomputes the ENTIRE `SCENARIOS` union
+(legacy + v2) through the current v2 core, and a naive `json.dump` of that result
+would rewrite every legacy entry's numbers too — two different NumPy/SciPy builds can
+legitimately differ in a float's last one or two bits (well within the
+`rtol=1e-9`/`atol=1e-12` the tests themselves use), which is enough for a plain
+overwrite to silently stop being byte-for-byte identical to the previously committed
+legacy entries. Adding `flow_only`/`poes_only` hit exactly this (two legacy
+entries' `wob_ex_total` moved in their 17th significant digit against the sandbox's
+freshly installed NumPy/pandas/SciPy). The fix: load the freshly written file back,
+take ONLY the new scenario key(s) from it, and merge those onto the previously
+committed dict before writing — never take the whole freshly written file as-is.
+Verify with a value-level (not text-level) equality check across every pre-existing
+key, since `git diff` on this file is not a reliable read here either — inserting a
+new scenario's tens of KB in the middle of a `sort_keys=True` dump shifts everything
+after it, and a naive text diff of the shifted region can look like a rewrite even
+when every value is unchanged (these two new scenarios added ~34 KB combined and the
+`git diff` still showed thousands of changed lines).
+
+**Golden job runtime:** measured locally (sandbox, `pytest tests/golden -q`,
+13 non-skipped + 5 skipped production tests) at ~7.5 s after adding
+`typed_ic_fvc_same_file` plus its own dedicated
+`test_typed_ic_fvc_same_file_vol_ic_matches_analytical_value` test — still the same
+order of magnitude as the ~11 s measured for the 11 non-skipped tests before it
+(`emg_only_whole_file`/`emg_only_separators`), since the new scenario is one more
+`run_batch` over a small synthetic input file, same as every other scenario here; the
+apparent drop is sandbox timing noise, not a real speed-up. `ci.yml`'s `golden` job
+(`timeout-minutes: 15`) was not itself re-measured on the real runner by this ticket
+(no Actions access from this environment) — confirm the actual CI duration on the
+merge commit that adds this scenario, and raise `timeout-minutes` in the same commit
+only if it is ever observed to exceed ~10 minutes.
+
+Re-measured locally (sandbox) at ~9.4 s (17 non-skipped + 5 skipped) after adding
+`typed_ic_crossfile` plus its own 3 dedicated tests — same order of magnitude
+again, same reasoning as above (one more small `run_batch` per scenario). Not
+re-measured on the real CI runner by this ticket either; same confirm-and-raise-if-
+needed note applies to the merge commit that adds THIS scenario.
 
 For each scenario the reference stores: the merged **average** breath data, the
 **per-file** breath-by-breath tables, and a compact **processed-data** summary
@@ -99,6 +155,68 @@ the full match analysis (notably: the current code's PTP columns differ from the
 older pre-`1630c40` expected spreadsheets by design, and the EMG columns track a
 newer ECG-removal algorithm than `master`).
 
+### Production scenarios
+
+| Scenario | Covers | Legacy-comparable? |
+|---|---|---|
+| `zeros_debugging` | flow separation, volume drift/zeroing, WOB (no EMG) | yes |
+| `trimming_debugging` | breath trimming edge cases, flow separation (no EMG) | yes |
+| `resampling_volume_sep` | volume-based breath separation + EMG/ECG/noise | yes |
+| `emg_h5_ecg_noise_outlier` | ECG removal + noise reduction + RMS outlier processing + EMG RMS | yes |
+| `emg_h6_ecg_noise_outlier` | ECG removal + noise reduction + RMS outlier processing + EMG RMS | yes |
+| `typed_ic_h5` | typed IC reference (`RIU_H5_IC.txt`) + cross-file operating-lung-volume derivation on the `RIU_H5_*W.txt` workload recordings (M-41) | **no — v2-only** |
+
+The first five are `SCENARIO_CFG` entries in `regen_production_emg_golden.py`: their
+settings come from an existing legacy-style `settings.py` (`build_production_golden.py`'s
+`SCENARIOS` list) migrated via `migrate_dict`, so `build_production_golden.py`/
+`prod_runner.py` can ALSO run them through the frozen v1 oracle for a one-time
+comparison against Emil's hand-verified expected spreadsheets. `typed_ic_h5` cannot:
+breath typing (`processing.breath_types`) and cross-file references
+(`processing.references`) have no legacy-dict shape at all — the same reason the
+SYNTHETIC `typed_ic_crossfile`/`typed_ic_fvc_same_file` scenarios above are committed
+v2-native TOML files rather than `LEGACY_SCENARIOS` dict overrides. `typed_ic_h5`'s
+settings therefore live in a v2 TOML that is authored **locally**, under the gitignored
+`production/EMG processing fix test/` folder (`regen_production_emg_golden.py`'s own
+`TYPED_IC_TOML` dict names the exact path), and run straight through `run_batch` —
+never through `prod_runner.py`/the legacy oracle.
+
+**Preparing `typed_ic_h5` locally** (real breath numbers can only be read off a real
+recording — see `IcSettings`' own docstring and the K-035 lesson in
+`docs/beslutninger.md`):
+
+1. Get `RIU_H5_IC.txt` — a recording where every breath is a repeat inspiratory-capacity
+   manoeuvre for the same participant as `RIU_H5_*W.txt` — into
+   `tests/golden/production/EMG processing fix test/` alongside the existing H5 files.
+2. `respmech migrate "tests/golden/production/EMG processing fix test/RIU_H5_example.py" -o "tests/golden/production/EMG processing fix test/RIU_H5_typed_ic.toml"`
+   (or hand-author the TOML — either way it ends up at the path `TYPED_IC_TOML` names).
+   Point `[input] files` at the SINGLE glob `RIU_H5_*.txt` — like `typed_ic_crossfile.toml`
+   above, one glob matches both the reference-only IC file and the tidal `*W.txt`
+   files in the SAME batch (`match_input_files` does not split on `;`/multiple
+   patterns). `[input] folder` does not need editing — `_run_typed_ic_scenario`
+   overrides it to the local `EMG processing fix test/` folder at run time, same as
+   every `SCENARIO_CFG` entry does for its own settings_py.
+3. `respmech breaths "tests/golden/production/EMG processing fix test/RIU_H5_typed_ic.toml" RIU_H5_IC.txt`
+   — lists every breath's onset/duration; paste a `[[processing.breath_types]]` entry
+   typing EACH one `kind = "ic"` (every breath in this file is a repeat IC by design).
+4. Add a `[[processing.references]]` entry (or one `[[processing.reference_defaults]]`
+   group entry, if every `RIU_H5_*W.txt` file shares one participant group) naming
+   `RIU_H5_IC.txt`'s breath numbers as the `ic` source for the workload recordings —
+   see `tests/golden/scenarios/typed_ic_crossfile.toml`'s own `[[processing.references]]`
+   block for the exact TOML shape.
+5. `pytest tests/golden/test_production_golden.py -k typed_ic_h5 -v` — should now RUN
+   instead of skip (a `KeyError`/`AssertionError` here means step 6 has not happened
+   yet, not that anything is wrong).
+6. `python tests/golden/regen_production_emg_golden.py typed_ic_h5 --write` — freezes
+   the current code's own lung-volume numbers into `production_golden.json["typed_ic_h5"]`
+   (**only these derived numbers are committed — never the raw recording**, same
+   convention as every other production scenario here). Re-run step 5 to confirm it now
+   passes.
+7. Fill in `tests/unit/test_manoeuvres.py`'s `EELV_UNSTABLE_MEASURED_CASES`/
+   `NOT_REPEATABLE_MEASURED_CASES` (search for `PLACEHOLDER_`) with the preceding-EELV
+   spread / repeat-IC volumes actually measured in `RIU_H5_IC.txt`, remove their
+   `pytest.mark.skip`, and record the calibrated `eelv_tolerance_frac`/
+   `repeatability_frac` in `docs/beslutninger.md`.
+
 ## Environment
 
 The original code only runs faithfully on an older SciPy stack (see
@@ -116,12 +234,37 @@ pip install -r tests/golden/requirements-golden.txt
 # Regenerate the synthetic input (rarely needed; output is committed)
 python tests/golden/generate_data.py
 
-# (Re)generate the golden reference — only when a change is intentional
+# (Re)generate the LEGACY_SCENARIOS entries — only when a change is intentional.
+# Merges onto golden_reference.json rather than overwriting it, so any committed
+# V2_SCENARIOS entry survives. Never touches (and cannot produce) a V2_SCENARIOS
+# entry: the frozen v1 oracle has no shape for the settings a v2 scenario needs
+# (typed breaths, references, separators, ...).
 python tests/golden/make_golden.py --write
 
-# Verify current code still matches the golden reference
+# (Re)generate a V2_SCENARIOS entry — bagt directly from the v2 core, never
+# through the legacy oracle. Regenerates every scenario in SCENARIOS (legacy AND
+# v2); the legacy entries it writes must still match make_golden.py's own output.
+python tests/golden/golden_newcore.py --write
+
+# Verify current code still matches the golden reference (both LEGACY_SCENARIOS
+# and V2_SCENARIOS, run through the v2 core either way — see golden_newcore.py)
 pytest tests/golden/test_golden.py -v
 ```
+
+**LEGACY_SCENARIOS vs. V2_SCENARIOS.** `make_golden.py` splits its scenario table
+in two: `LEGACY_SCENARIOS` (the five above — a legacy-dict override on
+`base_settings()`, migrated via `migrate_dict`, runnable by the frozen v1 oracle)
+and `V2_SCENARIOS` (name → a committed `tests/golden/scenarios/<name>.toml` file,
+loaded via `load_toml`; empty until the first feature ticket that needs one).
+`SCENARIOS = {**LEGACY_SCENARIOS, **V2_SCENARIOS}` is the union `test_golden.py`
+parametrises over, but `make_golden.py`'s own `run_all()` (the legacy oracle) only
+ever iterates `LEGACY_SCENARIOS` — a v2 scenario's settings have no legacy-dict
+shape at all. `golden_newcore.py::run_scenario` dispatches per scenario: legacy
+entries still go through `migrate_dict` exactly as before (byte-identical), v2
+entries load their own TOML file. There is deliberately no override hook layered
+on top of `migrate_dict` for v2 scenarios (a `V2_OVERRIDES`-style shortcut) — a v2
+scenario is its own committed TOML file, not a legacy dict with v2-only fields
+bolted on.
 
 ## Tolerance
 

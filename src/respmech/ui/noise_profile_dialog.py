@@ -56,6 +56,18 @@ except Exception:  # pragma: no cover
 
 #: sentinel returned by ``selected_region`` for the whole-expiration option
 EXPIRATION = "expiration"
+#: sentinel returned by ``selected_region`` for the EMG-only "use this file's rest-typed
+#: segment(s)" option (M-24; the corresponding core mode is M-22's ``resolve_noise_
+#: reference_mode``'s ``'rest_segments'``).
+REST_SEGMENTS = "rest_segments"
+#: sentinel returned by ``selected_region`` for the EMG-only "use the periods between this
+#: file's bursts" option (core mode ``'interburst'``, offered only when the analysis is
+#: segmented with ``emg_burst``).
+INTERBURST = "interburst"
+#: the two "whole modes" every caller has always been able to reach, before ``modes_available``
+#: existed (M-24) -- every call site predating this ticket omits the argument and gets exactly
+#: this, so behaviour for them is unchanged byte-for-byte.
+DEFAULT_MODES_AVAILABLE = frozenset({"expiration", "intervals"})
 
 _TIME_STEPS = 1000.0                   # scrollbar ticks per second: QScrollBar is integer-only
 _GLW_MARGIN = 10                       # GraphicsLayoutWidget's own margin around the plots
@@ -101,8 +113,14 @@ class NoiseProfileDialog(QDialog):
 
     def __init__(self, raw, t, fs, cols, parent=None, file_name="", flow=None,
                 reference_file="", peak_times=None, ecg_applied=True,
-                win_length=DEFAULT_WIN_LENGTH, hop_length=DEFAULT_HOP_LENGTH):
+                win_length=DEFAULT_WIN_LENGTH, hop_length=DEFAULT_HOP_LENGTH,
+                modes_available=DEFAULT_MODES_AVAILABLE):
         super().__init__(parent)
+        # M-24: which whole modes the CALLER says this signal set/file can offer.
+        # 'intervals' (drag a span) is not gated by this at all -- see selected_region -- it
+        # is always reachable regardless of what modes_available says, since dragging a span
+        # is the one mode every signal set (flow-bearing or EMG-only) has always supported.
+        self._modes_available = frozenset(modes_available)
         self.setWindowTitle("Set noise profile" + (f" — {file_name}" if file_name else ""))
         self.setModal(True)
         self._preferred = QSize(940, 580)   # opening size, clamped to the screen in showEvent
@@ -283,7 +301,45 @@ class NoiseProfileDialog(QDialog):
             "and gives a more stable estimate than one hand-marked span. Untick to mark a "
             "rest span yourself.")
         self.use_expiration.toggled.connect(self._on_mode_changed)
-        v.addWidget(self.use_expiration)
+        if "expiration" in self._modes_available:
+            v.addWidget(self.use_expiration)
+        else:
+            # M-24: an EMG-only signal set has no inspiration/expiration phases for this
+            # option to mean anything about -- absent, not merely disabled, so the picker
+            # never shows a control that could never do anything if ticked.
+            self.use_expiration.setVisible(False)
+
+        # M-24: EMG-only alternative to the expiration checkbox above -- offered only when
+        # the caller found a segment already typed 'rest' on this file (see
+        # ``_reference_file_has_rest_segment`` and ``modes_available`` in
+        # ``_open_noise_profile_dialog``). Same on/off shape as ``use_expiration``, kept as
+        # a second checkbox rather than promoting both to a QButtonGroup of radio buttons:
+        # the codebase already treats "expiration vs. a marked span" as a manually
+        # coordinated pair (_on_mode_changed), and a third option fits that same pattern
+        # without introducing a new widget family.
+        self.use_rest_segments = ElidingCheckBox("Use this file's rest-typed segment(s)")
+        self.use_rest_segments.setToolTip(
+            "Build the noise profile from every segment already typed 'rest' on this file "
+            "(Preview & QC's EMG segments tab), instead of marking a span by hand.")
+        self.use_rest_segments.toggled.connect(self._on_rest_mode_changed)
+        if "rest_segments" in self._modes_available:
+            v.addWidget(self.use_rest_segments)
+        else:
+            self.use_rest_segments.setVisible(False)
+
+        # The third whole mode, again the same on/off shape: the quiet stretches between the
+        # bursts an ``emg_burst`` segmentation finds, so a burst analysis needs no typed
+        # 'rest' segment and no hand-marked span to build its profile.
+        self.use_interburst = ElidingCheckBox("Use the periods between this file's bursts")
+        self.use_interburst.setToolTip(
+            "Build the noise profile from the quiet stretches between the EMG bursts the "
+            "automatic segmentation finds in this file (a margin next to each burst is left "
+            "out), instead of marking a span by hand.")
+        self.use_interburst.toggled.connect(self._on_interburst_mode_changed)
+        if "interburst" in self._modes_available:
+            v.addWidget(self.use_interburst)
+        else:
+            self.use_interburst.setVisible(False)
 
         row = QHBoxLayout()
         self.info = QLabel(""); self.info.setProperty("status", "muted")
@@ -302,6 +358,18 @@ class NoiseProfileDialog(QDialog):
         self.btn_ok.setDefault(True)
         row.addWidget(self.btn_cancel); row.addWidget(self.btn_ok)
         v.addLayout(row)
+
+        if "expiration" not in self._modes_available:
+            # Forced, not merely defaulted: a caller could in principle still construct this
+            # dialog with modes_available omitting 'expiration' while somehow expecting the
+            # checkbox pre-ticked (it never does today, but selected_region()'s own guard
+            # is the real backstop -- this call keeps the dialog's OWN visible state
+            # (info/warn text, btn_ok, the plot area's enabled-ness) consistent with that
+            # guard from the first paint, not just once something toggles). Deferred to
+            # here, after self.info/self.warn/self.btn_ok exist: _sync_mode_ui() (which
+            # this reaches via _on_mode_changed) touches all three.
+            self.use_expiration.setChecked(False)
+            self._on_mode_changed(False)
 
         # Enough height per channel to judge a rest span by eye. The stack grows with the
         # channel count and the scroll area absorbs the overflow, so the DIALOG's minimum
@@ -523,23 +591,77 @@ class NoiseProfileDialog(QDialog):
             self.warn.setVisible(False)
 
     def _on_mode_changed(self, on):
-        """Whole-expiration and a marked span are alternatives, so choosing one visibly
-        retires the other rather than leaving both on screen looking active."""
-        self.glw.setEnabled(not on)
+        """Whole-expiration and a marked span/rest-segments are alternatives, so choosing
+        one visibly retires the others rather than leaving more than one on screen looking
+        active."""
+        self._untick(on, self.use_rest_segments, self.use_interburst)
+        self._sync_mode_ui()
+
+    @staticmethod
+    def _untick(on, *boxes):
+        """When a whole mode is switched ON, switch the others OFF without re-entering
+        their own handlers (they would each call ``_sync_mode_ui`` half-way through)."""
+        if not on:
+            return
+        for box in boxes:
+            if box.isChecked():
+                box.blockSignals(True)
+                box.setChecked(False)
+                box.blockSignals(False)
+
+    def _on_interburst_mode_changed(self, on):
+        self._untick(on, self.use_expiration, self.use_rest_segments)
+        self._sync_mode_ui()
+
+    def _on_rest_mode_changed(self, on):
+        """M-24 counterpart of ``_on_mode_changed`` for the 'rest-typed segments' checkbox
+        -- same mutual-exclusion-by-hand as the expiration/span pair above, just mirrored."""
+        self._untick(on, self.use_expiration, self.use_interburst)
+        self._sync_mode_ui()
+
+    def _sync_mode_ui(self):
+        """The one place that reconciles the dialog's visible state with whichever of the
+        three mutually-exclusive modes (expiration / rest-typed segments / a dragged span)
+        is currently chosen. Byte-for-byte the same rule ``_on_mode_changed`` used to apply
+        alone when ``use_rest_segments`` did not exist -- with it always unchecked (its
+        default, and its only possible state when 'rest_segments' is not in
+        ``modes_available``), ``rest_on`` is always False here and this reduces to exactly
+        that old logic."""
+        exp_on = self.use_expiration.isChecked()
+        rest_on = self.use_rest_segments.isChecked()
+        burst_on = self.use_interburst.isChecked()
+        drag_on = not (exp_on or rest_on or burst_on)
+        self.glw.setEnabled(drag_on)
         for reg in self._regions:
-            reg.setVisible(bool(self._selection) and not on)
-        if on:
+            reg.setVisible(bool(self._selection) and drag_on)
+        if exp_on:
             self.warn.setVisible(False)
             self.info.setText("The profile will be built from every expiration.")
+        elif rest_on:
+            self.warn.setVisible(False)
+            self.info.setText("The profile will be built from this file's rest-typed segment(s).")
+        elif burst_on:
+            self.warn.setVisible(False)
+            self.info.setText("The profile will be built from the periods between this "
+                              "file's bursts.")
         elif self._selection:
             self._set_selection(*self._selection)
         else:
             self.info.setText("")
-        self.btn_ok.setEnabled(on or self._selection is not None)
+        self.btn_ok.setEnabled(exp_on or rest_on or burst_on or self._selection is not None)
 
     def selected_region(self):
-        """The chosen (t0, t1) in seconds, ``EXPIRATION`` for the whole-expiration option,
-        or None if nothing is chosen."""
-        if self.use_expiration.isChecked():
+        """The chosen (t0, t1) in seconds, ``EXPIRATION``/``REST_SEGMENTS`` for the two
+        whole-mode options, or None if nothing is chosen. Guarded by ``modes_available`` in
+        addition to the checkbox state itself (never trusting the widget alone) so a mode this
+        dialog was told is unavailable can never be returned regardless of how either
+        checkbox ended up ticked — the checkbox for an unavailable mode is forced off AND
+        hidden at construction (see ``__init__``), but this is the actual backstop the
+        ticket asks for, not merely a visual affordance."""
+        if "expiration" in self._modes_available and self.use_expiration.isChecked():
             return EXPIRATION
+        if "rest_segments" in self._modes_available and self.use_rest_segments.isChecked():
+            return REST_SEGMENTS
+        if "interburst" in self._modes_available and self.use_interburst.isChecked():
+            return INTERBURST
         return self._selection

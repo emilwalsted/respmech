@@ -5,8 +5,9 @@ One source of truth: the app's own onboarding sample (``core.sample`` — realis
 mechanics with an open Campbell loop, band-limited diaphragm EMG, and a heartbeat/ECG
 artefact) analysed through the full pipeline (``build_sample_settings`` — ECG removal +
 spectral noise reduction). The four feature figures are drawn by the core diagnostic
-plot writers, so they match the app's own output; the three UI screenshots are grabbed
-from the offscreen app. No patient data.
+plot writers, so they match the app's own output; the UI screenshots (Setup, Preview & QC,
+Run & results, the signal-set picker, a breath typed as a manoeuvre and the EMG-only
+segments tab) are grabbed from the offscreen app. No patient data.
 
     python scripts/gen_readme_figures.py        # writes docs/img/*.png
 
@@ -219,6 +220,82 @@ def _screenshots(settings, result, filename):
     pump(8)
     win.grab().save(f"{OUT}/run.png")
     print(f"screenshots: setup, preview-mechanics, run (dry run finished: {bool(finished)})")
+    win.close(); pump()
+    return app, pump
+
+
+def _settle(app, pv, timeout=120):
+    """Pump until Preview & QC has no job in flight (the reactive jobs have delivered)."""
+    import time
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        app.processEvents(); time.sleep(0.05)
+        busy = [n for n, ov in pv._overlays.items() if ov.isVisible() and getattr(ov, "busy", False)]
+        if not busy and not pv._jobs and not pv._launch_queue:
+            t = time.monotonic() + 0.5           # one more beat for paints scheduled by the delivery
+            while time.monotonic() < t:
+                app.processEvents(); time.sleep(0.02)
+            if not pv._jobs and not pv._launch_queue:
+                return True
+    return False
+
+
+def _modular_screenshots(app, pump):
+    """The three screens the modular analysis added: the signal-set picker a new analysis
+    starts with, a breath typed as an IC manoeuvre (Preview & QC, with its Manoeuvres table),
+    and the EMG-only analysis's own first tab, 'EMG – segments'. Each is driven through the
+    same offscreen ``MainWindow`` as the screenshots above, from a fresh window so nothing
+    carries over (an empty recent-analyses list and no local folder name reach an image)."""
+    from respmech.core.settings import Settings
+    from respmech.ui.state import AppState
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.signal_set_dialog import SignalSetDialog
+
+    # 1 · the signal-set picker
+    dlg = SignalSetDialog()
+    dlg.show(); pump(8)
+    dlg.grab().save(f"{OUT}/signal-set.png")
+    dlg.close(); pump()
+
+    # 2 · a breath typed as an IC manoeuvre, on the full sample (the same door a first-time
+    # user takes: 'Explore with sample data')
+    win = MainWindow(AppState())
+    win.resize(WIN_W, 1080); win.show(); pump()     # taller, so the Manoeuvres table under the per-breath table shows
+    if not win.settings_screen.open_sample_analysis():
+        raise SystemExit("the sample analysis did not open")
+    win.tabs.setCurrentIndex(1)
+    pv = win.preview_screen
+    pv.refresh_files(); pv._preview()
+    if not _settle(app, pv):
+        raise SystemExit("the typed-breath preview did not settle")
+    for i in range(pv.subtabs.count()):
+        if pv.subtabs.tabText(i).lower().startswith("mechanics"):
+            pv.subtabs.setCurrentIndex(i); break
+    if pv._set_breath_type(6, "ic") is None:
+        raise SystemExit("could not type breath 6 as an IC manoeuvre")
+    if not _settle(app, pv):
+        raise SystemExit("the typed-breath re-run did not settle")
+    pump(8)
+    win.grab().save(f"{OUT}/breath-types.png")
+    win.settings_screen._mark_clean()        # typing a breath dirtied it; close() would ask to save
+    win.close(); pump()
+
+    # 3 · the EMG-only analysis: no flow channel, segments placed by separators
+    st = Settings(); st.analysis.signals = ["emg"]
+    win = MainWindow(AppState(st))
+    win.resize(WIN_W, WIN_H); win.show(); pump()
+    if not win.settings_screen.open_sample_analysis(use_current_signals=True):
+        raise SystemExit("the EMG-only sample did not open")
+    win.tabs.setCurrentIndex(1)
+    pv = win.preview_screen
+    pv.refresh_files(); pv.subtabs.setCurrentIndex(0); pv._preview()
+    if not _settle(app, pv):
+        raise SystemExit("the EMG-only preview did not settle")
+    pump(8)
+    win.grab().save(f"{OUT}/emg-only.png")
+    win.settings_screen._mark_clean()
+    win.close(); pump()
+    print("screenshots: signal-set, breath-types, emg-only")
 
 
 def main():
@@ -228,17 +305,20 @@ def main():
     # user's data. (The onboarding writes its sample to a temp dir too, so the Setup
     # screenshot's path is faithful to what a first-time user actually sees.)
     work = tempfile.mkdtemp(prefix="respmech-readme-")
+    code = 1
     try:
         settings, result, fr, desc = _build(work)
         print(f"sample: {len(fr.breaths or {})} breaths, "
               f"{np.asarray((fr.signals or {}).get('emg_peaks', [])).size} R-peaks")
         _feature_figures(fr)
-        _screenshots(settings, result, desc["filename"])
+        app, pump = _screenshots(settings, result, desc["filename"])
+        _modular_screenshots(app, pump)
+        print("done — 10 graphics written to docs/img/")
+        code = 0
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    print("done — 7 graphics written to docs/img/")
-    sys.stdout.flush()
-    os._exit(0)          # Qt worker threads can otherwise keep the process alive at exit
+        sys.stdout.flush()
+        os._exit(code)   # Qt worker threads can otherwise keep the process alive at exit, also after an error
 
 
 if __name__ == "__main__":

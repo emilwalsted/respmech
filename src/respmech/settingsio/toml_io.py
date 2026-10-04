@@ -7,12 +7,22 @@ writing uses ``tomli_w``.
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from pathlib import Path
 
 import tomli_w
 
-from respmech.core.settings import Settings
+from respmech.core.analysis.signals import derived_signals, effective_signals
+
+# The one authoritative table of per-folder-tagged batch state — defined once in
+# core.settings (as `_CARRIED_KINDS`; CarriedOverState/carried_over_state/
+# clear_carried_over are its other consumers) and imported here under the name this
+# module's own functions were already written against, so the two can never drift the
+# way the six hand-spread call sites this replaces already had (B06/M-07).
+from respmech.core.settings import Settings, _CARRIED_KINDS as _FOLDER_TAG_PATHS, _walk
+
+_INDEX_RE = re.compile(r"^\[(\d+)\]$")
 
 
 def _rebase_folders(settings: Settings, base: str) -> None:
@@ -23,22 +33,25 @@ def _rebase_folders(settings: Settings, base: str) -> None:
     run). The EMG noise reference FILE is left as-is — a bare filename is resolved against
     the input folder downstream.
 
-    The carried-folder provenance tags (ExcludeEntry/BreathCountEntry.folder,
-    NoiseSettings.reference_folder — see core.settings.carried_over_state) are rebased the
-    SAME way, for the same reason: they are compared directly against the live, rebased
-    ``settings.input.folder`` (core.settings.is_carried_folder), and a shared/moved study
-    that only rebased input.folder itself would make every entry look falsely carried over
-    the moment it was reopened somewhere else."""
+    The carried-folder provenance tags (every row in ``_FOLDER_TAG_PATHS`` — see
+    core.settings.carried_over_state) are rebased the SAME way, for the same reason: they
+    are compared directly against the live, rebased ``settings.input.folder``
+    (core.settings.is_carried_folder), and a shared/moved study that only rebased
+    input.folder itself would make every entry look falsely carried over the moment it was
+    reopened somewhere else."""
     for obj, attr in ((settings.input, "folder"), (settings.output, "folder")):
         val = getattr(obj, attr)
         if val and not os.path.isabs(val):
             setattr(obj, attr, os.path.normpath(os.path.join(base, val)))
-    for entry in (*settings.processing.exclude_breaths, *settings.processing.breath_counts):
-        if entry.folder and not os.path.isabs(entry.folder):
-            entry.folder = os.path.normpath(os.path.join(base, entry.folder))
-    noise = settings.processing.emg.noise
-    if noise.reference_folder and not os.path.isabs(noise.reference_folder):
-        noise.reference_folder = os.path.normpath(os.path.join(base, noise.reference_folder))
+    for path, _kind, _name_of, _clear_fn in _FOLDER_TAG_PATHS:
+        container, attr = _walk(settings, path)
+        val = getattr(container, attr)
+        if isinstance(val, list):
+            for entry in val:
+                if entry.folder and not os.path.isabs(entry.folder):
+                    entry.folder = os.path.normpath(os.path.join(base, entry.folder))
+        elif val and not os.path.isabs(val):
+            setattr(container, attr, os.path.normpath(os.path.join(base, val)))
 
 
 def load_toml(path: str | Path) -> Settings:
@@ -50,7 +63,29 @@ def load_toml(path: str | Path) -> Settings:
 
 
 def dumps_toml(settings: Settings) -> str:
-    return tomli_w.dumps(_toml_clean(settings.to_dict()))
+    """Serialise ``settings`` as TOML text.
+
+    Unlike :func:`save_toml`, this ALWAYS writes the resolved, effective signal set
+    into ``[analysis] signals`` (R7) -- explicit or derived, it does not matter: this
+    is the run manifest's job (``core.io.writers._write_manifest`` calls it to build
+    ``analysis-used.toml``), and a run's own provenance should never leave a reader
+    guessing which signals actually governed it. Sorted for a deterministic manifest.
+
+    Every real call path writes this AFTER ``Settings.validate()`` already succeeded
+    (the CLI and the GUI Run screen both gate on it first), which itself now rejects a
+    malformed (non-list) ``analysis.signals`` cleanly -- so ``effective_signals``'s own
+    ``TypeError`` guard for that case is normally unreachable here. Caught anyway
+    (self-review finding) so a direct, unvalidated call to this function degrades the
+    same way :func:`save_toml` already does for the identical malformed input --
+    recording the value as-is rather than crashing a manifest write.
+    """
+    data = _merge_unknown(_toml_clean(settings.to_dict()), settings.unknown)
+    try:
+        resolved_signals = sorted(effective_signals(settings))
+    except TypeError:
+        resolved_signals = settings.analysis.signals
+    data.setdefault("analysis", {})["signals"] = resolved_signals
+    return tomli_w.dumps(data)
 
 
 def _relativize_folder(folder: str, base: str) -> str:
@@ -69,6 +104,20 @@ def _relativize_folder(folder: str, base: str) -> str:
     return folder
 
 
+def _walk_dict(data: dict, dotted_path: str) -> tuple[dict | None, str]:
+    """Dict-shaped counterpart of ``core.settings._walk``, for the ``to_dict()``/TOML
+    shape ``save_toml`` writes: resolve all but the last segment of ``dotted_path``
+    against nested dicts (dataclass field names ARE the TOML/dict key names, so the SAME
+    path strings from ``_FOLDER_TAG_PATHS`` apply unchanged). Returns ``(None, last
+    segment)`` if an intermediate table is absent (dropped by ``_toml_clean`` because it
+    was never set) — the caller then has nothing to relativize."""
+    segments = dotted_path.split(".")
+    cur = data
+    for seg in segments[:-1]:
+        cur = cur.get(seg) if isinstance(cur, dict) else None
+    return (cur if isinstance(cur, dict) else None), segments[-1]
+
+
 def save_toml(settings: Settings, path: str | Path) -> None:
     # Re-relativize input/output folders against the file's own directory — the inverse of
     # load_toml's rebase — so an Open→edit→Save cycle preserves a portable relative-path
@@ -77,21 +126,37 @@ def save_toml(settings: Settings, path: str | Path) -> None:
     # (dumps_toml, written into the output folder) deliberately keeps absolute paths for
     # reproducibility, so it is not routed through here.
     base = os.path.dirname(os.path.abspath(str(path)))
-    data = _toml_clean(settings.to_dict())
+    data = _merge_unknown(_toml_clean(settings.to_dict()), settings.unknown)
+    # R7: omit [analysis] entirely while the explicit set is empty (nothing was ever
+    # declared) or equals what the assigned channels already derive to -- so an
+    # unedited or fully-consistent analysis keeps writing exactly the shape it did
+    # before this ticket, and a hand round-tripped 2.4-era file gains no new table.
+    # Only the `signals` key itself is dropped, never the whole table, if some OTHER
+    # (currently unrecognised) key also lives under [analysis] -- that key still has
+    # to survive the save via the ordinary _merge_unknown path above.
+    analysis = data.get("analysis")
+    if isinstance(analysis, dict):
+        explicit = frozenset(settings.analysis.signals)
+        if not explicit or explicit == derived_signals(settings.input.channels):
+            analysis.pop("signals", None)
+            if not analysis:
+                data.pop("analysis")
     for section in ("input", "output"):
         sec = data.get(section)
         if isinstance(sec, dict) and sec.get("folder"):
             sec["folder"] = _relativize_folder(sec["folder"], base)
     # inverse of the carried-folder rebase in _rebase_folders — see its docstring.
-    proc = data.get("processing")
-    if isinstance(proc, dict):
-        for key in ("exclude_breaths", "breath_counts"):
-            for entry in proc.get(key) or ():
+    for path_, _kind, _name_of, _clear_fn in _FOLDER_TAG_PATHS:
+        parent, attr = _walk_dict(data, path_)
+        if parent is None:
+            continue
+        val = parent.get(attr)
+        if isinstance(val, list):
+            for entry in val:
                 if isinstance(entry, dict) and entry.get("folder"):
                     entry["folder"] = _relativize_folder(entry["folder"], base)
-        noise = (proc.get("emg") or {}).get("noise")
-        if isinstance(noise, dict) and noise.get("reference_folder"):
-            noise["reference_folder"] = _relativize_folder(noise["reference_folder"], base)
+        elif val:
+            parent[attr] = _relativize_folder(val, base)
     with open(path, "wb") as f:
         f.write(tomli_w.dumps(data).encode("utf-8"))
 
@@ -104,3 +169,70 @@ def _toml_clean(obj):
     if isinstance(obj, list):
         return [_toml_clean(v) for v in obj]
     return obj
+
+
+def _merge_unknown(data: dict, unknown: dict) -> dict:
+    """Fold ``Settings.unknown``'s dotted-path entries back into ``data`` before it is
+    written as TOML, so a key/table this version does not recognise survives a save
+    instead of being silently dropped (a hand-edited or newer-version analysis file
+    otherwise lost its extra tables the moment RespMech re-saved it).
+
+    ``core.settings._build`` archives an unrecognised key in exactly three shapes, and
+    every path in ``unknown`` is one of them:
+
+    * a whole unknown top-level or nested TABLE (``"processing.lung_volumes"`` ->
+      a dict) -- inserted as a table at that path;
+    * a whole unknown LIST OF TABLES (``"processing.references"`` -> a list) --
+      inserted as a list at that path;
+    * a single unrecognised FIELD inside one element of an otherwise-known list
+      dataclass (``"processing.exclude_breaths.[0].some_future_field"``) -- inserted
+      into that element only.
+
+    Every path segment before the last therefore already corresponds to an
+    already-serialised known field in ``data`` (an unknown value is archived whole,
+    never recursed into further) -- except a list index whose entry has since been
+    removed from the in-memory settings, which is dropped silently: the element it
+    belonged to no longer exists, so there is nowhere left to put it back.
+
+    KNOWN, ACCEPTED LIMITATIONS (found by self-review, deliberately not fixed here --
+    this ticket's scope is making the existing M-01 archival format round-trip through
+    a save, not redesigning it; each is pinned by a test in test_settings.py so a
+    future change to this function doesn't silently alter the accepted shape):
+
+    * A per-element unknown field is keyed by its list POSITION at load time
+      (``"...[0].kind"``), not by a stable identity. If an EARLIER entry in that same
+      list is removed from the in-memory settings before a save (not merely appended
+      to or left alone), the value reattaches to whatever entry now sits at that index
+      instead of being dropped -- silent misattribution to the wrong entry, which is
+      worse than the "index now out of range" case above. This cannot happen from
+      today's code (nothing yet lets a list carrying unknown per-entry data be edited
+      in the same session), but will need a stable per-entry identity or per-entry
+      unknown storage instead of this flat, position-keyed dict once such editing
+      exists.
+    * A literal ``.`` inside a TOML key name (e.g. a quoted ``"weird.key" = 5``) is
+      indistinguishable from a path separator once archived as a string, so a save
+      re-splits it and rebuilds it as a NESTED table instead of the original flat key.
+      The value survives; only the shape changes. This can never collide with a real
+      dataclass field (Python field names cannot contain ``.``), so it is a narrow
+      concern for a hand-edited or foreign-tool TOML file using dotted key namespacing,
+      not for RespMech's own output.
+    """
+    for path, value in unknown.items():
+        segments = path.split(".")
+        cur = data
+        for seg in segments[:-1]:
+            m = _INDEX_RE.match(seg)
+            if m:
+                idx = int(m.group(1))
+                if not isinstance(cur, list) or idx >= len(cur):
+                    cur = None
+                    break
+                cur = cur[idx]
+            else:
+                if not isinstance(cur, dict):
+                    cur = None
+                    break
+                cur = cur.setdefault(seg, {})
+        if isinstance(cur, dict):
+            cur[segments[-1]] = value
+    return data

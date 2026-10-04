@@ -62,6 +62,17 @@ _FIX_HINTS = {
     "ConstantFlowError": "Setup ▸ channel assignment ('Assign channels from data…'); "
                          "or switch 'Signal used to split breaths' to volume under "
                          "Preview & QC ▸ Mechanics ▸ Advanced….",
+    "EmgSegmentationError": "Check the separator times configured for this file "
+                            "(processing.segmentation.separators) against the recording's "
+                            "own length, and that they strictly increase — Preview & QC ▸ "
+                            "EMG – segments, or the settings file directly.",
+    "ReferenceLinkError": "This file's IC reference could not be resolved (the source "
+                          "file, its typed breaths, or its own breath typing) and "
+                          "'Require linked references' is on — fix the reference (Preview "
+                          "& QC ▸ Mechanics ▸ Reference manoeuvres…), or untick 'Require "
+                          "linked references' under Preview & QC ▸ Mechanics ▸ Advanced… "
+                          "▸ Lung volumes to fall back to the softer NaN-plus-notice "
+                          "behaviour instead.",
 }
 
 
@@ -443,7 +454,26 @@ class RunScreen(QWidget):
         file count/source, planned output count/destination — from the SAME planner
         (``core.io.plan.plan_outputs``) ``write_batch`` itself is measured against, never a
         second hand-rolled count; then every current blocker as a full sentence, or a
-        plain statement that the run can start."""
+        plain statement that the run can start.
+
+        M-13: a second line, 'Analyses: ...', is inserted right after the head — what
+        this signal set actually computes, the same line `respmech run --dry-run`
+        prints for the identical settings (``cli.__main__.cmd_run``), so the two never
+        describe an analysis differently. Unlike the References line below, it does not
+        depend on ``files`` — it is a property of the settings alone. Built from
+        ``Capabilities.from_settings_or_none`` (never the raising ``from_settings``):
+        this method runs on every settings-changed tick, unconditionally, so a
+        hand-edited ``analysis.signals`` (a bare string instead of a list) must not
+        crash it — the line is simply omitted for that one tick, same degrade-quietly
+        contract every other frequent-tick caller in this codebase already follows.
+
+        M-37: a THIRD line, 'References: N/M linked', is inserted BETWEEN the (now two)
+        head lines and the blocker/ready line — never appended after it — so existing
+        callers reading ``.text().split("\\n")[-1]`` for the blocker/ready line are
+        unaffected regardless of whether this line is present. Shown only when this
+        analysis actually declares SOME reference/subject configuration
+        (``processing.references``/``reference_defaults``/``input.subjects``) — an
+        ordinary analysis using none of this gets no extra line beyond Analyses."""
         if blockers is None:
             blockers = self._blockers()
         s = self.state.settings
@@ -463,8 +493,30 @@ class RunScreen(QWidget):
                 head += f" — into {out or '(output not set)'}"
         else:
             head += f" — into {out or '(output not set)'}"
+        proc = s.processing
+        # M-13: `from_settings_or_none`, NOT `from_settings` -- this method runs on every
+        # settings-changed tick, unconditionally (that is the point of an
+        # always-visible commitment sheet), with no surrounding try/except, so a
+        # hand-edited `analysis.signals = "flow"` (a bare string instead of a list --
+        # effective_signals()'s own documented TypeError guard) must degrade the same
+        # way every other "runs on every tick" caller in this codebase already does
+        # (_mechanics.py/_emg_noise.py/validation.py::channel_collision), not crash.
+        from respmech.core.analysis.signals import Capabilities
+        caps = Capabilities.from_settings_or_none(s)
+        lines = [head]
+        if caps is not None:
+            lines.append(f"Analyses: {', '.join(caps.analyses())}")
+        if files and (proc.references or proc.reference_defaults or s.input.subjects):
+            from respmech.core.analysis.references import resolve_reference
+            names = {os.path.basename(f) for f in files}
+            linked = sum(
+                1 for n in names
+                if (ref := resolve_reference(n, "ic", s)) is not None
+                and ref.file in names and ref.breaths)
+            lines.append(f"References: {linked}/{len(names)} linked")
         tail = ("⚠ " + "  ·  ".join(blockers)) if blockers else "Ready to run."
-        self._commitment.setText(f"{head}\n{tail}")
+        lines.append(tail)
+        self._commitment.setText("\n".join(lines))
         self._commitment.setProperty("status", "warn" if blockers else "info")
         st = self._commitment.style()
         if st is not None:
@@ -883,8 +935,10 @@ class RunScreen(QWidget):
         """The cohort-level output names to mention in subset-write UI text, joined into one
         readable phrase — shared by the subset dialog and the post-write log note so the two
         can never name a different set of artefacts."""
+        from respmech.core.analysis.signals import Capabilities
         bits = ["Average breathdata.xlsx", "Cohort summary.xlsx"]
-        if self.state.settings.output.diagnostics.save_pv_individual:
+        if (self.state.settings.output.diagnostics.save_pv_individual
+                and Capabilities.from_settings(self.state.settings).poes):
             bits.append("the cohort Campbell figure")
         return bits[0] if len(bits) == 1 else ", ".join(bits[:-1]) + " and " + bits[-1]
 
@@ -1314,7 +1368,7 @@ class RunScreen(QWidget):
             self._ok_file_count += 1
             self._append(f"  done ({ev.message})")
         elif ev.kind == "warning":
-            # K-108: e.g. respmech[plots] missing — figures are skipped, the run still
+            # E.g. respmech[plots] missing — figures are skipped, the run still
             # completes. Same log the CLI prints to stderr for (see cli/__main__.py's
             # _progress_printer), so the app surfaces it too instead of only via
             # run-report.txt's FIGURES SKIPPED section.
@@ -1641,9 +1695,12 @@ class RunScreen(QWidget):
         for fname, fr in files.items():
             err = getattr(fr, "error", None)
             bt = getattr(fr, "breaths_table", None)
+            # M-32: role rides along with the same result breaths/verdict already come
+            # from — see FileRailEntry.role's own docstring.
             self.file_rail.mark_result(fname, ok=err is None,
                                        breaths=None if err else (len(bt) if bt is not None else 0),
-                                       error=str(err) if err else None)
+                                       error=str(err) if err else None,
+                                       role=None if err else getattr(fr, "role", None))
         self.file_rail.sort_failed_first(self.file_rail.any_failed())
 
     def _rerun_failed(self):

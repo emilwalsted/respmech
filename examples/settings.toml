@@ -3,7 +3,7 @@
 # A realistic starting point covering the common keys, with comments explaining each
 # block and the current schema default alongside anything overridden. Kept in sync
 # with the annotated example in documentation.html's "The settings file (TOML)"
-# section on respmech.dk — update both together (ticket K-046).
+# section on respmech.dk — update both together.
 #
 # Unlike the copy on the website, this file is directly runnable: input.folder /
 # input.files point at sample_recording.csv, the same small synthetic recording the
@@ -32,9 +32,9 @@ decimal            = "."    # use "," for European-locale text/CSV
                             # column 1 is the time axis, so signals start at 2
 flow    = 5                 # REQUIRED
 volume  = 6                 # REQUIRED unless processing.volume.integrate_from_flow = true
-poes    = 7                 # REQUIRED — oesophageal pressure
-pgas    = 8                 # REQUIRED — gastric pressure
-pdi     = 9                 # REQUIRED — transdiaphragmatic pressure
+poes    = 7                 # optional — omit to leave its columns out; adds work of breathing
+pgas    = 8                 # optional — omit to leave its columns out; adds gastric pressure
+pdi     = 9                 # optional — omit to leave its columns out; adds transdiaphragmatic pressure
 emg     = [2, 3, 4]         # EMG channels; [] disables all EMG processing
 entropy = [2, 3, 4]         # sample-entropy channels; [] disables entropy
 
@@ -84,6 +84,90 @@ baseline_window_s = 0.05        # s — window whose mean is the pressure-time-p
 # [[processing.breath_counts]]
 # file  = "sample_recording.csv"
 # count = 12                      # override the auto-detected breath count for this file
+
+# --- Signal set: which signals the analysis uses (optional) ---
+# Leave the table out and the set is derived from the channels assigned above, which is
+# what every analysis written before signal sets existed does. Name one explicitly to
+# declare a set: any of "flow", "poes", "pgas", "pdi", "emg". An assigned
+# channel that is not named is added on load, with a notice.
+# [analysis]
+# signals = ["flow", "poes", "pgas", "pdi", "emg"]   # must cover every assigned channel
+
+# --- Breath types: name a breath as a manoeuvre instead of tidal breathing ---
+# Breath numbers are the ones `respmech breaths settings.toml` prints and Preview & QC
+# shows. A typed breath is left out of the tidal averages, like an excluded one, and is
+# measured in the Manoeuvres table instead. Kinds: "ic" (inspiratory capacity), "fvc"
+# (forced vital capacity), "ic_fvc" (both in one breath), "max_insp" (maximal
+# inspiratory effort), "sniff", "rest" (an EMG-only noise reference) and "other".
+# [[processing.breath_types]]
+# file  = "sample_recording.csv"
+# breath = 6                      # 1-based, in this file
+# kind  = "ic"
+# label = "IC after warm-up"      # optional free text kept with the entry
+
+# --- Reference manoeuvres: where a file's IC / FVC / baseline / maximal effort come from ---
+# A reference is one or more typed breaths, in this file or in another one. The order is
+# always: an entry for the file, then the entry for its group, then the file's own typed
+# breath. An unresolved link gives blank values and a caution, never an error (unless
+# processing.lung_volume.require_references is true).
+# [[processing.references]]
+# file = "P03_peak.csv"
+# ic = { file = "P03_IC.csv", breaths = [2, 3, 4] }       # several repeats are combined
+# fvc = { file = "P03_MFVL.csv", breaths = [1] }
+# baseline_ic = { file = "P03_rest.csv", breaths = [7] }  # a different recording by nature
+# max_insp = { file = "P03_max.csv", breaths = [1] }   # a breath can be typed only once
+
+# Or once per participant: the group is the key the cohort summary uses (the leading
+# filename token, or output.group_regex).
+# [[processing.reference_defaults]]
+# group = "P03"
+# ic = { file = "P03_IC.csv", breaths = [2, 3, 4] }
+
+# --- Subjects: per-participant spirometry, applied to every file of that group ---
+# vc_l anchors the operating lung volumes above residual volume; tlc_l adds the absolute
+# values; fev1_l (preferred over a value derived from a typed FVC breath) feeds the MVV
+# estimate, mvv_lpm overrides it; both feed the breathing-reserve columns.
+# [[input.subjects]]
+# key     = "P03"
+# tlc_l   = 6.12
+# vc_l    = 4.30
+# rv_l    = 1.90
+# fev1_l  = 3.10
+# mvv_lpm = 124.0
+
+# --- Operating lung volumes, flow-volume placement, PEEPi, normalisation (all optional) ---
+# Each adds columns only; none changes an existing result.
+# [processing.lung_volume]
+# require_references = false      # true: an unresolved reference blocks the run
+# [processing.lung_volume.ic]
+# eelv_tracking = "none"          # "none": the IC is held constant | "within_file": it follows EELV
+                                  # (same-file IC reference only; blank with trend correction)
+# [processing.mfvl]
+# source = "single"               # "single" (largest attempt) | "envelope" of several
+# mvv_fev1_multiplier = 40.0      # MVV estimated as FEV1 x this, when no mvv_lpm is given (uses fev1_l)
+# [processing.pressure.peepi]
+# enabled = true                  # measure intrinsic PEEP and the threshold work of breathing
+# [processing.pressure.normalization]
+# enabled = true                  # pressure and EMG as a percentage of a typed maximal effort
+
+# --- Repairing the automatic breath detection by hand (flow-bearing analyses) ---
+# Times are seconds into the recording. A cut splits a breath in two, a join removes the
+# nearest boundary. Preview & QC ▸ Mechanics writes these when you click a trace.
+# [[processing.segmentation.overrides]]
+# file   = "sample_recording.csv"
+# cut_s  = [12.4]
+# join_s = [20.1]
+
+# --- EMG-only analyses (analysis.signals = ["emg"], no flow channel) ---
+# The recording is cut into segments. "whole_file" (one segment), "separators" (boundaries
+# you place, below), "fixed_windows" (equal windows) or "emg_burst" (detected). Only valid
+# when the analysis declares EMG only; in that analysis this table replaces the
+# [processing.segmentation] table above rather than being added to it.
+# [processing.segmentation]
+# method = "separators"
+# [[processing.segmentation.separators]]
+# file    = "sample_recording_emg.csv"
+# times_s = [4.3, 7.8, 11.1]      # N separators give N + 1 segments, numbered from 1
 
 [output]
 folder = "output"                # workbooks land in <folder>/data

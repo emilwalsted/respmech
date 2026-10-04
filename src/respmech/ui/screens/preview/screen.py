@@ -50,6 +50,7 @@ import pyqtgraph as pg
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
+from respmech.core.analysis.signals import Capabilities
 from respmech.core.settings import ExcludeEntry
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.file_rail import FileRail
@@ -62,8 +63,8 @@ from respmech.ui.flow_layout import (ElidingLabel, FlowLayout, cluster as _clust
                                      elide as _elide, install_flow as _install_flow)
 from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   EmgConditioningWorker, FnWorker,
-                                  stage_ecg_reduction, stage_mechanics_preview,
-                                  stage_noise_fidelity)
+                                  stage_ecg_reduction, stage_emg_segments_preview,
+                                  stage_mechanics_preview, stage_noise_fidelity)
 
 try:
     from respmech.ui import theme as _theme
@@ -73,11 +74,12 @@ except Exception:  # pragma: no cover
 from ._mechanics import _MechanicsMixin, _MechStackFloorFitter
 from ._ecg import _EcgMixin
 from ._emg_noise import _EmgNoiseMixin, NEEDS_ECG_HINT
+from ._segments import _SegmentsMixin
 from ._busy_overlay import BusyOverlay
 from ._figure_fit import _PlotTitleOverlay
 from ._jobs import (_TAB_MECH, _PANELS, _SPIN_TEXT, _KIND_LABEL, _AUTO_KINDS,
                    _FILE_KINDS, _kinds_for_settings_path, _changed_settings_paths,
-                   _Job, _ORPHANED_THREADS, _MAX_ACTIVE, _FileRunError)
+                   _Job, _ORPHANED_THREADS, _MAX_ACTIVE, _FileRunError, panels_for)
 
 
 #: why the manual ECG fields (and Auto-suggest) are inert while "Auto-detect for the batch" is on
@@ -87,7 +89,7 @@ AUTO_BATCH_HINT = ("Auto-detect for the batch is on: these five settings are re-
                    "to set them by hand.")
 
 
-class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
+class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, QWidget):
     status_changed = Signal(str)
     # emitted when a noise reference is chosen on the graph (feature B)
     noise_reference_changed = Signal(str, object, bool)
@@ -120,7 +122,8 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._launch_queue = []          # _Jobs registered but not yet thread.start()ed (concurrency cap)
         self._active = set()             # _Jobs whose thread is started, compute not yet delivered
         self._reaping = set()            # _Jobs delivered; thread quitting — ref held until thread.finished
-        self._tokens = {"mech": 0, "batch": 0, "ecg": 0, "emg_all": 0, "emg_detail": 0, "noise": 0}
+        self._tokens = {"mech": 0, "batch": 0, "ecg": 0, "emg_all": 0, "emg_detail": 0,
+                       "noise": 0, "segments": 0}
         self._overlays = {}              # panel key -> BusyOverlay
         # Debounced auto-recompute: rapid edits (a spinbox drag / multi-keystroke entry)
         # restart one single-shot timer, collapsing the burst into ONE re-dispatch after a
@@ -158,6 +161,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # breath-overlay interaction state (feature A)
         self._channel_plots = []
         self._breath_spans = {}
+        self._selected_breath = None      # the marked breath (single click), see _select_breath
         self._breath_regions = {}
         self._breath_texts = {}
         self._mech_unpin = lambda: None   # detaches the mechanics label-pin slot
@@ -175,7 +179,15 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self.result_checks = []          # list of (col:int, QCheckBox)
         # breath overlays in the EMG views (Mechanics keeps its own _breath_* state)
         self._breaths = []               # last mech spans [(num, t0, t1, ignored), ...] (TRIMMED s)
+        self._suggested_fvc = None       # M-31: manoeuvres.suggest_fvc's breath number, or None
         self._trim_offset_s = 0.0        # startix/fs — maps a trimmed span to absolute EMG time
+        # whether Mechanics' own 'Place separators' (manual segmentation
+        # repair) is currently armed, and the SeparatorLinesItem drawn on each
+        # channel-stack plot — mirrors _segments.py's _separators_armed/_separator_items
+        # for the EMG-only separators list, but keyed on processing.segmentation.overrides
+        # instead of processing.segmentation.separators.
+        self._overrides_armed = False
+        self._override_items = []
         self._bov = {}                   # view -> {'items':[(plot,item)], 'regions':{num:[reg]}, 'texts':{num:txt}}
         self._emg_raw_subplots = []      # per-channel PlotItems of the raw stack (hit-testing)
         self._raw_label_y = None
@@ -206,6 +218,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             "emg_all": self._on_emg_all_result,
             "emg_detail": self._on_emg_detail_result,
             "noise": self._on_noise_result,
+            "segments": self._render_segments_preview,
         }
 
     # -- construction -------------------------------------------------------
@@ -252,22 +265,33 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
 
         self.subtabs = QTabWidget()
         # Each page is wrapped in a scroll area, and it is the WRAPPER that goes into the tab
-        # widget — so _update_emg_tab_visibility's indexOf/insertTab/removeTab keep working on
+        # widget — so _update_subtabs's indexOf/insertTab/removeTab keep working on
         # the same objects. ``.widget()`` on any of these gives the page content back.
         self._mech_page = self._build_mech_tab()
         self._ecg_page = self._build_ecg_tab()     # inserted between Mechanics + noise when EMG cols exist
         self._emg_page = self._build_emg_tab()
+        self._segments_page = self._build_segments_tab()   # M-26: EMG-only's own first tab
         self._mech_tab = self._scrollable(self._mech_page)
         self._ecg_tab = self._scrollable(self._ecg_page)
         self._emg_tab = self._scrollable(self._emg_page)
-        self.subtabs.addTab(self._mech_tab, _TAB_MECH)
-        # D14: keep the Mechanics stack's floor eftergivende for whatever viewport this
-        # scroll area actually has right now — see _MechStackFloorFitter.
+        self._segments_tab = self._scrollable(self._segments_page)
+        # M-26: NOT self.subtabs.addTab(...) here any more — the first tab is now itself
+        # part of subtab_plan's decision (Mechanics XOR the segments tab), so
+        # _update_subtabs() below (which already builds the whole bar from the plan)
+        # inserts it too, instead of one caller hardcoding tab 0 and another managing
+        # the rest.
+        # D14: keep each stack's floor eftergivende for whatever viewport its own scroll
+        # area actually has right now — see _MechStackFloorFitter. Built unconditionally,
+        # like the tab pages themselves, since both viewports exist regardless of which
+        # one _update_subtabs actually inserts.
         self._mech_stack_fitter = _MechStackFloorFitter(self, self._mech_tab.viewport())
-        # D14: the QC verdict + its two per-file actions live OUTSIDE the scrolling page now
-        # (see _build_mech_action_band) — built here so it can be pinned in THIS screen's
+        self._segments_stack_fitter = _MechStackFloorFitter(
+            self, self._segments_tab.viewport(), update_fn=self._update_segments_stack_floor)
+        # D14: the QC verdict + its per-file action(s) live OUTSIDE the scrolling page now
+        # (see _build_mech_action_band) — built here so they can be pinned in THIS screen's
         # own root layout, below self.subtabs, instead of scrolling away with the page.
         self._mech_action_band = self._build_mech_action_band()
+        self._segments_action_band = self._build_segments_action_band()
 
         # B02: the file rail — one row per file, replacing the old file_combo. A left-hand
         # panel rather than folded into the top bar, since a filterable, stateful row list
@@ -314,7 +338,11 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # D14: fixed under the workspace, same as settings_screen.py pins its own QC strip
         # (self.qc) below its scrolling form — see _build_mech_action_band's docstring.
         root.addWidget(self._mech_action_band)
-        self._update_mech_action_band_visibility()
+        root.addWidget(self._segments_action_band)   # M-26: same placement, EMG-only's own band
+        # M-26: NOT called here yet — self.subtabs has no tabs at all until
+        # _update_subtabs() below inserts the first one (tab 0 is now part of its own
+        # plan, see subtab_plan), so currentWidget() would still be None here and hide
+        # both bands. Called once _update_subtabs() has actually populated the bar.
 
         # The control strips sit directly above wheel-zoomable plots, so an overshoot while
         # zooming used to land on a spin box and step it — and every ECG/noise parameter here
@@ -336,15 +364,16 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # dead patches: the page simply stopped moving under the cursor over the Campbell
         # diagram, the fidelity figure and the breath table.
         _passive = []
-        for _page in (self._mech_page, self._ecg_page, self._emg_page):
+        for _page in (self._mech_page, self._ecg_page, self._emg_page, self._segments_page):
             _passive.append([w for w in _page.findChildren(FigureCanvasQTAgg)]
                             + [w for w in _page.findChildren(QTableWidget)])
         self._page_wheel_guards = [
             _wheel.guard_scroll_area(a, extra=ex)
-            for a, ex in zip((self._mech_tab, self._ecg_tab, self._emg_tab), _passive)]
+            for a, ex in zip(
+                (self._mech_tab, self._ecg_tab, self._emg_tab, self._segments_tab), _passive)]
         # A panel scrolled half out of view must not report its spinner or its error card
         # off-screen — see BusyOverlay.centre_on_visible.
-        for _a in (self._mech_tab, self._ecg_tab, self._emg_tab):
+        for _a in (self._mech_tab, self._ecg_tab, self._emg_tab, self._segments_tab):
             _a.verticalScrollBar().valueChanged.connect(self._recentre_overlays)
         self._wheel_guard = _wheel.swallow_wheel(
             extra=[self.subtabs.tabBar()], parent=self)
@@ -367,13 +396,23 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             "detail": BusyOverlay(self.emg_plots),
             "detail_psd": BusyOverlay(self.emg_psd_canvas),   # the detail job also renders the PSD
             "fidelity": BusyOverlay(self.fidelity_canvas),
+            # M-26: the segments tab's own dedicated stack/table — the VIEWPORT for the
+            # stack, same reason 'raw' above uses one (it scrolls inside its panel).
+            "segstack": BusyOverlay(self._segments_scroll.viewport()),
+            "segtable": BusyOverlay(self.segtable),
         }
 
         self._refresh_emg_channels()
         self._refresh_ecg_channels()
         self._load_noise_params()            # this already refreshes the band (D07) — no
         self._load_ecg_params()               # file is selected yet here, so it stays hidden;
-        self._update_emg_tab_visibility()     # the OLD unconditional _ensure_noise_region()
+        self._update_subtabs()     # the OLD unconditional _ensure_noise_region()
+        # M-26: now that _update_subtabs() has actually inserted the first tab (Mechanics
+        # or the segments tab), currentWidget() resolves to it and this shows the right band.
+        self._update_mech_action_band_visibility()
+        # M-17 (R7): name the Campbell/flow-volume panel and its export button for the
+        # signal set this analysis actually opened with, not the construction-time default.
+        self._update_campbell_panel_title()
         # call that used to sit here bypassed that and always showed reference_intervals[0]
         # regardless of which file refresh_files() (below) was about to select — found in
         # review: a fresh construction could paint the wrong file's span for one frame.
@@ -386,6 +425,10 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             QTimer.singleShot(0, self._announce_noise_repair)
 
         self.file_rail.selectionChanged.connect(self._on_file_selected)
+        # M-37: the rail's own "Reference manoeuvres…" row action (M-32, unconnected
+        # until this ticket) opens the same full picker the Mechanics type menu does,
+        # for the ROW's file rather than the currently previewed one.
+        self.file_rail.referencesRequested.connect(self._open_reference_picker)
         # the chip's themed height isn't known until the EMG sub-tab is first laid out;
         # match the 'Set noise profile' button to it then, so the strip is one band.
         self.subtabs.currentChanged.connect(lambda *_: QTimer.singleShot(0, self._align_noise_strip))
@@ -574,6 +617,16 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self.btn_process_file.setToolTip(
             "Locked while a run is in progress." if active
             else "Run and write output for the previewed file only.")
+        # M-26: the segments tab's own twin button, same gate/wording — _process_ready is
+        # shared on purpose (Mechanics and the segments tab are mutually exclusive).
+        self.btn_process_segments_file.setEnabled(self._process_ready and not active)
+        self.btn_process_segments_file.setToolTip(
+            "Locked while a run is in progress." if active
+            else "Run and write output for the previewed file only.")
+        # M-27: 'Place separators' locks the same way while a run is active — routed
+        # through _update_separators_button so 'whole_file' (already disabled, its own
+        # reason) is never overridden by a run ending.
+        self._update_separators_button()
 
     # -- file list (reactive) ----------------------------------------------
     def refresh_files(self):
@@ -606,7 +659,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # reproducible layout-race regression in test_window_fits_screen.py).
         self.file_rail.set_manifest(manifest)
         files = self.file_rail.filenames()
-        self._sync_rail_exclusions()
+        self._sync_rail_breath_state()
         if prev in files:
             self.file_rail.select_filename(prev)   # re-assert the highlight; identity unchanged
         elif files:
@@ -644,24 +697,80 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             self._set_status(f"{len(files)} files — pick one; everything runs automatically.")
         self._update_actions()
 
-    def _sync_rail_exclusions(self):
-        """Reflect ``exclude_breaths`` as the rail's exclusion badge for EVERY file
-        currently in the rail — for every file it names, not only the one currently
-        previewed (ticket requirement: the badge must be visible without selecting the
-        file first), AND explicitly zeroed for a file the CURRENT analysis names no
-        exclusion for. The zeroing matters because ``set_manifest`` preserves a
-        persisting file's rail state across a rebuild: opening a second analysis over
-        the same folder/mask, with no exclusion for a file the FIRST analysis had
-        excluded breaths in, must not leave that first analysis's stale badge on
-        screen."""
+    def _sync_rail_breath_state(self):
+        """Reflect ``exclude_breaths``/``breath_types``/``segmentation`` as the rail's
+        badges for EVERY file currently in the rail — for every file it names, not only
+        the one currently previewed (ticket requirement: a badge must be visible without
+        selecting the file first), AND explicitly zeroed for a file the CURRENT analysis
+        names no exclusion/typing for. The zeroing matters because ``set_manifest``
+        preserves a persisting file's rail state across a rebuild: opening a second
+        analysis over the same folder/mask, with no exclusion/typing for a file the
+        FIRST analysis had, must not leave that first analysis's stale badge on screen.
+
+        M-32: replaces the exclusion-only ``_sync_rail_exclusions`` — called from the
+        same three places that one was (``refresh_files``, ``sync_from_settings``) PLUS
+        every breath-classification write funnel (M-20's ``_set_breath_type``, M-27's
+        ``_toggle_separator_at``), which used to call a file-rail sync of their own
+        (``_sync_excluded_badge``/this same wide function respectively) — now unified on
+        one function so a type/exclude/separator edit can never leave any of the THREE
+        state kinds it might affect (exclusion, typing, segment count) stale on any
+        OTHER row than the one just edited."""
         from respmech.core.settings import is_carried_folder
+        from respmech.core.analysis.references import resolve_reference
+        from respmech.ui.validation import matching_files
         current_folder = self.state.settings.input.folder
-        counts = {e.file: len(e.breaths) for e in self.state.settings.processing.exclude_breaths}
-        carried = {e.file: is_carried_folder(e.folder, current_folder)
-                  for e in self.state.settings.processing.exclude_breaths if e.breaths}
+        proc = self.state.settings.processing
+        excl_counts = {e.file: len(e.breaths) for e in proc.exclude_breaths}
+        excl_carried = {e.file: is_carried_folder(e.folder, current_folder)
+                        for e in proc.exclude_breaths if e.breaths}
+        typed_counts: dict[str, dict[str, int]] = {}
+        typed_carried: dict[str, bool] = {}
+        for t in proc.breath_types:
+            counts = typed_counts.setdefault(t.file, {})
+            counts[t.kind] = counts.get(t.kind, 0) + 1
+            if is_carried_folder(t.folder, current_folder):
+                typed_carried[t.file] = True
+        seg = proc.segmentation
+        seg_counts = ({e.file: 1 + len(e.times_s) for e in seg.separators}
+                     if seg.method == "separators" else {})
+        # cut_s + join_s combined, per file — mirrors exclude/typed's own
+        # "nothing worth reporting" guard (an entry with both lists empty counts as 0,
+        # same as core.settings' own _CARRIED_KINDS row for this field).
+        override_counts = {e.file: len(e.cut_s) + len(e.join_s)
+                           for e in seg.overrides if e.cut_s or e.join_s}
+        # M-37: the 'reference' badge FileRailEntry has carried since M-32 (comment there:
+        # "stays None until a later ticket starts calling set_reference()") — this is that
+        # ticket. ``matched`` is the batch's OWN glob (ui.validation.matching_files), never
+        # the manifest's majority-column-count subset (check_links' own doctrine: a
+        # reference source can be a differently-shaped, manoeuvre-only recording a column
+        # vote would exclude) — a resolved reference whose source is not even in the batch,
+        # or names no breaths at all, is reported 'missing' rather than 'linked', so a
+        # broken link shows up on the row instead of reading as quietly resolved. This does
+        # NOT reproduce every check_links caution (an excluded or mistyped source breath
+        # still shows 'linked'/'self') — a deliberately narrower, presentational summary;
+        # check_links itself (Setup's own science notes) is the exhaustive version.
+        matched = {os.path.basename(f) for f in matching_files(
+            self.state.settings.input.folder, self.state.settings.input.files)}
         for name in self.file_rail.filenames():
-            self.file_rail.set_excluded_count(name, counts.get(name, 0),
-                                              carried=carried.get(name, False))
+            self.file_rail.set_excluded_count(name, excl_counts.get(name, 0),
+                                              carried=excl_carried.get(name, False))
+            self.file_rail.set_typed_state(name, typed_counts.get(name, {}),
+                                           carried=typed_carried.get(name, False))
+            self.file_rail.set_overrides_count(name, override_counts.get(name, 0))
+            if seg.method == "whole_file":
+                self.file_rail.set_segments(name, 1)
+            elif seg.method == "separators":
+                self.file_rail.set_segments(name, seg_counts.get(name, 1))
+            else:
+                self.file_rail.set_segments(name, None)
+            ref = resolve_reference(name, "ic", self.state.settings)
+            if ref is None:
+                ref_status = None
+            elif ref.file not in matched or not ref.breaths:
+                ref_status = "missing"
+            else:
+                ref_status = "self" if ref.file == name else "linked"
+            self.file_rail.set_reference(name, ref_status)
 
     def _refresh_files(self):        # kept for existing wiring + tests
         self.refresh_files()
@@ -679,8 +788,11 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             QTimer.singleShot(0, self._announce_ecg_auto_repair)
         if self._noise_repaired:
             QTimer.singleShot(0, self._announce_noise_repair)
-        self._update_emg_tab_visibility()
-        self._sync_rail_exclusions()   # a loaded analysis file can bring its own exclusions
+        self._update_subtabs()
+        self._update_campbell_panel_title()   # M-17 (R7): follows a signal-set change too
+        self._update_mech_stack_floor()       # M-17 (R7): follows a channel-count change too
+        self._update_separators_button()      # M-27: follows a segmentation.method change too
+        self._sync_rail_breath_state()   # a loaded analysis file can bring its own exclusions/typing
         self._update_actions()
         # Dependency-scoped invalidation: diff the settings against the last-synced snapshot
         # and recompute ONLY the panels whose inputs actually changed. An EMG-only edit no
@@ -692,8 +804,13 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             kinds = set(_AUTO_KINDS)
         else:
             kinds = set()
+            # M-24: capability-aware so an EMG-only edit re-dispatches 'batch' too (its own
+            # test-run mechanics come from EMG there — see _kinds_for_settings_path's
+            # docstring); from_settings_or_none degrades to caps=None (today's flow-only
+            # rule) rather than crash a settings edit over a malformed analysis.signals.
+            caps = Capabilities.from_settings_or_none(cur)
             for p in _changed_settings_paths(self._last_synced_settings, cur):
-                kinds |= _kinds_for_settings_path(p)
+                kinds |= _kinds_for_settings_path(p, caps)
         self._last_synced_settings = copy.deepcopy(cur)
         if not kinds:
             return                   # nothing preview-relevant changed -> leave panels as they are
@@ -822,7 +939,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
                 continue
             if job in self._launch_queue:
                 self._launch_queue.remove(job)         # never started -> drop (no thread/finished)
-                self._clear_panel_overlays(*_PANELS[kind])   # ...and its spinner (no _on_job_done to stop it)
+                self._clear_panel_overlays(*job.panels)   # ...and its spinner (no _on_job_done to stop it)
             else:
                 if hasattr(job.worker, "cancel"):
                     try:
@@ -859,8 +976,16 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         compute is being scheduled)."""
         self.plots.clear(); self._channel_plots = []
         self._table_model.set_dataframe(None)
+        self._fill_manoeuvres_table(None, None)   # M-31: never leave the PREVIOUS file's rows up
         self.campbell.figure.clear(); self.campbell.draw()
         self._forget_campbell()      # the export must not resurrect a cleared diagram
+        # M-27: segments_plots.clear() above already destroys every SeparatorLinesItem
+        # (children of the plots it just tore down) — reset the Python-side list too,
+        # matching the _segments_subplots reset right beside it (never READ stale today,
+        # but a dangling reference to a torn-down C++ object should not linger regardless).
+        self.segments_plots.clear(); self._segments_subplots = []; self._separator_items = []   # M-26
+        self._segtable_model.set_dataframe(None)
+        self.segments_caption.setFullText("")
         self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []
         self._set_ecg_capture_title()   # drop the previous file's R-peak count/state
         self._set_ecg_processed_title()  # and the previous file's ON/OFF + suppression verdict
@@ -880,10 +1005,12 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # _ensure_noise_region() call here could repaint a stale/mismatched band in the
         # window before the async detail render corrects it).
         self._refresh_noise_reference_band()
-        self._reset_qc_overview()    # neutral chip + disabled 'Process & write' (B02)
-        panels = [p for k in _FILE_KINDS for p in _PANELS[k]]
+        self._reset_qc_overview()    # neutral chip(s) + disabled 'Process & write' (B02, M-26)
+        # M-26: _panels_for, not the static _PANELS — 'batch' owns 'segtable' for the
+        # CURRENT (about to be re-dispatched) signal set, not necessarily 'table'/'campbell'.
+        panels = [p for k in _FILE_KINDS for p in self._panels_for(k)]
         if include_noise:
-            panels += _PANELS["noise"]
+            panels += self._panels_for("noise")
         self._clear_panel_overlays(*panels)   # dismiss stale spinners/cards on the cleared panels
 
     def _refresh_all(self):
@@ -901,8 +1028,16 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         _reset_breath_state additionally drops breath overlays + staged EMG."""
         self.plots.clear(); self._channel_plots = []
         self._table_model.set_dataframe(None)
+        self._fill_manoeuvres_table(None, None)   # M-31: never leave the PREVIOUS file's rows up
         self.campbell.figure.clear(); self.campbell.draw()
         self._forget_campbell()      # the export must not resurrect a cleared diagram
+        # M-27: segments_plots.clear() above already destroys every SeparatorLinesItem
+        # (children of the plots it just tore down) — reset the Python-side list too,
+        # matching the _segments_subplots reset right beside it (never READ stale today,
+        # but a dangling reference to a torn-down C++ object should not linger regardless).
+        self.segments_plots.clear(); self._segments_subplots = []; self._separator_items = []   # M-26
+        self._segtable_model.set_dataframe(None)
+        self.segments_caption.setFullText("")
         self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []
         self._set_ecg_capture_title()   # drop the previous analysis' R-peak count/state
         self._set_ecg_processed_title()  # and the previous analysis' ON/OFF + suppression verdict
@@ -916,7 +1051,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._noise_has_result = False
         self._reset_breath_state()   # clears _bov/_breaths/_emg_all/result plot/_previewed_file
         self._refresh_noise_reference_band()   # re-attach + recompute (see _clear_file_panels, D07)
-        self._reset_qc_overview()    # neutral chip + disabled 'Process & write' (B02)
+        self._reset_qc_overview()    # neutral chip(s) + disabled 'Process & write' (B02, M-26)
         self._clear_panel_overlays(*self._overlays)   # dismiss stale spinners / error cards
 
     def _on_file_selected(self, name):
@@ -961,7 +1096,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         ok, why = self._settings_ok()
         if not ok:
             # Blank the traces, not just the spinners. Unlike the EMG sub-tabs — which
-            # _update_emg_tab_visibility removes outright — the Mechanics tab is always
+            # _update_subtabs removes outright — the Mechanics tab is always
             # present, and sync_from_settings does not clear panels. So clearing the channel
             # mapping after a preview left the previous mapping's plots on screen, looking
             # like a current result for settings that can no longer produce one.
@@ -975,7 +1110,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
                 self._cancel_inflight(set(_AUTO_KINDS))
                 self._clear_file_panels(include_noise=True)
                 self._blanked_for_invalid = True
-            self._clear_panel_overlays(*_PANELS[kind])
+            self._clear_panel_overlays(*self._panels_for(kind))
             self._set_status(f"Setup incomplete: {why}")
             return
         if self._blanked_for_invalid:
@@ -989,30 +1124,67 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
             self._blanked_for_invalid = False
             self._request_autorun(set(_AUTO_KINDS))
         has_emg = bool(self.state.settings.input.channels.emg)
+        # Which of 'mech' (flow-bearing) / 'segments' (EMG-only) applies to THIS
+        # signal set. A valid Settings (checked by _settings_ok above) should always
+        # resolve a real Capabilities; caps=None (a malformed analysis.signals slipping
+        # through some other path) degrades to the old behaviour -- 'mech' runs,
+        # 'segments' does not -- same "erring wide is safe" default _kinds_for_settings_path
+        # already uses for an unclassified caps shape.
+        caps = Capabilities.from_settings_or_none(self.state.settings)
+        emg_only = bool(caps is not None and caps.mode == "emg_only")
+        has_flow = bool(caps is None or caps.flow)
         # snapshot the settings on the GUI thread so a worker never reads them while
         # the GUI mutates them in place (Settings is a plain, deep-copyable model)
         snap = copy.deepcopy(self.state.settings)
         worker = None
         if kind == "mech":
+            if not has_flow:
+                # An EMG-only set has no flow/volume/pressure channels to preview here at
+                # all (this job's own core.compute.trim would run on an empty flow array)
+                # -- 'segments' is this shape's own counterpart, gated below.
+                self._clear_panel_overlays(*_PANELS[kind])
+                return
             worker = FnWorker(stage_mechanics_preview, snap, path)
+        elif kind == "segments":
+            if not emg_only:
+                # A flow-bearing set has nothing for this job to segment (whole_file/
+                # separators are refused by Settings.validate() outside EMG-only) --
+                # 'mech' is this shape's own counterpart, gated above.
+                self._clear_panel_overlays(*_PANELS[kind])
+                return
+            worker = FnWorker(stage_emg_segments_preview, snap, path)
         elif kind == "ecg":
             if not has_emg:
                 self._clear_panel_overlays(*_PANELS[kind])   # gated out -> drop a stale spinner/card
                 return
             worker = FnWorker(stage_ecg_reduction, snap, path)
         elif kind == "batch":
-            # MECHANICS-ONLY test run: drop EMG so run_batch skips ECG removal, EMG RMS
-            # and noise reduction (that work is shown separately in the EMG tab).
-            # ecg_auto_detect has to go too, and not merely because it would be pointless
-            # here: Settings.validate() rejects it BOTH without remove_ecg and without
-            # input.channels.emg, and this snapshot clears both. Leaving it set made a test
-            # run on a perfectly valid setup (Remove ECG + Auto-detect for the batch, the
-            # combination the ECG tab actively steers the user towards) die inside
-            # run_batch's validate() with a raw SettingsError traceback.
-            snap.input.channels.emg = []
-            snap.processing.emg.remove_ecg = False
-            snap.processing.emg.ecg_auto_detect = False
-            snap.processing.emg.noise.enabled = False
+            if has_flow:
+                # MECHANICS-ONLY test run: drop EMG so run_batch skips ECG removal, EMG RMS
+                # and noise reduction (that work is shown separately in the EMG tab). Only
+                # a flow-bearing set has "the EMG tab" as a genuine alternative — for an
+                # EMG-only set the test run's own mechanics ARE built FROM these EMG
+                # settings (core.pipeline.run_batch's own EMG-only branch), so stripping
+                # them here left nothing to analyse: Settings.validate() then refused the
+                # snapshot outright ("analysis.signals must name at least one of 'flow' or
+                # 'emg'"), which BatchWorker.run's fatal-exception path turned into a raw
+                # 'Test run failed' card — found in self-review: 'batch' has always been
+                # auto-dispatched for every signal set, EMG-only included (_AUTO_KINDS
+                # predates this ticket), but nothing here was capability-aware until now.
+                # ecg_auto_detect has to go too, and not merely because it would be pointless
+                # here: Settings.validate() rejects it BOTH without remove_ecg and without
+                # input.channels.emg, and this snapshot clears both. Leaving it set made a test
+                # run on a perfectly valid setup (Remove ECG + Auto-detect for the batch, the
+                # combination the ECG tab actively steers the user towards) die inside
+                # run_batch's validate() with a raw SettingsError traceback.
+                snap.input.channels.emg = []
+                # an explicit signal set that names EMG must stop naming it too:
+                # Settings.validate() refuses 'emg' in analysis.signals without an EMG channel
+                # (an empty list means "derived", and derives the same reduced set already)
+                snap.analysis.signals = [x for x in (snap.analysis.signals or []) if x != "emg"]
+                snap.processing.emg.remove_ecg = False
+                snap.processing.emg.ecg_auto_detect = False
+                snap.processing.emg.noise.enabled = False
             worker = BatchWorker(snap, write=False, only_files=[os.path.basename(path)])
         elif kind == "emg_all":
             if not has_emg:
@@ -1037,6 +1209,13 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         self._tokens[kind] += 1
         self._launch(kind, self._tokens[kind], worker)
 
+    def _panels_for(self, kind):
+        """The panel keys ``kind``'s dispatch right now would own, given the CURRENT
+        settings (M-26) — see ``_jobs.panels_for``'s own docstring for why a caller that
+        already has a dispatched ``_Job`` should read ``job.panels`` instead of calling
+        this again."""
+        return panels_for(kind, Capabilities.from_settings_or_none(self.state.settings))
+
     def _launch(self, kind, token, worker):
         old = self._jobs.pop(kind, None)
         if old is not None:
@@ -1051,12 +1230,15 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
                     except Exception:              # noqa: BLE001
                         pass
                 self._draining.add(old)            # still running -> keep referenced until it self-cleans
-        for p in _PANELS[kind]:
+        # frozen NOW, at dispatch time — never re-derived later from settings that may
+        # have since changed (M-26; see panels_for's own docstring)
+        panels = self._panels_for(kind)
+        for p in panels:
             self._overlays[p].start(_SPIN_TEXT[kind])
         thread = QThread()
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        job = _Job(kind, token, thread, worker)
+        job = _Job(kind, token, thread, worker, panels=tuple(panels))
         self._jobs[kind] = job
         # Worker -> GUI delivery is EXPLICITLY queued. AutoConnection decides
         # queued-vs-direct at emit time, and under a fast-emit race it can resolve a
@@ -1126,20 +1308,30 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # superseded by a newer same-kind job: drop the payload silently, and
         # only clear the spinner if no newer owner took over the panels — but
         # never wipe an error card the current owner already painted (a stale
-        # draining job finishing late must not erase the live job's error).
+        # draining job finishing late must not erase the live job's error). A panel
+        # CAN be listed by more than one currently-active job's own frozen `job.panels`
+        # (no two _AUTO_KINDS entries share one today, post-M-26 — 'segments' got its
+        # own dedicated panel — but 'batch's OWN panels can differ between two of ITS
+        # OWN in-flight/draining dispatches if the signal set changed mid-flight, see
+        # panels_for) — a stale stop() must not hide a genuinely live spinner some
+        # other still-active job also lists on that panel, so this stays a general
+        # defensive check rather than a special case tied to one specific pairing.
         if job.token != self._tokens[job.kind]:
             if job.kind not in self._jobs:
-                for p in _PANELS[job.kind]:
-                    if not self._overlays[p].error:
+                for p in job.panels:
+                    owned_elsewhere = any(p in other.panels
+                                          for other in self._jobs.values())
+                    if not self._overlays[p].error and not owned_elsewhere:
                         self._overlays[p].stop()
             self._update_actions(status=False)
             return
         label = _KIND_LABEL.get(job.kind, job.kind)
+        seg_chip = self.segments_qc_overview if "segtable" in job.panels else None
         err = job.error
         if err or result is None:
             detail = err or "The computation returned no data."
             self._set_status(f"{label} failed — {short_error(detail)}")
-            for p in _PANELS[job.kind]:
+            for p in job.panels:
                 # The diagnosis rides along in the card itself now, not only behind the "i"
                 # button — the status line carrying it is transient and, per the shared
                 # status-bar ownership rules, may not even be visible from this tab.
@@ -1151,7 +1343,11 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
                 cur = self._selected_filename()
                 if cur:
                     self.file_rail.mark_result(cur, ok=False, error=detail)
-                self._qc_overview_not_assessed(detail)
+                self._qc_overview_not_assessed(detail, chip=seg_chip)
+                # M-31: the "table" overlay above is parented to self.table alone, not
+                # the whole panel — a PREVIOUS successful run's Manoeuvres section would
+                # otherwise stay visible, uncovered, right below this error card.
+                self._fill_manoeuvres_table(None, None)
             self._update_actions(status=False)
             return
         try:
@@ -1159,21 +1355,24 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         except _FileRunError as e:                     # a per-file analysis error -> "failed"
             detail = str(e)
             self._set_status(f"{label} failed — {short_error(detail)}")
-            for p in _PANELS[job.kind]:
+            for p in job.panels:
                 self._overlays[p].show_error(f"{label} failed — {short_error(detail)}", detail)
+            if job.kind == "batch":
+                self._fill_manoeuvres_table(None, None)   # M-31: see the note above
             self._update_actions(status=False)
             return
         except Exception:                              # noqa: BLE001 — a rendering bug
             detail = traceback.format_exc()
             self._set_status(f"{label} — display error: {short_error(detail)}")
-            for p in _PANELS[job.kind]:
+            for p in job.panels:
                 self._overlays[p].show_error(
                     f"{label} — display error: {short_error(detail)}", detail)
             if job.kind == "batch":
                 # a rendering bug in _on_batch_result itself (not a per-file analysis
                 # error, which _FileRunError above already covers) — the chip must not
                 # keep showing a stale prior verdict over a display-error card
-                self._qc_overview_not_assessed(detail)
+                self._qc_overview_not_assessed(detail, chip=seg_chip)
+                self._fill_manoeuvres_table(None, None)   # M-31: see the note above
             self._update_actions(status=False)
             return
         # 'mech' is deliberately excluded: _render_preview_async only just returned from
@@ -1183,7 +1382,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # LAST one completes (ticket D15). Stopping them here would hide the busy
         # spinner over a panel that has not actually finished drawing yet.
         if job.kind != "mech":
-            for p in _PANELS[job.kind]:
+            for p in job.panels:
                 self._overlays[p].stop()
         if job.kind == "noise":
             self._noise_has_result = True   # the fidelity panel now holds a current result
@@ -1242,7 +1441,8 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, QWidget):
         # at each plot's OWN shutdown, rather than reaped from outside by conftest.py's
         # cross-window sweep after the fact.
         for _container in (self.plots, self.ecg_capture_plot, self.ecg_processed_plots,
-                            self.emg_raw_plots, self.emg_result_plots, self.emg_plots):
+                            self.emg_raw_plots, self.emg_result_plots, self.emg_plots,
+                            self.segments_plots):
             plot_perf.close_plots(_container)
 
     def panel_busy(self, key):

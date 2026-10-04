@@ -142,3 +142,64 @@ def test_v1_carrying_the_old_default_is_upgraded_and_reported():
     s, r = migrate_dict(legacy)
     assert s.processing.volume.trend_peak_min_height is None
     assert any("retired default" in n for n in r.normalised)
+
+
+# -- MigrationReport.text() prints Defaulted; absent pgas/pdi; derived signals --------
+
+def test_report_text_includes_the_defaulted_section():
+    """MigrationReport.defaulted existed as a dataclass field but text() never
+    iterated it and nothing ever appended to it -- both are fixed together here:
+    LEGACY carries neither an absent pgas/pdi nor anything else that skips the
+    Defaulted section, so this alone proves the section heading itself now always
+    appears (a regression found along the way: the field was dead code)."""
+    s, r = migrate_dict(LEGACY)
+    text = r.text()
+    assert "## Defaulted" in text
+    # analysis.signals is unconditionally reported (a legacy file never has one)
+    assert any("analysis.signals" in d for d in r.defaulted)
+    assert any("analysis.signals" in line for line in text.splitlines())
+
+
+def test_missing_column_pgas_and_pdi_migrate_to_none_validate_and_are_reported():
+    """Acceptance criterion: migrating a legacy file with no column_pgas/pdi at all
+    gives a valid TOML (Settings.validate() already accepted an absent pressure role
+    before this -- see the two channels going to None below); what is new here is
+    that the migration REPORT now says so explicitly instead of the fact being
+    invisible."""
+    legacy = _deep(LEGACY)
+    del legacy["input"]["data"]["column_pgas"]
+    del legacy["input"]["data"]["column_pdi"]
+    s, r = migrate_dict(legacy)
+    assert s.input.channels.pgas is None
+    assert s.input.channels.pdi is None
+    s.validate()                                    # does not raise
+    assert any("input.channels.pgas" in d and "not present" in d for d in r.defaulted)
+    assert any("input.channels.pdi" in d and "not present" in d for d in r.defaulted)
+
+
+def test_present_column_pgas_and_pdi_are_not_reported_as_defaulted():
+    """The converse of the test above: LEGACY's own column_pgas/column_pdi ARE
+    present, so neither channel gets a 'not present in the legacy file' line --
+    only the always-unconditional analysis.signals entry is in `r.defaulted`."""
+    s, r = migrate_dict(LEGACY)
+    assert not any("input.channels.pgas" in d for d in r.defaulted)
+    assert not any("input.channels.pdi" in d for d in r.defaulted)
+    assert len(r.defaulted) == 1
+    assert "analysis.signals" in r.defaulted[0]
+
+
+def test_analysis_signals_is_derived_from_the_migrated_channels_and_reported():
+    """LEGACY names poes/pgas/pdi/flow/volume/emg columns but no entropy channels --
+    the derived signal set (core.analysis.signals.derived_signals) must list exactly
+    the single-role signals actually assigned, reported with the real list, not a
+    vague 'derived' placeholder."""
+    s, r = migrate_dict(LEGACY)
+    from respmech.core.analysis.signals import derived_signals
+    derived = sorted(derived_signals(s.input.channels))
+    assert derived == sorted(["flow", "poes", "pgas", "pdi", "emg"])
+    line = next(d for d in r.defaulted if "analysis.signals" in d)
+    for sig in derived:
+        assert sig in line
+    # this changes no actual behaviour: an empty analysis.signals still means
+    # "derive it" (AnalysisSettings' own docstring) -- the report is informational.
+    assert s.analysis.signals == []

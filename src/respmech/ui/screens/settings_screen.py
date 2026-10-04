@@ -13,13 +13,16 @@ import os
 import tomllib
 import traceback
 
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
-                               QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
-                               QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
-                               QScrollArea, QSpinBox, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox,
+                               QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
+                               QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+                               QPlainTextEdit, QPushButton, QScrollArea, QSpinBox,
+                               QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 from PySide6.QtCore import Signal, QTimer, Qt
 
+from respmech.core.analysis.signals import Capabilities, SINGLE_SIGNALS, effective_signals
 from respmech.core.settings import BreathCountEntry, Settings, SettingsError
+from respmech.ui import column_stack as _cs
 from respmech.ui.dialogs import open_error_dialog, short_error
 from respmech.ui.migration_report_dialog import open_migration_report
 from respmech.ui.flow_layout import FormLabel, install_flow
@@ -35,6 +38,46 @@ from respmech.ui.channel_summary import ChannelSummary
 # the guided-flow default file mask (multi-pattern; narrowed to the found extension on the
 # channel-setup OK so the single-pattern core batch runner still finds the files)
 _DEFAULT_MASK = "*.csv; *.txt"
+
+# M-11: the Setup Signals row's chip captions, one per name in
+# core.analysis.signals.SINGLE_SIGNALS plus 'emg' — the same vocabulary
+# apply_signal_set/effective_signals/SignalSetDialog already share, read in the order a
+# 'full' analysis lists its own components (Capabilities.analyses()'s own ordering).
+# Self-review: reuses column_stack's OWN role-label tables rather than a third copy
+# (column_stack.REQUIRED_LABELS already covers flow/poes/pgas/pdi identically; 'emg' comes
+# from its ROLE_NAMES, which is also core.analysis.signals.Capabilities.analyses()'s own
+# vocabulary) — the chip tooltips reuse column_stack.ROLES' short descriptions the same way.
+_SIGNAL_CHIP_ORDER = ("flow", "poes", "pgas", "pdi", "emg")
+_SIGNAL_CHIP_LABELS = {**_cs.REQUIRED_LABELS, "emg": _cs.ROLE_NAMES["emg"]}
+_SIGNAL_CHIP_TIPS = dict(_cs.ROLES)
+
+# The Setup Behold/Ryd banner's wording, one phrase per `core.settings.CarriedOverState`
+# kind (see its `kinds_present()`) — table-driven so a future kind (M-19/M-21/M-34's own
+# folder-tagged state) reaches the banner by adding an entry here, not by extending an
+# if/elif chain (M-07). ``SettingsScreen`` is referenced lazily inside each lambda, so its
+# position ahead of the class definition is fine — nothing here is called before the
+# class (and the module) has finished loading.
+_CARRIED_PHRASES = {
+    "exclude_files": lambda names: (
+        f"breath exclusions for {SettingsScreen._named_by_filename(names)}"),
+    "breath_count_files": lambda names: (
+        f"breath-count overrides for {SettingsScreen._named_by_filename(names)}"),
+    "noise_reference": lambda names: "the EMG rest reference",
+    "ecg_reference": lambda names: "the ECG reference",
+    "normalization_reference": lambda names: "the EMG normalisation reference",
+    "breath_type_files": lambda names: (
+        f"breath types for {SettingsScreen._named_by_filename(names)}"),
+    "separator_files": lambda names: (
+        f"separators for {SettingsScreen._named_by_filename(names)}"),
+    "segmentation_override_files": lambda names: (
+        f"manual cut/join overrides for {SettingsScreen._named_by_filename(names)}"),
+    "reference_files": lambda names: (
+        f"reference manoeuvres for {SettingsScreen._named_by_filename(names)}"),
+    "group_reference_groups": lambda names: (
+        f"group reference defaults for {SettingsScreen._named_by_filename(names)}"),
+    "subject_keys": lambda names: (
+        f"lung volumes for {SettingsScreen._named_by_filename(names)}"),
+}
 
 
 class SettingsScreen(QWidget):
@@ -105,6 +148,22 @@ class SettingsScreen(QWidget):
         gin = QGroupBox("Input")
         f = QFormLayout(gin)
         f.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
+        # Signals row (M-11, R7): one chip per signal this analysis declares, plus the
+        # 'Change...' door onto apply_signal_set (SignalSetDialog) — the same funnel the
+        # New-analysis picker uses, so Setup and 'File > New' can never disagree about what
+        # changing the set does. A FlowLayout, not a plain QHBoxLayout: five chips plus a
+        # button is exactly the "row that must not force the window wide" case flow_layout.py
+        # exists for (see its own module docstring) — rebuilt on every render rather than
+        # diffed, since it is at most six small labels.
+        self.signals_row = QWidget()
+        self._signals_flow = install_flow(self.signals_row, h=6, v=4)
+        self.btn_change_signals = QPushButton("Change…")
+        self.btn_change_signals.setProperty("compact", True)
+        self.btn_change_signals.setToolTip(_tip(
+            "analysis.signals", "Change which signals this analysis declares."))
+        self.btn_change_signals.clicked.connect(self._change_signals)
+        self._signals_flow.addWidget(self.btn_change_signals)
+        f.addRow("Signals", self.signals_row)
         self.in_folder = QLineEdit()   # absolute path + Browse button: full width is the point
         self.in_files = QLineEdit()
         self.in_files.setProperty("formField", "compact")   # a short glob mask, not a path (theme.py)
@@ -232,6 +291,18 @@ class SettingsScreen(QWidget):
         _enthint = QLabel("Computed on the columns ticked as Entropy in the channel picker.")
         _enthint.setWordWrap(True); _enthint.setProperty("status", "muted")
         fent.addRow("", _enthint)
+        # Sample entropy on the volume RespMech integrates from flow (a volume with no column
+        # of its own): the conditioned volume, per breath and per phase. Only offered when
+        # Flow is declared and the volume is integrated (see _derived_volume_available).
+        self.ent_derived_volume = QCheckBox("Entropy on derived volume")
+        self.ent_derived_volume.setToolTip(
+            "input.channels.entropy_derived\n"
+            "Also compute sample entropy on the volume integrated from flow: the conditioned "
+            "volume (zeroed, drift- and trend-corrected as configured), for the whole breath, "
+            "inspiration and expiration. Reported as sample_entropy_col_volume, "
+            "sample_entropy_insp_col_volume and sample_entropy_exp_col_volume, and kept out of "
+            "sample_entropy_max/min/mean.")
+        fent.addRow("", self.ent_derived_volume)
         # Live read-out in the app's own vocabulary (m, not "template length"), so a user can
         # write their methods section straight off this line without opening the source.
         self.ent_caption = QLabel(""); self.ent_caption.setWordWrap(True)
@@ -239,6 +310,79 @@ class SettingsScreen(QWidget):
         fent.addRow("", self.ent_caption)
         self.ent_epochs.valueChanged.connect(self._update_entropy_caption)
         self.ent_tol.valueChanged.connect(self._update_entropy_caption)
+
+        # Intrinsic PEEP (PEEPi) ------------------------------------------------
+        # Opt-in (core.analysis.pressure): only meaningful when oesophageal pressure is
+        # declared, so it is a conditional card (_cond_cards) -- absent from a Flow-only
+        # analysis, present from Flow + Poes. Its four numbers are literature-informed
+        # starting values that have not yet been measured on real recordings, and the
+        # tooltips say so.
+        gpeepi = QGroupBox("Intrinsic PEEP (PEEPi)")
+        fpeepi = QFormLayout(gpeepi)
+        fpeepi.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        self.peepi_enabled = QCheckBox("Detect PEEPi and add threshold work of breathing")
+        self.peepi_enabled.setToolTip(_tip(
+            "processing.pressure.peepi.enabled",
+            "Measures the pre-flow drop in oesophageal pressure before each inspiration "
+            "and adds PEEPi columns and a hatched PEEPi rectangle to the Campbell diagram. "
+            "Only adds columns: every existing result is unchanged, on or off."))
+        fpeepi.addRow(self.peepi_enabled)
+        self.peepi_window = QDoubleSpinBox(); self.peepi_window.setRange(0.05, 10.0)
+        self.peepi_window.setDecimals(2); self.peepi_window.setSingleStep(0.1)
+        self.peepi_window.setSuffix(" s")
+        self._row(fpeepi, "Search window", self.peepi_window,
+                  "processing.pressure.peepi.search_window_s",
+                  "How far back into the preceding breath's expiration the start of the "
+                  "pre-flow pressure drop is searched for. A starting value, not yet "
+                  "measured on real recordings.")
+        self.peepi_smooth = QDoubleSpinBox(); self.peepi_smooth.setRange(0.0, 1.0)
+        self.peepi_smooth.setDecimals(3); self.peepi_smooth.setSingleStep(0.01)
+        self.peepi_smooth.setSuffix(" s")
+        self._row(fpeepi, "Smoothing", self.peepi_smooth,
+                  "processing.pressure.peepi.smooth_s",
+                  "Moving-average width applied to the search window before its slope is "
+                  "read; the pressures actually reported stay unsmoothed. A starting value, "
+                  "not yet measured on real recordings.")
+        self.peepi_slope = QDoubleSpinBox(); self.peepi_slope.setRange(0.01, 1.0)
+        self.peepi_slope.setDecimals(2); self.peepi_slope.setSingleStep(0.05)
+        self._row(fpeepi, "Onset slope fraction", self.peepi_slope,
+                  "processing.pressure.peepi.onset_slope_frac",
+                  "Walking back from the start of flow, the drop lasts while the pressure "
+                  "still falls faster than this fraction of the steepest fall in the window. "
+                  "Between 0 and 1. A starting value, not yet measured on real recordings.")
+        self.peepi_min = QDoubleSpinBox(); self.peepi_min.setRange(0.0, 50.0)
+        self.peepi_min.setDecimals(2); self.peepi_min.setSingleStep(0.1)
+        self.peepi_min.setSuffix(" cmH₂O")
+        self._row(fpeepi, "Minimum deflection", self.peepi_min,
+                  "processing.pressure.peepi.min_deflection",
+                  "A smaller drop than this is reported as no PEEPi (0). A starting value, "
+                  "not yet measured on real recordings.")
+        self.peepi_enabled.toggled.connect(self._sync_peepi_fields)
+        self._peepi_shown = {}
+
+        # Subjects & lung volumes ---------------------------------------------
+        # M-37: read-only -- input.subjects (SubjectEntry: TLC/VC/RV/FEV1/MVV per
+        # participant, M-34) is written by the reference model itself (an analysis's own
+        # .toml, or a later release's dedicated editor), never from a Setup widget, so
+        # there is no to_state() write-back for this card, unlike every other one on this
+        # screen. Hidden while empty (_cond_cards, same mechanism Sample entropy already
+        # uses) -- an empty table would just be clutter for an analysis that names no
+        # subjects at all.
+        gsub = QGroupBox("Subjects && lung volumes")
+        vsub = QVBoxLayout(gsub)
+        self.subjects_table = QTableWidget(0, 6)
+        self.subjects_table.setHorizontalHeaderLabels(
+            ["Key", "TLC (L)", "VC (L)", "RV (L)", "FEV1 (L)", "MVV (L/min)"])
+        self.subjects_table.verticalHeader().setVisible(False)
+        self.subjects_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.subjects_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.subjects_table.setToolTip(_tip(
+            "input.subjects",
+            "Per-participant spirometry, keyed on the same group as the cohort "
+            "summary. Used by operating-lung-volume calculations (Preview & QC ▸ "
+            "Mechanics ▸ Advanced… ▸ Lung volumes) when no per-file TLC/VC is "
+            "available another way."))
+        vsub.addWidget(self.subjects_table)
 
         # 'What to save' lives inside the Output card now (one place for everything the run
         # produces and where it goes), so these rows attach to the Output form (fo). The two
@@ -322,13 +466,15 @@ class SettingsScreen(QWidget):
         # benefits from the width, unlike the Advanced modals' short captions.
         self._card_input, self._card_channels = gin, gch
         self._card_output, self._card_entropy = gout, gent
+        self._card_subjects = gsub
+        self._card_peepi = gpeepi
         rig = QWidget(); rig_col = QVBoxLayout(rig)
         rig_col.setContentsMargins(0, 0, 0, 0); rig_col.setSpacing(11)
         rig_col.addWidget(gin); rig_col.addWidget(gch)
         _rig_sp = rig.sizePolicy(); _rig_sp.setHeightForWidth(True); rig.setSizePolicy(_rig_sp)
         leverance = QWidget(); lev_col = QVBoxLayout(leverance)
         lev_col.setContentsMargins(0, 0, 0, 0); lev_col.setSpacing(11)
-        lev_col.addWidget(gout); lev_col.addWidget(gent)
+        lev_col.addWidget(gout); lev_col.addWidget(gent); lev_col.addWidget(gpeepi); lev_col.addWidget(gsub)
         _lev_sp = leverance.sizePolicy(); _lev_sp.setHeightForWidth(True); leverance.setSizePolicy(_lev_sp)
         self._rig, self._leverance = rig, leverance
         columns = QWidget()
@@ -385,9 +531,10 @@ class SettingsScreen(QWidget):
         self.qc.setProperty("banner", True)   # the box comes from the QSS, not extra margins
         outer.addWidget(self.qc)
 
-        # Carried-over exclusions/breath-counts/noise-reference banner: shown only when the
-        # input folder just changed AND state named against a DIFFERENT (or unrecorded)
-        # folder is still sitting in the analysis — see core.settings.carried_over_state.
+        # Carried-over exclusions/breath-counts/EMG-reference (noise/ECG/normalisation)
+        # banner: shown only when the input folder just changed AND state named against a
+        # DIFFERENT (or unrecorded) folder is still sitting in the analysis — see
+        # core.settings.carried_over_state.
         # Two explicit choices, no default: "Keep" just dismisses (the state was never
         # touched, so it still applies exactly as it did before — an inherited exclusion is
         # only ever hatched/named differently in Preview, never silently dropped); "Clear"
@@ -411,8 +558,8 @@ class SettingsScreen(QWidget):
         self.btn_carried_clear = QPushButton("Clear")
         self.btn_carried_clear.setProperty("compact", True)
         self.btn_carried_clear.setToolTip(
-            "Remove the exclusions/breath-count overrides/rest reference that belong to "
-            "the previous recordings folder.")
+            "Remove the exclusions/breath-count overrides/EMG references (rest, ECG, "
+            "normalisation) that belong to the previous recordings folder.")
         self.btn_carried_clear.clicked.connect(self._clear_carried_banner)
         cb.addWidget(self.btn_carried_keep)
         cb.addWidget(self.btn_carried_clear)
@@ -424,7 +571,12 @@ class SettingsScreen(QWidget):
         # _apply_card_visibility) — Sample entropy's two parameters are meaningless unless a
         # column is actually assigned to entropy, in either mode.
         self._cond_cards = [
-            (gent, lambda: bool(self.state.settings.input.channels.entropy)),
+            (gent, lambda: bool(self.state.settings.input.channels.entropy)
+                    or bool(self.state.settings.input.channels.entropy_derived)
+                    or self._derived_volume_available()),
+            (gsub, lambda: bool(self.state.settings.input.subjects)),
+            # PEEPi needs oesophageal pressure: absent from Flow only (and EMG only)
+            (gpeepi, self._peepi_relevant),
         ]
         self._mode = "full"          # "full" = an opened/default analysis; "new" = guided
         self._flow_ready = True
@@ -614,6 +766,18 @@ class SettingsScreen(QWidget):
             self.out_folder.setText(s.output.folder)
             self.ent_epochs.setValue(s.processing.entropy.epochs)
             self.ent_tol.setValue(s.processing.entropy.tolerance)
+            self.ent_derived_volume.setChecked("volume" in s.input.channels.entropy_derived)
+            _pp = s.processing.pressure.peepi
+            self.peepi_enabled.setChecked(_pp.enabled)
+            self.peepi_window.setValue(_pp.search_window_s)
+            self.peepi_smooth.setValue(_pp.smooth_s)
+            self.peepi_slope.setValue(_pp.onset_slope_frac)
+            self.peepi_min.setValue(_pp.min_deflection)
+            # what the four boxes SHOW after loading: a hand-edited value outside a box's
+            # range or precision is clipped/rounded on display, so to_state() writes a box
+            # back only once it has actually been edited (never a silent change to a number)
+            self._peepi_shown = {n: getattr(self, n).value() for n in self._PEEPI_BOXES}
+            self._sync_peepi_fields()
             _mi = self.matlab_variant.findData(s.input.format.matlab_variant)
             self.matlab_variant.setCurrentIndex(_mi if _mi >= 0 else 0)
             _di = self.decimal_sep.findData(s.input.format.decimal or ".")
@@ -661,6 +825,19 @@ class SettingsScreen(QWidget):
         s.output.folder = self.out_folder.text()
         s.processing.entropy.epochs = self.ent_epochs.value()
         s.processing.entropy.tolerance = self.ent_tol.value()
+        # only the derived signals this screen owns are written; the list stays as loaded
+        # unless the box actually changed (an unknown future value is never dropped here)
+        _derived = [d for d in s.input.channels.entropy_derived if d != "volume"]
+        if self.ent_derived_volume.isChecked():
+            _derived.append("volume")
+        s.input.channels.entropy_derived = _derived
+        _pp = s.processing.pressure.peepi
+        _pp.enabled = self.peepi_enabled.isChecked()
+        for _name, _field in self._PEEPI_BOXES.items():
+            _v = getattr(self, _name).value()
+            if _v != self._peepi_shown.get(_name):
+                setattr(_pp, _field, _v)
+                self._peepi_shown[_name] = _v
         s.input.format.matlab_variant = self.matlab_variant.currentData()
         s.input.format.decimal = self.decimal_sep.currentData()
         if self.on_settings_changed:
@@ -710,6 +887,23 @@ class SettingsScreen(QWidget):
         self._refresh_channel_view()   # 'Volume: derived from flow' follows the model
         self._update_save_preview()
         self._update_entropy_caption()   # a loaded analysis may set m/r without a valueChanged
+        self._refresh_subjects_table()   # M-37: a loaded analysis brings its own subjects
+
+    def _refresh_subjects_table(self):
+        """Repopulate the read-only Subjects && lung volumes card from
+        ``input.subjects`` -- called wherever a loaded/opened/imported analysis can
+        change the list (``_sync_widgets``), never from a widget edit of its own (this
+        card has none, see its own construction comment)."""
+        subs = self.state.settings.input.subjects
+        self.subjects_table.setRowCount(len(subs))
+        for row, sub in enumerate(subs):
+            values = (sub.key, sub.tlc_l, sub.vc_l, sub.rv_l, sub.fev1_l, sub.mvv_lpm)
+            for col, v in enumerate(values):
+                text = v if isinstance(v, str) else ("—" if v is None else f"{v:g}")
+                item = QTableWidgetItem(text)
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                self.subjects_table.setItem(row, col, item)
+        self.subjects_table.resizeColumnsToContents()
 
     def _update_save_preview(self):
         """The 'You will get' line under the output checklist — the deliverables the current
@@ -790,12 +984,34 @@ class SettingsScreen(QWidget):
         # recompute.
         self.samp_freq.valueChanged.connect(self._on_sampling_frequency_changed)
         self.ent_tol.valueChanged.connect(self._on_field_changed)
+        self.ent_derived_volume.toggled.connect(self._on_field_changed)
+        for _sb in (self.peepi_window, self.peepi_smooth, self.peepi_slope, self.peepi_min):
+            _sb.valueChanged.connect(self._on_field_changed)
+        self.peepi_enabled.toggled.connect(self._on_field_changed)
         self.matlab_variant.currentIndexChanged.connect(self._on_field_changed)
         self.decimal_sep.currentIndexChanged.connect(self._on_field_changed)
         for chk in (self.save_average, self.save_bbb, self.save_processed,
                     self.include_ignored, self.save_pv_avg, self.save_pv_ind, self.save_raw_fig,
                     self.save_trimmed_fig, self.save_drift_fig, self.save_emg_fig):
             chk.toggled.connect(self._on_field_changed)
+
+    #: Setup box -> ``PeepiSettings`` field
+    _PEEPI_BOXES = {"peepi_window": "search_window_s", "peepi_smooth": "smooth_s",
+                    "peepi_slope": "onset_slope_frac", "peepi_min": "min_deflection"}
+
+    def _peepi_relevant(self):
+        """The PEEPi card applies once oesophageal pressure is declared. A malformed
+        hand-edited signal set (``_capabilities_for_view`` -> None) hides it rather than
+        crashing the card pass, the same degrade the channel door uses."""
+        caps = self._capabilities_for_view(self.state.settings)
+        return bool(caps is not None and caps.poes)
+
+    def _sync_peepi_fields(self, *_):
+        """The four thresholds only matter while the feature is on: grey them out otherwise
+        (kept visible, so the values a user has set are never hidden)."""
+        on = self.peepi_enabled.isChecked()
+        for w in (self.peepi_window, self.peepi_smooth, self.peepi_slope, self.peepi_min):
+            w.setEnabled(on)
 
     def _on_field_changed(self, *_):
         if self._loading:
@@ -849,21 +1065,17 @@ class SettingsScreen(QWidget):
         self._update_disclosure()   # last, so this screen's own validation status wins (see above)
 
     def _update_carried_banner(self):
-        """Show/hide the carried-over exclusions/breath-counts/noise-reference notice —
-        see core.settings.carried_over_state, and the banner built in _build()."""
+        """Show/hide the carried-over exclusions/breath-counts/reference notice — see
+        core.settings.carried_over_state, and the banner built in _build(). Wording is
+        built from `_CARRIED_PHRASES`, keyed on the SAME kinds `_CARRIED_KINDS` tracks
+        (M-07), so a new tagged kind never needs a new if/elif branch here."""
         from respmech.core.settings import carried_over_state
         state = carried_over_state(self.state.settings)
         if not state:
             self.carried_banner.setVisible(False)
             return
-        parts = []
-        if state.exclude_files:
-            parts.append(f"breath exclusions for {self._named_by_filename(state.exclude_files)}")
-        if state.breath_count_files:
-            parts.append("breath-count overrides for "
-                         f"{self._named_by_filename(state.breath_count_files)}")
-        if state.noise_reference:
-            parts.append("the EMG rest reference")
+        parts = [_CARRIED_PHRASES[kind](names) for kind, names in state.kinds_present()
+                 if kind in _CARRIED_PHRASES]
         self.carried_label.setText(
             "This analysis still has " + "; ".join(parts) + " set against a DIFFERENT "
             "recordings folder than the one now loaded. Keep them if you want the same "
@@ -1202,10 +1414,36 @@ class SettingsScreen(QWidget):
             self.enter_open_mode()
         return ok
 
-    def open_sample_analysis(self):
+    def open_sample_analysis(self, use_current_signals: bool = False):
         """P23: generate a small synthetic recording, wire a ready analysis around it,
         and open it in full mode — a no-setup door for first-time users. Returns True on
         success. The sample lives in a temp folder (throwaway).
+
+        ``use_current_signals``: the startup door (StartupDialog, both on the
+        very first window and via 'Get started…') always leaves this False, so it
+        always opens the complete demo recording regardless of whatever is currently
+        loaded — a predictable, unconditional door. 'File/Analysis > Explore with
+        sample data' (``MainWindow._explore_sample``), reachable again mid-session over
+        an already-configured analysis, passes True instead: the sample variant then
+        follows the CURRENT analysis's declared signal set (``Capabilities``, read
+        BEFORE this analysis is replaced below), so exploring after choosing 'Flow only'
+        opens a flow-only sample instead of the full one. Any mode without a dedicated
+        sample variant (the full set, or a not-yet-supported shape) still falls back to
+        'full' (``core.sample.sample_variant_for_mode``), so this door never fails to
+        open something. Self-review finding: ``Capabilities.mode`` alone strips 'emg'
+        before classifying (a preset's 'Also EMG' toggle is orthogonal to the flow/
+        pressure shape), so 'Flow only + Also EMG' and plain 'Flow only' report the SAME
+        mode ('flow_only') — mapping that straight to the 'flow' variant would silently
+        drop the very EMG channel the user just asked for (no ECG-removal/noise-
+        reduction demo either), where the demo the user's declared set actually promised
+        is the full one. EMG in the declared set therefore always wins to 'full',
+        checked explicitly below rather than folded into ``sample_variant_for_mode``
+        (which stays a pure, mode-string-only mapping — 'emg' is not a mode) — EXCEPT
+        for the genuine 'emg_only' mode itself, which has its own dedicated
+        'emg' variant and must be checked FIRST: ``caps.emg`` is also True there (it is
+        the only signal declared), so the 'Also EMG'-toggle rule above would otherwise
+        wrongly send an EMG-only analysis to the flow-bearing 'full' demo instead of its
+        own no-flow one.
 
         The first call in a process is a synchronous ~1 s stall (measured: mostly the
         lazy import of the compute/reader stack, not the small CSV write itself, and a
@@ -1213,7 +1451,24 @@ class SettingsScreen(QWidget):
         threaded, so a wait cursor plus a status line is enough to say something is
         happening instead of the window appearing to freeze."""
         import tempfile  # noqa: PLC0415
-        from respmech.core.sample import write_sample_recording, build_sample_settings  # noqa: PLC0415
+        from respmech.core.sample import (write_sample_recording, build_sample_settings,  # noqa: PLC0415
+                                          sample_variant_for_mode)
+        from respmech.core.analysis.signals import Capabilities  # noqa: PLC0415
+        variant = "full"
+        if use_current_signals:
+            try:
+                caps = Capabilities.from_settings(self.state.settings)
+                if caps.mode == "emg_only":
+                    variant = "emg"
+                elif caps.emg:
+                    variant = "full"
+                else:
+                    variant = sample_variant_for_mode(caps.mode)
+            except (TypeError, AttributeError):
+                # a malformed analysis.signals (e.g. a hand-edited bare string) would
+                # raise here; Settings.validate() reports it properly once the user
+                # tries to run something, but this door must still open SOMETHING
+                variant = "full"
         self._set_status("Building the sample recording…")
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
@@ -1222,11 +1477,20 @@ class SettingsScreen(QWidget):
             # unrelated queued callback, and that must still hit the finally below —
             # nothing between a successful setOverrideCursor and the finally is unguarded.
             QApplication.processEvents()   # paint the status text and cursor before the stall
-            base = os.path.join(tempfile.gettempdir(), "respmech_sample")
-            desc = write_sample_recording(os.path.join(base, "input"))
-            # the sample carries an ECG artefact and EMG noise, so the ready analysis
-            # switches on ECG removal + noise reduction to demonstrate the full pipeline
-            s = build_sample_settings(desc, os.path.join(base, "output"))
+            # 'full' keeps today's folder (unchanged, so any code/docs elsewhere that
+            # already assume tempdir/respmech_sample/{input,output} keep working);
+            # 'flow'/'flow_poes' get their OWN folder pair, so exploring 'flow' after
+            # 'full' (or vice versa) never mixes leftover files from a previous variant
+            # into the same input/output folder — each variant is analysable in its own
+            # folder without overwriting another.
+            sample_root = os.path.join(tempfile.gettempdir(), "respmech_sample")
+            base = sample_root if variant == "full" else os.path.join(sample_root, variant)
+            desc = write_sample_recording(os.path.join(base, "input"), variant=variant)
+            # the full variant carries an ECG artefact and EMG noise, so its ready
+            # analysis switches on ECG removal + noise reduction to demonstrate the full
+            # pipeline; the flow/flow_poes variants have no EMG channel at all and skip it
+            # (build_sample_settings)
+            s = build_sample_settings(desc, os.path.join(base, "output"), variant=variant)
             self.state.settings, self.state.settings_path = s, None
             self.state.display_name = None
             self.state.legacy_source_path = None
@@ -1286,21 +1550,193 @@ class SettingsScreen(QWidget):
         return self.save_analysis(confirm_overwrite=False)   # a refused save aborts the action too
 
     def new_analysis(self):
-        """Analysis > 'New analysis': discard the current settings for a fresh set and
-        re-enter the guided flow. Guarded like every other action that would drop unsaved
-        edits (open, recents, close) — the guard only asks when there are REAL edits, and
-        offers Save rather than a bare discard."""
+        """Discard the current settings for a fresh set and re-enter the guided flow,
+        with no signal-set choice (the plain reset ``new_analysis_from_startup`` below
+        also does, minus the picker). Guarded like every other action that would drop
+        unsaved edits (open, recents, close) — the guard only asks when there are REAL
+        edits, and offers Save rather than a bare discard.
+
+        Production's 'File > New' (``main_window._new_analysis``) no longer calls this
+        directly — it builds a richer flow around ``new_analysis_from_startup`` so the
+        signal-set picker can sit between the confirm and the reset. This stays as the
+        plain, undecorated primitive: a real, independently useful reset-and-confirm
+        unit worth testing (and reusing) on its own, without pulling in a dialog."""
         if not self.confirm_discard_changes(
                 "New analysis", question="Save them before starting a new analysis?"):
             return
+        self.new_analysis_from_startup()
+
+    def new_analysis_from_startup(self, signals: list[str] | None = None,
+                                  use_last_rig: bool = False,
+                                  segmentation_method: str | None = None):
+        """The full-reset primitive behind ``new_analysis()`` above, the startup
+        chooser's 'New analysis'/'New from last rig' doors, and 'File > New analysis'
+        once its own ``SignalSetDialog`` has been accepted: a genuine ``Settings()``
+        swap, not the softer ``enter_new_mode()`` alone — which is all
+        ``_apply_startup_choice`` used to call for the startup doors. That gap
+        mattered: a preset chosen over the PREVIOUS analysis's leftover channels could
+        otherwise be silently re-inflated by them the moment a channel got reassigned,
+        since ``enter_new_mode()`` only blanks the input/output folders and mask, never
+        the channel mapping itself.
+
+        Discarding unsaved edits is the CALLER's job (``confirm_discard_changes``), same
+        as it already is for every other caller of ``enter_new_mode()`` — this method
+        never asks on its own, so it composes cleanly with a dialog the caller may show
+        in between (the signal-set picker) without stacking two confirmation prompts.
+
+        ``signals``: the explicit signal set to apply via ``apply_signal_set`` (the ONE
+        funnel for changing it — see that method), or ``None`` to skip applying one and
+        let it derive from whichever channels end up assigned (used by 'New from last
+        rig', which derives its set from the rig's own channel mapping instead, and
+        never shows the picker — see ``prefs.apply_rig``). ``segmentation_method``
+        is the EMG-only preset's own extra choice
+        (``SignalSetDialog.segmentation_method``), passed straight through to
+        ``apply_signal_set`` — ``None`` for every other preset."""
         self.state.settings = Settings()
         self.state.settings_path = None
         self.state.display_name = None
         self.state.legacy_source_path = None
         self.state.is_sample = False
         self.from_state()
-        self.enter_new_mode()       # emits inputs/settings_changed then sets guided status
-        self._mark_clean()          # a fresh analysis has no unsaved edits yet
+        if signals is not None:
+            self.apply_signal_set(signals, segmentation_method=segmentation_method)
+        self.enter_new_mode(use_last_rig=use_last_rig)
+        self._mark_clean()
+
+    def apply_signal_set(self, signals: list[str], segmentation_method: str | None = None):
+        """The ONE funnel (R7) for changing ``analysis.signals`` in an already-running
+        session: every action that changes the declared signal set — the New-analysis
+        picker above, and Setup's own Signals row 'Change…' door too — must go
+        through this, never assign ``analysis.signals`` directly. A preset chosen over
+        a NON-blank state must not be silently re-inflated by channels the new set no
+        longer includes; this is what clears them first.
+
+        Clears ``ch.<role> = None`` for every single-role signal (flow/poes/pgas/pdi)
+        LEAVING the new set, and ``ch.emg = []`` when 'emg' leaves it; ``ch.entropy`` is
+        never touched (R8: sample entropy is independent of the signal set).
+
+        When flow's MEMBERSHIP of the set changes (added or removed — a different
+        segmenter produces the breath numbers and kinds either way, so every existing
+        one means something different afterwards) AND there is actually breath-keyed
+        state that would be affected, the user is asked ONCE whether to also clear it:
+        ``exclude_breaths``/``breath_counts``/``breath_types`` (cleared via
+        ``getattr``/``hasattr`` so a future list added the same way needs no change
+        here) and ``processing.segmentation.separators`` (checked/cleared
+        separately, since it lives one level deeper than ``processing`` itself, not
+        directly on it like the others). ``references``/``reference_defaults`` do not
+        exist yet (a later ticket). Nothing is asked, and nothing is cleared, when
+        there is nothing to lose (a freshly reset analysis has none of this yet) — the
+        same "dropping a role clears the derived state that depended on it" principle
+        already established for removing the EMG role (silently there, since a
+        stuck-invalid ECG auto-detect flag was worse than asking; here the confirmation
+        is added because losing flow is the bigger change — see
+        ``docs/beslutninger.md``).
+
+        ``segmentation_method`` is set ONLY by the EMG-only preset (the sole
+        caller today that has a segmentation method to name at all —
+        ``SignalSetDialog``'s 'EMG only' button and Setup's 'Change…' door reopening
+        it), applied to ``processing.segmentation.method`` together with
+        ``noise.use_expiration = False`` and (except for ``emg_burst``, which implements it)
+        ``noise.auto_prop = False``: an EMG-only
+        analysis has no inspiration/expiration phases for ``use_expiration`` to mean
+        anything about (see ``core.settings.resolve_noise_reference_mode``), and
+        ``Settings.validate()`` outright REJECTS ``auto_prop`` while noise reduction is
+        enabled on an EMG-only set (no EMG-only implementation exists for it yet) — a
+        state reachable from the shipped UI TODAY (open the built-in 'full' sample,
+        which turns noise reduction and ``auto_prop`` on, then Setup ▸ Signals ▸
+        Change… ▸ EMG only) without this reset, so it is not a hypothetical. When
+        ``None`` (every other preset) but ``signals`` GAINS flow over a settings object
+        still left on an EMG-only-only method ('whole_file'/'separators'/…) from a
+        *previous* EMG-only preset, that method is reset to 'flow' here too;
+        conversely, LOSING flow with no explicit method (unreachable via the shipped
+        UI today — both EMG-only doors always supply one — but the funnel is meant for
+        a future caller too, e.g. an eventual 'Custom…' picker) falls back to
+        'whole_file' rather than leaving a flow-only method declared over a set that
+        no longer has one. Either way, ``Settings.validate()`` rejects a
+        ('flow'/'volume') method the moment flow leaves the set, and a
+        ('whole_file'/'separators'/'fixed_windows'/'emg_burst') method the moment it
+        re-enters — leaving either stale would make the very next validation fail with
+        no visible cause tying it to this signal-set change.
+
+        A method CHANGE within EMG-only itself (Change… re-asked, 'separators' ->
+        'whole_file' or back) also counts as "a different breath segmentation" for the
+        reconciliation prompt below, alongside flow leaving/entering the set — segment
+        NUMBERING changes completely either way, so a `breath_types`/`exclude_breaths`
+        entry keyed to an old segment number is exactly as stale."""
+        # Same guard as core.analysis.signals.effective_signals, and for the same
+        # reason: a bare string is iterable too, so frozenset("flow") would silently
+        # become {'f','l','o','w'} — and since 'flow' is then None-of-the-above, the
+        # clearing loop below would wipe every single-role channel. Only this
+        # method's own SignalSetDialog caller exists today (always a real list), but
+        # the funnel is meant for a later caller too, so the guard belongs here now.
+        if isinstance(signals, str):
+            raise TypeError(
+                f"apply_signal_set expects a list of signal names, not a bare string: "
+                f"{signals!r}")
+        s = self.state.settings
+        ch = s.input.channels
+        had_flow = "flow" in effective_signals(s)
+        new_set = frozenset(signals)
+        wants_flow = "flow" in new_set
+
+        proc = s.processing
+        breath_keyed_attrs = ("exclude_breaths", "breath_counts", "breath_types",
+                              "references", "reference_defaults")
+        has_breath_keyed_state = (any(getattr(proc, a, None) for a in breath_keyed_attrs)
+                                  or bool(getattr(proc.segmentation, "separators", None)))
+        method_changing = (segmentation_method is not None
+                           and segmentation_method != proc.segmentation.method)
+
+        if (had_flow != wants_flow or method_changing) and has_breath_keyed_state:
+            ans = QMessageBox.question(
+                self, "RespMech",
+                "Breath types, references, exclusions and separators were made for a "
+                "different breath segmentation — clear them?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if ans == QMessageBox.Yes:
+                for a in breath_keyed_attrs:
+                    if hasattr(proc, a):
+                        setattr(proc, a, [])
+                if hasattr(proc.segmentation, "separators"):
+                    proc.segmentation.separators = []
+
+        s.analysis.signals = list(signals)
+        for role in SINGLE_SIGNALS:
+            if role not in new_set:
+                setattr(ch, role, None)
+        if "emg" not in new_set:
+            ch.emg = []
+
+        noise = proc.emg.noise
+        if segmentation_method is not None:
+            proc.segmentation.method = segmentation_method
+            noise.use_expiration = False
+            if segmentation_method == "emg_burst":
+                # bursts against the periods between them IS an active/quiet split, so
+                # both the inter-burst reference and auto_prop have an implementation
+                # here (and are what a burst analysis with noise reduction needs: it has
+                # no typed rest segment to fall back on until the user makes one). Only
+                # the default while no other reference is set: re-choosing the method
+                # never overrides a span or mode the user picked.
+                if not noise.reference_intervals and noise.reference_mode == "auto":
+                    noise.reference_mode = "interburst"
+            else:
+                noise.auto_prop = False
+                if noise.reference_mode == "interburst":
+                    noise.reference_mode = "auto"      # no bursts to take the periods between
+        elif wants_flow and proc.segmentation.method not in ("flow", "volume"):
+            proc.segmentation.method = "flow"
+            if noise.reference_mode != "auto":
+                noise.reference_mode = "auto"           # EMG-only alternatives, refused with flow
+        elif not wants_flow and proc.segmentation.method in ("flow", "volume"):
+            proc.segmentation.method = "whole_file"
+
+        # M-11: analysis.signals is now part of _channel_view_signature, so this always
+        # detects a real change and rebuilds — the Signals row and 'Analyses: …' must
+        # reflect the newly declared set immediately, not only once some unrelated field
+        # happens to touch the signature next (e.g. the guided flow's own folder reset).
+        self._refresh_channel_view()
+        self.settings_changed.emit()
 
     def _analysis_dialog_start(self):
         """Where an Open-analysis-style file dialog should start (ticket C03 point 4):
@@ -1393,10 +1829,23 @@ class SettingsScreen(QWidget):
         # the batch's true size, instead of only ever describing the majority subset.
         excluded = ([(f.filename, f.columns) for f in self._manifest.outliers]
                    if self._manifest is not None else [])
+        # M-12: the dialog offers/requires only the roles THIS analysis actually declared
+        # (Capabilities.declared), instead of always forcing flow+poes+pgas+pdi regardless
+        # of the chosen signal set. ``_capabilities_for_view`` (not a raw
+        # ``Capabilities.from_settings`` call): a malformed hand-edited
+        # ``analysis.signals`` must not crash the channel-assignment door itself; ``None``
+        # falls the dialog back to its own old, full-set default (see its docstring).
+        # A truly EMPTY declared set (a brand-new analysis, no channel assigned yet and no
+        # explicit analysis.signals — before any signal set was ever chosen) is treated the
+        # same as ``None``: this is the everyday "Assign channels from data…" entry point
+        # for a fresh analysis, and it must still offer every role, not none at all.
+        caps = self._capabilities_for_view(s)
+        declared = caps.declared if caps is not None and caps.declared else None
         try:
             dlg = ChannelSetupDialog(files, fs, initial, loader=lambda p: load_raw_matrix(s, p),
                                      parent=self, excluded=excluded,
-                                     integrate_from_flow=s.processing.volume.integrate_from_flow)
+                                     integrate_from_flow=s.processing.volume.integrate_from_flow,
+                                     declared=declared)
         except NoReadableFileError as exc:
             # ticket D01: the dialog already diagnosed WHY none of its files could be read
             # (see _no_files_readable_message) — show that diagnosis as the message, not a
@@ -1560,12 +2009,79 @@ class SettingsScreen(QWidget):
     def _channel_view_signature(self):
         """What the summary actually depends on. Rebuilding a stack of pyqtgraph plots on
         every keystroke would be unusable, so the render is skipped unless one of these
-        moved."""
+        moved.
+
+        M-11: includes ``analysis.signals`` (as a tuple — the list itself is mutable and
+        so unhashable/uncomparable-by-identity, and ``apply_signal_set`` replaces it
+        wholesale rather than mutating in place) — the Signals row and the 'Analyses: …'
+        line both depend on it, and it can change (via 'Change…'/File > New) without any
+        channel column moving at all."""
         ch = self.state.settings.input.channels
         f = self.state.settings.input.format
         return (ch.flow, ch.volume, ch.poes, ch.pgas, ch.pdi, tuple(ch.emg), tuple(ch.entropy),
                 self.state.settings.processing.volume.integrate_from_flow,  # Preview-owned now
-                f.sampling_frequency, f.decimal, self.in_folder.text(), self.in_files.text())
+                f.sampling_frequency, f.decimal, self.in_folder.text(), self.in_files.text(),
+                tuple(self.state.settings.analysis.signals))
+
+    def _update_signals_row(self, capabilities):
+        """Rebuild the Setup Signals row's chips from ``capabilities.declared`` — the same
+        set ``Capabilities.from_settings`` derived (explicit ``analysis.signals``, or the
+        assigned channels when it is empty, see ``core.analysis.signals.effective_signals``).
+        Rebuilt wholesale (never diffed): at most five small labels, so the cost is
+        negligible next to the ColumnStack rebuild this is always called alongside.
+
+        ``capabilities=None`` (see ``_capabilities_for_view``'s own docstring — a hand-
+        edited, malformed ``analysis.signals``) renders no chips at all, just the
+        'Change…' door: there is nothing safe to derive a chip set from, and this method
+        must never itself be the thing that raises."""
+        lay = self._signals_flow
+        while lay.count():
+            item = lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+        if capabilities is not None:
+            for name in _SIGNAL_CHIP_ORDER:
+                if name in capabilities.declared:
+                    chip = QLabel(_SIGNAL_CHIP_LABELS[name])
+                    chip.setProperty("chip", True)
+                    chip.setToolTip(_tip("analysis.signals", _SIGNAL_CHIP_TIPS[name]))
+                    lay.addWidget(chip)
+        lay.addWidget(self.btn_change_signals)
+
+    def _change_signals(self):
+        """Setup's 'Change…' door onto ``apply_signal_set`` — the SAME funnel the
+        New-analysis picker uses (R7's one-funnel rule), via the same ``SignalSetDialog``.
+        This is the ONE place the EMG-only recording-content question is RE-asked:
+        choosing 'EMG only' here opens the identical
+        ``EmgRecordingContentDialog`` the New-analysis picker uses, whether or not the
+        analysis was already EMG-only — there is no separate 'keep the current method'
+        shortcut, since the dialog itself is the single source of truth for that
+        choice."""
+        from respmech.ui.signal_set_dialog import SignalSetDialog  # noqa: PLC0415
+        dlg = SignalSetDialog(self)
+        if dlg.exec() == QDialog.Accepted and dlg.signals is not None:
+            self.apply_signal_set(dlg.signals, segmentation_method=dlg.segmentation_method)
+
+    def _capabilities_for_view(self, s):
+        """``Capabilities.from_settings(s)``, tolerant of a malformed ``analysis.signals``.
+
+        ``core.analysis.signals.effective_signals`` deliberately raises ``TypeError`` for
+        a bare string (e.g. a hand-edited ``signals = "flow"`` instead of ``["flow"]``) —
+        a guard meant for ``Settings.validate()`` to catch and report as a clean, friendly
+        error. This screen's render path runs on EVERY edit and on open, always BEFORE any
+        validation (``from_state()`` -> ``_sync_widgets()`` -> here), including the
+        command-line/drag-drop open path that constructs ``MainWindow`` directly against
+        an already-parsed ``Settings`` — there is no surrounding try/except there at all,
+        so letting this raise crashed the whole window instead of leaving that job to
+        validate(). ``None`` tells ``_update_signals_row``/``ChannelSummary.show_mapping``
+        to render exactly as if no capabilities were available (no chips, no 'Analyses: …'
+        row, Volume shown unconditionally) — degraded, never crashed; the status bar's
+        ``_validation_status()`` still names the real problem."""
+        try:
+            return Capabilities.from_settings(s)
+        except TypeError:
+            return None
 
     def _refresh_channel_view(self, force=False):
         """Re-render the read-only channel summary. The traces need a readable data file; the
@@ -1575,6 +2091,8 @@ class SettingsScreen(QWidget):
             return
         self._channel_view_sig = sig
         s = self.state.settings
+        capabilities = self._capabilities_for_view(s)
+        self._update_signals_row(capabilities)
         matrix = names = None
         files = self._valid_input_files()
         if files:
@@ -1591,7 +2109,8 @@ class SettingsScreen(QWidget):
         self.channel_summary.show_mapping(
             s.input.channels, matrix=matrix, names=names,
             fs=s.input.format.sampling_frequency or 1000,
-            integrate_from_flow=s.processing.volume.integrate_from_flow)
+            integrate_from_flow=s.processing.volume.integrate_from_flow,
+            capabilities=capabilities)
 
     def _current_channel_mapping(self):
         ch = self.state.settings.input.channels
@@ -1647,6 +2166,13 @@ class SettingsScreen(QWidget):
         self._set_flow_ready(ready)
         self._set_status(self._validation_status())   # no Validate button: every edit re-checks
 
+    def _derived_volume_available(self):
+        """The 'Entropy on derived volume' box is offered when Flow is declared and the
+        volume is integrated from it: a volume without a column of its own."""
+        s = self.state.settings
+        return bool(s.input.channels.flow is not None
+                    and s.processing.volume.integrate_from_flow)
+
     def _apply_card_visibility(self):
         """Conditional cards only (B04 retired the staged reveal): Sample entropy stays
         hidden unless a column is actually assigned to it, in every mode. The one exemption
@@ -1656,6 +2182,8 @@ class SettingsScreen(QWidget):
             if card.isVisible() and card.isAncestorOf(QApplication.focusWidget()):
                 continue
             card.setVisible(relevant())
+        self.ent_derived_volume.setVisible(
+            self._derived_volume_available() or self.ent_derived_volume.isChecked())
 
     def _channel_collision(self):
         """A HARD channel-mapping error (message, else ''), delegating to the Qt-free
@@ -1709,6 +2237,7 @@ class SettingsScreen(QWidget):
         chain silently hides one behind another — a sub-1000 Hz recording would have masked
         the gated-peak prerequisite below, which is the one caution the user cannot diagnose
         from this screen."""
+        from respmech.core.analysis.references import check_links  # noqa: PLC0415
         s = self.state.settings
         ch = s.input.channels
         out = []
@@ -1753,6 +2282,18 @@ class SettingsScreen(QWidget):
                            "for EMG — Preview & QC ▸ Mechanics ▸ Advanced… ▸ Sampling")
             else:
                 out.append(f"sampling frequency {fs_eff} Hz is low for EMG")
+        # M-37: reference/subject cautions -- lowest priority (informational, never a
+        # blocker unless processing.lung_volume.require_references is set, in which case
+        # ui.validation.path_problem already surfaces the missing-source half of this as
+        # a hard error ahead of any of the notes above). filenames is the batch's OWN
+        # glob (matching_files), never the manifest's majority-column-count subset --
+        # check_links' own doctrine, see its docstring.
+        matches = matching_files(s.input.folder, s.input.files)
+        # M-38: the manifest already knows which outliers are also named reference
+        # sources -- check_links stays Qt-free and does no column probing of its own.
+        m = self._manifest
+        outlier_refs = m.outlier_reference_names if m is not None else None
+        out.extend(check_links(s, matches, outlier_reference_names=outlier_refs))
         return out
 
     def _science_note(self):
@@ -1973,13 +2514,43 @@ class SettingsScreen(QWidget):
         return True
 
     def surface_notices(self):
-        """Tell the user about any schema upgrade applied while loading this analysis.
+        """Tell the user about any schema upgrade applied while loading this analysis, and
+        (M-11) about any key this version could not make sense of at all.
 
         A setting this version reads differently from the version that saved the file
         changes the results, so it is said on screen at open time — not only in the run
-        report, which is written after the numbers already exist."""
+        report, which is written after the numbers already exist.
+
+        ``settings.unknown`` (populated by ``Settings.from_dict`` while parsing a .toml,
+        never touched again) is a SEPARATE case from the upgrade notices above: an upgrade
+        means this version understood the old key and translated it, an unknown key means
+        it did not recognise it at all — most often a newer analysis opened in an older
+        RespMech. Shown once, here, alongside the upgrade notices (both fire only from the
+        open paths that call this — see ``_load``/``main_window.begin_session`` — never
+        after a save), never repeated on every edit.
+
+        Named by the FIRST path segment only (``settingsio.toml_io._merge_unknown``'s own
+        dotted-path key, e.g. ``'processing.exclude_breaths.[0].some_field'``, becomes
+        just 'processing'): the full internal path is meaningless to a user, and every
+        unknown value is archived as one whole table/list/field under a real, recognised
+        ancestor field, so its first segment always names something that already appears
+        elsewhere in this screen. Self-review (M-11) found the wording cannot honestly
+        promise unconditional preservation: ``_merge_unknown``'s own docstring documents
+        that a per-element unknown field (that ``[0]``-style path) is dropped if the list
+        entry that carried it is later removed in this session — reachable today via
+        ``apply_signal_set``'s own 'clear breath-keyed state?' prompt. The wording below
+        says so, rather than the flatly wrong 'always kept' an earlier draft used."""
         for note in self.state.settings.notices:
             QMessageBox.information(self, "Analysis updated for this version", note)
+        unknown = self.state.settings.unknown
+        if unknown:
+            names = sorted({k.split(".", 1)[0] for k in unknown})
+            keys = ", ".join(names)
+            QMessageBox.information(
+                self, "RespMech",
+                "This analysis carries settings this version does not understand: "
+                f"{keys}. They are kept unchanged when you save, unless the setting "
+                "they belong to is removed here first.")
 
     def can_save(self):
         """Whether the current settings may be written to an analysis file."""
@@ -2038,13 +2609,14 @@ class SettingsScreen(QWidget):
         with 'No input files found'.
 
         Copies the recording out of the temp input folder into an ``input`` subfolder next
-        to the destination file, and repoints ``input.folder``/``output.folder``, the EMG
-        noise reference folder, and any exclude-breaths/breath-count entry that named the
-        same temp folder — the carried-folder tags this screen elsewhere compares against
-        the live ``input.folder`` (``core.settings.is_carried_folder``) would otherwise
-        still point at the OLD temp folder while ``input.folder`` itself moved, making a
-        breath excluded moments earlier during this same sample session falsely read as
-        "carried over from a different folder" the instant the analysis is reopened.
+        to the destination file, and repoints ``input.folder``/``output.folder`` and every
+        row in ``core.settings._CARRIED_KINDS`` (M-07) that named the same temp folder —
+        the carried-folder tags this screen elsewhere compares against the live
+        ``input.folder`` (``core.settings.is_carried_folder``) would otherwise still point
+        at the OLD temp folder while ``input.folder`` itself moved, making a breath
+        excluded (or an EMG reference picked) moments earlier during this same sample
+        session falsely read as "carried over from a different folder" the instant the
+        analysis is reopened.
         ``AppState.save_toml`` -> ``settingsio.toml_io`` already relativizes any
         input/output folder that ends up living at/under the file's own directory, so
         nothing here needs to compute a relative path itself — it only needs to move the
@@ -2076,12 +2648,16 @@ class SettingsScreen(QWidget):
                 "system may already have cleared it. The analysis will be saved, but "
                 "it has no matching input file yet; point Setup at a real recordings "
                 "folder before running it.")
-        noise = s.processing.emg.noise
-        if noise.reference_folder == old_input:
-            noise.reference_folder = new_input
-        for entry in (*s.processing.exclude_breaths, *s.processing.breath_counts):
-            if entry.folder == old_input:
-                entry.folder = new_input
+        from respmech.core.settings import _CARRIED_KINDS, _walk
+        for path, _kind, _name_of, _clear_fn in _CARRIED_KINDS:
+            container, attr = _walk(s, path)
+            val = getattr(container, attr)
+            if isinstance(val, list):
+                for entry in val:
+                    if entry.folder == old_input:
+                        entry.folder = new_input
+            elif val == old_input:
+                setattr(container, attr, new_input)
         s.input.folder = new_input
         s.output.folder = os.path.join(dest_dir, "output")
 
@@ -2141,15 +2717,18 @@ class SettingsScreen(QWidget):
         The output folder is only ever a SUGGESTION (``ui.duplicate.derive_sibling_output``),
         shown in ``DuplicateFolderDialog`` for confirmation/editing, never applied silently.
 
-        The file-keyed state (exclude_breaths/breath_counts/the EMG noise reference) is
-        deliberately NOT force-cleared here: switching ``input.folder`` makes every entry
-        recorded against the OLD folder "carried-over" by B06's own definition
-        (``core.settings.carried_over_state``), so the Setup Behold/Ryd banner this screen
-        already shows will ask about exactly that state right after — reusing B06's
-        existing ask, not a second copy of it, per this ticket's own instruction to prefer
-        the already-built helper. ``processing.emg.ecg_reference_file`` has no such
-        folder-tracked ask mechanism (see core/settings.py), so it is cleared directly —
-        it can only ever have named a file in the OLD folder."""
+        The file-keyed state (exclude_breaths/breath_counts/the EMG noise/ECG/
+        normalisation references) is deliberately NOT force-cleared here: switching
+        ``input.folder`` makes every entry recorded against the OLD folder "carried-over"
+        by B06's own definition (``core.settings.carried_over_state``), so the Setup
+        Behold/Ryd banner this screen already shows will ask about exactly that state
+        right after — reusing B06's existing ask, not a second copy of it. Before M-07,
+        ``processing.emg.ecg_reference_file`` had no such folder-tracked ask mechanism and
+        was cleared directly here instead; now that it (and normalization_reference_file)
+        carry their own folder tag, force-clearing it would just be a second, redundant
+        way of doing what the banner's "Clear" already does — and would throw away a
+        reference that, unlike an excluded breath, has no per-file re-creation path, so
+        losing it silently on every duplicate would be a regression, not a safety net."""
         if not self.confirm_discard_changes(
                 "Duplicate for another recordings folder",
                 question="Save them before duplicating this analysis?"):
@@ -2177,7 +2756,6 @@ class SettingsScreen(QWidget):
         self.in_folder.setText(new_input)
         self.out_folder.setText(new_output)
         self.to_state()
-        self.state.settings.processing.emg.ecg_reference_file = None
         # Duplicating a sample-derived analysis onto real folders means it is no longer
         # the built-in sample — see AppState.is_sample's own docstring.
         self.state.is_sample = False

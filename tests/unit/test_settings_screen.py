@@ -204,6 +204,81 @@ def test_entropy_fields_are_named_and_explained_for_what_they_are(qapp, tmp_path
     win.close()
 
 
+def test_subjects_table_renders_the_declared_subjects_read_only(qapp, tmp_path):
+    """M-37: the 'Subjects && lung volumes' card is read-only (input.subjects has no
+    Setup widget of its own -- it is written by the reference model/an analysis's own
+    .toml) -- populated by _refresh_subjects_table, which _sync_widgets calls on load."""
+    from PySide6.QtCore import Qt
+    from respmech.core.settings import SubjectEntry
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    s.input.subjects = [
+        SubjectEntry(key="synth_case", tlc_l=6.5, vc_l=5.0, rv_l=None, fev1_l=4.1,
+                    mvv_lpm=150.0),
+    ]
+    win = MainWindow(AppState(s))
+    sc = win.settings_screen
+    sc._refresh_subjects_table()
+    t = sc.subjects_table
+    assert t.rowCount() == 1
+    assert t.item(0, 0).text() == "synth_case"
+    assert t.item(0, 1).text() == "6.5"
+    assert t.item(0, 2).text() == "5"
+    assert t.item(0, 3).text() == "—"                  # None renders as an em dash, not "None"
+    assert t.item(0, 4).text() == "4.1"
+    assert t.item(0, 5).text() == "150"
+    assert not (t.item(0, 0).flags() & Qt.ItemIsEditable)
+    win.close()
+
+
+def test_subjects_table_fits_under_windows_font_metrics(qapp, tmp_path, windows_metrics):
+    """Acceptance criterion: '...Subjects-kortet...består windows_metrics-ratiotests'.
+    Unlike a FlowLayout chip row, a QTableWidget does not elide its own header/cell
+    text at all -- the risk here is the CARD demanding an unreasonably wide window at
+    the runner's wider advance, not a silently-truncated string. Six columns' worth of
+    headers plus a real row is the card's own widest case."""
+    from respmech.core.settings import SubjectEntry
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    s.input.subjects = [SubjectEntry(key="synth_case", tlc_l=6.5, vc_l=5.0, rv_l=1.5,
+                                     fev1_l=4.1, mvv_lpm=150.0)]
+    win = MainWindow(AppState(s))
+    sc = win.settings_screen
+    sc._refresh_subjects_table()
+    card = sc._card_subjects
+    natural = card.sizeHint().width()
+    assert natural > 0
+    # A RATIO against an already-fitting sibling card (CLAUDE.md: "assert ratios, not
+    # pixel figures" -- a literal would just be a measurement of this developer's
+    # fonts). sc._card_input shares this same two-column layout and is exercised by
+    # test_window_fits_screen.py on the real Windows/macOS runners, so it is a proven
+    # floor: a table card wildly wider than it would be the thing pushing the whole
+    # two-column layout past its own budget, which sizeHint() > 0 alone cannot catch.
+    sibling = sc._card_input.sizeHint().width()
+    assert natural <= sibling * 1.5, (
+        f"Subjects card is {natural}px wide vs the Input card's {sibling}px -- looks "
+        "like the table is forcing the two-column layout wider than its siblings")
+    # the six header labels must survive intact -- a table never elides them itself,
+    # so this is a floor check against them having been dropped/emptied, not a ratio.
+    headers = [sc.subjects_table.horizontalHeaderItem(i).text() for i in range(6)]
+    assert headers == ["Key", "TLC (L)", "VC (L)", "RV (L)", "FEV1 (L)", "MVV (L/min)"]
+    win.close()
+
+
+def test_science_notes_include_check_links_cautions(qapp, tmp_path):
+    """M-37: Setup's own science-caution list (_science_notes) surfaces check_links'
+    cautions -- here, a reference_defaults group key that matches no analysed file."""
+    from respmech.core.settings import GroupReferenceEntry
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    s.processing.reference_defaults.append(GroupReferenceEntry(group="no_such_group"))
+    win = MainWindow(AppState(s))
+    sc = win.settings_screen
+    notes = sc._science_notes()
+    assert any("no_such_group" in n and "matches no analysed file" in n for n in notes)
+    win.close()
+
+
 def test_entropy_readout_states_m_and_r_in_the_apps_own_words(qapp, tmp_path):
     """The live caption under the two entropy fields does the m = epochs - 1 arithmetic for
     the user, in the terms a methods section would use, and follows every edit."""
@@ -1396,6 +1471,19 @@ def _entry_folder(s, filename):
     return e.folder
 
 
+def test_carried_phrases_covers_every_carried_kind():
+    """M-07 self-review finding: `_update_carried_banner` silently drops any kind whose
+    name isn't a key in `_CARRIED_PHRASES` (`if kind in _CARRIED_PHRASES`), and if it were
+    the ONLY carried kind the banner would show with an empty phrase list. A future row
+    added to `_CARRIED_KINDS` (M-19/M-21/M-34's own tagged state) without a matching
+    `_CARRIED_PHRASES` entry would fail SILENTLY at runtime — pin the parity here so it
+    fails a test instead."""
+    from respmech.core.settings import _CARRIED_KINDS
+    from respmech.ui.screens.settings_screen import _CARRIED_PHRASES
+    kinds = {kind for _path, kind, _name_of, _clear_fn in _CARRIED_KINDS}
+    assert kinds == set(_CARRIED_PHRASES)
+
+
 def test_switching_input_folder_shows_the_carried_over_banner(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
     from respmech.core.settings import ExcludeEntry
@@ -1519,6 +1607,54 @@ def test_the_sample_analysis_never_shows_a_false_carried_over_banner(qapp):
     win.close()
 
 
+def test_the_emg_only_sample_never_shows_a_false_carried_over_banner(qapp):
+    """build_sample_settings's 'emg' branch stamps BOTH the noise reference AND
+    the manual SeparatorEntry's folder to match input.folder — miss either one and the
+    very first 'EMG only' 'Try it on sample data' would show a false carried-over
+    banner, exactly the class of bug the 'full' variant's own equivalent test above
+    guards against."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.apply_signal_set(["emg"], segmentation_method="separators")
+    assert sc.open_sample_analysis(use_current_signals=True) is True
+    assert sc.state.settings.analysis.signals == ["emg"]
+    assert sc.carried_banner.isHidden()
+    win.close()
+
+
+def test_save_as_repoints_the_emg_only_samples_separator_folder_too(qapp, tmp_path, monkeypatch):
+    """The same detach-and-repoint guarantee ``test_save_as_repoints_carried_
+    folder_tags_for_the_sample_too`` proves for exclude_breaths/breath_counts must also
+    hold for the EMG-only sample's OWN carried kind, processing.segmentation.separators
+    — otherwise reopening a saved EMG-only sample analysis would show a false
+    carried-over banner for its separators the moment the original OS temp folder is
+    gone, and 'Clear' on that banner would silently drop them."""
+    from PySide6.QtWidgets import QFileDialog
+    from respmech.ui.main_window import MainWindow
+    from respmech.settingsio.toml_io import load_toml
+
+    win = MainWindow(AppState())
+    sc = win.settings_screen
+    sc.apply_signal_set(["emg"], segmentation_method="separators")
+    assert sc.open_sample_analysis(use_current_signals=True) is True
+    old_input = sc.state.settings.input.folder
+    assert len(sc.state.settings.processing.segmentation.separators) == 1
+    assert sc.state.settings.processing.segmentation.separators[0].folder == old_input
+
+    dest_dir = tmp_path / "saved"; dest_dir.mkdir()
+    picked = str(dest_dir / "analysis.toml")
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: (picked, "")))
+    assert sc.save_analysis_as() is True
+
+    reloaded = load_toml(picked)
+    new_input = str(dest_dir / "input")
+    assert reloaded.processing.segmentation.separators[0].folder == new_input
+    reloaded.validate()
+    win.close()
+
+
 def test_a_preview_side_edit_refreshes_a_showing_setup_banner(qapp, tmp_path):
     """Self-review finding: confirming/clearing carried state from Preview & QC (a breath
     toggle, a breath-count-overrides commit) must not leave Setup's banner showing a
@@ -1637,14 +1773,16 @@ def test_deepest_existing_ancestor_walks_up_to_a_real_directory(tmp_path):
     assert SettingsScreen._deepest_existing_ancestor("") == os.path.expanduser("~")
 
 
-def test_duplicate_for_another_folder_derives_output_clears_ecg_reference_and_opens_save_as(
+def test_duplicate_for_another_folder_derives_output_preserves_ecg_reference_and_opens_save_as(
         qapp, tmp_path, monkeypatch):
     """C03 point 5, the end-to-end flow: pick a new recordings folder, confirm the
     suggested (sibling-derived) output folder, and land on Save as… pre-filled with the
     SAME analysis filename inside the NEW folder — never overwriting the template. The
     file-keyed exclude_breaths/breath_counts/noise-reference are left to B06's own
-    Behold/Ryd banner (already exercised by the tests above this section); only
-    ecg_reference_file (no such ask mechanism) is asserted cleared directly here."""
+    Behold/Ryd banner (already exercised by the tests above this section). Since M-07,
+    ecg_reference_file carries its own folder tag too, so it now goes through the SAME
+    banner instead of being force-cleared here: it survives the duplicate, and the
+    banner (asserted separately below) names it as carried."""
     from respmech.ui.screens import settings_screen as ss
     from respmech.ui.main_window import MainWindow
     from _helpers import synth_settings
@@ -1690,9 +1828,13 @@ def test_duplicate_for_another_folder_derives_output_clears_ecg_reference_and_op
     assert captured["suggested_output"] == str(study / "S02-output")   # derived, not asked
     assert sc.in_folder.text() == str(new_input)
     assert sc.out_folder.text() == str(study / "S02-output")
-    assert sc.state.settings.processing.emg.ecg_reference_file is None
+    assert sc.state.settings.processing.emg.ecg_reference_file == "synth_case_A.csv"
     assert sc.is_dirty()
     assert save_as_calls == [str(new_input / "analysis.toml")]
+    # the folder switch made the (unrecorded-folder) ECG reference carried-over —
+    # the banner names it instead of the reference being silently dropped.
+    assert not sc.carried_banner.isHidden()
+    assert "ECG reference" in sc.carried_label.text()
     win.close()
 
 
@@ -1785,5 +1927,542 @@ def test_sync_from_preview_skips_the_rebuild_when_the_signature_is_unchanged(qap
         not sc.state.settings.processing.volume.integrate_from_flow
     sc.sync_from_preview()                # a signature field changed -> must rebuild
     assert calls == [1]
+    win.close()
+
+
+# ---------------------------------------------------------------------------
+# apply_signal_set: the one funnel for changing analysis.signals
+# ---------------------------------------------------------------------------
+def test_apply_signal_set_clears_channels_for_roles_leaving_the_set(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    ch = sc.state.settings.input.channels
+    assert ch.pgas == 8 and ch.pdi == 9 and ch.emg == [2, 3, 4]
+
+    sc.apply_signal_set(["flow", "poes"])
+    assert ch.pgas is None and ch.pdi is None and ch.emg == []
+    assert ch.flow == 5 and ch.poes == 7        # roles that stayed are untouched
+    assert sc.state.settings.analysis.signals == ["flow", "poes"]
+    win.close()
+
+
+def test_apply_signal_set_over_a_reduced_state_cannot_be_reinflated(qapp, tmp_path):
+    """The acceptance criterion this method exists for: a preset applied over a state that
+    already had OTHER channels assigned must not let them silently reappear — apply_signal_set
+    clears first, so re-declaring a wider set later starts from genuinely empty roles, not
+    stale column numbers a previous mapping left behind."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.apply_signal_set(["flow", "poes"])              # drops pgas/pdi/emg
+    ch = sc.state.settings.input.channels
+    assert ch.pgas is None and ch.pdi is None
+    # widening back to 'full' does NOT resurrect the old column numbers on its own —
+    # apply_signal_set only ever clears roles LEAVING the set, it never assigns one
+    sc.apply_signal_set(["flow", "poes", "pgas", "pdi"])
+    assert ch.pgas is None and ch.pdi is None           # still unassigned: a real gap to fill
+    win.close()
+
+
+def test_apply_signal_set_entropy_is_never_touched(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.state.settings.input.channels.entropy = [10, 11, 12]
+    sc.apply_signal_set(["flow"])                       # drops poes/pgas/pdi/emg too
+    assert sc.state.settings.input.channels.entropy == [10, 11, 12]
+    win.close()
+
+
+def test_apply_signal_set_asks_once_and_clears_when_flow_leaves_with_breath_keyed_state(
+        qapp, tmp_path, monkeypatch):
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import ExcludeEntry, BreathCountEntry
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    proc = sc.state.settings.processing
+    proc.exclude_breaths = [ExcludeEntry(file="a.csv", breaths=[1, 2])]
+    proc.breath_counts = [BreathCountEntry(file="a.csv", count=10)]
+
+    calls = []
+    monkeypatch.setattr(ss.QMessageBox, "question",
+                        staticmethod(lambda *a, **k: (calls.append(a), ss.QMessageBox.Yes)[1]))
+    sc.apply_signal_set(["emg"])                        # flow leaves the set
+    assert len(calls) == 1
+    # the exact wording the ticket specifies, not just "a dialog was shown" — a future
+    # refactor that quietly changes/typos it should turn this test red
+    question_text = calls[0][2]
+    assert question_text == (
+        "Breath types, references, exclusions and separators were made for a "
+        "different breath segmentation — clear them?")
+    assert proc.exclude_breaths == [] and proc.breath_counts == []
+    win.close()
+
+
+def test_apply_signal_set_declining_the_prompt_keeps_the_lists(qapp, tmp_path, monkeypatch):
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import ExcludeEntry
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    proc = sc.state.settings.processing
+    proc.exclude_breaths = [ExcludeEntry(file="a.csv", breaths=[1])]
+    monkeypatch.setattr(ss.QMessageBox, "question",
+                        staticmethod(lambda *a, **k: ss.QMessageBox.No))
+    sc.apply_signal_set(["emg"])
+    assert proc.exclude_breaths != []                   # declined -> left alone
+    # the channel-clearing part of apply_signal_set still ran regardless of the answer
+    assert sc.state.settings.input.channels.flow is None
+    win.close()
+
+
+def test_apply_signal_set_no_prompt_without_breath_keyed_state(qapp, tmp_path, monkeypatch):
+    """A brand-new analysis (or any state with nothing breath-keyed yet) must never see
+    the reconciliation prompt — there is nothing for it to lose."""
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    assert sc.state.settings.processing.exclude_breaths == []
+    assert sc.state.settings.processing.breath_counts == []
+
+    def _boom(*a, **k):
+        raise AssertionError("QMessageBox.question must not be called")
+    monkeypatch.setattr(ss.QMessageBox, "question", staticmethod(_boom))
+    sc.apply_signal_set(["emg"])                        # flow leaves, but nothing to clear
+    assert sc.state.settings.input.channels.flow is None
+    win.close()
+
+
+def test_apply_signal_set_no_prompt_when_flow_membership_is_unchanged(qapp, tmp_path, monkeypatch):
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import ExcludeEntry
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.state.settings.processing.exclude_breaths = [ExcludeEntry(file="a.csv", breaths=[1])]
+
+    def _boom(*a, **k):
+        raise AssertionError("QMessageBox.question must not be called")
+    monkeypatch.setattr(ss.QMessageBox, "question", staticmethod(_boom))
+    sc.apply_signal_set(["flow", "poes", "pgas", "pdi", "emg"])   # flow stays in the set
+    assert sc.state.settings.processing.exclude_breaths != []
+    win.close()
+
+
+# --- segmentation_method (EMG-only preset's own extra choice) --------------------
+
+def test_apply_signal_set_emg_only_sets_segmentation_method_and_use_expiration_false(
+        qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.state.settings.processing.emg.noise.use_expiration = True
+    sc.apply_signal_set(["emg"], segmentation_method="separators")
+    proc = sc.state.settings.processing
+    assert proc.segmentation.method == "separators"
+    assert proc.emg.noise.use_expiration is False
+    win.close()
+
+
+def test_apply_signal_set_emg_only_also_turns_off_auto_prop(qapp, tmp_path):
+    """Self-review finding: Settings.validate() outright REJECTS noise.auto_prop while
+    noise reduction is enabled on an EMG-only set (no EMG-only implementation exists
+    for it yet) -- and this is reachable from the shipped UI today, not hypothetical:
+    open the built-in 'full' sample (noise + auto_prop both on by default), then Setup
+    ▸ Signals ▸ Change… ▸ EMG only. Without this reset, the very next validate() would
+    fail with no visible cause tying it to the signal-set change just made."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    proc = sc.state.settings.processing
+    proc.emg.remove_ecg = True
+    proc.emg.noise.enabled = True
+    proc.emg.noise.auto_prop = True
+    sc.apply_signal_set(["emg"], segmentation_method="whole_file")
+    assert proc.emg.noise.auto_prop is False
+    ch = sc.state.settings.input.channels
+    ch.emg = [2, 3, 4]
+    proc.emg.noise.reference_file = "a.csv"
+    proc.emg.noise.reference_intervals = [[0.0, 1.0]]
+    sc.state.settings.validate()                    # must not raise on auto_prop
+    win.close()
+
+
+def test_apply_signal_set_defaults_to_whole_file_when_losing_flow_with_no_method(
+        qapp, tmp_path):
+    """Defensive-only today (both EMG-only doors always supply a method), but the
+    funnel is documented for a future caller too (e.g. an eventual 'Custom…' picker)
+    -- losing flow with segmentation_method=None must not leave a flow-only method
+    ('flow'/'volume') declared over a set that no longer has one."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    assert sc.state.settings.processing.segmentation.method == "flow"
+    sc.apply_signal_set(["emg"])                    # no segmentation_method given
+    assert sc.state.settings.processing.segmentation.method == "whole_file"
+    win.close()
+
+
+def test_apply_signal_set_leaving_emg_only_for_a_flow_preset_resets_the_method(
+        qapp, tmp_path):
+    """A settings object left on an EMG-only-only method ('whole_file'/'separators')
+    from a PREVIOUS EMG-only preset must not stay there once flow re-enters the
+    declared set — Settings.validate() rejects that combination outright, and the
+    ordinary flow-family presets never pass segmentation_method themselves (they have
+    nothing new to name), so apply_signal_set must reset it on their behalf."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.apply_signal_set(["emg"], segmentation_method="whole_file")
+    assert sc.state.settings.processing.segmentation.method == "whole_file"
+
+    sc.apply_signal_set(["flow", "poes"])          # an ordinary flow-family preset
+    assert sc.state.settings.processing.segmentation.method == "flow"
+    # apply_signal_set never ASSIGNS a channel for a role ENTERING the set (only ever
+    # clears one leaving it — test_apply_signal_set_over_a_reduced_state_cannot_be_
+    # reinflated above pins that same rule), so flow/poes need their own real mapping
+    # before validate() can pass; the point of THIS test is only that the METHOD no
+    # longer names an EMG-only-only value once flow is back.
+    ch = sc.state.settings.input.channels
+    ch.flow, ch.volume, ch.poes = 5, 6, 7
+    sc.state.settings.validate()                    # must not raise
+    win.close()
+
+
+def test_apply_signal_set_flow_family_to_flow_family_leaves_the_method_alone(
+        qapp, tmp_path):
+    """The ordinary case (never touched an EMG-only method) must not be perturbed by
+    the new reset rule -- 'volume' segmentation in particular must survive a preset
+    change that keeps flow in the set."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.state.settings.processing.segmentation.method = "volume"
+    sc.apply_signal_set(["flow", "poes"])
+    assert sc.state.settings.processing.segmentation.method == "volume"
+    win.close()
+
+
+def test_apply_signal_set_prompt_also_covers_separators(qapp, tmp_path, monkeypatch):
+    """The breath-keyed reconciliation prompt (already tested above for exclude_breaths/
+    breath_counts) must ALSO fire for, and clear, processing.segmentation.separators —
+    the ONLY carried kind reachable through a real UI path today. Guards against
+    the exact latent bug found while building this: the prompt's own presence-check
+    used to read a nonexistent `proc.separators` attribute (separators actually live
+    one level deeper, at `proc.segmentation.separators`) and so could never see them."""
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import SeparatorEntry
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.apply_signal_set(["emg"], segmentation_method="separators")
+    sc.state.settings.processing.segmentation.separators = [
+        SeparatorEntry(file="a.csv", times_s=[1.0, 2.0])]
+
+    calls = []
+    monkeypatch.setattr(ss.QMessageBox, "question",
+                        staticmethod(lambda *a, **k: (calls.append(a), ss.QMessageBox.Yes)[1]))
+    sc.apply_signal_set(["flow"])                   # flow re-enters the set
+    assert len(calls) == 1
+    assert sc.state.settings.processing.segmentation.separators == []
+    win.close()
+
+
+def test_apply_signal_set_declining_the_prompt_keeps_separators_too(
+        qapp, tmp_path, monkeypatch):
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import SeparatorEntry
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.apply_signal_set(["emg"], segmentation_method="separators")
+    sc.state.settings.processing.segmentation.separators = [
+        SeparatorEntry(file="a.csv", times_s=[1.0, 2.0])]
+    monkeypatch.setattr(ss.QMessageBox, "question",
+                        staticmethod(lambda *a, **k: ss.QMessageBox.No))
+    sc.apply_signal_set(["flow"])
+    assert len(sc.state.settings.processing.segmentation.separators) == 1
+    win.close()
+
+
+def test_apply_signal_set_prompt_also_fires_on_an_emg_only_method_change(
+        qapp, tmp_path, monkeypatch):
+    """Self-review finding: switching Setup's 'Change…' door from 'separators' back to
+    'whole_file' (or vice versa) on an ALREADY-EMG-only analysis keeps flow membership
+    unchanged (False both before and after), so the ORIGINAL gate (flow membership
+    alone) never fired -- yet segment NUMBERING changes completely, exactly the same
+    class of staleness the flow-membership check exists to catch. A leftover
+    breath_types entry keyed to a segment number 'separators' produced would silently
+    misapply (or fail validate()) under 'whole_file'."""
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import SeparatorEntry
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.apply_signal_set(["emg"], segmentation_method="separators")
+    sc.state.settings.processing.segmentation.separators = [
+        SeparatorEntry(file="a.csv", times_s=[1.0, 2.0])]
+
+    calls = []
+    monkeypatch.setattr(ss.QMessageBox, "question",
+                        staticmethod(lambda *a, **k: (calls.append(a), ss.QMessageBox.Yes)[1]))
+    sc.apply_signal_set(["emg"], segmentation_method="whole_file")   # method changes, flow doesn't
+    assert len(calls) == 1
+    assert sc.state.settings.processing.segmentation.separators == []
+    assert sc.state.settings.processing.segmentation.method == "whole_file"
+    win.close()
+
+
+def test_apply_signal_set_no_prompt_when_reapplying_the_same_emg_only_method(
+        qapp, tmp_path, monkeypatch):
+    """The negative case for the test above: re-choosing the SAME method through
+    Change… (e.g. re-confirming 'separators') must not ask, since nothing about the
+    segmentation actually changes."""
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    from respmech.core.settings import SeparatorEntry
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.apply_signal_set(["emg"], segmentation_method="separators")
+    sc.state.settings.processing.segmentation.separators = [
+        SeparatorEntry(file="a.csv", times_s=[1.0, 2.0])]
+
+    def _boom(*a, **k):
+        raise AssertionError("QMessageBox.question must not be called")
+    monkeypatch.setattr(ss.QMessageBox, "question", staticmethod(_boom))
+    sc.apply_signal_set(["emg"], segmentation_method="separators")   # same method again
+    assert len(sc.state.settings.processing.segmentation.separators) == 1
+    win.close()
+
+
+# ---------------------------------------------------------------------------
+# M-11: Setup Signals row, ChannelSummary's use of it, _channel_view_signature,
+# and the 'settings.unknown' notice
+# ---------------------------------------------------------------------------
+def _chip_texts(sc):
+    from PySide6.QtWidgets import QLabel
+    return [sc._signals_flow.itemAt(i).widget().text()
+            for i in range(sc._signals_flow.count())
+            if isinstance(sc._signals_flow.itemAt(i).widget(), QLabel)]
+
+
+def test_a_malformed_bare_string_signal_set_degrades_instead_of_crashing(qapp, tmp_path):
+    """Self-review: _refresh_channel_view calls Capabilities.from_settings on every
+    render, and effective_signals() deliberately raises TypeError for a bare-string
+    analysis.signals (a hand-edited 'signals = "flow"' instead of '["flow"]') — a guard
+    meant for Settings.validate() to report cleanly. This screen's render path runs on
+    EVERY edit/open, always BEFORE any validation, including MainWindow's own
+    construction on the command-line/drag-drop open path — which has no surrounding
+    try/except at all. Constructing the whole window over such a settings object must
+    not raise; the row simply shows no chips (nothing safe to derive), never a crash."""
+    from respmech.core.settings import Settings
+    from respmech.ui.main_window import MainWindow
+    s = Settings()
+    s.analysis.signals = "flow"          # malformed: a bare string, not a list
+    win = MainWindow(AppState(s))        # must not raise
+    sc = win.settings_screen
+    assert _chip_texts(sc) == []
+    assert sc.btn_change_signals.text() == "Change…"
+    win.close()
+
+
+def test_signals_row_shows_a_chip_per_declared_signal(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)          # flow/volume/poes/pgas/pdi/emg all assigned -> derived full+emg
+    assert _chip_texts(sc) == ["Flow", "Poes", "Pgas", "Pdi", "EMG"]
+    assert sc.btn_change_signals.text() == "Change…"
+    # the button is always the LAST item, after every chip
+    last = sc._signals_flow.itemAt(sc._signals_flow.count() - 1).widget()
+    assert last is sc.btn_change_signals
+    win.close()
+
+
+def test_signals_row_shrinks_with_a_reduced_signal_set(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.apply_signal_set(["flow", "poes"])
+    assert _chip_texts(sc) == ["Flow", "Poes"]
+    win.close()
+
+
+def test_signals_row_updates_immediately_on_a_fresh_new_analysis(qapp, tmp_path):
+    """new_analysis_from_startup calls from_state() BEFORE apply_signal_set — a caller
+    ordering that, without apply_signal_set refreshing the view itself, would leave the
+    row showing the stale (pre-reset) chips until an unrelated field happened to change."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    assert _chip_texts(sc) == ["Flow", "Poes", "Pgas", "Pdi", "EMG"]
+    sc.new_analysis_from_startup(signals=["emg"])
+    assert _chip_texts(sc) == ["EMG"]
+    win.close()
+
+
+def test_change_signals_button_applies_the_chosen_set(qapp, tmp_path, monkeypatch):
+    from respmech.ui.main_window import MainWindow
+    from PySide6.QtWidgets import QDialog
+    import respmech.ui.signal_set_dialog as ssd
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        sc, "apply_signal_set",
+        lambda signals, segmentation_method=None: calls.append((signals, segmentation_method)))
+
+    class _FakeDialog:
+        def __init__(self, parent=None):
+            self.signals = ["flow"]
+            self.segmentation_method = None
+
+        def exec(self):
+            return QDialog.Accepted
+    monkeypatch.setattr(ssd, "SignalSetDialog", _FakeDialog)
+    sc._change_signals()
+    assert calls == [(["flow"], None)]
+    win.close()
+
+
+def test_change_signals_button_passes_through_the_emg_only_segmentation_method(
+        qapp, tmp_path, monkeypatch):
+    """Unlike the flow-family presets above (segmentation_method stays None),
+    choosing EMG only through 'Change…' must pass the dialog's own recording-content
+    answer through to apply_signal_set, not silently drop it."""
+    from respmech.ui.main_window import MainWindow
+    from PySide6.QtWidgets import QDialog
+    import respmech.ui.signal_set_dialog as ssd
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        sc, "apply_signal_set",
+        lambda signals, segmentation_method=None: calls.append((signals, segmentation_method)))
+
+    class _FakeDialog:
+        def __init__(self, parent=None):
+            self.signals = ["emg"]
+            self.segmentation_method = "separators"
+
+        def exec(self):
+            return QDialog.Accepted
+    monkeypatch.setattr(ssd, "SignalSetDialog", _FakeDialog)
+    sc._change_signals()
+    assert calls == [(["emg"], "separators")]
+    win.close()
+
+
+def test_change_signals_door_re_asks_the_question_on_an_already_emg_only_analysis(
+        qapp, tmp_path, monkeypatch):
+    """End-to-end (no stubbed apply_signal_set this time -- the REAL funnel runs):
+    an analysis already in EMG-only 'separators' mode, re-opening Setup ▸ Signals ▸
+    Change… and choosing 'whole_file' this time, must actually switch the method on
+    the real settings object -- proving the door is genuinely re-askable for an
+    analysis that was ALREADY EMG-only, not just for a fresh one (only ``SignalSet
+    Dialog`` itself is stubbed, to avoid a real blocking modal in the test)."""
+    from respmech.ui.main_window import MainWindow
+    from PySide6.QtWidgets import QDialog
+    import respmech.ui.signal_set_dialog as ssd
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    sc.apply_signal_set(["emg"], segmentation_method="separators")
+    assert sc.state.settings.processing.segmentation.method == "separators"
+
+    class _FakeDialog:
+        def __init__(self, parent=None):
+            self.signals = ["emg"]
+            self.segmentation_method = "whole_file"
+
+        def exec(self):
+            return QDialog.Accepted
+    monkeypatch.setattr(ssd, "SignalSetDialog", _FakeDialog)
+    sc._change_signals()
+    assert sc.state.settings.analysis.signals == ["emg"]
+    assert sc.state.settings.processing.segmentation.method == "whole_file"
+    win.close()
+
+
+def test_change_signals_cancel_leaves_the_set_untouched(qapp, tmp_path, monkeypatch):
+    from respmech.ui.main_window import MainWindow
+    from PySide6.QtWidgets import QDialog
+    import respmech.ui.signal_set_dialog as ssd
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    calls = []
+    monkeypatch.setattr(sc, "apply_signal_set", lambda signals: calls.append(signals))
+
+    class _FakeDialog:
+        def __init__(self, parent=None):
+            self.signals = None
+
+        def exec(self):
+            return QDialog.Rejected
+    monkeypatch.setattr(ssd, "SignalSetDialog", _FakeDialog)
+    sc._change_signals()
+    assert calls == []
+    win.close()
+
+
+def test_channel_view_signature_changes_with_analysis_signals_alone(qapp, tmp_path):
+    """The acceptance criterion this ticket names explicitly: a signature must move even
+    when NOTHING about the channel mapping changes, only the declared signal set."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    before = sc._channel_view_signature()
+    sc.state.settings.analysis.signals = ["flow", "emg"]
+    after = sc._channel_view_signature()
+    assert before != after
+    win.close()
+
+
+def test_signals_row_wraps_under_windows_font_metrics(qapp, tmp_path, windows_metrics):
+    """The same _WRAPPED-ratio guard test_window_fits_screen.py established for the EMG
+    control strips (minimum width = widest single chip, never the sum) — applied here
+    directly, at the row's own widest case (all five chips), rather than only
+    transitively through the whole-window test."""
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)          # all five chips present, the row's widest case
+    lay = sc._signals_flow
+    natural = lay.sizeHint().width()
+    minimum = lay.minimumSize().width()
+    assert natural > 0 and minimum > 0
+    assert minimum / natural < 0.65, f"minimum {minimum} / natural {natural} did not shrink"
+    win.close()
+
+
+def test_unknown_settings_note_shown_once_on_open_and_not_after_save(qapp, tmp_path, monkeypatch):
+    """M-11: a key ``Settings.from_dict`` could not place anywhere gets ONE information box
+    at open time, naming the key, and is never repeated by a save — ``save_toml`` clears
+    ``notices`` (the schema-upgrade list) but deliberately never touches ``unknown``, so the
+    key survives the round-trip unchanged, exactly as the note promises."""
+    from PySide6.QtWidgets import QFileDialog
+    from respmech.ui.screens import settings_screen as ss
+    from respmech.ui.main_window import MainWindow
+    win = MainWindow(AppState()); sc = win.settings_screen
+    _valid(sc, tmp_path)
+    p = str(tmp_path / "unknown.toml")
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (p, "")))
+    assert sc.save_analysis_as() is True   # a normal, valid analysis first
+    with open(p, "a") as fh:
+        fh.write('\n[some_future_section]\nfoo = 1\n')
+
+    calls = []
+    monkeypatch.setattr(ss.QMessageBox, "information",
+                        staticmethod(lambda *a, **k: calls.append(a[-1])))
+    assert sc.open_analysis(p) is True
+    assert len(calls) == 1
+    assert "some_future_section" in calls[0]
+    assert "does not understand" in calls[0]
+    assert "kept unchanged when you save" in calls[0]
+
+    calls.clear()
+    sc.save_analysis(confirm_overwrite=False)
+    assert calls == []                                    # not repeated by a save
+    assert "some_future_section" in sc.state.settings.unknown   # still round-tripped
     win.close()
 

@@ -1,0 +1,45 @@
+# V2_SCENARIOS golden fixture: 'emg_only_burst'. A tidal EMG-only recording pair
+# (tests/golden/input/synth_emgburst_*.csv, generate_data.py::make_emgburst_file: a train
+# of EMG bursts with a quiet gap between any two) segmented AUTOMATICALLY on its bursts --
+# 6 bursts in the A file, 5 in the B file, so the two files exercise a different segment
+# count each -- with ECG removal and a shared noise profile cut from the periods BETWEEN
+# the bursts of the first file (``reference_mode = "interburst"``), the strength chosen
+# by auto_prop from bursts against those periods. Neural timing (ti_emg ... bf_emg) and
+# the per-file burst QC columns come with the segmentation. See emg_only_whole_file.toml's
+# own header comment for the LEGACY_SCENARIOS/V2_SCENARIOS split and the golden-
+# regeneration warning; the same applies here.
+schema_version = 2
+
+[analysis]
+signals = ["emg"]
+
+[input]
+folder = "../input"
+files  = "synth_emgburst_*.csv"
+
+[input.format]
+sampling_frequency = 1000
+decimal            = "."
+
+[input.channels]
+emg = [2, 3, 4]
+
+[processing.segmentation]
+method = "emg_burst"
+
+[processing.emg]
+rms_window_s = 0.050
+remove_ecg   = true
+
+[processing.emg.noise]
+enabled        = true
+reference_file = "synth_emgburst_A.csv"
+reference_mode = "interburst"
+
+[output]
+folder = "output"
+
+[output.data]
+save_average          = true
+save_breath_by_breath = true
+save_processed         = false

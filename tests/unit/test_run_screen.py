@@ -620,6 +620,28 @@ def test_confirm_overwrite_subset_mentions_the_cohort_figure_only_when_enabled(q
     win.close()
 
 
+def test_confirm_overwrite_subset_omits_the_cohort_figure_without_poes(qapp, tmp_path, monkeypatch):
+    """Self-review finding: ``_cohort_output_names`` only checked
+    ``save_pv_individual``, so a flow-only analysis (no Poes -- no Campbell figure ever
+    exists, per-file or cohort) still claimed one was 'UNCHANGED by this run' in the
+    subset-overwrite dialog. It must also check the signal set has Poes."""
+    from PySide6.QtWidgets import QMessageBox
+    from respmech.ui.main_window import MainWindow
+    settings = synth_settings(
+        tmp_path, channels={"poes": None, "pgas": None, "pdi": None, "emg": []}
+    )
+    win = MainWindow(AppState(settings)); rn = win.run_screen
+    seen = {}
+    def _question(*a, **k):
+        seen["text"] = a[2]
+        return QMessageBox.Yes
+    monkeypatch.setattr(QMessageBox, "question", _question)
+    rn.state.settings.output.diagnostics.save_pv_individual = True   # ticked, but Poes is absent
+    rn._confirm_overwrite_subset(["synth_case_A.csv"])
+    assert "cohort Campbell figure" not in seen["text"]
+    win.close()
+
+
 def test_confirm_overwrite_subset_is_accurate_after_a_prior_subset_write(qapp, tmp_path, monkeypatch):
     """Regression: the dialog used to derive its "from a full run on {when}" claim from
     _existing_output()'s generic newest-mtime, which a PRIOR subset write's own per-file
@@ -918,7 +940,8 @@ def test_results_section_starts_collapsed_and_toggles(qapp, tmp_path):
     win = _win(tmp_path); rn = win.run_screen
     assert not rn.btn_toggle_results.isChecked()
     assert rn._results_section.isHidden()
-    # "&&", not "&" — see test_no_button_caption_turns_an_ampersand_into_a_mnemonic.
+    # "&&", not "&" — see test_ui_wording.py::
+    # test_no_caption_anywhere_turns_an_ampersand_into_a_mnemonic.
     # This assertion pinned the bug: Qt renders a lone "&" before a space by eating the
     # ampersand and underlining the space, so the shipped caption read "Run _results ▸".
     assert rn.btn_toggle_results.text() == "Run && results ▸"
@@ -1071,14 +1094,153 @@ def test_commitment_sheet_names_file_and_output_counts_matching_plan_outputs(qap
     win.close()
 
 
+def test_commitment_sheet_omits_the_analyses_line_instead_of_crashing_on_malformed_signals(
+        qapp, tmp_path):
+    """M-13: `_update_commitment` runs on every settings-changed tick, unconditionally
+    and with no surrounding try/except (that is the whole point of an always-visible
+    commitment sheet) -- so it must use `Capabilities.from_settings_or_none`, never the
+    raising `from_settings`, exactly like every other frequent-tick caller in this
+    codebase already does. A hand-edited `analysis.signals = "flow"` (a bare string
+    instead of a list -- `effective_signals`'s own documented TypeError guard) must
+    degrade to simply omitting the Analyses line, not raise out of a Qt slot."""
+    win = _win(tmp_path); rn = win.run_screen
+    rn.state.settings.analysis.signals = "flow"   # malformed: a bare string, not a list
+    rn.refresh_actions()                            # must not raise
+    text = rn._commitment.text()
+    assert "Analyses:" not in text
+    assert text.split("\n")[0].startswith("2 files")   # the head line still renders
+    win.close()
+
+
+def test_commitment_sheet_adds_a_references_line_only_when_references_are_configured(qapp, tmp_path):
+    """M-37: an ordinary analysis (no references/reference_defaults/subjects at all) gets
+    NO extra line beyond M-13's own always-present Analyses line -- the commitment
+    sheet's three-line shape (head, Analyses, ready/blocker) is unchanged for the common
+    case. Configuring one IC reference inserts exactly one MORE line, BETWEEN Analyses
+    and the blocker/ready line (never after it, so ``.split("\\n")[-1]`` still means the
+    same thing to every pre-existing test)."""
+    from respmech.core.settings import BreathTypeEntry, ReferenceEntry, BreathRef
+    win = _win(tmp_path); rn = win.run_screen
+    rn.refresh_actions()
+    before = rn._commitment.text()
+    assert before.count("\n") == 2
+    # synth_settings' default channels are the full pressure family + EMG + entropy.
+    assert before.split("\n")[1] == (
+        "Analyses: Breath timing, Work of breathing, Gastric pressure, "
+        "Transdiaphragmatic pressure, Ventilatory muscle ratio, EMG, Sample entropy")
+    assert "References:" not in before
+
+    s = rn.state.settings
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=1, kind="ic", t_onset_s=0.1))
+    s.processing.references.append(ReferenceEntry(
+        file="synth_case_B.csv", ic=BreathRef(file="synth_case_A.csv", breaths=[1])))
+    rn.refresh_actions()
+    after = rn._commitment.text()
+    lines = after.split("\n")
+    assert len(lines) == 4
+    assert lines[2] == "References: 2/2 linked"   # A resolves to its own typed breath; B is explicit
+    assert lines[-1] == "Ready to run."            # unchanged tail, still the LAST line
+    win.close()
+
+
+def test_commitment_sheet_analyses_line_costs_at_most_one_text_line_on_windows_metrics(
+        qapp, tmp_path, windows_metrics):
+    """M-13 acceptance, verbatim: 'Kommitment-sheetets minimumSizeHint().height() vokser
+    højst én tekstlinje (windows_metrics)'. Same heightForWidth-at-a-fixed-width
+    technique as the References windows_metrics test above (a bare sizeHint() does not
+    track height monotonically on an unshown/unconstrained word-wrap QLabel) -- measured
+    here by comparing the real, always-present Analyses line against the same text with
+    that one line removed, rather than against a hypothetical pre-M-13 sheet. A short,
+    two-analysis signal set (flow + poes only, no pgas/pdi/emg/entropy) is used so the
+    Analyses line itself does not ALSO wrap across several visual lines under the wider
+    Windows-modelled font -- a separate concern from the one this test measures."""
+    win = _win(tmp_path); rn = win.run_screen
+    ch = rn.state.settings.input.channels
+    ch.pgas = ch.pdi = None
+    ch.emg = []
+    ch.entropy = []
+    win.resize(1100, 760)
+    win.show()
+    for _ in range(6):
+        qapp.processEvents()
+    rn.refresh_actions()
+    width = rn._commitment.width()
+    assert width > 0
+    line_h = rn._commitment.fontMetrics().lineSpacing()
+    full_text = rn._commitment.text()
+    lines = full_text.split("\n")
+    assert lines[1] == "Analyses: Breath timing, Work of breathing"
+    without_analyses = "\n".join([lines[0]] + lines[2:])
+
+    rn._commitment.setText(without_analyses)
+    before_h = rn._commitment.heightForWidth(width)
+    rn._commitment.setText(full_text)
+    after_h = rn._commitment.heightForWidth(width)
+
+    grew = after_h - before_h
+    assert 0 < grew <= line_h * 1.5, (
+        f"the Analyses line cost {grew}px — more than one text line ({line_h}px) "
+        "under the Windows-modelled font")
+    win.close()
+
+
+def test_commitment_sheets_references_line_costs_at_most_one_text_line_on_windows_metrics(
+        qapp, tmp_path, windows_metrics):
+    """Acceptance criterion, verbatim: 'Kommitment-sheetet vokser højst én tekstlinje
+    (windows_metrics)'. The already-passing line-COUNT assertion above proves the
+    logical shape; this measures the label's own word-wrapped HEIGHT budget before/
+    after, AT A FIXED WIDTH (``heightForWidth``), under the wider font this codebase
+    models the Windows runner with. ``sizeHint()`` alone is not reliable for this: on
+    an unshown/unconstrained word-wrap QLabel it does not track the embedded-newline
+    count monotonically (measured directly — a first cut of this test using bare
+    ``sizeHint()`` on an unshown window saw height go DOWN when a line was ADDED), so
+    the window is shown and laid out first, and height is read for the SAME concrete
+    width both times."""
+    from respmech.core.settings import BreathTypeEntry, ReferenceEntry, BreathRef
+    win = _win(tmp_path); rn = win.run_screen
+    win.resize(1100, 760)
+    win.show()
+    for _ in range(6):
+        qapp.processEvents()
+    rn.refresh_actions()
+    width = rn._commitment.width()
+    assert width > 0
+    line_h = rn._commitment.fontMetrics().lineSpacing()
+    before_h = rn._commitment.heightForWidth(width)
+
+    s = rn.state.settings
+    s.processing.breath_types.append(
+        BreathTypeEntry(file="synth_case_A.csv", breath=1, kind="ic", t_onset_s=0.1))
+    s.processing.references.append(ReferenceEntry(
+        file="synth_case_B.csv", ic=BreathRef(file="synth_case_A.csv", breaths=[1])))
+    rn.refresh_actions()
+    after_h = rn._commitment.heightForWidth(width)
+
+    grew = after_h - before_h
+    assert 0 < grew <= line_h * 1.5, (
+        f"the references line cost {grew}px — more than one text line ({line_h}px) "
+        "under the Windows-modelled font")
+    win.close()
+    win.close()
+
+
 def test_commitment_sheet_names_a_channel_collision_before_a_path_problem(qapp, tmp_path):
     """_blockers() priority mirrors Setup's own former _first_blocker order (collision,
     then core validation, then path) via the SAME shared ui.validation helpers — so the
     commitment sheet and Setup's QC strip can never name a different TOP blocker for the
     identical settings. A REAL path problem is introduced alongside the collision (not
     just the collision alone) — otherwise the test cannot tell "collision wins over a
-    path problem" from "collision is reported because nothing else is wrong"."""
+    path problem" from "collision is reported because nothing else is wrong".
+
+    M-12: ``analysis.signals`` is pinned explicitly to the full pressure family FIRST —
+    ``synth_settings``'s default settings carry an EMPTY, DERIVED signal set (no explicit
+    list), so simply unassigning the Flow channel would also make the declared set stop
+    naming Flow (derivation follows the live channel assignment), turning this into a
+    "Flow required by the pressures" ``Settings.validate()`` blocker instead of the
+    channel_collision this test means to exercise."""
     win = _win(tmp_path); rn = win.run_screen
+    rn.state.settings.analysis.signals = ["flow", "poes", "pgas", "pdi"]
     rn.state.settings.input.channels.flow = None    # a hard collision (not assigned)
     rn.state.settings.input.files = "*.nomatch"     # AND a real path problem, present at once
     rn.refresh_actions()
@@ -1398,38 +1560,58 @@ def test_end_to_end_real_write_reports_a_complete_finished_status(qapp, tmp_path
     win.close()
 
 
-def test_no_button_caption_turns_an_ampersand_into_a_mnemonic(qapp):
-    """A lone `&` in Qt button text is a mnemonic marker, not an ampersand.
+# test_no_button_caption_turns_an_ampersand_into_a_mnemonic moved to
+# test_ui_wording.py::test_no_caption_anywhere_turns_an_ampersand_into_a_mnemonic: it
+# now scans group-box titles, menu/menu-bar actions, tab captions and buddy labels too,
+# via the shared _lone_ampersands(root) helper, not just QAbstractButton — so later
+# screens can register in the same scan instead of each growing its own copy of the
+# guard.
 
-    Qt eats the `&` and underlines the character after it. When that character is a SPACE
-    the caption silently loses the word: "Run & results ▸" renders as "Run _results ▸",
-    which is what shipped in v2.4.0 and what the documentation screenshots taken from it
-    show. The drawer toggle had it twice — once at construction and once in the open/close
-    handler, so fixing only one would bring it back on the first click.
 
-    Guard the whole window rather than the one button: every caption in this app that wants
-    a literal ampersand already doubles it ("Preview && QC", "Process && write this file"),
-    so a lone `&` is either this bug or a deliberate mnemonic — and a deliberate mnemonic is
-    never on a space."""
-    from PySide6.QtWidgets import QAbstractButton
-    from respmech.ui.main_window import MainWindow
-    from respmech.ui.state import AppState
+def test_commitment_sheet_analyses_line_for_a_full_signal_set_wraps_past_one_line(
+        qapp, tmp_path, windows_metrics):
+    """KNOWN, DOCUMENTED LIMITATION (self-review finding, M-13): the acceptance
+    criterion 'grows by at most one text line' does NOT hold for a full-capability
+    (flow+poes+pgas+pdi+emg+entropy) analysis -- `synth_settings`' own default, the
+    same one every OTHER test in this file uses via `_win`. Measured directly: at the
+    commitment label's real width in this screen's actual layout (~640px under a
+    1100px window), the full seven-item Analyses line
+    ('Breath timing, Work of breathing, Gastric pressure, Transdiaphragmatic
+    pressure, Ventilatory muscle ratio, EMG, Sample entropy') wraps to about THREE
+    visual lines, not one -- roughly 51px of the ~16px single-line budget the
+    sibling short-signal-set test above pins. This is a real gap against the
+    ticket's own acceptance criterion for the common, full-capability case, flagged
+    to Emil rather than silently worked around by shortening the analysis names
+    (which would break the 'same Analyses text everywhere' requirement) or picking
+    an artificially narrow test width. This test pins the CURRENT, over-budget
+    behaviour so a future change to it is a deliberate decision, not an accident --
+    same 'document the quirk, do not silently paper over it' convention this
+    codebase already uses elsewhere (see e.g. M-14's golden-locked quirks)."""
+    win = _win(tmp_path); rn = win.run_screen
+    win.resize(1100, 760)
+    win.show()
+    for _ in range(6):
+        qapp.processEvents()
+    rn.refresh_actions()
+    width = rn._commitment.width()
+    assert width > 0
+    line_h = rn._commitment.fontMetrics().lineSpacing()
+    full_text = rn._commitment.text()
+    lines = full_text.split("\n")
+    assert lines[1] == ("Analyses: Breath timing, Work of breathing, Gastric pressure, "
+                        "Transdiaphragmatic pressure, Ventilatory muscle ratio, EMG, "
+                        "Sample entropy")
+    without_analyses = "\n".join([lines[0]] + lines[2:])
 
-    win = MainWindow(AppState())
-    offenders = []
-    for b in win.findChildren(QAbstractButton):
-        t = b.text()
-        for i, ch in enumerate(t):
-            if ch != "&":
-                continue
-            if i + 1 < len(t) and t[i + 1] == "&":      # "&&" — a real ampersand, fine
-                continue
-            if i > 0 and t[i - 1] == "&":               # second half of a "&&" pair
-                continue
-            if i + 1 < len(t) and t[i + 1].isalnum():   # a deliberate mnemonic
-                continue
-            offenders.append((type(b).__name__, t))
-    assert not offenders, (
-        "these captions carry a lone '&' that Qt will swallow — double it to '&&': "
-        f"{offenders}")
+    rn._commitment.setText(without_analyses)
+    before_h = rn._commitment.heightForWidth(width)
+    rn._commitment.setText(full_text)
+    after_h = rn._commitment.heightForWidth(width)
+
+    grew = after_h - before_h
+    assert grew > line_h * 1.5, (
+        "the full-signal-set Analyses line no longer overflows one line at this "
+        f"width ({grew}px grown vs a {line_h}px line) -- if this is because of a "
+        "deliberate fix, replace this test with one that asserts the NEW bound "
+        "instead of deleting the coverage")
     win.close()

@@ -64,7 +64,8 @@ def _rms_reference_values(breaths_table, mode) -> dict:
     """Per-RMS-column reference value (that column's own max or mean), used either as
     a file's own reference (the legacy per-file behaviour) or, via
     :func:`reference_values_for_batch`, as ONE shared reference read from a
-    maximal-manoeuvre file and applied to every file in the batch (ticket 5.1)."""
+    maximal-manoeuvre file and applied to every file in the batch (documented on
+    the website)."""
     rms_cols = [c for c in breaths_table.columns if str(c).lower().startswith("rms")]
     out = {}
     for c in rms_cols:
@@ -77,8 +78,8 @@ def _rms_reference_values(breaths_table, mode) -> dict:
 
 
 def reference_values_for_batch(result, settings) -> "dict | None":
-    """The shared cross-file reference for :func:`normalize_emg_table` (ticket 5.1 /
-    K-155, K-158), or None to fall back to each file's own reference (the previous,
+    """The shared cross-file reference for :func:`normalize_emg_table` (documented on
+    the website), or None to fall back to each file's own reference (the previous,
     still-default behaviour).
 
     ``processing.emg.normalization_reference_file`` names a file already present in
@@ -103,6 +104,50 @@ def reference_values_for_batch(result, settings) -> "dict | None":
     return _rms_reference_values(fr.breaths_table, mode)
 
 
+def resolve_emg_reference(result, settings) -> "tuple[dict | None, str | None]":
+    """M-30: wraps :func:`reference_values_for_batch` (contract UNCHANGED) with a
+    notice for the one case that function itself cannot distinguish from "not
+    configured at all" -- a reference file that IS named and IS present in the batch,
+    but has no breath table to read a reference from (a reference-only file has no
+    tidal breaths and so no ``breaths_table``).
+
+    When the named file has ``max_insp``/``sniff`` breaths typed in it, the reference
+    is read at THOSE breaths instead (the largest peak RMS they reach, per channel; see
+    ``core.analysis.normalisation.emg_reference_from_max_effort``), which also makes a
+    reference-only file a usable reference. Otherwise:
+
+    Returns ``(values, None)`` unchanged whenever ``reference_values_for_batch``
+    itself resolves a value. Every OTHER reason it returns ``None`` -- no reference
+    configured, normalisation off, a typo'd/missing/excluded filename -- is
+    unchanged, silent, already-documented behaviour and gets no notice here either;
+    only the new, previously-silent "the reference resolved to a real file, but that
+    file has nothing to read" case gets one."""
+    emg = getattr(getattr(settings, "processing", None), "emg", None)
+    ref_name = getattr(emg, "normalization_reference_file", None)
+    mode = getattr(emg, "normalization", "none")
+    if ref_name and mode == "per_file_max":
+        # A reference file that has typed max_insp/sniff breaths of its own is read at
+        # THOSE breaths (the largest peak RMS reached in them, per channel), not at the
+        # file's per-column maximum over all its breaths. Lazy import: references imports
+        # this module.
+        from respmech.core.analysis import normalisation
+        typed = normalisation.emg_reference_from_max_effort(result, settings, ref_name)
+        if typed is not None:
+            return typed, None
+    values = reference_values_for_batch(result, settings)
+    if values is not None:
+        return values, None
+    if not ref_name or mode in (None, "none"):
+        return None, None
+    fr = getattr(result, "ok_files", {}).get(ref_name)
+    if fr is not None and (fr.breaths_table is None or len(fr.breaths_table) == 0):
+        return None, (
+            f"EMG normalisation reference '{ref_name}' has no breath table to read "
+            "(a reference-only file has no tidal breaths) — falling back to each "
+            "file's own reference.")
+    return None, None
+
+
 def normalize_emg_table(breaths_table, settings, reference_values=None) -> "pd.DataFrame | None":
     """Per-file-normalised EMG RMS (feature P14).
 
@@ -117,8 +162,9 @@ def normalize_emg_table(breaths_table, settings, reference_values=None) -> "pd.D
     ``reference_values``: optional ``{column: value}`` (from
     :func:`reference_values_for_batch`) giving each RMS column's reference
     explicitly, overriding this file's own max/mean — the shared maximal-manoeuvre
-    reference (ticket 5.1). None (the default) reproduces the original per-file
-    behaviour exactly: each column's own maximum/mean across this file's breaths."""
+    reference (documented on the website). None (the default) reproduces the
+    original per-file behaviour exactly: each column's own maximum/mean across
+    this file's breaths."""
     mode = getattr(getattr(getattr(settings, "processing", None), "emg", None), "normalization", "none")
     if mode in (None, "none") or breaths_table is None or len(breaths_table) == 0:
         return None

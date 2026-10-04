@@ -341,7 +341,7 @@ def test_clearing_the_emg_channels_repairs_a_stuck_auto_batch(qapp, tmp_path):
 
     Auto-detect also requires an EMG channel. Drop the EMG role in Setup's channel picker
     while it is on and the LIVE settings become invalid: every preview gates out, and the
-    two controls that could clear the flag are on this tab, which _update_emg_tab_visibility
+    two controls that could clear the flag are on this tab, which _update_subtabs
     removes precisely when there are no EMG channels. Setup's status bar did name the way
     out ("Auto-detect ECG needs an EMG channel assigned"), but pointing at a repair the app
     can perform itself is not performing it.

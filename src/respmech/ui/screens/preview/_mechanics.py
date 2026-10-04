@@ -12,21 +12,25 @@ from dataclasses import dataclass
 
 import numpy as np
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
-                               QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton,
-                               QScrollArea, QSplitter, QTableView,
+                               QFrame, QHBoxLayout, QLabel, QMenu, QProgressBar, QPushButton,
+                               QAbstractItemView, QScrollArea, QSplitter, QTableView,
                                QTabWidget, QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt, QEvent, QObject, QSize, QThread, QTimer, Signal
-from PySide6.QtGui import QBrush, QFont, QFontMetrics
+from PySide6.QtGui import QBrush, QCursor, QFont, QFontMetrics, QFontMetricsF
 
 import pyqtgraph as pg
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
-from respmech.core.settings import ExcludeEntry
+from respmech.core.analysis.signals import Capabilities
+from respmech.core.settings import (BreathRef, BreathTypeEntry, ExcludeEntry,
+                                    GroupReferenceEntry, ReferenceEntry,
+                                    SegmentationOverrideEntry)
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
 from respmech.ui import plot_perf
 from respmech.ui.plot_overlays import add_flow_background, add_ecg_capture_markers
+from respmech.ui.validation import matching_files
 from respmech.ui import wheel as _wheel
 from respmech.ui.flow_layout import (ElidingLabel, FlowLayout, cluster as _cluster,
                                      elide as _elide, install_flow as _install_flow)
@@ -37,6 +41,7 @@ from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   stage_ecg_reduction, stage_mechanics_preview,
                                   stage_noise_fidelity)
 from respmech.ui import prefs as _prefs
+from respmech.ui.theme import SELECTED_BREATH_RGB, SELECTED_BREATH_HEX
 
 try:
     from respmech.ui import theme as _theme
@@ -45,9 +50,108 @@ except Exception:  # pragma: no cover
 
 from ._figure_fit import _CompactFigureFitter, _fit_compact_figure
 from ._jobs import _FileRunError, _KIND_LABEL, _PANELS
-from ._plot_helpers import (BreathSpansItem, SciAxis, _CHANNELS, _pen, _plot_pal,
-                            _restrict_body_wheel_to_x)
+from ._plot_helpers import (BreathSpansItem, SciAxis, SeparatorLinesItem, _CHANNELS,
+                            _pen, _plot_pal, _restrict_body_wheel_to_x)
 
+
+#: A breath span's/BreathTypeEntry's kind -> the palette suffix _breath_brush/
+#: _breath_label_color reads (``breath_<suffix>_brush``/``_label``). 'excluded' is a
+#: UI-only pseudo-kind (processing.exclude_breaths, never a BREATH_KINDS member); any
+#: real BREATH_KINDS member without its own dedicated entry here (ic_fvc/max_insp/sniff/
+#: other — M-20's minimal menu never offered them, and M-31's fuller one deliberately
+#: keeps them visually grouped with 'other' rather than growing the palette further)
+#: falls back to 'other' rather than raising on an unknown kind.
+_KIND_PALETTE_SUFFIX = {"excluded": "excl", "ic": "ic", "fvc": "fvc", "rest": "rest"}
+
+#: The full type menu (M-31): every respmech.core.settings.BREATH_KINDS member, plus
+#: the two pseudo-kinds 'tidal'/'excluded' _set_breath_type also accepts. 'rest' is
+#: filtered out by _handle_type_requested for a flow-bearing (non-EMG-only) file —
+#: it names a noise-reference segment, which only makes sense on the EMG-only
+#: 'EMG – segments' tab this same menu-building code also serves (see the module's
+#: 'kunder' comment on _handle_type_requested). Order matches the ticket's own
+#: ordering, which is also the order BREATH_KINDS is declared in.
+_TYPE_MENU_KINDS = ("tidal", "excluded", "ic", "fvc", "ic_fvc", "max_insp", "sniff", "rest", "other")
+_TYPE_MENU_LABELS = {
+    "tidal": "Tidal",
+    "excluded": "Excluded",
+    "ic": "IC manoeuvre",
+    "fvc": "FVC manoeuvre",
+    "ic_fvc": "IC + FVC",
+    "max_insp": "Maximal inspiratory effort",
+    "sniff": "Sniff",
+    "rest": "Rest",
+    "other": "Other…",
+}
+
+#: statusTip shown while hovering each type-menu action (M-31) — the same
+#: bold-path/description shape ui.help_text.tooltip() uses for settings controls,
+#: but plain text (QAction.statusTip is not rich text) since there is no settings
+#: path to show for a menu choice.
+_TYPE_MENU_STATUS_TIPS = {
+    "tidal": "Ordinary tidal breathing — included in the average like any other breath.",
+    "excluded": "Exclude this breath from the tidal average without typing it.",
+    "ic": "Mark as an inspiratory capacity manoeuvre: reports its own volume, timing and "
+          "pressure swings on the Manoeuvres sheet.",
+    "fvc": "Mark as a forced vital capacity manoeuvre (a deliberately prolonged forced "
+           "exhalation).",
+    "ic_fvc": "Mark as a combined inspiratory-capacity-then-forced-exhalation manoeuvre.",
+    "max_insp": "Mark as a maximal inspiratory effort — reports a peak-effort reference value.",
+    "sniff": "Mark as a maximal sniff manoeuvre — reports a peak-effort reference value.",
+    "rest": "Mark as a quiet-breathing reference segment for noise-profile estimation.",
+    "other": "Mark as typed without extracting any manoeuvre values.",
+}
+
+#: The second line of a breath's label (ticket: show the breath type as text under the
+#: breath number). Plain tidal breathing has none. 'excluded' reads "(Excluded)" as
+#: Emil asked; the typed kinds use the SHORT names the Manoeuvres sheet uses, not the
+#: menu's longer sentences, so the line stays about as wide as a breath span usually is.
+_KIND_TAG = {
+    "excluded": "(Excluded)", "ic": "IC", "fvc": "FVC", "ic_fvc": "IC+FVC",
+    "max_insp": "Max insp", "sniff": "Sniff", "rest": "Rest", "other": "Other",
+}
+#: The compact stand-in used instead of the text when the view is zoomed out so far that
+#: the text would run into its neighbours: one or two characters, still in the kind's own
+#: colour, so the type stays readable (initials, with '×' for an exclusion and '…' for
+#: 'other') without needing a symbol font.
+_KIND_ICON = {
+    "excluded": "×", "ic": "I", "fvc": "F", "ic_fvc": "IF",
+    "max_insp": "M", "sniff": "S", "rest": "R", "other": "…",
+}
+#: Spare pixels required between a label's text and the edge of its own breath span
+#: before the full text is judged to fit (labels are centred on their span, so a label
+#: wider than its span is what collides with its neighbour).
+_LABEL_FIT_PAD_PX = 4.0
+
+#: slot -> the BreathTypeEntry.kind values that count as "this breath is already typed
+#: as slot" for the quick 'Use as IC reference for' submenu (M-37) -- mirrors
+#: core.analysis.references._OWN_TYPED_KINDS['ic'] exactly (only that one slot has a
+#: one-click shortcut here; the other three slots are only reachable through the full
+#: 'Reference manoeuvres…' picker).
+_IC_REFERENCE_KINDS = frozenset({"ic", "ic_fvc"})
+
+
+def _set_chip_text(chip, text, *, fixed_tooltip=None):
+    """``QLabel.setText``, but routed through ``ElidingLabel.setFullText`` when ``chip``
+    is one (``qc_overview``, M-37) so the FULL text -- not just whatever happens to be
+    displayed right now -- survives into the tooltip and can be re-elided on resize.
+    ``_update_qc_overview``/``_qc_overview_not_assessed``/``_reset_qc_overview`` share
+    this so a caller never has to know which chip type it was handed (``chip`` can also
+    be ``segments_qc_overview``, still a plain QLabel -- M-26, where ``fixed_tooltip`` is
+    silently ignored).
+
+    ``fixed_tooltip``: ``ElidingLabel.setFullText`` always overwrites the tooltip with
+    the text just set -- right for ``mech_window_label`` (the tooltip only ever needs to
+    recover the elided text itself), wrong here: ``qc_overview``'s tooltip is a STATIC
+    explanation of what the chip even measures ("the CURRENTLY PREVIEWED file's most
+    recent test run"), which the short QC verdict text alone does not say. Passing it
+    re-applies that fixed wording after ``setFullText``'s own overwrite, the same
+    two-step ``_set_analysis_window`` already does for ``mech_window_label``."""
+    if hasattr(chip, "setFullText"):
+        chip.setFullText(text)
+        if fixed_tooltip is not None:
+            chip.setToolTip(fixed_tooltip)
+    else:
+        chip.setText(text)
 
 
 def _short_boundary_note(notices):
@@ -129,7 +233,17 @@ def _buffer_debounce_hint(buffer_samples, resample, resample_to_frequency, nativ
 # Per-file errors that mean "this recording cannot support this step", not "something
 # broke". The mech preview lands them softly and explains them in the status line, so the
 # batch panel must not also paint a hard 'Test run failed' card over the same thing.
-_SOFT_FILE_ERRORS = ("TrimError", "VolumeTrendError", "NoBreathsError")
+# EmgSegmentationError: a bad separator placement on an EMG-only set -- the
+# 'batch' test run reaches this via FileResult.error_kind exactly like the other three;
+# the 'segments' preview job never raises it at all (stage_emg_segments_preview catches
+# it itself, see _segments.py's _render_segments_preview's own 'Not processed' status line).
+# ReferenceLinkError: a file's cross-file IC reference could not be resolved and
+# processing.lung_volume.require_references is set -- see
+# core.analysis.references.ReferenceLinkError's own docstring for when this actually
+# escapes a file (off by default: an unresolved reference is normally just a caution
+# plus NaN, never a file error).
+_SOFT_FILE_ERRORS = ("TrimError", "VolumeTrendError", "NoBreathsError", "EmgSegmentationError",
+                     "ReferenceLinkError")
 
 # The Mechanics-advanced fields that change the volume the trend detector sees. The live
 # trough count is only valid while these still match the rendered preview it was taken
@@ -145,6 +259,39 @@ _TREND_PROBE_KEYS = ("integrate_from_flow", "correct_drift", "inverse_flow",
 _CAMPBELL_XLABEL_VARIANTS = ("Lung volume above end-expiration (L)",
                             "Volume above EELV (L)", "V−EELV (L)")
 _CAMPBELL_YLABEL_VARIANTS = ("Oesophageal pressure  Poes (cmH₂O)", "Poes (cmH₂O)", "Poes")
+
+#: M-17 (R7): the Campbell panel's stand-in for a Poes-less (Flow only) signal set — a
+#: tidal flow-volume loop, same axis-label ladder mechanics as the Campbell diagram above.
+_FV_XLABEL_VARIANTS = ("Lung volume (L)", "Volume (L)", "V (L)")
+_FV_YLABEL_VARIANTS = ("Flow (L/s)", "Flow")
+#: The same panel when the tidal loops sit inside the file's MFVL — TLC on the left.
+_MFVL_XLABEL_VARIANTS = ("Volume below TLC (L)", "Below TLC (L)", "V (L)")
+
+
+def _mech_channel_count(settings) -> int:
+    """How many rows the Mechanics stack draws for this signal set (M-17, R7).
+
+    ``_render_preview_stage1`` filters ``_CHANNELS`` (flow, volume, poes, pgas, pdi) down to
+    whichever keys ``series`` actually carries for the file just previewed — a crash guard
+    against a reduced signal set, added before this ticket. This mirrors that same count from
+    ``Capabilities`` alone, so the stack's floor (``_update_mech_stack_floor``) is right even
+    before any file has ever been previewed, and on every resize in between — the two counts
+    agree by construction, because both ultimately trace back to the same declared/assigned
+    channels: Capabilities' five flow/pressure fields are named and ordered exactly like
+    ``_CHANNELS``' five keys. Never zero: an analysis with no flow/pressure channel at all
+    (unreachable from the UI today, see ``subtab_plan``) falls back to the full five rather
+    than flooring a stack for none, which ``theme.set_stack_floor`` treats as at least one
+    anyway (``max(1, rows)``). Uses ``from_settings_or_none``: ``_update_mech_stack_floor``
+    (the sole caller) is invoked from ``_MechStackFloorFitter``'s deferred resize/show
+    callback, which fires on real ``MainWindow`` startup exactly like the sub-tab bar and
+    Campbell title this same ticket's fix already covers — ``None`` (nothing safe to
+    derive) falls back the same way the zero-signal case already does, to the full five,
+    rather than raising out of that Qt callback."""
+    caps = Capabilities.from_settings_or_none(settings)
+    if caps is None:
+        return len(_CHANNELS)
+    n = sum((caps.flow, caps.volume, caps.poes, caps.pgas, caps.pdi))
+    return n or len(_CHANNELS)
 
 #: QSettings key for the persisted vertical splitter (channel stack / table+Campbell) — D14.
 _MECH_VSPLIT_PREF_KEY = "preview.mech.vsplit"
@@ -179,11 +326,16 @@ class _MechStackFloorFitter(QObject):
     anything is shown — so the first live measurement often arrives as a Show, not a Resize.
     """
 
-    def __init__(self, screen, viewport):
+    def __init__(self, screen, viewport, update_fn=None):
         super().__init__(viewport)
         self._screen = screen
         self._viewport = viewport
         self._pending = False
+        # M-26: bound per stack — the segments tab's own GraphicsLayoutWidget reuses this
+        # exact eftergivende-floor mechanism via its own update_fn (_update_segments_stack_
+        # floor) instead of the Mechanics-specific _update_mech_stack_floor every prior
+        # instance defaulted to.
+        self._update_fn = update_fn if update_fn is not None else screen._update_mech_stack_floor
         viewport.installEventFilter(self)
 
     def eventFilter(self, obj, ev):
@@ -194,7 +346,7 @@ class _MechStackFloorFitter(QObject):
 
     def _run(self):
         self._pending = False
-        self._screen._update_mech_stack_floor()
+        self._update_fn()
 
 
 class _MechanicsMixin:
@@ -254,11 +406,38 @@ class _MechanicsMixin:
         configure_result_table(self.table)
         # a table squeezed to one visible row is as useless as a flattened graph
         _theme.set_plot_floor(self.table)
+        # M-31: the Manoeuvres sheet, stacked BELOW the per-breath table in the SAME
+        # panel (no third action-band row — _build_mech_action_band stays a single fixed
+        # row) — its own small ResultTableModel, hidden until a test run reports at least
+        # one typed breath (_fill_manoeuvres_table), so an untyped file's Mechanics panel
+        # looks exactly as it did before this ticket.
+        self.manoeuvres_table = QTableView()
+        self.manoeuvres_table.setAccessibleName("Manoeuvres")   # C02
+        self._manoeuvres_model = ResultTableModel()
+        self.manoeuvres_table.setModel(self._manoeuvres_model)
+        self.manoeuvres_table.verticalHeader().setVisible(False)
+        configure_result_table(self.manoeuvres_table)
+        _theme.set_plot_floor(self.manoeuvres_table)
+        self._manoeuvres_label = ElidingLabel("Manoeuvres")
+        self._manoeuvres_label.setProperty("status", "muted")
+        self._manoeuvres_section = QWidget()
+        _mv_lay = QVBoxLayout(self._manoeuvres_section)
+        _mv_lay.setContentsMargins(0, 6, 0, 0)
+        _mv_lay.setSpacing(2)
+        _mv_lay.addWidget(self._manoeuvres_label)
+        _mv_lay.addWidget(self.manoeuvres_table, 1)
+        self._manoeuvres_section.setVisible(False)
+        _tables_box = QWidget()
+        _tables_lay = QVBoxLayout(_tables_box)
+        _tables_lay.setContentsMargins(0, 0, 0, 0)
+        _tables_lay.setSpacing(6)
+        _tables_lay.addWidget(self.table, 2)
+        _tables_lay.addWidget(self._manoeuvres_section, 1)
         # D22 (UI-overhaul): titled, like the Campbell panel beside it, so the header can
         # name the work-of-breathing source (see _set_wob_table_note) — otherwise nothing
         # on screen says that the five wob* columns are one whole-file value repeated on
         # every row when "Work of breathing from" is Average (the default).
-        self._table_panel = self._titled("Per-breath results", self.table)
+        self._table_panel = self._titled("Per-breath results", _tables_box)
         lower.addWidget(self._table_panel)
         self.campbell = FigureCanvasQTAgg(Figure(figsize=(4, 4)))
         self.campbell.setAccessibleName("Campbell diagram")   # C02: named for QAccessible/screen readers
@@ -279,7 +458,12 @@ class _MechanicsMixin:
         # figure's own title is deliberately screen-only, see above) — see
         # titled_panel()'s docstring for why it must not be allowed to collapse to a
         # bare ellipsis the way the general-purpose default floor allows.
-        lower.addWidget(self._titled("Campbell diagram", self.campbell, title_floor_chars=10))
+        # Stored (not just added) so its header text can follow the signal set (M-17): a
+        # Poes-less analysis draws a flow-volume loop here instead of a Campbell diagram —
+        # see _update_campbell_panel_title/_draw_campbell_or_loop.
+        self._campbell_panel = self._titled("Campbell diagram", self.campbell,
+                                            title_floor_chars=10)
+        lower.addWidget(self._campbell_panel)
         # Non-collapsible: a QSplitter's children are collapsible by default, and a
         # collapsible child can be dragged — or arrive from a restored/derived layout —
         # BELOW its minimumSizeHint, all the way to nothing. That is the one mechanism by
@@ -340,20 +524,31 @@ class _MechanicsMixin:
         try:
             area = getattr(self, "_mech_tab", None)
             vp_h = area.viewport().height() if area is not None else 0
-            _theme.set_stack_floor(self.plots, len(_CHANNELS),
+            _theme.set_stack_floor(self.plots, _mech_channel_count(self.state.settings),
                                    viewport_height=vp_h if vp_h > 0 else None)
         except RuntimeError:                  # pragma: no cover - deleted C++ widget
             pass
 
     def _update_mech_action_band_visibility(self):
-        """Show the Mechanics action band (D14) only while the Mechanics sub-tab is the
-        current one — the ECG/EMG sub-tabs have no equivalent band, and it would otherwise
-        sit fixed under whichever page happens to be showing. Compares the TAB WRAPPER
-        (``_mech_tab``), not the page, because that is what ``self.subtabs`` actually holds
-        (see the comment in ``PreviewScreen._build`` on why the wrapper is the tab item)."""
+        """Show each tab's own action band only while ITS sub-tab is the current one —
+        the ECG/noise sub-tabs have no equivalent band, and a band would otherwise sit
+        fixed under whichever page happens to be showing. Compares the TAB WRAPPER
+        (``_mech_tab``/``_segments_tab``), not the page, because that is what
+        ``self.subtabs`` actually holds (see the comment in ``PreviewScreen._build`` on
+        why the wrapper is the tab item).
+
+        M-26: now toggles the segments tab's own band too — 'accepts both tabs' rather
+        than being Mechanics-only, since Mechanics and the segments tab are mutually
+        exclusive (never both present in the same ``subtab_plan``, see ``_schedule``'s
+        'mech'/'segments' gate), so exactly one of the two bands, or neither (ECG/noise),
+        is ever visible at once."""
+        cur = self.subtabs.currentWidget()
         band = getattr(self, "_mech_action_band", None)
         if band is not None:
-            band.setVisible(self.subtabs.currentWidget() is self._mech_tab)
+            band.setVisible(cur is self._mech_tab)
+        seg_band = getattr(self, "_segments_action_band", None)
+        if seg_band is not None:
+            seg_band.setVisible(cur is getattr(self, "_segments_tab", None))
 
     def _build_mech_action_band(self):
         """The Mechanics QC verdict + its two per-file actions (P16/P17), built as a small
@@ -373,12 +568,14 @@ class _MechanicsMixin:
         band.setMaximumHeight(40)
         bar = QHBoxLayout(band)
         bar.setContentsMargins(6, 0, 6, 0)
-        self.qc_overview = QLabel("")
+        # ElidingLabel (M-37, not a plain QLabel): the QC verdict text grows with the
+        # number of flags found (_update_qc_overview's "⚠ ..." suffix), and this chip
+        # sits in a fixed-height action band next to mech_window_label, which already
+        # needed the same fix for the same reason (see its own comment below).
+        self.qc_overview = ElidingLabel("")
         self.qc_overview.setProperty("banner", True)   # box baked at first polish (theme.py)
         self.qc_overview.setProperty("status", "muted")
-        self.qc_overview.setToolTip(
-            "Quality overview of the CURRENTLY PREVIEWED file's most recent test run — "
-            "not a batch summary. See the file rail for every file's exclusion count.")
+        self.qc_overview.setToolTip(self._QC_OVERVIEW_TOOLTIP)
         # D23 (UI-overhaul): the analysis window, at a PERSISTENT spot beside the QC chip —
         # not the shared status line (main_window.py connects every screen's status_changed
         # to one bar, so a Setup/EMG message lands a moment later and silently overwrites
@@ -397,6 +594,15 @@ class _MechanicsMixin:
         self.btn_export_fig.setEnabled(False)          # enabled once a diagram is drawn
         self.btn_export_fig.setToolTip("Save the Campbell diagram as a PNG or PDF.")
         self.btn_export_fig.clicked.connect(self._export_campbell)
+        # Mechanics' own 'Place separators' — repairs the AUTOMATIC flow-/
+        # volume-based segmentation (processing.segmentation.overrides) by cut/join,
+        # reusing the exact button label and checkable-is-armed pattern _segments.py's
+        # own button already established for the EMG-only separators list. Checkable,
+        # so its own pressed state IS the armed flag _on_plot_clicked reads, same
+        # reasoning as the segments tab's own button.
+        self.btn_place_overrides = QPushButton("Place separators")
+        self.btn_place_overrides.setCheckable(True)
+        self.btn_place_overrides.toggled.connect(self._on_place_overrides_toggled)
         # P19: process AND write just this file, so a tuned file can be produced without
         # re-running the whole batch (reuses the Run screen's write machinery).
         self.btn_process_file = QPushButton("Process && write this file")
@@ -406,13 +612,19 @@ class _MechanicsMixin:
         bar.addWidget(self.qc_overview)
         bar.addSpacing(10)
         bar.addWidget(self.mech_window_label, 1)   # takes the stretch the plain addStretch(1) used to
+        bar.addWidget(self.btn_place_overrides)
         bar.addWidget(self.btn_process_file); bar.addWidget(self.btn_export_fig)
+        self._update_overrides_button()
         return band
 
     _MECH_WINDOW_TOOLTIP = (
         "The window of the recording actually analysed, after trimming to whole "
         "breaths. The Mechanics channel stack's time axis is zero at the start of "
         "this window; the EMG tabs show the file's own untrimmed clock.")
+
+    _QC_OVERVIEW_TOOLTIP = (
+        "Quality overview of the CURRENTLY PREVIEWED file's most recent test run — "
+        "not a batch summary. See the file rail for every file's exclusion count.")
 
     def _process_this_file(self):
         name = self._previewed_file or self._selected_filename()
@@ -425,29 +637,81 @@ class _MechanicsMixin:
         and this button: clearing what a panel shows and clearing the widget that judges
         it must be the same act. Called from ``_clear_file_panels`` (a file switch/blank);
         the mechanics render (``_render_preview``) is what re-enables the button for a
-        file that actually loaded."""
-        self.qc_overview.setText("QC:  —")
-        self.qc_overview.setProperty("status", "muted")
-        self.qc_overview.style().unpolish(self.qc_overview)
-        self.qc_overview.style().polish(self.qc_overview)
+        file that actually loaded.
+
+        M-26: resets BOTH the Mechanics chip and the segments tab's own chip
+        unconditionally — this runs on every file switch regardless of which shape/tab
+        is currently active, so the one that is not showing must not be left stale
+        either (it becomes visible again the moment the signal set changes back)."""
+        for chip in (self.qc_overview, getattr(self, "segments_qc_overview", None)):
+            if chip is None:
+                continue
+            _set_chip_text(chip, "QC:  —", fixed_tooltip=self._QC_OVERVIEW_TOOLTIP)
+            chip.setProperty("status", "muted")
+            chip.style().unpolish(chip)
+            chip.style().polish(chip)
+        self._mech_window_base_text = ""
         self.mech_window_label.setFullText("")
         self.mech_window_label.setToolTip(self._MECH_WINDOW_TOOLTIP)
         self._process_ready = False
         self.btn_process_file.setEnabled(False)
+        if hasattr(self, "btn_process_segments_file"):
+            self.btn_process_segments_file.setEnabled(False)
+        # Same discipline for 'Place separators' (M-27): unarm and disable it here too,
+        # not just re-sync it later on a SUCCESSFUL 'segments' render
+        # (_render_segments_preview's own _update_separators_button call). Without this,
+        # a file switch whose 'segments' job then fails (a bad separator, a crashed
+        # worker) left the button exactly as the PREVIOUS file's render had set it —
+        # enabled and possibly still CHECKED — while every plot it would hit-test
+        # against had already been torn down by this same method a few lines up; a click
+        # during that window would resolve the NEW file's name (_selected_filename)
+        # against the OLD file's now-stale geometry. Unarming here closes the window
+        # unconditionally, the same way the process button already is.
+        if hasattr(self, "btn_place_separators"):
+            if self.btn_place_separators.isChecked():
+                self.btn_place_separators.setChecked(False)   # also clears _separators_armed
+            self.btn_place_separators.setEnabled(False)
+        # Same discipline for Mechanics' own 'Place separators' (segmentation
+        # overrides) -- unarm and disable it on every file switch, for the identical
+        # stale-geometry reason the comment above documents for that button.
+        if hasattr(self, "btn_place_overrides"):
+            if self.btn_place_overrides.isChecked():
+                self.btn_place_overrides.setChecked(False)   # also clears _overrides_armed
+            self.btn_place_overrides.setEnabled(False)
 
-    def _qc_overview_not_assessed(self, detail):
+    def _qc_overview_not_assessed(self, detail, chip=None):
         """The chip's honest state while the test run itself failed or was skipped —
         called from ``_on_batch_result``'s error branches and from ``_on_job_done``'s
-        'batch' failure branch. Purely presentational: no computed value changes."""
-        self.qc_overview.setText(f"QC:  not assessed — {short_error(str(detail))}")
-        self.qc_overview.setProperty("status", "warn")
-        self.qc_overview.style().unpolish(self.qc_overview)
-        self.qc_overview.style().polish(self.qc_overview)
+        'batch' failure branch. Purely presentational: no computed value changes.
+        ``chip`` (M-26): the segments tab's own QC chip for an EMG-only 'batch' run,
+        defaulting to the Mechanics chip unchanged."""
+        chip = chip if chip is not None else self.qc_overview
+        _set_chip_text(chip, f"QC:  not assessed — {short_error(str(detail))}",
+                      fixed_tooltip=self._QC_OVERVIEW_TOOLTIP)
+        chip.setProperty("status", "warn")
+        chip.style().unpolish(chip)
+        chip.style().polish(chip)
 
-    def _update_qc_overview(self, fr):
+    def _update_qc_overview(self, fr, chip=None):
         """P16: a persistent, at-a-glance quality summary of the current test run —
         breaths used/excluded plus a conservative flag for any non-physiological
-        per-breath value (so a suspect run is obvious without reading the table)."""
+        per-breath value (so a suspect run is obvious without reading the table).
+        ``chip`` (M-26): see ``_qc_overview_not_assessed``."""
+        chip = chip if chip is not None else self.qc_overview
+        if getattr(fr, "role", "tidal") == "reference":
+            # M-30: every breath here was deliberately TYPED as a manoeuvre, not
+            # excluded — self-review finding: the ordinary "N used, M excluded" framing
+            # below would misreport a fully successful reference-only file as if QC had
+            # quietly dropped every breath, directly contradicting the success status
+            # line shown alongside it.
+            n_typed = len(getattr(fr, "manoeuvres", None) or {})
+            _set_chip_text(chip, f"QC:  {n_typed} typed manoeuvre breath"
+                          f"{'s' if n_typed != 1 else ''}, no tidal breathing",
+                          fixed_tooltip=self._QC_OVERVIEW_TOOLTIP)
+            chip.setProperty("status", "ok")
+            chip.style().unpolish(chip)
+            chip.style().polish(chip)
+            return
         bt = getattr(fr, "breaths_table", None)
         total = len(fr.breaths) if getattr(fr, "breaths", None) else (len(bt) if bt is not None else 0)
         used = len(bt) if bt is not None else 0
@@ -477,10 +741,10 @@ class _MechanicsMixin:
             status = "warn"
         else:
             msg += "   ·  no flags"
-        self.qc_overview.setText(msg)
-        self.qc_overview.setProperty("status", status)
-        self.qc_overview.style().unpolish(self.qc_overview)
-        self.qc_overview.style().polish(self.qc_overview)
+        _set_chip_text(chip, msg, fixed_tooltip=self._QC_OVERVIEW_TOOLTIP)
+        chip.setProperty("status", status)
+        chip.style().unpolish(chip)
+        chip.style().polish(chip)
 
     def _set_analysis_window(self, data):
         """D23 (UI-overhaul): word the trim window at the persistent spot beside the QC
@@ -488,11 +752,16 @@ class _MechanicsMixin:
         drawn from — ``startix``/``endix`` are indices into the file's own untrimmed
         arrays (``core.compute.trim``), and ``emg_flow`` is that untrimmed flow, so its
         length is the file's total duration regardless of whether trimming succeeded.
-        Purely presentational: no computed value is read or changed here."""
+        Purely presentational: no computed value is read or changed here.
+
+        M-37: the trim-window sentence is only HALF of what this label now shows —
+        ``_refresh_reference_chip`` appends the file's own resolved IC reference (if
+        any) inside the SAME eliding slot, so ``_mech_window_base_text`` (this method's
+        own half) is stashed for that method to read rather than recomputed there."""
         fs = data.get("fs")
         if not fs:
-            self.mech_window_label.setFullText("")
-            self.mech_window_label.setToolTip(self._MECH_WINDOW_TOOLTIP)
+            self._mech_window_base_text = ""
+            self._refresh_reference_chip()
             return
         total_s = len(data.get("emg_flow", ())) / fs
         if data.get("trim_error"):
@@ -510,8 +779,49 @@ class _MechanicsMixin:
             text = f"Analysis window {start_s:.2f}–{end_s:.2f} s of {total_s:.2f} s"
             if trimmed_s > 0.005:                       # hide a rounding-only "0.00 s trimmed"
                 text += f" ({trimmed_s:.2f} s trimmed)"
+        self._mech_window_base_text = text
+        self._refresh_reference_chip()
+
+    def _reference_chip_text(self, name):
+        """The short 'IC ref: …' fragment appended to ``mech_window_label`` (M-37), or
+        ``''`` when ``name`` has no resolved IC reference at all — a file that simply
+        does not use one shows no chip, rather than an unconditional 'IC ref: none'
+        cluttering every ordinary analysis. Reads ``resolve_reference`` (M-34), so this
+        already reports a group-default or the file's own typed breath, not only an
+        explicit ``processing.references`` entry — exactly like the chip's job
+        ('viser den') requires after ANY of the three ways a reference can resolve."""
+        from respmech.core.analysis.references import resolve_reference  # noqa: PLC0415
+
+        if not name:
+            return ""
+        ref = resolve_reference(name, "ic", self.state.settings)
+        if ref is None:
+            return ""
+        where = "this file" if ref.file == name else ref.file
+        if not ref.breaths:
+            return f"IC ref: {where}"
+        n = len(ref.breaths)
+        breath_txt = f"breath {ref.breaths[0]}" if n == 1 else f"{n} breaths"
+        return f"IC ref: {where} ({breath_txt})"
+
+    def _refresh_reference_chip(self):
+        """Recompose ``mech_window_label`` from its stashed trim-window half
+        (``_mech_window_base_text``) plus a freshly-resolved reference chip for the
+        CURRENTLY SELECTED file — called both from a real render (``_set_analysis_
+        window``) and from every write path that can change what the reference
+        resolves to (``_set_reference``, ``_open_reference_picker``) without waiting
+        for the next full re-render. The combined text is stashed as the tooltip too
+        (appended after the fixed explanation, mirroring ``_set_chip_text``'s
+        ``fixed_tooltip`` two-step for ``qc_overview``) so the full, un-elided sentence
+        stays one hover away exactly like every other use of ElidingLabel here."""
+        base = getattr(self, "_mech_window_base_text", "")
+        ref_text = self._reference_chip_text(self._selected_filename())
+        text = f"{base}  ·  {ref_text}" if (base and ref_text) else (ref_text or base)
         self.mech_window_label.setFullText(text)
-        self.mech_window_label.setToolTip(self._MECH_WINDOW_TOOLTIP)
+        tip = self._MECH_WINDOW_TOOLTIP
+        if text:
+            tip += "\n\n" + text
+        self.mech_window_label.setToolTip(tip)
 
     # -- P17 crosshair + figure export -------------------------------------
     def _on_mech_mouse_moved(self, evt):
@@ -533,9 +843,13 @@ class _MechanicsMixin:
 
     def _export_campbell(self):
         from PySide6.QtWidgets import QFileDialog       # noqa: PLC0415
+        # M-17 (R7): the export follows whichever diagram the panel is actually showing —
+        # "Campbell" with Poes declared, "Flow-volume loop" without it.
+        is_campbell = Capabilities.from_settings(self.state.settings).poes
+        panel_title = "Campbell diagram" if is_campbell else "Flow-volume loop"
         base = (self._previewed_file or "campbell").rsplit(".", 1)[0]
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export Campbell diagram", f"{base} – Campbell.png",
+            self, f"Export {panel_title}", f"{base} – {panel_title}.png",
             "PNG image (*.png);;PDF document (*.pdf)")
         if not path:
             return
@@ -548,12 +862,17 @@ class _MechanicsMixin:
         breaths = getattr(self, "_campbell_breaths", None)
         redrawn = False
         try:
-            if breaths is not None and _theme is not None and _theme.is_dark():
-                # set BEFORE the call it guards: _draw_campbell begins by clearing the
-                # figure, so a failure part-way through still leaves the on-screen diagram
-                # destroyed and the finally-branch below is the only thing that puts it back
+            if breaths is not None and ((_theme is not None and _theme.is_dark())
+                                         or self._selected_breath is not None):
+                # (a marked breath also forces a redraw: its green loop is screen-only)
+                # set BEFORE the call it guards: _draw_campbell_or_loop begins by clearing
+                # the figure, so a failure part-way through still leaves the on-screen
+                # diagram destroyed and the finally-branch below is the only thing that puts
+                # it back
                 redrawn = True
-                self._draw_campbell(breaths, pal=_theme._PLOT_LIGHT)
+                self._loop_export = True
+                dark = _theme is not None and _theme.is_dark()
+                self._draw_campbell_or_loop(breaths, pal=_theme._PLOT_LIGHT if dark else None)
             # The export is a stand-alone figure with no panel header around it, so it gets
             # the title back that the on-screen panel leaves to its header — and then loses
             # it again straight away. Leaving it set showed the title twice on screen, once
@@ -562,20 +881,21 @@ class _MechanicsMixin:
             fig = self.campbell.figure
             try:
                 for _ax in fig.axes:
-                    _ax.set_title("Campbell diagram")
+                    _ax.set_title(panel_title)
                 fig.savefig(path, dpi=150, bbox_inches="tight",
                             facecolor=fig.get_facecolor())
             finally:
                 for _ax in fig.axes:
                     _ax.set_title("")
                 self.campbell.draw_idle()
-            self._set_status(f"Saved Campbell diagram → {path}")
+            self._set_status(f"Saved {panel_title} → {path}")
         except Exception as e:                          # noqa: BLE001
             self._set_status(f"Could not save figure: {short_error(str(e))}")
         finally:
+            self._loop_export = False
             if redrawn:                                 # put the on-screen figure back
                 try:
-                    self._draw_campbell(breaths)
+                    self._draw_campbell_or_loop(breaths)
                 except Exception:                       # pragma: no cover - defensive
                     pass
 
@@ -700,9 +1020,91 @@ class _MechanicsMixin:
             ("ptp", Field("baseline_window_s", "PTP baseline window", "float",
                           "processing.ptp.baseline_window_s",
                           "End-expiratory window whose mean is the PTP baseline.",
-                          lo=0.0, hi=1.0, step=0.01, decimals=4, suffix=" s")),
+                          lo=0.0, hi=1.0, step=0.01, decimals=4, suffix=" s",
+                          # Only while the opt-in PEEPi analysis is on (Setup ▸ Intrinsic PEEP):
+                          # the one-baseline rule means the pre-flow area stays OUT of every PTP
+                          # column, and a reader comparing them should be told where it went.
+                          note=("The pre-flow area of the PEEPi deflection (int_oes_preflow) is "
+                                "reported in its own column and is never added to PTP."
+                                if s.processing.pressure.peepi.enabled else None))),
+            # M-37: only the four fields the ticket names -- the rest of LungVolumeSettings/
+            # IcSettings (baseline_pattern, the EELV_UNSTABLE/NOT_REPEATABLE/LOW_EFFORT
+            # thresholds, reject_flags) stay TOML-only for now, same "surface the most-used
+            # fields, preserve the rest on round-trip" rule the whole dialog already follows.
+            ("lv", Field("require_references", "Require linked references", "bool",
+                        "processing.lung_volume.require_references",
+                        "Make a reference source named in Setup that is missing from the "
+                        "analysed files a hard error instead of a caution.")),
+            ("ic", Field("eelv_tracking", "EELV tracking", "choice",
+                        "processing.lung_volume.ic.eelv_tracking",
+                        "Whether each tidal breath's operating IC follows its own "
+                        "end-expiratory drift, same-file reference only.",
+                        options=[("None — reference IC held fixed", "none"),
+                                 ("Within this file", "within_file")])),
+            ("ic", Field("aggregate", "Repeat-IC aggregate", "choice",
+                        "processing.lung_volume.ic.aggregate",
+                        "How repeated IC manoeuvres in the same reference are combined.",
+                        options=[("Mean", "mean"), ("Median", "median")])),
+            ("ic", Field("preceding_breaths", "Preceding breaths for EELV baseline", "int",
+                        "processing.lung_volume.ic.preceding_breaths",
+                        "How many tidal breaths right before the manoeuvre set its "
+                        "end-expiratory baseline.",
+                        lo=0, hi=1000, step=1)),
+            # The four MFVL fields most often changed; efl_present_min_pct stays TOML-only.
+            ("mfvl", Field("source", "MFVL source", "choice",
+                          "processing.mfvl.source",
+                          "Which forced expiration the tidal breaths are placed against: the "
+                          "single attempt with the largest FVC, or the per-volume maximum flow "
+                          "across every attempt in the file.",
+                          options=[("Largest-FVC attempt", "single"),
+                                   ("Envelope of all attempts", "envelope")])),
+            ("mfvl", Field("efl_rel_tol", "EFL tolerance (relative)", "float",
+                          "processing.mfvl.efl_rel_tol",
+                          "A tidal sample counts as flow-limited when its flow reaches the MFVL "
+                          "flow at that volume minus this fraction (0 = it must reach the "
+                          "curve).",
+                          lo=0.0, hi=1.0, step=0.01, decimals=3)),
+            ("mfvl", Field("efl_abs_tol_lps", "EFL tolerance (absolute)", "float",
+                          "processing.mfvl.efl_abs_tol_lps",
+                          "Extra flow, in L/s, a tidal sample may fall short of the MFVL and "
+                          "still count as flow-limited.",
+                          lo=0.0, hi=10.0, step=0.01, decimals=3, suffix=" L/s")),
+            ("mfvl", Field("mvv_fev1_multiplier", "MVV = FEV1 ×", "float",
+                          "processing.mfvl.mvv_fev1_multiplier",
+                          "Multiplier that estimates maximal voluntary ventilation from FEV1 "
+                          "when no measured MVV is given (ATS/ACCP 2003 uses 40).",
+                          lo=0.0, hi=100.0, step=1.0, decimals=1)),
+            # Breathing pattern: two switches, both opt-in and both flow/volume only.
+            ("bp", Field("extended", "Extended per-breath pattern columns", "bool",
+                        "processing.breathing_pattern.extended",
+                        "Add mean inspiratory and expiratory flow, the volume moved in each "
+                        "phase, the instantaneous breathing rate and the timing of the peak "
+                        "flows to every breath.")),
+            ("bp", Field("variability", "Per-file variability (CV)", "bool",
+                        "processing.breathing_pattern.variability",
+                        "Add the coefficient of variation of VT, Ti, Te, Ttot and Ti/Ttot over "
+                        "the included breaths, and the number of breaths, to each file's "
+                        "average row (needs at least 3 breaths).")),
         ]
-        owner = {"seg": seg, "peak": peak, "vol": vol, "samp": samp, "wob": wob, "ptp": ptp}
+        # M-17 (R7): "Work of breathing" and "Pressure–time product" are meaningless without
+        # a Poes trace — WOB/PTP are never computed for a Poes-less analysis (M-14's
+        # compute-guards). Filtering the FLAT fields list here, rather than the sections
+        # table below, drops both cards automatically (their keys leave `remaining` empty,
+        # so the "if picked" check skips them — see below) instead of dumping their fields
+        # onto "Other". Nothing is lost: unlike a value the user typed, these two cards'
+        # settings simply are not offered while the shape cannot use them, and return the
+        # moment Poes is added back to the signal set (Setup ▸ Signals) — same "hidden
+        # follows the set, never workflow progress" rule as every other R7 surface.
+        if not Capabilities.from_settings(s).poes:
+            _hidden_without_poes = {"calc_from", "avg_resampling_obs", "baseline_window_s"}
+            fields = [(grp, f) for grp, f in fields if f.key not in _hidden_without_poes]
+        # Breathing pattern is flow and volume only, so it needs Flow -- absent from an
+        # EMG-only analysis, where the card would offer switches with nothing to switch on.
+        if not Capabilities.from_settings(s).flow:
+            fields = [(grp, f) for grp, f in fields if grp != "bp"]
+        owner = {"seg": seg, "peak": peak, "vol": vol, "samp": samp, "wob": wob, "ptp": ptp,
+                "lv": s.processing.lung_volume, "ic": s.processing.lung_volume.ic,
+                "mfvl": s.processing.mfvl, "bp": s.processing.breathing_pattern}
         values = {f.key: getattr(owner[grp], f.key) for grp, f in fields}
         # breath counts round-trip as one 'file = count' line each, edited as text
         bc_field = Field("breath_counts", "Breath-count overrides", "text",
@@ -710,8 +1112,8 @@ class _MechanicsMixin:
                          "Per-file override of the breath count used for per-minute scaling — "
                          "one 'filename = count' per line. Blank = each file's detected count.",
                          placeholder="one 'filename = count' per line",
-                         note="Excluded breaths are NOT set here — click a breath in the "
-                              "channel plots above to include/exclude it; the file rail "
+                         note="Excluded breaths are NOT set here — right-click a breath in "
+                              "the channel plots above and choose Excluded or Tidal; the file rail "
                               "shows each file's exclusion count.")
         bc_text = "\n".join(f"{e.file} = {e.count}" for e in s.processing.breath_counts)
         # Which card each setting is shown on, in display order. Grouping only: the flat
@@ -729,6 +1131,10 @@ class _MechanicsMixin:
                                       "trend_peak_min_distance_s", "trend_peak_min_height"]),
             ("Sampling", ["resample", "resample_to_frequency"]),
             ("Pressure–time product", ["baseline_window_s"]),
+            ("Lung volumes", ["require_references", "eelv_tracking", "aggregate",
+                              "preceding_breaths", "source", "efl_rel_tol",
+                              "efl_abs_tol_lps", "mvv_fev1_multiplier"]),
+            ("Breathing pattern", ["extended", "variability"]),
             # not "Breath-count overrides" — the one field on this card is already called
             # that, and a card whose title repeats its only row reads like a mistake
             ("Per-file overrides", ["breath_counts"]),
@@ -876,7 +1282,8 @@ class _MechanicsMixin:
         n = f"{total} breath{'s' if total != 1 else ''}"
         excl = f", {excluded} excluded" if excluded else ""
         self.mech_caption.setFullText(
-            f"{n}{excl} — click a shaded breath to include/exclude (red = excluded).")
+            f"{n}{excl} — click a shaded breath to mark it; right-click to exclude it or set its "
+            f"type (red = excluded).")
 
     def _render_preview(self, data):
         """Draw the mechanics channel stack + breath overlays and the raw EMG
@@ -954,16 +1361,23 @@ class _MechanicsMixin:
         self._update_actions(status=False)
 
     def _render_preview_stage1(self, data):
-        """Clear stale panel state and draw the five channel curves + crosshairs.
-        Kept cheap and synchronous even on the async path: curve-plotting is not
-        the cost this ticket addresses (decimation/clipToView already bound it,
-        see plot_perf.tune) — the breath overlays and the raw EMG stack are."""
+        """Clear stale panel state and draw the channel curves (flow/volume always;
+        poes/pgas/pdi only when the signal set declares them present, see
+        ``present_channels`` below) + crosshairs. Kept cheap and synchronous even on
+        the async path: curve-plotting is not the cost this ticket addresses
+        (decimation/clipToView already bound it, see plot_perf.tune) — the breath
+        overlays and the raw EMG stack are."""
         self._mech_render_gen += 1
         t = data["t"]
         series = data["series"]
         self._trim_offset_s = data["startix"] / data["fs"]  # trimmed span -> absolute EMG time
+        self._update_overrides_button()   # re-sync for the CURRENT method/run state
         self._set_analysis_window(data)                      # D23: persistent trim-window label
         self._breaths = list(data["spans"])
+        # M-31: the type menu's 'Suggested: FVC' hint — .get() so a stale suggestion from
+        # the previously-viewed file/tab can never survive (stage_emg_segments_preview's
+        # own dict carries no such key, since a segment has no expiration to judge).
+        self._suggested_fvc = data.get("suggested_fvc")
         # Drop the click-to-toggle maps NOW, not just on a file switch (_reset_breath_state):
         # a same-file settings edit re-dispatches 'mech' WITHOUT going through a file switch,
         # so without this, a click landing in the stage1->stage2 gap (the async path's
@@ -990,7 +1404,16 @@ class _MechanicsMixin:
         # is actually shown in (D14) — see _update_mech_stack_floor/theme.set_stack_floor.
         # Five channels sharing a flat 130 px container is 10 px of trace each.
         self._update_mech_stack_floor()
-        for i, (key, label, colour) in enumerate(_CHANNELS):
+        # A reduced signal set (Flow only / Flow + Poes, already reachable today via
+        # channel_setup_dialog.py's declared-roles gating) omits the absent pressure
+        # keys from `series` entirely (core/pipeline.py/ui/workers.py's "None means
+        # absent" contract) — filter the row list to what is actually present, rather
+        # than indexing `series[key]` unconditionally and raising KeyError. This is a
+        # crash guard, not the full relevance-driven layout a later ticket still owns
+        # (the stack floor above still sizes for all five rows regardless of how many
+        # are actually drawn — a cosmetic gap, not a correctness issue).
+        present_channels = [c for c in _CHANNELS if c[0] in series]
+        for i, (key, label, colour) in enumerate(present_channels):
             p = self.plots.addPlot(row=i, col=0, axisItems={"left": SciAxis(orientation="left")})
             p.showGrid(x=True, y=True, alpha=pal["grid_alpha"])
             # name over unit on two centred lines — "Poes (cmH₂O)" on one line is taller than
@@ -1036,6 +1459,7 @@ class _MechanicsMixin:
         individual QGraphicsItems."""
         self._draw_breath_overlays(data["spans"], data["label_y"],
                                    carried=self._exclusion_carried_for(data["name"]))
+        self._update_override_lines(data["name"])   # cut markers, own pen
 
     def _render_preview_stage3(self, data):
         """The raw EMG stack, the detail/result overlay repaint, and the status
@@ -1088,7 +1512,8 @@ class _MechanicsMixin:
                 f"{data['name']}: {data['nbreaths']} breaths"
                 + (f" ({nign} excluded)" if nign else "")
                 + f", trimmed to {data['startix'] / fs:.2f}–{data['endix'] / fs:.2f} s. "
-                "Click a shaded breath to include/exclude (red = excluded)."
+                "Click a shaded breath to mark it; right-click to exclude it or set its type "
+                "(red = excluded)."
                 + (f" {boundary_note}" if boundary_note else ""))
             self._set_mech_caption(data['nbreaths'], nign)
 
@@ -1130,26 +1555,38 @@ class _MechanicsMixin:
         self._raw_label_y = self._safe_top(emg[:, 0])
         self._repaint_view_breaths("raw")
 
-    # -- feature A: breath overlays + include/exclude ----------------------
+    # M-25's provisional 'segments' renderer (_render_emg_segments_preview) lived here —
+    # drawing into the raw EMG stack with no click surface at all, since no dedicated tab
+    # existed yet. M-26 replaces it with the real, interactive one:
+    # _segments.py::_SegmentsMixin._render_segments_preview.
+
+    # -- feature A: breath overlays + include/exclude/type ------------------
     @staticmethod
-    def _breath_brush(ignored, carried=False):
-        """``carried``: this exclusion was recorded against a different (or unrecorded)
+    def _breath_brush(kind, carried=False):
+        """``kind``: ``None``/falsy for plain tidal breathing, the pseudo-kind
+        ``'excluded'`` for a manual exclusion, or a ``respmech.core.settings.
+        BREATH_KINDS`` member for a typed breath (M-20) — see ``_KIND_PALETTE_SUFFIX``.
+        ``carried``: this entry was recorded against a different (or unrecorded)
         recordings folder than the one now loaded — see ``_exclusion_carried_for``. Drawn
         HATCHED instead of solid, so an inherited exclusion reads differently from one made
         in the folder actually on screen without needing a second colour (which would
         collide with the included/excluded palette already in use elsewhere)."""
         pal = _plot_pal()
-        if not ignored:
+        if not kind:
             return pg.mkBrush(*pal["breath_incl_brush"])
-        colour = pg.mkColor(*pal["breath_excl_brush"])
+        suffix = _KIND_PALETTE_SUFFIX.get(kind, "other")
+        colour = pg.mkColor(*pal[f"breath_{suffix}_brush"])
         if carried:
             return QBrush(colour, Qt.BDiagPattern)
         return QBrush(colour, Qt.SolidPattern)
 
     @staticmethod
-    def _breath_label_color(ignored):
+    def _breath_label_color(kind):
         pal = _plot_pal()
-        return pg.mkColor(*(pal["breath_excl_label"] if ignored else pal["breath_incl_label"]))
+        if not kind:
+            return pg.mkColor(*pal["breath_incl_label"])
+        suffix = _KIND_PALETTE_SUFFIX.get(kind, "other")
+        return pg.mkColor(*pal[f"breath_{suffix}_label"])
 
     @staticmethod
     def _limit_x(plot, t):
@@ -1168,7 +1605,7 @@ class _MechanicsMixin:
         except Exception:                        # noqa: BLE001 — cosmetic
             pass
 
-    def _breath_text(self, num, ignored):
+    def _breath_text(self, num, kind, span=None):
         """A breath-number TextItem, sized for the SHORT stacked mechanics channel plots
         (~46 px of data area each): at the 13 pt app font the box is 23 px, so the headroom
         needed to show it swallows half the plot.
@@ -1176,11 +1613,16 @@ class _MechanicsMixin:
         Both steps matter, and the second is the one that counts: the default box is 23 px
         almost entirely because QTextDocument adds a 4 px margin on every side — setting a
         smaller font ALONE leaves it at 23 px. Font 9 pt + documentMargin 0 gives ~15 px."""
-        txt = pg.TextItem(self._breath_label(num),
-                          color=self._breath_label_color(ignored), anchor=(0.5, 0.0))
+        txt = pg.TextItem(self._breath_label(num, kind),
+                          color=self._breath_label_color(kind), anchor=(0.5, 0.0))
         f = QFont(); f.setPointSizeF(9.0)
         txt.setFont(f)
-        txt.textItem.document().setDocumentMargin(0)
+        doc = txt.textItem.document()
+        doc.setDocumentMargin(0)
+        opt = doc.defaultTextOption(); opt.setAlignment(Qt.AlignHCenter)
+        doc.setDefaultTextOption(opt)            # the type line is centred under '#n'
+        txt._rm_label = {"num": num, "kind": kind, "span": span, "compact": False,
+                         "full_px": self._label_full_width_px(txt, num, kind) if kind else 0.0}
         txt.updateTextPos()
         return txt
 
@@ -1236,10 +1678,18 @@ class _MechanicsMixin:
             return lambda: None
 
         def _unpin():
-            try:
-                vb.sigYRangeChanged.disconnect(_reposition)
-            except Exception:                          # noqa: BLE001
-                pass
+            for sig, slot in ((vb.sigYRangeChanged, _reposition), (vb.sigXRangeChanged, _recompact),
+                         (vb.sigResized, _recompact)):
+                try:
+                    sig.disconnect(slot)
+                except Exception:                      # noqa: BLE001
+                    pass
+
+        def _recompact(*_):
+            # x zoom changes how many pixels a breath span gets: swap each typed label
+            # between its full type text and the compact marker (see _refresh_breath_label)
+            for t in texts:
+                self._refresh_breath_label(t)
 
         def _reposition(*_):
             try:
@@ -1253,44 +1703,101 @@ class _MechanicsMixin:
                 _unpin()
 
         vb.sigYRangeChanged.connect(_reposition)
+        vb.sigXRangeChanged.connect(_recompact)
+        vb.sigResized.connect(_recompact)          # a resize changes px/s without changing x range
         _reposition()                                  # place at the CURRENT view top now
+        _recompact()
         return _unpin
 
     @staticmethod
-    def _breath_label(num):
-        """The per-breath number label, e.g. '#3'. The word 'breath' is intentionally
-        omitted from per-breath numbering — it is implicit from context on every graph."""
-        return f"#{num}"
+    def _breath_label(num, kind=None, compact=False):
+        """The per-breath label: the number, e.g. '#3', and for a typed or excluded breath
+        its type on a second line (``_KIND_TAG``), e.g. '#3\nFVC' or '#3\n(Excluded)'.
+        ``compact`` swaps that second line for the kind's one-or-two-character stand-in
+        (``_KIND_ICON``), used when the full text would collide with a neighbour. The word
+        'breath' is intentionally omitted from per-breath numbering — it is implicit from
+        context on every graph. Plain tidal breathing (``kind`` falsy) stays a bare '#3'."""
+        if not kind:
+            return f"#{num}"
+        second = (_KIND_ICON if compact else _KIND_TAG).get(kind, _KIND_ICON["other"] if compact else _KIND_TAG["other"])
+        return f"#{num}\n{second}"
 
-    def _draw_breath_overlays(self, spans, label_y=0.0, carried=False):
-        """Shade every breath + a number label on the mechanics stack. One
-        BreathSpansItem PER PLOT carries every breath's region (D15) — the old
-        per-breath pg.LinearRegionItem (plus its now-dropped redundant boundary
-        line, see BreathSpansItem's docstring) is gone; only the label stays a
-        per-breath TextItem, same as before."""
+    @staticmethod
+    def _label_full_width_px(txt, num, kind):
+        """The rendered width, in pixels, of ``txt``'s FULL (non-compact) label."""
+        fm = QFontMetricsF(txt.textItem.font())
+        return max(fm.horizontalAdvance(line)
+                   for line in _MechanicsMixin._breath_label(num, kind).split("\n"))
+
+    def _refresh_breath_label(self, txt):
+        """Pick, for one breath-number TextItem, between the full type text and the compact
+        marker, from the zoom the label's own view currently has: the full text when the
+        breath's span is wide enough on screen to hold it, the marker otherwise. A no-op
+        for an untyped breath (nothing to shorten) and for a label whose view has no laid-out
+        width yet (it keeps the full text until a real range arrives)."""
+        st = getattr(txt, "_rm_label", None)
+        if not st or not st["kind"]:
+            return
+        compact = False
+        try:
+            vb = txt.getViewBox()
+            span = st.get("span")
+            if vb is not None and span is not None and vb.width() > 0:
+                (x0, x1) = vb.viewRange()[0]
+                if x1 > x0:
+                    span_px = (span[1] - span[0]) / (x1 - x0) * float(vb.width())
+                    compact = span_px < st["full_px"] + _LABEL_FIT_PAD_PX
+        except Exception:                        # noqa: BLE001 — cosmetic
+            return
+        if compact != st["compact"]:
+            st["compact"] = compact
+            txt.setText(self._breath_label(st["num"], st["kind"], compact))
+
+    def _draw_breath_overlays(self, spans, label_y=0.0, carried=False, plots=None):
+        """Shade every breath + a number label on ``plots`` (default: the Mechanics
+        channel stack, ``self._channel_plots``). One BreathSpansItem PER PLOT carries
+        every breath's region (D15) — the old per-breath pg.LinearRegionItem (plus its
+        now-dropped redundant boundary line, see BreathSpansItem's docstring) is gone;
+        only the label stays a per-breath TextItem, same as before. ``spans``:
+        ``(n, t0, t1, kind)`` — see ``_breath_brush``'s docstring for what ``kind`` may be.
+
+        ``plots`` (M-26): the segments tab's own stack passes its subplot list here
+        instead, reusing this exact click/type-menu-bearing overlay machinery — safe
+        because it writes into the SAME shared ``_breath_spans``/``_breath_regions``/
+        ``_breath_texts``/``_mech_unpin`` state ``_toggle_breath``/``_set_breath_type``
+        already read generically, and Mechanics and the segments tab are never both
+        rendering breaths at once (a signal set is either flow-bearing or EMG-only,
+        never both — see ``_schedule``'s 'mech'/'segments' gate)."""
+        if plots is None:
+            plots = self._channel_plots
         self._mech_unpin()               # the old labels are torn down with their pin slot
-        self._breath_spans = {n: (t0, t1) for (n, t0, t1, _ig) in spans}
-        self._breath_regions = {n: [] for (n, _0, _1, _ig) in spans}   # n -> [(item, index), ...]
+        self._breath_spans = {n: (t0, t1) for (n, t0, t1, _k) in spans}
+        self._breath_regions = {n: [] for (n, _0, _1, _k) in spans}   # n -> [(item, index), ...]
         self._breath_texts = {}
-        brushes_by_index = [self._breath_brush(ignored, carried=carried) for _n, _t0, _t1, ignored in spans]
-        for plot in self._channel_plots:
+        brushes_by_index = [self._breath_brush(kind, carried=carried) for _n, _t0, _t1, kind in spans]
+        for plot in plots:
             item = BreathSpansItem()
-            item.set_spans([(t0, t1, brushes_by_index[i])
-                            for i, (_n, t0, t1, _ig) in enumerate(spans)])
+            item.set_spans([(t0, t1, brushes_by_index[i], n)
+                            for i, (n, t0, t1, _k) in enumerate(spans)])
             item.setZValue(-10)
+            item.typeRequested.connect(self._handle_type_requested)
             plot.addItem(item)
-            for i, (n, _t0, _t1, _ig) in enumerate(spans):
+            for i, (n, _t0, _t1, _k) in enumerate(spans):
                 self._breath_regions[n].append((item, i))
-        if self._channel_plots:
-            for n, t0, t1, ignored in spans:
-                txt = self._breath_text(n, ignored)
+        if plots:
+            for n, t0, t1, kind in spans:
+                txt = self._breath_text(n, kind, span=(t0, t1))
                 txt.setPos((t0 + t1) / 2.0, label_y)
-                self._channel_plots[0].addItem(txt, ignoreBounds=True)
+                plots[0].addItem(txt, ignoreBounds=True)
                 self._breath_texts[n] = txt
-        if self._channel_plots and self._breath_texts:
+        if plots and self._breath_texts:
             # size the headroom from the label's REAL rendered height, not a guess
-            self._label_headroom(self._channel_plots[0], label_px=self._label_px(self._breath_texts))
-            self._mech_unpin = self._pin_breath_labels(self._channel_plots[0], self._breath_texts)
+            self._label_headroom(plots[0], label_px=self._label_px(self._breath_texts))
+            self._mech_unpin = self._pin_breath_labels(plots[0], self._breath_texts)
+        # a mark survives a re-render only while its breath still exists in this render
+        if self._selected_breath is not None and self._selected_breath not in self._breath_spans:
+            self._clear_breath_selection()
+        self._apply_breath_selection(redraw_loop=False)
 
     def _breath_at(self, t):
         for n, (t0, t1) in self._breath_spans.items():
@@ -1299,6 +1806,22 @@ class _MechanicsMixin:
         return None
 
     def _on_plot_clicked(self, ev):
+        # While 'Place separators' (Mechanics' own manual segmentation-repair
+        # toggle) is armed, EVERY click on this stack places or removes an override
+        # instead of toggling a breath — checked FIRST, mirroring _emg_noise.py's
+        # _toggle_from_emg_click (the same armed-click precedence used for the
+        # EMG-only segments tab). _place_or_remove_override does its own
+        # accepted/button checks.
+        if self._overrides_armed:
+            self._place_or_remove_override(ev, self._channel_plots)
+            return
+        # M-20: a right-click/Ctrl+left-click that landed on a breath is handled at
+        # item level (BreathSpansItem.mouseClickEvent -> typeRequested) and accepted
+        # there — this scene-level handler is for the plain left-click toggle only, and
+        # must ignore anything already accepted (including a right-click ViewBox itself
+        # accepted to raise its own menu, when the click missed every span).
+        if ev.isAccepted() or ev.button() != Qt.LeftButton:
+            return
         if not self._breath_spans:
             return
         try:
@@ -1310,17 +1833,114 @@ class _MechanicsMixin:
             if vb is not None and vb.sceneBoundingRect().contains(pos):
                 bno = self._breath_at(vb.mapSceneToView(pos).x())
                 if bno is not None:
-                    self._toggle_breath(bno)
+                    self._select_breath(bno)
                 return
 
-    def _toggle_breath(self, breath_no):
-        # D24: the single funnel both the Mechanics-stack click (_on_plot_clicked above)
-        # and every EMG plot's click handler (_emg_noise._toggle_from_emg_click) call
-        # through — one guard here covers both. A click during a run used to silently
-        # rewrite exclude_breaths without ever touching the batch that is already reading
-        # a frozen deepcopy of the settings taken at _start() (run_screen.py) — the click
-        # LOOKED like it worked (the overlay recoloured immediately) while the running
-        # batch, and the results it was about to write, never saw it.
+    # -- Marked (selected) breath -------------------------------------------
+    # A plain left click MARKS a breath instead of toggling its exclusion (exclusion
+    # now lives in the right-click menu, _build_type_menu's Tidal/Excluded). The mark is
+    # one number, self._selected_breath, painted in the SAME green everywhere that
+    # breath shows: its span on every plot, its number label, its row in the result
+    # tables (scrolled into view) and its loop plus legend entry in the Campbell /
+    # flow-volume diagram. Clicking the marked breath again clears it; clicking another
+    # moves it. Purely a view state: it never touches settings, so it is allowed while a
+    # run is in progress and never emits settings_edited.
+    def _select_breath(self, breath_no):
+        """Mark ``breath_no``, or clear the mark if it is already the marked one."""
+        if breath_no not in self._breath_spans:
+            return
+        self._selected_breath = None if self._selected_breath == breath_no else breath_no
+        name = self._selected_filename()
+        if self._selected_breath is None:
+            self._set_status(f"{name}: breath {breath_no} unmarked.")
+        else:
+            self._set_status(f"{name}: breath {breath_no} marked. Click it again to unmark; "
+                             f"right-click it to exclude it or set its type.")
+        self._apply_breath_selection()
+
+    def _clear_breath_selection(self):
+        """Drop the mark without repainting (file change, stale breath numbers)."""
+        self._selected_breath = None
+        for model in (getattr(self, "_table_model", None), getattr(self, "_manoeuvres_model", None),
+                      getattr(self, "_segtable_model", None)):
+            if model is not None:
+                model.set_highlight_breath(None)
+
+    def _apply_breath_selection(self, redraw_loop=True):
+        """Paint ``self._selected_breath`` (or its absence) on every surface that shows
+        breaths: the span items of the Mechanics stack and of the EMG views, the number
+        labels, the result tables and (``redraw_loop``) the Campbell / flow-volume diagram."""
+        sel = self._selected_breath
+        if sel is not None and sel not in self._breath_spans \
+                and sel not in {b[0] for b in self._breaths}:
+            sel = self._selected_breath = None          # a stale number: nothing to mark
+        seen = set()
+        items = [it for lst in self._breath_regions.values() for it, _i in lst]
+        for rec in self._bov.values():
+            items.extend(it for _p, it in rec.get("items", []) if isinstance(it, BreathSpansItem))
+            for num, txt in rec.get("texts", {}).items():
+                self._style_breath_label(txt, num == sel)
+        for it in items:
+            if id(it) not in seen:
+                seen.add(id(it))
+                it.set_selected(sel)
+        for num, txt in self._breath_texts.items():
+            self._style_breath_label(txt, num == sel)
+        for model, view in ((self._table_model, self.table),
+                            (self._manoeuvres_model, self.manoeuvres_table),
+                            (self._segtable_model, self.segtable)):
+            row = model.set_highlight_breath(sel)
+            if row is not None:
+                view.scrollTo(model.index(row, 0), QAbstractItemView.EnsureVisible)
+        if redraw_loop and not getattr(self, "_loop_no_mark", False):
+            breaths = getattr(self, "_campbell_breaths", None)
+            if breaths is not None:
+                try:
+                    self._draw_campbell_or_loop(breaths)
+                except Exception:                      # noqa: BLE001 — cosmetic
+                    pass
+
+    def _style_breath_label(self, txt, selected):
+        """Number label in the selection green while marked (colour only: a bold face would be
+        wider than the width the compact-label logic measured), back to its kind's
+        own colour when not."""
+        st = getattr(txt, "_rm_label", None)
+        if st is None:
+            return
+        if selected:
+            txt.setColor(pg.mkColor(*SELECTED_BREATH_RGB))
+        else:
+            txt.setColor(self._breath_label_color(st["kind"]))
+
+    def _set_breath_type(self, breath_no, kind):
+        """Single funnel for every breath-classification write: the plain include/
+        exclude toggle (``_toggle_breath``) and the type menu's Tidal/Excluded/Rest
+        (``_handle_type_requested``) all end here, so the run-lock guard, the
+        folder-stamp-only-on-creation rule and the one ``settings_edited`` emission
+        exist in exactly one place (D24's original reasoning for ``_toggle_breath``,
+        now shared). ``kind`` is one of:
+
+        - ``'tidal'`` — clear both exclusion and typing (plain tidal breathing);
+        - ``'excluded'`` — manually excluded, ``processing.exclude_breaths``;
+        - a ``respmech.core.settings.BREATH_KINDS`` member — typed,
+          ``processing.breath_types`` (M-19), storing ``t_onset_s``.
+
+        A breath is at all times in exactly one of these three states: setting one
+        clears whichever of the other two it may have carried, so the settings.
+        validate() invariants ('typed more than once', 'both typed and excluded')
+        can never actually be reached from this funnel.
+
+        Returns ``kind`` again on success (never ``None`` — 'tidal' is returned as the
+        literal string, so a caller can tell "applied, now tidal" apart from "did not
+        apply" unambiguously), or ``None`` if the write was blocked (a run in
+        progress) or the target is invalid (no file selected, or a breath number this
+        file's current render does not know about — e.g. a stale click, same guard
+        ``_toggle_breath`` has always had).
+
+        Does NOT itself write a status-bar message or the Mechanics caption: those
+        differ enough between the toggle's "N/M excluded" wording and the menu's
+        "set to <kind>" wording that each caller composes its own, after checking
+        the return value is not ``None``."""
         if self._run_active:
             # _set_status alone would be invisible here: MainWindow suppresses every
             # non-run_screen status while a run is active (see write_action_blocked's own
@@ -1333,75 +1953,643 @@ class _MechanicsMixin:
         name = self._selected_filename()
         if not name or breath_no not in self._breath_spans:
             return None
-        excl = self.state.settings.processing.exclude_breaths
-        entry = next((e for e in excl if e.file == name), None)
-        if entry is None:
-            # ONLY a brand-new entry gets stamped with the current folder here. An EXISTING
-            # entry's folder is deliberately left untouched by a plain toggle, even when the
-            # user is un-excluding one of ITS OWN breaths: entry.folder is one tag for the
-            # WHOLE file, but excl.breaths can hold a MIX of breaths the user just decided on
-            # and others still carried from a different folder that this click never looked
-            # at. Restamping on every touch (an earlier version of this fix did) would
-            # silently "confirm" those untouched breaths too — exactly the invisible
-            # application this ticket exists to stop, just moved one click later. Per the
-            # ticket, an entry only stops reading as carried via a fresh creation here or via
-            # the Setup banner's "Clear" (core.settings.clear_carried_over); "Keep" is a
-            # pure dismiss and — like this — never restamps either, matching "as long as the
-            # user has chosen to keep them, a carried exclusion is still drawn hatched", not
-            # "keeping it once makes it look native from then on". Known accepted
-            # imprecision: a genuinely NEW breath added to an EXISTING carried entry still
-            # reads as carried until the whole entry is cleared — ExcludeEntry.folder is one
-            # tag per FILE, not per breath, by the ticket's own design.
-            entry = ExcludeEntry(file=name, breaths=[], folder=self.state.settings.input.folder)
-            excl.append(entry)
-        now_excluded = breath_no not in entry.breaths
-        if now_excluded:
-            entry.breaths = sorted(set(entry.breaths) | {breath_no})
+        proc = self.state.settings.processing
+        excl = proc.exclude_breaths
+        types = proc.breath_types
+        excl_entry = next((e for e in excl if e.file == name), None)
+        type_entry = next((t for t in types if t.file == name and t.breath == breath_no), None)
+
+        if kind == "tidal":
+            if excl_entry is not None and breath_no in excl_entry.breaths:
+                excl_entry.breaths = [b for b in excl_entry.breaths if b != breath_no]
+                if not excl_entry.breaths:
+                    excl.remove(excl_entry)
+            if type_entry is not None:
+                types.remove(type_entry)
+            paint_kind = None
+        elif kind == "excluded":
+            if type_entry is not None:
+                types.remove(type_entry)
+            if excl_entry is None:
+                # ONLY a brand-new entry gets stamped with the current folder here. An
+                # EXISTING entry's folder is deliberately left untouched by a plain
+                # toggle, even when the user is un-excluding one of ITS OWN breaths:
+                # entry.folder is one tag for the WHOLE file, but excl.breaths can hold
+                # a MIX of breaths the user just decided on and others still carried
+                # from a different folder that this click never looked at. Restamping
+                # on every touch (an earlier version of this fix did) would silently
+                # "confirm" those untouched breaths too — exactly the invisible
+                # application B06 exists to stop, just moved one click later. An entry
+                # only stops reading as carried via a fresh creation here or via the
+                # Setup banner's "Clear" (core.settings.clear_carried_over); "Keep" is a
+                # pure dismiss and — like this — never restamps either, matching "as
+                # long as the user has chosen to keep them, a carried exclusion is
+                # still drawn hatched", not "keeping it once makes it look native from
+                # then on". Known accepted imprecision: a genuinely NEW breath added to
+                # an EXISTING carried entry still reads as carried until the whole
+                # entry is cleared — ExcludeEntry.folder is one tag per FILE, not per
+                # breath, by B06's own design.
+                excl_entry = ExcludeEntry(file=name, breaths=[],
+                                          folder=self.state.settings.input.folder)
+                excl.append(excl_entry)
+            excl_entry.breaths = sorted(set(excl_entry.breaths) | {breath_no})
+            paint_kind = "excluded"
         else:
-            entry.breaths = [b for b in entry.breaths if b != breath_no]
-            if not entry.breaths:
-                excl.remove(entry)
-        self.settings_edited.emit()      # exclude_breaths lands in the .toml -> mark dirty
+            if excl_entry is not None and breath_no in excl_entry.breaths:
+                excl_entry.breaths = [b for b in excl_entry.breaths if b != breath_no]
+                if not excl_entry.breaths:
+                    excl.remove(excl_entry)
+            # self._breath_spans is zero-based at the TRIMMED window's own start
+            # (stage_mechanics_preview's cum/fs); + _trim_offset_s recovers the
+            # recording's own clock, matching both breath['time'][0] (core) and the
+            # absolute time base the EMG views already align their spans to
+            # (_paint_breaths' own `t0 + offset`) — self-review finding: an earlier
+            # version stored the trimmed-window-relative t0 instead, which would have
+            # silently drifted from the recording's own clock whenever the trim
+            # settings changed.
+            t0_abs = self._breath_spans[breath_no][0] + self._trim_offset_s
+            if type_entry is None:
+                # same folder-stamp-only-on-creation rule as the exclude branch above.
+                type_entry = BreathTypeEntry(file=name, breath=breath_no, kind=kind,
+                                             t_onset_s=t0_abs,
+                                             folder=self.state.settings.input.folder)
+                types.append(type_entry)
+            else:
+                type_entry.kind = kind
+                type_entry.t_onset_s = t0_abs
+            paint_kind = kind
+
+        self.settings_edited.emit()      # exclude_breaths/breath_types land in the .toml
+        # M-31: manoeuvres.suggest_fvc's own contract is "untyped, non-ignored" — the
+        # instant THIS write types/excludes the breath the hint was pointing at, that
+        # contract is broken until the next full re-stage (self._suggested_fvc is only
+        # ever recomputed there). Rather than showing a now-wrong hint on an already-
+        # decided breath until some LATER unrelated re-stage happens to correct it,
+        # drop it immediately — advertising nothing is honest; a stale suggestion is not.
+        if breath_no == self._suggested_fvc:
+            self._suggested_fvc = None
+        self._repaint_breath(breath_no, paint_kind)
+        # M-32: the wide, all-files sync (exclusion + typed + segment badges) — a
+        # narrower single-file version (the old _sync_excluded_badge) no longer exists,
+        # same reasoning _toggle_separator_at (_segments.py) already had for using this
+        # one directly.
+        self._sync_rail_breath_state()
+        # a type/exclude change must update the AVERAGED result in lockstep with the
+        # overlay — otherwise the Campbell loop + per-breath table stay stale and the
+        # user tunes blind. Recompute the (mechanics-only) test run, debounced.
+        self._request_batch_recompute()
+        return kind
+
+    def _repaint_breath(self, breath_no, paint_kind):
+        """Recolour one breath's overlay everywhere it is currently painted (the
+        mechanics stack + every EMG view that has it) to ``paint_kind`` — the shared
+        repaint step both ``_set_breath_type`` and (indirectly, via it) ``_toggle_breath``
+        use. ``paint_kind``: ``None``/``'excluded'``/a BREATH_KINDS member, see
+        ``_breath_brush``. Never threads ``carried`` through: a live single-breath
+        repaint has never reflected it (only a full re-render via
+        ``_draw_breath_overlays``/``_paint_breaths`` does), unchanged by this ticket."""
         # each entry is (BreathSpansItem, index-into-that-item's-span-list) — one PAIR per
         # plot the breath is drawn on (5 for the mechanics stack), not one item per plot.
         for item, idx in self._breath_regions.get(breath_no, []):
-            item.set_brush(idx, self._breath_brush(now_excluded))
+            item.set_brush(idx, self._breath_brush(paint_kind))
         txt = self._breath_texts.get(breath_no)
         if txt is not None:
-            txt.setColor(self._breath_label_color(now_excluded))
-        # recolour the same breath in every EMG view that has it painted
+            self._retag_breath_label(txt, breath_no, paint_kind, self._breath_texts)
         for view in ("raw", "detail", "result"):
             rec = self._bov.get(view)
             if not rec:
                 continue
             for item, idx in rec["regions"].get(breath_no, []):
                 try:
-                    item.set_brush(idx, self._breath_brush(now_excluded))
+                    item.set_brush(idx, self._breath_brush(paint_kind))
                 except Exception:                      # noqa: BLE001
                     pass
             t = rec["texts"].get(breath_no)
             if t is not None:
                 try:
-                    t.setColor(self._breath_label_color(now_excluded))
+                    self._retag_breath_label(t, breath_no, paint_kind, rec["texts"])
                 except Exception:                      # noqa: BLE001
                     pass
-        nexcl = len({b for e in excl if e.file == name for b in e.breaths} & set(self._breath_spans))
-        # the rail's badge is the raw exclusion count (matches _sync_rail_exclusions, which
-        # reads it the same way for every file the settings name — not the nexcl above,
-        # which is scoped to spans of the file CURRENTLY previewed). entry.breaths is []
-        # once excl.remove(entry) above has run, so this is correct even then. carried is
-        # always False here: the folder restamp just above means this entry, by
-        # definition, now matches the current folder.
-        self.file_rail.set_excluded_count(name, len(entry.breaths), carried=False)
-        # excluding/including a breath must update the AVERAGED result in lockstep with the
-        # overlay — otherwise the Campbell loop + per-breath table stay stale and the user
-        # tunes blind. Recompute the (mechanics-only) test run, debounced.
-        self._request_batch_recompute()
+
+    def _retag_breath_label(self, txt, breath_no, paint_kind, txt_map):
+        """Live counterpart of ``_breath_text``: give an already-drawn label its new colour
+        AND its new type line (``_breath_label``) after a type/exclusion change, then let
+        ``_refresh_breath_label`` choose text vs. marker for the current zoom. A label that
+        has just grown a second line may be taller than the headroom reserved above the
+        signal when the view was drawn (an all-tidal file reserves one line), so the
+        headroom is re-fitted once, and only when it has actually grown."""
+        txt.setColor(pg.mkColor(*SELECTED_BREATH_RGB) if breath_no == self._selected_breath
+                     else self._breath_label_color(paint_kind))
+        st = getattr(txt, "_rm_label", None)
+        if st is None:
+            return
+        before = txt.boundingRect().height()
+        st["kind"] = paint_kind
+        st["compact"] = False
+        st["full_px"] = self._label_full_width_px(txt, breath_no, paint_kind) if paint_kind else 0.0
+        txt.setText(self._breath_label(breath_no, paint_kind))
+        self._refresh_breath_label(txt)             # may swap to the marker for the current zoom
+        if txt.boundingRect().height() > before + 1.0:
+            vb = txt.getViewBox()
+            plot = getattr(vb, "parentItem", lambda: None)() if vb is not None else None
+            if plot is not None:
+                self._label_headroom(plot, label_px=self._label_px(txt_map))
+
+    def _toggle_breath(self, breath_no):
+        # D24: the single funnel both the Mechanics-stack click (_on_plot_clicked above)
+        # and every EMG plot's click handler (_emg_noise._toggle_from_emg_click) call
+        # through — one guard here covers both. A click during a run used to silently
+        # rewrite exclude_breaths without ever touching the batch that is already reading
+        # a frozen deepcopy of the settings taken at _start() (run_screen.py) — the click
+        # LOOKED like it worked (the overlay recoloured immediately) while the running
+        # batch, and the results it was about to write, never saw it. (M-20: reimplemented
+        # on top of the shared _set_breath_type funnel; the include/exclude toggle is a
+        # two-state special case of the three-state kind model, plain 'excluded' vs
+        # 'tidal', with its own status wording preserved exactly.)
+        name = self._selected_filename()
+        excl_entry = None
+        if name:
+            excl_entry = next((e for e in self.state.settings.processing.exclude_breaths
+                               if e.file == name), None)
+        was_excluded = excl_entry is not None and breath_no in excl_entry.breaths
+        result = self._set_breath_type(breath_no, "tidal" if was_excluded else "excluded")
+        if result is None:
+            return None
+        now_excluded = result == "excluded"
+        nexcl = len({b for e in self.state.settings.processing.exclude_breaths if e.file == name
+                    for b in e.breaths} & set(self._breath_spans))
         self._set_status(
             f"{name}: breath {breath_no} {'excluded' if now_excluded else 'included'} "
             f"({nexcl}/{len(self._breath_spans)} excluded). Recomputing the average…")
         self._set_mech_caption(len(self._breath_spans), nexcl)
         return now_excluded
+
+    # -- Manual segmentation overrides (cut/join), Mechanics tab -----------
+
+    def _update_overrides_button(self):
+        """Enable/disable + tooltip Mechanics' own 'Place separators' for the
+        CURRENT segmentation method and run state — mirrors ``_segments.py``'s
+        ``_update_separators_button`` exactly, but for
+        ``processing.segmentation.overrides``: only 'flow'/'volume' segmentation has
+        an automatic detector this repairs (``whole_file``/``separators`` are
+        EMG-only and already have their own manual-boundary mechanism,
+        ``SeparatorEntry``, consulted only for THOSE methods — see
+        ``SegmentationSettings.overrides``' own comment)."""
+        method = self.state.settings.processing.segmentation.method
+        if method not in ("flow", "volume"):
+            if self.btn_place_overrides.isChecked():
+                self.btn_place_overrides.setChecked(False)   # also clears _overrides_armed
+            self.btn_place_overrides.setEnabled(False)
+            self.btn_place_overrides.setToolTip(
+                "Segmentation repair applies to flow-/volume-based breath detection "
+                "only.")
+        else:
+            self.btn_place_overrides.setEnabled(not self._run_active)
+            self.btn_place_overrides.setToolTip(
+                "Click a channel trace to cut a new breath boundary there, or click "
+                "an existing cut (within a few pixels) to remove it. Click near an "
+                "automatic breath boundary to join the two breaths either side of it.")
+
+    def _on_place_overrides_toggled(self, checked):
+        self._overrides_armed = checked
+
+    def _update_override_lines(self, filename):
+        """(Re)draw the cut markers on every current Mechanics channel-stack plot
+        from ``processing.segmentation.overrides``' ``cut_s`` — mirrors
+        ``_segments.py``'s own ``_update_separator_lines``, with this feature's own
+        ``"segmentation_override"`` pen so the two never look alike. ``join_s`` names
+        an AUTOMATIC boundary to REMOVE, so it has no marker of its own to draw:
+        joining one leaves nothing at that instant for a marker to point at."""
+        entry = next((e for e in self.state.settings.processing.segmentation.overrides
+                     if e.file == filename), None)
+        cut_times = list(entry.cut_s) if entry is not None else []
+        self._override_items = []
+        for p in self._channel_plots:
+            item = SeparatorLinesItem(pen_key="segmentation_override")
+            item.set_times(cut_times)
+            item.setZValue(-5)          # above BreathSpansItem's fill (-10), below the trace
+            p.addItem(item)
+            self._override_items.append(item)
+
+    def _set_segmentation_overrides(self, file, cut_s, join_s, old_bounds, new_bounds):
+        """Rewrite ``file``'s ``cut_s``/``join_s`` and renumber every existing
+        ``ExcludeEntry``/``BreathTypeEntry`` for it in lockstep — the counterpart
+        of ``_segments.py``'s ``_set_separators``, reusing the SAME
+        ``remap_segment_number`` rule: it is already generic over WHERE a boundary
+        list came from (an explicit ``separators`` list there, an
+        auto-plus-override-adjusted one here).
+
+        ``cut_s``/``join_s``: the FULL new lists (absolute recording-clock seconds,
+        the same convention ``SeparatorEntry.times_s``/``ExcludeEntry``/
+        ``BreathTypeEntry`` already use). ``old_bounds``/``new_bounds``: the ACTUAL
+        breath-start boundary lists in effect before/after this one edit, supplied by
+        the caller (``_toggle_override_at``) — NOT derived from ``cut_s`` alone here,
+        because a JOIN changes which breaths merge (and therefore every later
+        breath's number) WITHOUT touching ``cut_s`` at all; only the caller, which
+        already knows the file's currently rendered breath spans, can name the real
+        before/after boundaries. Folder is stamped ONLY when a brand-new
+        ``SegmentationOverrideEntry`` is created here, never on an edit of an
+        existing one — the same carried-over-state rule every other tagged kind
+        already follows (see ``_set_breath_type``)."""
+        self._clear_breath_selection()           # the breaths are renumbered: a mark would drift
+        from respmech.core.analysis.segments import remap_segment_number  # noqa: PLC0415
+
+        proc = self.state.settings.processing
+        seg = proc.segmentation
+        entry = next((e for e in seg.overrides if e.file == file), None)
+        new_cut = sorted(cut_s)
+
+        def remap(old_number):
+            return remap_segment_number(old_bounds, new_bounds, old_number)
+
+        excl_entry = next((e for e in proc.exclude_breaths if e.file == file), None)
+        if excl_entry is not None and excl_entry.breaths:
+            excl_entry.breaths = sorted({remap(b) for b in excl_entry.breaths})
+
+        for t in proc.breath_types:
+            if t.file != file:
+                continue
+            t.breath = remap(t.breath)
+            idx = min(max(t.breath - 1, 0), len(new_bounds) - 1)
+            t.t_onset_s = new_bounds[idx]
+        # A cut can fold two previously distinct typed breaths onto the SAME new
+        # number (same collision ``_set_separators`` already guards against) —
+        # keep the first one this file's own list still holds, drop the rest.
+        seen = set()
+        deduped = []
+        for t in proc.breath_types:
+            key = (t.file, t.breath)
+            if t.file == file:
+                if key in seen:
+                    continue
+                seen.add(key)
+            deduped.append(t)
+        proc.breath_types[:] = deduped
+        # …and the exclusion/typed cross-kind collision that function also guards
+        # against: typed wins over a plain exclusion on the same new number.
+        if excl_entry is not None and excl_entry.breaths:
+            typed_here = {t.breath for t in proc.breath_types if t.file == file}
+            excl_entry.breaths = sorted(set(excl_entry.breaths) - typed_here)
+            if not excl_entry.breaths:
+                proc.exclude_breaths.remove(excl_entry)
+
+        if entry is None:
+            seg.overrides.append(SegmentationOverrideEntry(
+                file=file, cut_s=new_cut, join_s=sorted(join_s),
+                folder=self.state.settings.input.folder))
+        else:
+            entry.cut_s = new_cut
+            entry.join_s = sorted(join_s)
+
+    def _toggle_override_at(self, name, t, vb):
+        """Decide join/cut/remove-cut for an armed click at absolute-recording-time
+        ``t`` on ``name`` — the counterpart of ``_segments.py``'s
+        ``_toggle_separator_at``. Three outcomes:
+
+        - ``t`` is within tolerance of an EXISTING cut this override already placed
+          -> remove that cut (undo).
+        - ``t`` is within tolerance of one of the file's CURRENTLY RENDERED breath
+          boundaries (an untouched automatic one — a breath's own start in
+          ``self._breath_spans``) and not already named in ``join_s`` -> request a
+          JOIN there (remove that automatic boundary).
+        - otherwise -> add a new CUT at ``t``.
+
+        Tolerance uses ``vb``'s own current pixel scale, same as the EMG-only
+        separators list's own tolerance (a fixed-seconds tolerance would feel wildly
+        different zoomed in vs out). Never validates ``t`` against the recording's
+        own duration: ``compute.apply_segmentation_overrides`` already turns an
+        out-of-range cut into a soft per-file notice, exactly like
+        ``segments.separators()`` does for its own boundaries."""
+        proc = self.state.settings.processing
+        entry = next((e for e in proc.segmentation.overrides if e.file == name), None)
+        existing_cuts = list(entry.cut_s) if entry is not None else []
+        existing_joins = list(entry.join_s) if entry is not None else []
+        tol = abs(vb.viewPixelSize()[0]) * 6
+        # The boundary list ACTUALLY in effect right now (whatever the last
+        # successful segment_file computed for this file — auto detection, minus
+        # any joined-away boundaries, plus any cuts already placed), read directly
+        # off the rendered breath spans (window-relative + the trim offset ->
+        # absolute, same conversion _set_breath_type already uses for t_onset_s).
+        # This is what a JOIN actually changes for renumbering purposes, which
+        # cut_s/join_s individually do NOT capture (a join changes numbering
+        # without touching cut_s at all).
+        old_bounds = sorted(t0 + self._trim_offset_s for (t0, _t1) in self._breath_spans.values())
+
+        nearest_cut = min(existing_cuts, key=lambda s: abs(s - t)) if existing_cuts else None
+        if nearest_cut is not None and abs(nearest_cut - t) <= tol:
+            new_cuts = [s for s in existing_cuts if s != nearest_cut]
+            new_bounds = [b for b in old_bounds if abs(b - nearest_cut) > tol]
+            self._set_segmentation_overrides(name, new_cuts, existing_joins, old_bounds, new_bounds)
+            verb, at = "cut removed at", nearest_cut
+        else:
+            nearest_boundary = (min(old_bounds, key=lambda s: abs(s - t))
+                                if old_bounds else None)
+            if (nearest_boundary is not None and abs(nearest_boundary - t) <= tol
+                    and not any(abs(nearest_boundary - j) <= tol for j in existing_joins)):
+                new_joins = sorted(existing_joins + [nearest_boundary])
+                new_bounds = [b for b in old_bounds if abs(b - nearest_boundary) > tol]
+                self._set_segmentation_overrides(name, existing_cuts, new_joins, old_bounds, new_bounds)
+                verb, at = "breaths joined at", nearest_boundary
+            else:
+                new_cuts = sorted(existing_cuts + [t])
+                new_bounds = sorted(old_bounds + [t])
+                self._set_segmentation_overrides(name, new_cuts, existing_joins, old_bounds, new_bounds)
+                verb, at = "cut placed at", t
+        self.settings_edited.emit()
+        # Wide, all-files sync — a segmentation-override edit can change this file's
+        # own exclusion/typed/segment counts exactly like a separator edit can
+        # (the same reasoning ``_toggle_separator_at`` has for using this instead of
+        # a narrower, single-file version, which does not exist).
+        self._sync_rail_breath_state()
+        # Wide, not just {"mech", "batch"}: _kinds_for_settings_path treats every
+        # processing.segmentation.* field as needing the full _AUTO_KINDS recompute
+        # (same rule ``_toggle_separator_at`` itself relies on) — an override can
+        # renumber a rest-typed BreathTypeEntry too, on an EMG-only-adjacent mixed
+        # signal set, and feeds segment_file/the noise reference exactly like buffer
+        # does.
+        self._request_autorun()
+        self._set_status(f"Segmentation {verb} {at:.2f} s in {name}.")
+
+    def _place_or_remove_override(self, ev, plot_items):
+        """The armed counterpart of the plain breath-exclude click — mirrors
+        ``_segments.py``'s ``_place_or_remove_separator`` exactly (same
+        best-effort button check, same scene-position lookup, same per-plot ViewBox
+        hit test), differing only in what the click then does
+        (``_toggle_override_at``) and in reading the click position via
+        ``self._trim_offset_s`` directly rather than a passed-in offset: unlike the
+        EMG-only views the shared funnel there serves (all effectively untrimmed,
+        offset always 0.0), the Mechanics stack's own x-axis is deliberately
+        zero-based AT the trimmed window's start (``_MECH_WINDOW_TOOLTIP``), so a
+        click there must be shifted FORWARD by the trim offset to reach the
+        recording's absolute clock, the same conversion ``_set_breath_type`` already
+        performs for ``t_onset_s``."""
+        if self._run_active:
+            msg = "Segmentation repair is locked while a run is in progress."
+            self._set_status(msg)
+            self.write_action_blocked.emit(msg)
+            return
+        name = self._selected_filename()
+        if not name:
+            return
+        try:
+            if ev.isAccepted():
+                return
+            button = getattr(ev, "button", None)
+            if button is not None and button() != Qt.LeftButton:
+                return
+            pos = ev.scenePos()
+        except Exception:                              # noqa: BLE001
+            return
+        for p in plot_items:
+            vb = p.getViewBox()
+            if vb is not None and vb.sceneBoundingRect().contains(pos):
+                t = vb.mapSceneToView(pos).x() + self._trim_offset_s
+                self._toggle_override_at(name, t, vb)
+                return
+
+    def _build_type_menu(self, breath_no, kinds):
+        """The breath-type context menu (M-20's minimal Tidal/Excluded/Rest, extended by
+        M-31 to the full manoeuvre set). Parented to ``self.plots`` so
+        ``_lone_ampersands``'s QMenu scan (``tests/unit/_helpers.py``) reaches it like
+        every other menu in the window — a menu with no such parent is invisible to that
+        scan — and set to delete itself on close so a right-click doesn't leak one QMenu
+        per use.
+
+        ``kinds`` is the caller's choice of which real kinds to OFFER (``_handle_type_
+        requested`` filters ``'rest'`` in/out by capability) — the disabled hint and the
+        M-37 reference actions below are unconditional, since they name a property of
+        the BREATH's current type (already decided, not something ``kinds`` should ever
+        need to suppress)."""
+        from respmech.core.summary import group_key  # noqa: PLC0415
+
+        menu = QMenu(self.plots)
+        menu.setAttribute(Qt.WA_DeleteOnClose)
+        # M-31: a plain, deterministic hint (manoeuvres.suggest_fvc) — the untyped
+        # breath with the longest expiration in the file is the most plausible untyped
+        # FVC candidate. Purely advisory: shown disabled, next to whichever breath it
+        # names, so it never competes with (or is mistaken for) an actual menu choice.
+        if getattr(self, "_suggested_fvc", None) == breath_no:
+            hint = menu.addAction("Suggested: FVC")
+            hint.setEnabled(False)
+            menu.addSeparator()
+        for kind in kinds:
+            action = menu.addAction(_TYPE_MENU_LABELS.get(kind, kind.capitalize()))
+            tip = _TYPE_MENU_STATUS_TIPS.get(kind)
+            if tip:
+                action.setStatusTip(tip)
+            action.triggered.connect(
+                lambda _checked=False, k=kind: self._apply_breath_type_choice(breath_no, k))
+        # M-37: reference actions. 'Use as IC reference for' is a real submenu (Qt draws
+        # its own arrow — no manual '▸' needed), enabled only once THIS breath is already
+        # typed 'ic'/'ic_fvc' (_IC_REFERENCE_KINDS): pointing another file's reference at
+        # a breath that is not itself an IC manoeuvre would silently create a reference
+        # to nothing useful. 'Reference manoeuvres…' has no such precondition — the full
+        # picker lets any file's/breath's typed manoeuvres be linked regardless of what
+        # (if anything) this particular breath is typed as — so it stays enabled here;
+        # both funnels re-check the run lock themselves (same "gate the action, not the
+        # tab" split _set_breath_type already uses).
+        menu.addSeparator()
+        name = self._selected_filename()
+        current_kind = self._current_breath_kind(name, breath_no) if name else None
+        can_ref = current_kind in _IC_REFERENCE_KINDS
+        ref_for = menu.addMenu("Use as IC reference for")
+        ref_for.setEnabled(can_ref and bool(name))
+        ref_for.menuAction().setStatusTip(
+            "Point another file's (or this group's) IC reference at this manoeuvre."
+            if can_ref else
+            "Type this breath as an IC manoeuvre (or IC + FVC) first.")
+        if name:
+            group = group_key(name, self.state.settings)
+            a_file = ref_for.addAction("This file")
+            a_file.triggered.connect(
+                lambda _checked=False: self._set_reference(name, breath_no, "file"))
+            a_group = ref_for.addAction(f"All files of {group}")
+            a_group.triggered.connect(
+                lambda _checked=False: self._set_reference(name, breath_no, "group"))
+            a_all = ref_for.addAction("All files")
+            a_all.triggered.connect(
+                lambda _checked=False: self._set_reference(name, breath_no, "all"))
+        ref_manoeuvres = menu.addAction("Reference manoeuvres…")
+        ref_manoeuvres.setStatusTip(
+            "Browse and link IC/FVC/baseline/maximal-effort manoeuvres across files.")
+        ref_manoeuvres.triggered.connect(
+            lambda _checked=False: self._open_reference_picker(name))
+        return menu
+
+    def _current_breath_kind(self, file, breath_no):
+        """The ``BreathTypeEntry.kind`` already recorded for ``file``'s ``breath_no``,
+        or ``None`` if it is untyped (plain tidal, or excluded — neither is a
+        ``BreathTypeEntry``, see ``_set_breath_type``'s own three-state contract)."""
+        entry = next((t for t in self.state.settings.processing.breath_types
+                     if t.file == file and t.breath == breath_no), None)
+        return entry.kind if entry is not None else None
+
+    def _set_reference(self, file, breath_no, scope):
+        """M-37 funnel for the quick 'Use as IC reference for' submenu: point ``scope``
+        (``'file'`` | ``'group'`` | ``'all'``) at ``file``'s ``breath_no`` — already
+        typed ``'ic'``/``'ic_fvc'``, see ``_IC_REFERENCE_KINDS`` — as its IC reference.
+        Same run-lock / folder-stamp-only-on-creation / one ``settings_edited`` contract
+        as ``_set_breath_type``: an EXISTING ``ReferenceEntry``/``GroupReferenceEntry``'s
+        ``folder`` is never rewritten by this, only a brand-new one gets stamped. The
+        full slot/file/breath picker (``_open_reference_picker``) is the OTHER way to
+        write ``processing.references``/``reference_defaults``; this is the one-click
+        shortcut for the single most common case (this breath's own file IS the IC
+        source).
+
+        Returns ``scope`` again on success, or ``None`` if the write was blocked (a run
+        in progress) or ``scope`` is not one of the three recognised values."""
+        from respmech.core.summary import group_key  # noqa: PLC0415
+
+        if self._run_active:
+            msg = "Reference editing is locked while a run is in progress."
+            self._set_status(msg)
+            self.write_action_blocked.emit(msg)
+            return None
+        if scope not in ("file", "group", "all"):
+            return None
+        proc = self.state.settings.processing
+        folder = self.state.settings.input.folder
+
+        def _point_file_at(target):
+            # A fresh BreathRef PER entry, never one shared instance handed to every
+            # target (self-review finding): a scope='all' write used to alias the SAME
+            # BreathRef — and its mutable .breaths LIST — across every file's
+            # ReferenceEntry.ic, so mutating one file's reference later (e.g. a future
+            # multi-breath edit) silently corrupted every other file's reference too.
+            entry = next((e for e in proc.references if e.file == target), None)
+            if entry is None:
+                entry = ReferenceEntry(file=target, folder=folder)
+                proc.references.append(entry)
+            entry.ic = BreathRef(file=file, breaths=[breath_no])
+
+        if scope == "file":
+            _point_file_at(file)
+            where = "this file"
+        elif scope == "group":
+            group = group_key(file, self.state.settings)
+            entry = next((e for e in proc.reference_defaults if e.group == group), None)
+            if entry is None:
+                entry = GroupReferenceEntry(group=group, folder=folder)
+                proc.reference_defaults.append(entry)
+            entry.ic = BreathRef(file=file, breaths=[breath_no])
+            where = f"all files of {group}"
+        else:                                              # "all"
+            targets = [os.path.basename(f) for f in matching_files(
+                self.state.settings.input.folder, self.state.settings.input.files)]
+            for target in targets:
+                _point_file_at(target)
+            where = "all files"
+
+        self.settings_edited.emit()
+        self._sync_rail_breath_state()
+        self._refresh_reference_chip()
+        self._request_batch_recompute()
+        self._set_status(f"{file}: breath {breath_no} set as the IC reference for {where}.")
+        return scope
+
+    def _open_reference_picker(self, filename=None):
+        """M-37: the full picker (``ReferencePickerDialog``) for all four reference
+        slots at once, opened from the type menu's 'Reference manoeuvres…' (the
+        currently previewed file) or from the file rail's row context menu
+        (``FileRail.referencesRequested``, a specific ``filename``). Same run-lock
+        contract as ``_set_reference``; writes nothing if the dialog is cancelled or
+        nothing was actually touched.
+
+        Only writes the slots ``dlg.touched_slots()`` reports (self-review finding: an
+        earlier version wrote every slot ``staged()`` returned whenever ANY slot
+        differed from the existing explicit entry, which silently truncated a
+        legitimate MULTI-breath own-typed-breath reference to the picker's
+        single-breath selection the instant the user touched a completely different
+        slot and clicked OK — see ``ReferencePickerDialog.staged()``'s own docstring)."""
+        if self._run_active:
+            msg = "Reference editing is locked while a run is in progress."
+            self._set_status(msg)
+            self.write_action_blocked.emit(msg)
+            return
+        name = filename or self._selected_filename()
+        if not name:
+            return
+        from respmech.ui.reference_picker_dialog import ReferencePickerDialog
+        s = self.state.settings
+        files = sorted({os.path.basename(f) for f in matching_files(
+            s.input.folder, s.input.files)} | {name})
+        dlg = ReferencePickerDialog(name, s, files, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        touched = dlg.touched_slots()
+        if not touched:
+            return
+        staged = dlg.staged()
+        proc = s.processing
+        entry = next((e for e in proc.references if e.file == name), None)
+        if entry is None:
+            entry = ReferenceEntry(file=name, folder=s.input.folder)
+            proc.references.append(entry)
+        for slot in touched:
+            setattr(entry, slot, staged[slot])
+        self.settings_edited.emit()
+        self._sync_rail_breath_state()
+        self._refresh_reference_chip()
+        self._request_batch_recompute()
+        self._set_status(f"{name}: reference manoeuvres updated.")
+
+    def _apply_breath_type_choice(self, breath_no, kind):
+        result = self._set_breath_type(breath_no, kind)
+        if result is None:
+            return
+        name = self._selected_filename()
+        # .get(), mirroring _build_type_menu's own fallback: a future menu offering a
+        # kind not in _TYPE_MENU_LABELS (M-31) must not KeyError here AFTER the
+        # settings write above has already happened (self-review finding).
+        label = _TYPE_MENU_LABELS.get(kind, kind.capitalize())
+        self._set_status(f"{name}: breath {breath_no} set to {label.lower()}.")
+
+    def _handle_type_requested(self, breath_no, scene_pos):
+        """Slot for ``BreathSpansItem.typeRequested`` (right-click/Ctrl+left-click on a
+        span): resolve the emitting item's own scene to a global point (the item does
+        not know which widget it is embedded in — it can be any plot on the mechanics
+        stack or any EMG view) and pop the type menu up there.
+
+        M-31: the offered kinds differ by signal set — this one slot serves BOTH the
+        flow-bearing Mechanics stack and the EMG-only 'EMG – segments' tab (see
+        ``_draw_breath_overlays``'s own docstring on why the two share this machinery),
+        and the two shapes support genuinely different manoeuvre kinds:
+
+        - 'Rest' names a quiet-breathing noise-reference SEGMENT, which only exists as a
+          concept where segmentation (not inspiration/expiration) is the unit — offering
+          it on a flow-bearing file would type a real tidal breath as a noise reference
+          no resolver (``resolve_noise_reference_mode``) ever reads for that shape.
+        - IC/FVC/IC+FVC/max_insp/sniff all need ``core.pipeline.run_batch``'s per-breath
+          extraction loop, which is unconditionally skipped for an EMG-only set
+          (``if not emg_only:`` around the ``manoeuvreslib.extract`` call — a segment has
+          no inspiration/expiration split for it to read, see ``core.analysis.segments``'
+          own module docstring). Offering them on the 'EMG – segments' tab would type a
+          segment as, say, 'ic' with NO Manoeuvres row ever appearing for it — the kind
+          is silently a dead end there today (self-review finding: this ticket's first
+          cut offered the full set on both tabs, which is what the guard below fixes)."""
+        item = self.sender()
+        view = None
+        if item is not None:
+            sc = item.scene()
+            if sc is not None and sc.views():
+                view = sc.views()[0]
+        if view is not None:
+            # QGraphicsView.mapFromScene(QPointF) returns a QPoint in PySide6, which
+            # has no .toPoint() (only QPointF does) — a real right-click crashed this
+            # slot every time (self-review finding), silently: PySide6 prints the
+            # AttributeError to stderr from inside the signal emission and swallows
+            # it, so the only visible symptom was "nothing happens".
+            global_pos = view.mapToGlobal(view.mapFromScene(scene_pos))
+        else:                                          # pragma: no cover — defensive only
+            global_pos = QCursor.pos()
+        caps = Capabilities.from_settings_or_none(self.state.settings)
+        emg_only = bool(caps is not None and caps.mode == "emg_only")
+        if emg_only:
+            kinds = tuple(k for k in _TYPE_MENU_KINDS if k in ("tidal", "excluded", "rest", "other"))
+        else:
+            kinds = tuple(k for k in _TYPE_MENU_KINDS if k != "rest")
+        menu = self._build_type_menu(breath_no, kinds)
+        menu.popup(global_pos)
 
     def _request_batch_recompute(self):
         """Debounced recompute of the mechanics test run (Campbell + per-breath table) after
@@ -1417,12 +2605,26 @@ class _MechanicsMixin:
         self._schedule("batch")
 
     # -- breath overlays on the EMG views ----------------------------------
-    def _excluded_now(self):
-        """Live set of excluded 1-based breath numbers for the current file — the
-        single source of truth for overlay colour (matches what the core ignores)."""
+    def _breath_kind_now(self, breath_no):
+        """Live 3-way kind for one breath of the CURRENT file — the single source of
+        truth for the EMG views' overlay colour (mirrors ``core.compute``'s own
+        ignorebreaths+breathkinds union, see M-19's ``compute.breathkinds`` docstring).
+        A BREATH_KINDS member if typed (``processing.breath_types``), the pseudo-kind
+        ``'excluded'`` if only manually excluded (``processing.exclude_breaths``), else
+        ``None`` (plain tidal breathing). Used by ``_paint_breaths``, which redraws
+        from ``self._breaths`` rather than a fresh ``stage_mechanics_preview`` call and
+        so cannot read the ``kind`` that call already baked into the mechanics stack's
+        own spans."""
         name = self._selected_filename()
-        entry = next((e for e in self.state.settings.processing.exclude_breaths if e.file == name), None)
-        return set(entry.breaths) if entry else set()
+        proc = self.state.settings.processing
+        type_entry = next((t for t in proc.breath_types
+                           if t.file == name and t.breath == breath_no), None)
+        if type_entry is not None:
+            return type_entry.kind
+        excl_entry = next((e for e in proc.exclude_breaths if e.file == name), None)
+        if excl_entry is not None and breath_no in excl_entry.breaths:
+            return "excluded"
+        return None
 
     def _exclusion_carried_for(self, name):
         """True iff ``name``'s exclusion entry was recorded against a DIFFERENT (or
@@ -1457,27 +2659,32 @@ class _MechanicsMixin:
         self._bov[view] = {"items": [], "regions": {}, "texts": {}, "unpin": lambda: None}
         if not plot_items or not self._breaths:
             return
-        excl = self._excluded_now()
         carried = self._exclusion_carried_for(self._selected_filename())
         reg_map = self._bov[view]["regions"]; txt_map = self._bov[view]["texts"]
         items = self._bov[view]["items"]
-        spans = [(num, t0 + offset, t1 + offset, num in excl) for (num, t0, t1, _ig) in self._breaths]
+        spans = [(num, t0 + offset, t1 + offset, self._breath_kind_now(num))
+                for (num, t0, t1, _k) in self._breaths]
         for p in plot_items:
             item = BreathSpansItem()
-            item.set_spans([(a, b, self._breath_brush(ignored, carried=carried))
-                            for _num, a, b, ignored in spans])
+            item.set_spans([(a, b, self._breath_brush(kind, carried=carried), num)
+                            for num, a, b, kind in spans])
             item.setZValue(-10)
+            item.typeRequested.connect(self._handle_type_requested)
             p.addItem(item)
             items.append((p, item))
-            for i, (num, _a, _b, _ig) in enumerate(spans):
+            for i, (num, _a, _b, _k) in enumerate(spans):
                 reg_map.setdefault(num, []).append((item, i))
-        for num, a, b, ignored in spans:
-            txt = self._breath_text(num, ignored)
+        for num, a, b, kind in spans:
+            txt = self._breath_text(num, kind, span=(a, b))
             txt.setPos((a + b) / 2.0, label_y)
             plot_items[0].addItem(txt, ignoreBounds=True)
             items.append((plot_items[0], txt)); txt_map[num] = txt
         self._label_headroom(plot_items[0], label_px=self._label_px(txt_map))   # labels above the signal
         self._bov[view]["unpin"] = self._pin_breath_labels(plot_items[0], txt_map)
+        for it in (i for _p, i in items if isinstance(i, BreathSpansItem)):
+            it.set_selected(self._selected_breath)
+        for num, txt in txt_map.items():
+            self._style_breath_label(txt, num == self._selected_breath)
 
     def _repaint_view_breaths(self, view):
         """Repaint one EMG view IF it has rendered real data (label_y sentinel set)."""
@@ -1515,9 +2722,12 @@ class _MechanicsMixin:
                     pass
         self._bov = {}
         self._breaths = []
+        self._suggested_fvc = None
         self._breath_spans = {}
         self._breath_regions = {}
         self._breath_texts = {}
+        self._clear_breath_selection()          # breath numbers belong to the file being left
+        self._campbell_breaths = None           # and so do the cached loops a mark would redraw
         self._emg_raw_subplots = []
         self._raw_label_y = self._detail_label_y = self._result_label_y = None
         self._trim_offset_s = 0.0
@@ -1582,10 +2792,29 @@ class _MechanicsMixin:
         return len(breaths)
 
     def _on_batch_result(self, result):
-        """Render the automatic mechanics test run: the per-breath table + Campbell (the
-        batch is mechanics-only, so no EMG/fidelity here). The noise_report branch is
-        retained for the direct-call path that still carries one."""
+        """Render the automatic test run. For a flow-bearing set: the per-breath table +
+        Campbell (mechanics-only, so no EMG/fidelity here). For an EMG-only set (M-26):
+        the segments tab's own per-segment table instead — there is no flow/volume/
+        pressure to draw a Campbell diagram against, and the Mechanics tab holding
+        ``self.table``/``self.campbell`` is not even shown for that shape (see
+        ``subtab_plan``). The noise_report branch is retained for the direct-call path
+        that still carries one, and applies to both shapes alike.
+
+        Reads CURRENT caps (not the dispatching job's own frozen ``job.panels``, unlike
+        ``_on_job_done``'s generic spinner/error bookkeeping) because this method has no
+        ``job`` parameter at all — it is called generically as ``_RENDER[job.kind]
+        (result)``. Safe only because ``_on_job_done`` already returned early on a stale
+        job (``job.token != self._tokens[job.kind]``) before ever reaching here, and any
+        settings edit that changes ``caps.mode`` synchronously bumps ``_tokens['batch']``
+        (``sync_from_settings`` -> ``_cancel_inflight``) before the GUI event loop can
+        deliver a stale job's queued ``finished`` signal — so by the time this runs,
+        "not stale" already implies "caps unchanged since dispatch", i.e. this always
+        agrees with what ``self._panels_for('batch')`` would also say. Re-check this
+        invariant if `_RENDER` calls are ever made asynchronous or a caps-affecting edit
+        is ever allowed to bypass `sync_from_settings`'s synchronous token bump."""
         cur = self._selected_filename()
+        caps = Capabilities.from_settings_or_none(self.state.settings)
+        emg_only = bool(caps is not None and caps.mode == "emg_only")
         fr = None
         if getattr(result, "files", None):
             fr = result.files.get(cur) or next(iter(result.files.values()), None)
@@ -1594,28 +2823,64 @@ class _MechanicsMixin:
             kind = getattr(fr, "error_kind", None) or str(err).split(":", 1)[0]
             if cur:
                 self.file_rail.mark_result(cur, ok=False, error=str(err))
-            self._qc_overview_not_assessed(err)
+            self._qc_overview_not_assessed(
+                err, chip=self.segments_qc_overview if emg_only else None)
             if kind in _SOFT_FILE_ERRORS:
-                # A precondition failure of THIS recording, not a fault: the mech preview
-                # keeps drawing the channels, so don't raise a 'Test run failed' card over
-                # them. The reason still has to live on these two panels — the status line
-                # is a single shared label that the EMG/ECG jobs overwrite moments later,
-                # which would leave a blank table and Campbell explaining nothing.
-                self._table_model.set_dataframe(None)
-                self._set_wob_table_note(None)
-                self.campbell.figure.clear(); self.campbell.draw()
-                self._forget_campbell()   # the export must not resurrect a cleared diagram
-                for p in _PANELS["batch"]:
+                # A precondition failure of THIS recording, not a fault: the mech/segments
+                # preview keeps drawing the channels, so don't raise a 'Test run failed'
+                # card over them. The reason still has to live on the panel(s) — the
+                # status line is a single shared label that the EMG/ECG jobs overwrite
+                # moments later, which would leave a blank table explaining nothing.
+                if emg_only:
+                    self._segtable_model.set_dataframe(None)
+                else:
+                    self._table_model.set_dataframe(None)
+                    self._set_wob_table_note(None)
+                    self._fill_manoeuvres_table(None, None)
+                    self.campbell.figure.clear(); self.campbell.draw()
+                    self._forget_campbell()   # the export must not resurrect a cleared diagram
+                for p in self._panels_for("batch"):
                     self._overlays[p].show_error(
                         f"Not processed — {short_error(str(err))}", str(err))
                 return
             # raise so _on_job_done paints a copyable "Test run failed" error card
             raise _FileRunError(err)
         if cur:
-            self.file_rail.mark_result(cur, ok=True, breaths=len(fr.breaths_table))
-        self._fill_table(fr.breaths_table)
-        self._draw_campbell(fr.breaths)
-        self._update_qc_overview(fr)                  # P16 QC line, for THIS file only
+            n_breaths = 0 if fr.breaths_table is None else len(fr.breaths_table)
+            # M-32: role rides along with the same successful result breaths/verdict
+            # already come from — see FileRailEntry.role's own docstring.
+            self.file_rail.mark_result(cur, ok=True, breaths=n_breaths,
+                                       role=getattr(fr, "role", None))
+        is_reference_only = getattr(fr, "role", "tidal") == "reference"
+        if is_reference_only:
+            # M-30: no tidal breaths at all in this file — nothing for the Campbell
+            # diagram/breath table to draw, but the Manoeuvres table (this file's whole
+            # reason for being typed) has real content, so show that instead of an
+            # empty or error-looking mechanics view. Falls through to the noise-report
+            # handling below like every other shape (self-review finding: an EARLIER
+            # version of this branch returned immediately here, which for a
+            # reference-only file that ALSO carries EMG channels in a noise-reduction
+            # test silently dropped the batch's auto-tuned prop_decrease and skipped
+            # re-conditioning the EMG views — result.noise_report is built once per
+            # whole test, independent of any one file's role).
+            self._fill_table(fr.manoeuvres_table)
+            self._table_panel._title_label.setFullText("Manoeuvres (reference-only file)")
+            # the primary table ALREADY shows this file's manoeuvres (above) — the
+            # separate stacked section below it would just repeat the same rows.
+            self._fill_manoeuvres_table(None, None)
+            self.campbell.figure.clear(); self.campbell.draw()
+            self._forget_campbell()
+            self._update_qc_overview(fr)
+        elif emg_only:
+            self._fill_segtable(fr.breaths_table)
+            self._fill_manoeuvres_table(None, None)   # M-31 scope is the Mechanics tab only
+            self._update_qc_overview(fr, chip=self.segments_qc_overview)
+        else:
+            self._fill_table(fr.breaths_table)
+            self._campbell_manoeuvres = fr.manoeuvres     # read by the flow-only branch
+            self._draw_campbell_or_loop(fr.breaths)
+            self._update_qc_overview(fr)                  # P16 QC line, for THIS file only
+            self._fill_manoeuvres_table(fr.manoeuvres_table, fr.manoeuvres)
         nr = getattr(result, "noise_report", None)
         if nr:
             self.render_noise_report(result)         # sets its own status incl. prop_decrease
@@ -1633,6 +2898,11 @@ class _MechanicsMixin:
             if noise.enabled and noise.auto_prop and self.state.settings.input.channels.emg:
                 self._schedule("emg_all")
                 self._schedule("emg_detail")
+        elif is_reference_only:
+            n_typed = len(fr.manoeuvres or {})
+            self._set_status(
+                f"Reference manoeuvres only — {n_typed} typed breath"
+                f"{'s' if n_typed != 1 else ''}, no tidal table")
         else:
             n = len(fr.breaths_table)
             self._set_status(f"Test run OK: {n} breaths (nothing written)")
@@ -1641,6 +2911,23 @@ class _MechanicsMixin:
         self._table_model.set_dataframe(df)
         resize_result_table(self.table)
         self._set_wob_table_note(df)
+
+    def _fill_manoeuvres_table(self, df, manoeuvres):
+        """Show the Manoeuvres sheet below the per-breath table (M-31), visible only
+        once the previewed file's most recent test run actually typed at least one
+        breath — ``manoeuvres`` (``FileResult.manoeuvres``, a ``{breath_no: ...}`` dict)
+        decides visibility rather than ``df`` alone, matching ``build_manoeuvre_table``'s
+        own "empty dict -> None" contract (``core/results.py``) so the two can never
+        disagree. Passing ``(None, None)`` hides the section — used for a soft file
+        error, an EMG-only file (out of this ticket's scope) and a reference-only file
+        (whose own manoeuvres already fill the PRIMARY table, see ``_on_batch_result``),
+        so an untyped or not-applicable file's panel looks exactly as it did before this
+        ticket, with no empty second table left visible."""
+        has_manoeuvres = bool(manoeuvres)
+        self._manoeuvres_model.set_dataframe(df if has_manoeuvres else None)
+        if has_manoeuvres:
+            resize_result_table(self.manoeuvres_table)
+        self._manoeuvres_section.setVisible(has_manoeuvres)
 
     def _set_wob_table_note(self, df):
         """Name the work-of-breathing source in the table's own header (D22,
@@ -1674,10 +2961,107 @@ class _MechanicsMixin:
         file the user is no longer looking at, under that file's name. Clearing the figure
         and clearing what it was drawn from have to be the same act."""
         self._campbell_breaths = None
+        self._campbell_manoeuvres = None
         try:
             self.btn_export_fig.setEnabled(False)
         except Exception:                       # pragma: no cover - button may not exist yet
             pass
+
+    def _update_campbell_panel_title(self):
+        """Name the Campbell panel — and its export button — for the current signal set
+        (M-17, R7): "Campbell diagram" with Poes declared, "Flow-volume loop" without it.
+        Cheap and idempotent, so it is safe to call on every settings sync as well as every
+        draw — see ``_draw_campbell_or_loop`` and ``sync_from_settings``.
+
+        ``titled_panel``'s own docstring warns that ``title_floor_chars`` (the Campbell
+        panel's only caller of it) sizes the header's never-squeeze-below floor ONCE, from
+        the title given at construction, and does not follow a later ``setFullText()`` — a
+        floor sized for a short opt-in title would go stale against a longer one set here.
+        Checked, not merely assumed: both titles this function ever sets are at least as
+        long as the floor's own ``title_floor_chars`` cap (10), so ``min(len(title), 10)``
+        is 10 either way and the floor this call inherits is identical regardless of which
+        title built the panel. A THIRD title introduced later must satisfy the same check
+        (>= 10 characters) or recompute the floor explicitly. Uses
+        ``from_settings_or_none``: this runs on every settings sync, including
+        ``PreviewScreen`` construction on ``MainWindow``'s no-try/except open path, so a
+        malformed ``analysis.signals`` must degrade to the poes-less title rather than
+        crash — see ``Capabilities.from_settings_or_none``."""
+        caps = Capabilities.from_settings_or_none(self.state.settings)
+        poes = caps is not None and caps.poes
+        title = "Campbell diagram" if poes else "Flow-volume loop"
+        panel = getattr(self, "_campbell_panel", None)
+        if panel is not None:
+            panel._title_label.setFullText(title)
+        btn = getattr(self, "btn_export_fig", None)
+        if btn is not None:
+            btn.setText("Export Campbell…" if poes else "Export flow-volume…")
+            # Not title.lower(): "Campbell" is a proper noun (E.J.M. Campbell), so a bare
+            # lower() would misspell it mid-sentence.
+            tooltip_noun = "Campbell diagram" if poes else "flow-volume loop"
+            btn.setToolTip(f"Save the {tooltip_noun} as a PNG or PDF.")
+
+    def _draw_campbell_or_loop(self, breaths, pal=None):
+        """Dispatch the Campbell panel to whichever diagram this signal set can actually
+        show (M-17, R7): the Campbell (volume-vs-Poes) diagram when Poes is declared, or a
+        tidal flow-volume loop when it is not — a Poes-less analysis has no pressure trace
+        to plot work of breathing against. Same cached-breaths/export plumbing either way
+        (``_campbell_breaths``, ``btn_export_fig``), because both draw functions set it.
+        Same ``from_settings_or_none`` tolerance as ``_update_campbell_panel_title`` (a
+        malformed signal set degrades to the flow-volume loop rather than crashing)."""
+        self._update_campbell_panel_title()
+        caps = Capabilities.from_settings_or_none(self.state.settings)
+        if caps is not None and caps.poes:
+            self._draw_campbell(breaths, pal=pal)
+            return
+        # No Poes but a forced vital capacity typed in this file -> the tidal loops
+        # inside that file's own MFVL; anything else keeps the plain flow-volume loop.
+        placed = self._placed_mfvl(breaths)
+        # the tidal-loops-in-MFVL picture has no per-breath loop to mark: skip the redraw
+        self._loop_no_mark = placed is not None
+        if placed is not None:
+            self._draw_flow_volume_in_mfvl(breaths, placed, pal=pal)
+        else:
+            self._draw_flow_volume_loop(breaths, pal=pal)
+
+    def _placed_mfvl(self, breaths):
+        """``core.analysis.mfvl.placed_tidal_loops`` for the file just previewed, or ``None``
+        (no typed FVC, no tidal breath, or the placement itself failing: a preview must
+        degrade to the plain loop, never raise). Imported here so the compute core stays off
+        the startup path."""
+        manoeuvres = getattr(self, "_campbell_manoeuvres", None)
+        if not manoeuvres:
+            return None
+        from respmech.core.analysis import mfvl as _mfvl        # noqa: PLC0415
+        s = self.state.settings
+        try:
+            return _mfvl.placed_tidal_loops(breaths, manoeuvres, s.processing.mfvl,
+                                            s.processing.lung_volume.ic)
+        except Exception:                                       # noqa: BLE001
+            return None
+
+    def _draw_flow_volume_in_mfvl(self, breaths, placed, pal=None):
+        """The Campbell panel for a Poes-less analysis whose file carries a forced vital
+        capacity: the tidal loops drawn inside that file's MFVL (the same picture the
+        ``flow-volume (tidal in MFVL).pdf`` figure writes), in the panel's own theme."""
+        from respmech.core.plots import draw_flow_volume_mfvl   # noqa: PLC0415
+        self._campbell_breaths = breaths        # kept so the export can re-render it light
+        pal = _plot_pal() if pal is None else pal
+        fig = self.campbell.figure
+        fig.clear()
+        fig.set_facecolor(pal["mpl_bg"])
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(pal["mpl_bg"])
+        draw_flow_volume_mfvl(ax, placed, loop=pal["mpl_loop"], mean=pal["mpl_accent"],
+                              envelope=pal["fg"], marker=pal["mpl_zeroline"], label=pal["fg"])
+        ax.set_xlabel(_MFVL_XLABEL_VARIANTS[0])
+        ax.set_ylabel(_FV_YLABEL_VARIANTS[0])
+        _fit_compact_figure(
+            self.campbell, ax,
+            legend_kw={"loc": "upper right", "frameon": False, "fontsize": 7},
+            xlabel_variants=_MFVL_XLABEL_VARIANTS,
+            ylabel_variants=_FV_YLABEL_VARIANTS)
+        self.campbell.draw()
+        self.btn_export_fig.setEnabled(True)         # a diagram now exists to export
 
     def _draw_campbell(self, breaths, pal=None):
         self._campbell_breaths = breaths        # kept so the export can re-render it light
@@ -1690,6 +3074,7 @@ class _MechanicsMixin:
         kept = [b for b in breaths.values() if not b["ignored"]]
         for b in kept:
             ax.plot(b["volume"], b["poes"], color=pal["mpl_loop"], lw=0.7, alpha=0.5, zorder=1)
+        self._plot_selected_loop(ax, kept, "volume", "poes")
         # P12: overlay the average breath bold, draw the elastic recoil (relaxation)
         # line EELV→EILV, and shade the inspiratory resistive work between the Poes
         # trace and it (the elastic triangle itself is not shaded here).
@@ -1715,6 +3100,55 @@ class _MechanicsMixin:
         self.campbell.draw()
         self.btn_export_fig.setEnabled(True)         # a diagram now exists to export
 
+    def _draw_flow_volume_loop(self, breaths, pal=None):
+        """The Campbell panel's stand-in for a Poes-less (Flow only) signal set (M-17, R7):
+        a tidal flow-volume loop per breath, plotted from the SAME breath dicts
+        ``_draw_campbell`` reads (``b["volume"]``/``b["flow"]`` are computed whenever flow
+        is declared, unaffected by whether Poes is — see ``core.compute._make_breath``).
+        Deliberately without the WOB/elastic-recoil overlay ``_overlay_campbell_work``
+        draws for the Campbell diagram: every one of that overlay's own inputs
+        (``wobtotal``, ``volumeavg``/``poesavg``, ``eelvavg``/``eilvavg``) comes from the
+        pressures family and is never computed for a Poes-less analysis."""
+        self._campbell_breaths = breaths        # kept so the export can re-render it light
+        pal = _plot_pal() if pal is None else pal
+        fig = self.campbell.figure
+        fig.clear()
+        fig.set_facecolor(pal["mpl_bg"])
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(pal["mpl_bg"])
+        kept = [b for b in breaths.values() if not b["ignored"]]
+        for b in kept:
+            ax.plot(b["volume"], b["flow"], color=pal["mpl_loop"], lw=0.7, alpha=0.5, zorder=1)
+        marked = self._plot_selected_loop(ax, kept, "volume", "flow")
+        ax.axhline(0, color=pal["mpl_zeroline"], lw=0.8, zorder=0)
+        ax.set_xlabel(_FV_XLABEL_VARIANTS[0])
+        ax.set_ylabel(_FV_YLABEL_VARIANTS[0])
+        # No figure title on screen — the panel header carries it (_update_campbell_panel_title).
+        _fit_compact_figure(
+            self.campbell, ax,
+            # no average/recoil overlay here to label (see docstring); a legend appears only
+            # to name the marked breath's loop
+            legend_kw={"loc": "upper right", "frameon": False, "fontsize": 7} if marked else None,
+            xlabel_variants=_FV_XLABEL_VARIANTS,
+            ylabel_variants=_FV_YLABEL_VARIANTS)
+        self.campbell.draw()
+        self.btn_export_fig.setEnabled(True)         # a diagram now exists to export
+
+    def _plot_selected_loop(self, ax, kept, xkey, ykey):
+        """Draw the marked breath's loop (see ``_select_breath``) over the grey ones, in the
+        selection green with a legend entry ('breath #n'). Returns whether one was drawn.
+        Skipped while an export re-renders the figure (``_loop_export``): a figure made for a
+        report must not carry a screen-only mark."""
+        n = self._selected_breath
+        if n is None or getattr(self, "_loop_export", False):
+            return False
+        b = next((b for b in kept if b.get("number") == n), None)
+        if b is None:
+            return False
+        ax.plot(b[xkey], b[ykey], color=SELECTED_BREATH_HEX, lw=1.9, alpha=1.0, zorder=5,
+                label=f"breath #{n}")
+        return True
+
     def _overlay_campbell_work(self, ax, kept, pal):
         """Draw the average PV loop + elastic recoil line + shaded inspiratory
         resistive work, so the Campbell diagram *shows* work of breathing, not just the loops.
@@ -1732,6 +3166,12 @@ class _MechanicsMixin:
                 ax.plot(vavg, pavg, color=pal["mpl_accent"], lw=2.0, zorder=3,
                         label="average breath")
             if eelv is not None and eilv is not None:
+                # modified Campbell (opt-in PEEPi): the hatched rectangle goes under the
+                # recoil line, exactly as the written figure draws it -- nothing at all
+                # (no patch, no legend entry) unless the feature produced a height.
+                from respmech.core.plots import draw_peepi_rectangle, mean_peepi_rectangle_height
+                draw_peepi_rectangle(ax, eilv, eelv, mean_peepi_rectangle_height(kept),
+                                     color=pal["mpl_target"], zorder=2)
                 # elastic recoil line: straight line between the two volume endpoints
                 ax.plot([eelv[0], eilv[0]], [eelv[1], eilv[1]], color=pal["mpl_target"],
                         ls="--", lw=1.3, zorder=4, label="elastic recoil")

@@ -147,7 +147,15 @@ def deep_update(base, overrides):
 # "flow_exclude_emg" below now locks that combination with the EMG pipeline ACTIVE.
 # "flow_exclude_noemg" stays: it is the only scenario exercising the processed-data
 # export, which getprocesseddata() only supports at exactly 5 EMG channels.
-SCENARIOS = {
+#
+# LEGACY_SCENARIOS: expressed as legacy-dict overrides (deep_update onto
+# base_settings()) and migrated via migrate_dict — run_all() below (the frozen v1
+# oracle) can only run THESE, since the oracle has no notion of the newer,
+# TOML-only settings (analysis.signals, breath_types, references, separators,
+# subjects, pressure.peepi, ...). Every scenario here must stay byte-identical
+# against the legacy oracle forever; a new scenario that needs any v2-only
+# settings belongs in V2_SCENARIOS instead.
+LEGACY_SCENARIOS = {
     "flow_wob_average": {},
     "flow_wob_individual": {
         "processing": {"wob": {"calcwobfrom": "individual"}},
@@ -179,6 +187,59 @@ SCENARIOS = {
         "output": {"data": {"saveprocesseddata": True}},
     },
 }
+
+# V2_SCENARIOS: name -> path (relative to this file's directory) of a committed
+# tests/golden/scenarios/<name>.toml settings file, bagt directly from the v2 core
+# (golden_newcore.py --write) rather than run through the legacy oracle. A v2
+# scenario expresses settings the legacy dict/migrate_dict path cannot (typed
+# breaths, references, separators, ...); it is never included in run_all()'s
+# legacy-oracle run. 'flow_only'/'poes_only' are the first two entries: neither has a
+# legacy-dict shape at all (analysis.signals is v2-only), so both are baked straight
+# from the v2 core and locked here to characterise the flow-only and flow+poes signal
+# sets end to end, over the same committed synthetic input.
+V2_SCENARIOS: dict = {
+    "flow_only": os.path.join("scenarios", "flow_only.toml"),
+    "poes_only": os.path.join("scenarios", "poes_only.toml"),
+    # EMG-only (no flow/pressure channel at all), over the dedicated
+    # synth_emgonly_*.csv input pair (never the flow-bearing synth_case_*.csv) —
+    # 'whole_file' (one segment per file) and 'separators' (a per-file manual
+    # boundary list, exercising a DIFFERENT segment count per file: 4 and 3).
+    "emg_only_whole_file": os.path.join("scenarios", "emg_only_whole_file.toml"),
+    "emg_only_separators": os.path.join("scenarios", "emg_only_separators.toml"),
+    # Tidal EMG-only, segmented automatically on the EMG bursts (over the dedicated
+    # synth_emgburst_*.csv pair) with an inter-burst noise reference.
+    "emg_only_burst": os.path.join("scenarios", "emg_only_burst.toml"),
+    # Two breaths typed as manoeuvres (IC #4, FVC #7) in the SAME file, over the
+    # dedicated synth_manoeuvre_*.csv input (own RNG stream, never synth_case_*.csv).
+    "typed_ic_fvc_same_file": os.path.join("scenarios", "typed_ic_fvc_same_file.toml"),
+    # A reference-only IC recording (synth_crossfile_ic.csv) and a separate tidal
+    # recording (synth_crossfile_stage.csv) whose processing.references entry names
+    # the IC file as its IC source -- the CROSS-file counterpart of
+    # typed_ic_fvc_same_file's same-file "own typed breath" fallback. Own dedicated
+    # synth_crossfile_*.csv input pair (own RNG streams, never any other scenario's
+    # glob).
+    "typed_ic_crossfile": os.path.join("scenarios", "typed_ic_crossfile.toml"),
+    # One manual cut, mid-recording, on synth_case_A.csv only -- the full
+    # signal set (unlike flow_only/poes_only above), over the same committed
+    # synth_case_*.csv input every other full-channel scenario uses. Pins that an
+    # empty overrides entry (synth_case_B.csv, no entry at all) is untouched while a
+    # non-empty one (synth_case_A.csv) actually changes that file's own breath table.
+    "flow_separator_overrides": os.path.join("scenarios", "flow_separator_overrides.toml"),
+    # Opt-in PEEPi / modified Campbell columns (processing.pressure.peepi.enabled) over a
+    # dedicated synth_peepi_*.csv recording whose every breath but the first follows a
+    # 0.4 s zero-flow pause carrying a known pre-flow Poes fall (see generate_data.py's
+    # peepi_channels): peepi_dyn/peepi_corr have exact analytical values.
+    "flow_peepi_on": os.path.join("scenarios", "flow_peepi_on.toml"),
+    # Sample entropy on the volume column itself (input.channels.entropy lists the volume
+    # column) with drift correction on: entropy is taken on the CONDITIONED volume, the
+    # deliberate numeric change described in docs/beslutninger.md.
+    "entropy_on_volume": os.path.join("scenarios", "entropy_on_volume.toml"),
+}
+
+# The union both test_golden.py (via golden_newcore.mg.SCENARIOS) and this
+# module's own run_all() see the FULL set through; run_all() below filters back
+# down to LEGACY_SCENARIOS alone, since the frozen oracle cannot run a v2 scenario.
+SCENARIOS = {**LEGACY_SCENARIOS, **V2_SCENARIOS}
 
 
 def _jsonify_df(df):
@@ -231,9 +292,13 @@ def collect_outputs(outdir):
 
 
 def run_all():
+    """Run every scenario through the frozen v1 oracle (legacy/respmech.py) and
+    --write the reference JSON. Only LEGACY_SCENARIOS: the oracle has no concept
+    of a v2-only settings shape, so a V2_SCENARIOS entry is bagt separately by
+    golden_newcore.py --write instead (see tests/golden/README.md)."""
     rm = load_respmech()
     all_results = {}
-    for name, override in SCENARIOS.items():
+    for name, override in LEGACY_SCENARIOS.items():
         outdir = os.path.join(WORK_DIR, name)
         if os.path.exists(outdir):
             shutil.rmtree(outdir)
@@ -253,8 +318,17 @@ def main():
     write = "--write" in sys.argv
     results = run_all()
     if write:
+        # Merge onto whatever is already on disk rather than overwrite it outright:
+        # this file only ever regenerates LEGACY_SCENARIOS (the frozen oracle cannot
+        # run a V2_SCENARIOS entry at all), so a blind overwrite would silently drop
+        # any v2 scenario golden_newcore.py --write had separately baked in.
+        existing = {}
+        if os.path.exists(GOLDEN_JSON):
+            with open(GOLDEN_JSON) as f:
+                existing = json.load(f)
+        existing.update(results)
         with open(GOLDEN_JSON, "w") as f:
-            json.dump(results, f, indent=2, sort_keys=True)
+            json.dump(existing, f, indent=2, sort_keys=True)
         print(f"\nWrote golden reference: {GOLDEN_JSON}")
     else:
         print("\nDry run complete (pass --write to save golden_reference.json).")

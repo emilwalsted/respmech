@@ -1,8 +1,10 @@
 """RespMech command-line interface.
 
     respmech run       settings.toml [--dry-run]
+    respmech breaths   settings.toml [FILE]
     respmech migrate   old_settings.py -o new_settings.toml
     respmech validate  settings.toml
+    respmech init      new_settings.toml --signals flow,poes,emg [--folder DIR --files MASK --fs HZ]
     respmech --version
 
 Batch processing is first-class and scriptable (no editing a Python file to launch
@@ -29,7 +31,7 @@ def _progress_printer():
         elif ev.kind == "file_error":
             print(f"\r  ERROR: {ev.message}")
         elif ev.kind == "warning":
-            # K-108: without respmech[plots], write_batch's figure step degrades to a
+            # Without respmech[plots], write_batch's figure step degrades to a
             # silent skip (exit 0, every workbook still written) — this is the only
             # place a terminal user sees it as it happens, alongside the FIGURES
             # SKIPPED section write_batch always leaves in run-report.txt.
@@ -63,7 +65,7 @@ def cmd_run(args) -> int:
         # under data/). Name the output root a real run writes into instead.
         print(f"\nWrote {len(written)} file(s) to {settings.output.folder}")
     else:
-        # K-108/A06: the same ceiling `core.io.plan.plan_outputs` builds for the GUI's
+        # The same ceiling `core.io.plan.plan_outputs` builds for the GUI's
         # Dry run, over `result.files` (ok AND failed — a plan never depends on which
         # files happened to succeed, see the module docstring), so a CLI dry run stops
         # promising a different set of outputs than the app does.
@@ -76,16 +78,293 @@ def cmd_run(args) -> int:
             print(f"  {g.category}: {cap}{g.count} file(s) in {target}")
         total_cap = "up to " if plan.is_cap else ""
         print(f"  Total: {total_cap}{plan.total_count} file(s) in {settings.output.folder}")
+        from respmech.core.analysis.signals import Capabilities
+        caps = Capabilities.from_settings(settings)
+        # M-13: same line the GUI's commitment sheet prints -- what this signal set
+        # actually computes, right where the output plan already answers "what/where".
+        print(f"  Analyses: {', '.join(caps.analyses())}")
         print()
+        unit_word = "segments" if caps.mode == "emg_only" else "breaths"
+        # Whether THIS analysis names an IC reference anywhere at all -- the
+        # same family flag core.analysis.references.attach() already computed while
+        # run_batch was building `result` above (never re-derived here), gating the
+        # whole per-file reference line the way attach() itself gates the vol_ic_ref
+        # column family: no IC reference named anywhere -> no lung-volume columns ->
+        # nothing useful to report per file. FVC has no consuming column yet (see
+        # references.attach's own docstring), so its ref (when the family IS present)
+        # is shown as purely informational extra context on the same line, resolved
+        # fresh via resolve_reference rather than a (non-existent) references_used
+        # entry.
+        ic_family = bool((result.analysis_plan or {}).get("ic", {}).get("family"))
+        if ic_family:
+            from respmech.core.analysis.references import resolve_reference
         for fname, fr in result.ok_files.items():
-            n = 0 if fr.breaths_table is None else len(fr.breaths_table)
-            print(f"  {fname}: {n} breaths")
+            if getattr(fr, "role", "tidal") == "reference":
+                # M-30: no tidal table for this file at all — say so plainly instead
+                # of a bare, misleading "0 breaths".
+                n_ref = len(fr.manoeuvres or {})
+                print(f"  {fname}: 0 tidal breaths, {n_ref} reference manoeuvre"
+                     f"{'s' if n_ref != 1 else ''}")
+            else:
+                n = 0 if fr.breaths_table is None else len(fr.breaths_table)
+                print(f"  {fname}: {n} {unit_word}")
+                if ic_family:
+                    ic_used = fr.references_used.get("ic")
+                    if ic_used is None:
+                        print("    no IC reference — lung-volume columns NaN")
+                    else:
+                        ic_label = _ref_label(fname, ic_used["source"], ic_used["breaths"])
+                        fvc_ref = resolve_reference(fname, "fvc", settings)
+                        fvc_label = (_ref_label(fname, fvc_ref.file, fvc_ref.breaths)
+                                    if fvc_ref is not None else "none")
+                        print(f"    IC ref: {ic_label} · FVC ref: {fvc_label}")
 
     if result.failed_files:
         print(f"\n{len(result.failed_files)} file(s) FAILED:", file=sys.stderr)
         for fname, fr in result.failed_files.items():
             print(f"  {fname}: {fr.error}", file=sys.stderr)
         return 1
+    return 0
+
+
+def cmd_breaths(args) -> int:
+    """Number every breath/segment ``core.pipeline.segment_file`` would build for one
+    or all matched files -- the SAME step ``run_batch``'s main loop uses, so the
+    numbers this prints are exactly ``FileResult.breaths``' own keys for a real run of
+    the same settings (this command's own acceptance test pins that equality). Skips
+    the shared noise profile and cross-file reference forepass ``run_batch`` builds
+    (neither affects breath boundaries/numbering/kind -- only EMG *content* within a
+    breath, which this inspection tool never prints), so a single file's breaths can be
+    listed without a full batch's setup cost. Still applies
+    ``core.pipeline.apply_resample_override`` first (same call ``run_batch`` makes) --
+    without it, a pre-analysis-resample analysis would be segmented at the file's
+    native rate here instead of the resampled rate a real run actually uses.
+
+    The suggested-FVC breath (``core.analysis.manoeuvres.suggest_fvc`` -- the file's
+    longest untyped expiration) drives a ready-to-paste ``[[processing.breath_types]]``
+    snippet with real numbers filled in (not a ``<N>`` placeholder), including
+    ``folder`` so the entry is never mistaken for one carried over from a different
+    recordings folder (same convention ``respmech init``'s exclude-breaths example
+    already documents)."""
+    import os
+
+    import numpy as np
+
+    from respmech.settingsio.toml_io import load_toml
+    from respmech.core._legacy_ns import to_legacy_ns
+    from respmech.core.pipeline import apply_resample_override, match_input_files, segment_file
+    from respmech.core.analysis.manoeuvres import suggest_fvc
+
+    settings = load_toml(args.settings)
+    settings.validate()
+    allfiles = match_input_files(settings.input.folder, settings.input.files)
+    if args.file:
+        target = os.path.basename(args.file).lower()
+        files = [f for f in allfiles if os.path.basename(f).lower() == target]
+        if not files:
+            print(f"error: {args.file!r} does not match any file in "
+                 f"'{settings.input.folder}'", file=sys.stderr)
+            return 2
+    else:
+        files = allfiles
+    if not files:
+        print("error: no input files match.", file=sys.stderr)
+        return 2
+
+    s = to_legacy_ns(settings)
+    apply_resample_override(settings, s)
+    fs = s.input.format.samplingfrequency
+    ok = True
+    for fi in files:
+        path = os.path.abspath(fi)
+        filename = os.path.basename(path)
+        print(f"\n{filename}:")
+        try:
+            breaths, _trimmed = segment_file(settings, s, path, filename=filename)
+        except Exception as e:
+            print(f"  ERROR: {type(e).__name__}: {e}", file=sys.stderr)
+            ok = False
+            continue
+        hint = suggest_fvc(breaths)
+        for no, b in breaths.items():
+            # len(...)/fs, not time[-1]-time[0]: the same sample-count convention
+            # every other duration in this codebase uses (core/pipeline.py's own
+            # EMG-only seg_duration_s, calculatemechanics' ti/te/ttot).
+            t = np.asarray(b["time"]).reshape(-1)
+            onset = float(t[0]) if t.size else 0.0
+            duration = t.size / fs
+            kind = b.get("kind") or "tidal"
+            tail = " · excluded" if b.get("ignored") else ""
+            if no == hint:
+                tail += " · suggested FVC"
+            print(f"  {b['name']}: onset {onset:.2f}s · duration {duration:.2f}s · "
+                 f"kind={kind}{tail}")
+        if hint is None:
+            print("  (no suggested FVC breath)")
+        else:
+            print("  # ready to paste into settings.toml:")
+            print("  [[processing.breath_types]]")
+            print(f'  file = "{filename}"')
+            print(f"  breath = {hint}")
+            print('  kind = "fvc"')
+            print(f"  folder = {_toml_string(settings.input.folder)}")
+    return 0 if ok else 1
+
+
+def _toml_string(value: str) -> str:
+    """A syntactically valid TOML string literal for an arbitrary ``value`` (M-13's
+    ``_init_template`` uses this for ``folder``/``files``, hand-built text rather than
+    routed through ``tomli_w`` -- see that function's own docstring for why).
+
+    Prefers a TOML *literal* (single-quoted) string, which needs NO escaping at all --
+    the standard TOML idiom for a filesystem path, so a Windows ``--folder
+    C:\\Users\\...`` is written back out unchanged rather than needing every backslash
+    escaped. Falls back to a properly escaped *basic* (double-quoted) string only when
+    ``value`` itself contains something a literal string cannot hold (a literal ``'``,
+    which a single-quoted string has no escape for at all, or a raw control character).
+    """
+    if "'" not in value and not any(ord(c) < 0x20 for c in value):
+        return f"'{value}'"
+    escaped = []
+    for ch in value:
+        if ch == "\\":
+            escaped.append("\\\\")
+        elif ch == '"':
+            escaped.append('\\"')
+        elif ch == "\n":
+            escaped.append("\\n")
+        elif ch == "\t":
+            escaped.append("\\t")
+        elif ch == "\r":
+            escaped.append("\\r")
+        elif ord(ch) < 0x20:
+            escaped.append(f"\\u{ord(ch):04x}")
+        else:
+            escaped.append(ch)
+    return '"' + "".join(escaped) + '"'
+
+
+def _ref_label(filename: str, source: str, breaths) -> str:
+    """``'own #9'``/``'P03_IC.txt #2,#3'`` -- ``cmd_run``'s compact per-file IC/FVC
+    reference label for its ``--dry-run`` output. ``source`` is ``'own'`` rather than
+    repeating the filename when the reference resolved to a breath typed IN this same
+    file (``core.analysis.references.resolve_reference``'s "own typed" tier, or a
+    ``FileResult.references_used`` entry whose ``'source'`` equals ``filename``) -- the
+    common case for a single-file exercise test with its own pre-exercise IC/FVC
+    breath, where repeating the filename back at the user would be pure noise."""
+    label_source = "own" if source == filename else source
+    return f"{label_source} " + ",".join(f"#{b}" for b in breaths)
+
+
+def _init_template(signals: list, *, folder, files, fs: "int | None") -> str:
+    """The commented, signal-set-filtered starting point ``respmech init`` writes (M-13).
+
+    Only the ``[input.channels]`` entries the CHOSEN signals actually need are written
+    (no Pgas/Pdi keys for a poes-only set); ``folder``/``files``/``sampling_frequency``
+    are written as real values when the caller supplied them, or as a commented
+    placeholder line otherwise. ``Settings.validate()`` requires
+    ``sampling_frequency``, so the file only becomes runnable once that (and
+    folder/files, for anything to actually match) is filled in -- every OTHER value
+    here (the channel column numbers, guessed sequentially from column 2; the
+    segmentation method for an EMG-only set) is already a valid placeholder, so
+    ``load_toml(path).validate()`` succeeds on the channels/analysis side immediately,
+    unedited.
+    """
+    from respmech.core.analysis.signals import SINGLE_SIGNALS
+
+    declared = set(signals)
+    order = [s for s in SINGLE_SIGNALS if s in declared]
+    if "emg" in declared:
+        order.append("emg")
+    has_flow = "flow" in declared
+
+    lines: list[str] = [
+        f"# RespMech analysis settings — generated by `respmech init --signals "
+        f"{','.join(order)}`.",
+        "#",
+        "# Fill in the placeholders below (folder, files, sampling frequency, and the",
+        "# channel column numbers, which are only a starting guess), then check it",
+        "# with:",
+        "#",
+        "#     respmech validate <this file>",
+        "",
+        "[analysis]",
+        "signals = [" + ", ".join(f'"{s}"' for s in order) + "]",
+        "",
+        "[input]",
+    ]
+    if folder:
+        lines.append(f"folder = {_toml_string(folder)}")
+    else:
+        lines.append('# folder = "<input.folder>"   # REQUIRED — point this at your recordings')
+    if files:
+        lines.append(f"files = {_toml_string(files)}")
+    else:
+        lines.append('# files  = "*.csv"            # case-insensitive glob')
+    lines += ["", "[input.format]"]
+    if fs:
+        lines.append(f"sampling_frequency = {fs}   # Hz")
+    else:
+        lines.append("# sampling_frequency = 1000   # Hz — REQUIRED, integer")
+    lines += ["", "[input.channels]            # 1-based column numbers; column 1 is usually time"]
+    col = 2
+    for role in order:
+        lines.append(f"emg  = [{col}]" if role == "emg" else f"{role:<5}= {col}")
+        col += 1
+    lines.append("")
+    if has_flow:
+        lines += ["[processing.volume]",
+                  "integrate_from_flow = true   # derive volume from flow — no volume channel "
+                  "needed above",
+                  ""]
+    else:
+        lines += ["[processing.segmentation]",
+                  'method = "whole_file"        # no flow channel to detect breaths from — see '
+                  'also "separators"/"fixed_windows"/"emg_burst"',
+                  ""]
+    lines += [
+        "# Example: manually exclude one breath from a file's tidal average. An entry",
+        "# WITHOUT `folder =` is read as carried over from a DIFFERENT recordings folder",
+        "# — tag a fresh entry you add here with the input folder above so it is never",
+        "# mistaken for one:",
+        "#",
+        "# [[processing.exclude_breaths]]",
+        '# file = "P01.csv"',
+        "# breaths = [3]",
+        '# folder = "<input.folder>"',
+        "",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def cmd_init(args) -> int:
+    from respmech.core.analysis.signals import SINGLE_SIGNALS
+
+    raw = [s.strip() for s in args.signals.split(",") if s.strip()]
+    known = frozenset(SINGLE_SIGNALS) | {"emg"}
+    unknown = [s for s in raw if s not in known]
+    if unknown:
+        print(f"error: unknown signal(s) in --signals: {', '.join(unknown)}", file=sys.stderr)
+        return 2
+    declared = set(raw)
+    # Mirrors Settings.validate()'s own two analysis.signals rules EXACTLY (same
+    # condition, same order, same wording -- core/settings.py), so a --signals value
+    # rejected here and the equivalent hand-written TOML fail with the identical
+    # message. The first rule fires only for a genuinely empty set (--signals ",", or
+    # all-unknown entries already caught above) -- NOT "does it contain flow/emg",
+    # which would wrongly pre-empt the second, more specific rule for e.g. --signals
+    # poes (a non-empty set that still needs flow).
+    if not declared:
+        print("error: --signals must name at least one of 'flow' or 'emg'", file=sys.stderr)
+        return 2
+    if (declared & {"poes", "pgas", "pdi"}) and "flow" not in declared:
+        print("error: --signals: 'poes', 'pgas' and 'pdi' require 'flow'", file=sys.stderr)
+        return 2
+
+    text = _init_template(raw, folder=args.folder, files=args.files, fs=args.fs)
+    with open(args.output, "w", encoding="utf-8") as f:
+        f.write(text)
+    print(f"Wrote {args.output}")
     return 0
 
 
@@ -108,15 +387,51 @@ def cmd_validate(args) -> int:
     from respmech.core.pipeline import match_input_files
     from respmech.core.io.plan import probe_write_folder
     from respmech.core.io.loaders import probe_constant_channels, probe_merged_time_blocks
+    from respmech.core.analysis.signals import (
+        Capabilities, effective_signals, off_signals_text, signals_text)
 
     settings = load_toml(args.settings)
     settings.validate()
+    # An EMG-only signal set has no flow channel for a constant one to ever be
+    # assigned against, so the flow-only hard-failure rule below is meaningless there —
+    # a constant EMG channel is EMG-only's equivalent hard failure instead (RMS/entropy
+    # on a dead channel is a meaningless number, not merely an unused pressure port).
+    declared = effective_signals(settings)
+    emg_only = "flow" not in declared and "emg" in declared
     pattern = os.path.join(settings.input.folder, settings.input.files)
     # match_input_files: the SAME matcher run_batch uses, so the reported count is exactly
     # what `respmech run` will process (case-insensitive; safe against folder metacharacters).
     files = match_input_files(settings.input.folder, settings.input.files)
     print(f"Settings valid. Input pattern '{pattern}' matches {len(files)} file(s).")
+    # M-13: which signals govern this analysis and what they compute, so `validate`
+    # alone answers "what will this run actually produce" without a dry run.
+    caps = Capabilities.from_settings(settings)
+    n_entropy = len(settings.input.channels.entropy or [])
+    summary = (f"Signals: {signals_text(settings)} · Entropy: {n_entropy} columns · "
+              f"Analyses: {', '.join(caps.analyses())}")
+    off = off_signals_text(caps.declared)
+    if off:
+        summary += f" · off: {off} (not in signal set)"
+    print(summary)
+    # Every reason a reference/subject link in this analysis might not work,
+    # computed over the SAME matched file list `files` above (check_links's own
+    # docstring: "whatever the caller's OWN file list is ... match_input_files's
+    # result for a real run") -- advisory only, never on their own a reason to fail
+    # `validate` (Settings.validate() is the only thing that ever BLOCKS a run, and
+    # only for require_references -- references.check_links's own docstring). The
+    # one exception mirrors the SAME hard-block condition ui.validation.path_problem
+    # already enforces before Setup lets a run start: a reference source genuinely
+    # missing from the matched files while lung_volume.require_references is set.
+    # Anything else check_links flags (an excluded/mistyped linked breath, a
+    # reference_defaults group matching no file, an outlier column layout) stays
+    # advisory here too -- validate has no equivalent hard block for those, and this
+    # command must not invent a stricter one of its own.
+    from respmech.core.analysis.references import check_links, missing_reference_sources
+    for caution in check_links(settings, files):
+        print(f"WARNING: {caution}", file=sys.stderr)
     ok = True
+    if settings.processing.lung_volume.require_references and missing_reference_sources(settings, files):
+        ok = False
     if not files:
         print("WARNING: no input files match.", file=sys.stderr)
         ok = False
@@ -138,10 +453,15 @@ def cmd_validate(args) -> int:
             # OTHER constant channel is advisory only, same as Manifest.
             # constant_channel_files' own docstring promises the GUI's QC strip -- a
             # permanently unused pressure port (e.g. no Pdi balloon) is a legitimate
-            # real setup, and validate should not fail every time on it.
-            if any(name.startswith("Flow ") for name in constant):
+            # real setup, and validate should not fail every time on it. An EMG-only
+            # set has no flow channel at all -- a constant EMG channel there is the
+            # equivalent hard failure instead.
+            if emg_only:
+                if any(name.startswith("EMG #") for name in constant):
+                    ok = False
+            elif any(name.startswith("Flow ") for name in constant):
                 ok = False
-    # K-113: Settings.unknown is collected by from_dict but was never read anywhere —
+    # Settings.unknown is collected by from_dict but was never read anywhere —
     # a misspelled key silently ran on the default it was meant to override, with no
     # warning from validate, the run, or run-report.txt. Report it here so the site's
     # promise ("skim the validate output ... to catch this") is actually true.
@@ -174,6 +494,13 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--dry-run", action="store_true", help="compute but do not write output files")
     pr.set_defaults(func=cmd_run)
 
+    pb = sub.add_parser(
+        "breaths", help="number every detected breath/segment for one or all matched files")
+    pb.add_argument("settings")
+    pb.add_argument("file", nargs="?",
+                    help="only this file (basename); every matched file if omitted")
+    pb.set_defaults(func=cmd_breaths)
+
     pm = sub.add_parser("migrate", help="convert a legacy .py settings file to TOML")
     pm.add_argument("legacy")
     pm.add_argument("-o", "--output", required=True, help="output .toml path")
@@ -182,6 +509,15 @@ def build_parser() -> argparse.ArgumentParser:
     pv = sub.add_parser("validate", help="validate a TOML settings file and its inputs")
     pv.add_argument("settings")
     pv.set_defaults(func=cmd_validate)
+
+    pi = sub.add_parser("init", help="write a commented, signal-set-filtered starting TOML file")
+    pi.add_argument("output", help="path to write, e.g. new_settings.toml")
+    pi.add_argument("--signals", required=True,
+                    help="comma-separated signal set, e.g. flow,poes,emg")
+    pi.add_argument("--folder", help="recordings folder (left as a placeholder if omitted)")
+    pi.add_argument("--files", help="input file mask (left as a placeholder if omitted)")
+    pi.add_argument("--fs", type=int, help="sampling frequency in Hz (left as a placeholder if omitted)")
+    pi.set_defaults(func=cmd_init)
     return p
 
 

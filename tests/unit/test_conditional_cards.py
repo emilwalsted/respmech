@@ -97,6 +97,29 @@ def test_a_card_holding_the_focused_widget_is_not_yanked_away(qapp, tmp_path):
     assert card.isVisible(), "the card vanished while the user was editing it"
 
 
+def test_the_declared_signal_set_never_hides_the_entropy_card(qapp, tmp_path):
+    """R8, restated as a regression: entropy is bool(ch.entropy) alone, never a function of
+    ``analysis.signals`` — unlike the Work-of-breathing/PTP cards M-17 makes conditional on
+    Poes, the entropy card's predicate is untouched by that ticket and must stay that way.
+    A Flow-only (no Poes/Pgas/Pdi/EMG) and an EMG-only-SHAPED (no flow at all) declared set
+    both still show it, as long as a column is assigned to entropy."""
+    sc = _screen(qapp, tmp_path)
+    card = _entropy_card(sc)
+    assert card.isVisible()
+    sc.state.settings.analysis.signals = ["flow"]
+    sc.state.settings.input.channels.poes = None
+    sc.state.settings.input.channels.pgas = None
+    sc.state.settings.input.channels.pdi = None
+    sc._update_disclosure()
+    qapp.processEvents()
+    assert card.isVisible(), "a Flow-only signal set hid the entropy card"
+    sc.state.settings.analysis.signals = ["emg"]
+    sc.state.settings.input.channels.flow = None
+    sc._update_disclosure()
+    qapp.processEvents()
+    assert card.isVisible(), "an EMG-only-shaped signal set hid the entropy card"
+
+
 # -- the parameters still round-trip ------------------------------------------
 def test_the_moved_parameters_still_load_and_save(qapp, tmp_path):
     sc = _screen(qapp, tmp_path)
@@ -114,3 +137,44 @@ def test_editing_them_still_marks_the_analysis_modified(qapp, tmp_path):
         sc._mark_clean()
         getattr(sc, name).setValue(value)
         assert sc.is_dirty(), f"{name} no longer marks the analysis modified"
+
+
+# -- Subjects && lung volumes (M-37) ------------------------------------------
+def _subjects_card(sc):
+    return _card(sc, "Subjects && lung volumes")
+
+
+def test_subjects_card_is_hidden_when_no_subjects_are_declared(qapp, tmp_path):
+    sc = _screen(qapp, tmp_path, entropy=())
+    assert not sc.state.settings.input.subjects
+    assert not _subjects_card(sc).isVisible()
+
+
+def test_subjects_card_appears_once_a_subject_is_added(qapp, tmp_path):
+    from respmech.core.settings import SubjectEntry
+    sc = _screen(qapp, tmp_path, entropy=())
+    card = _subjects_card(sc)
+    assert not card.isVisible()
+    sc.state.settings.input.subjects.append(SubjectEntry(key="synth_case", tlc_l=6.0))
+    sc._update_disclosure()
+    qapp.processEvents()
+    assert card.isVisible()
+
+
+def test_entropy_on_derived_volume_box_follows_flow_and_integrated_volume(qapp, tmp_path):
+    """The 'Entropy on derived volume' box lives in the Sample entropy card and is offered only
+    when Flow is declared and the volume is integrated from it; ticking it writes
+    input.channels.entropy_derived, and the card shows even with no entropy column assigned."""
+    sc = _screen(qapp, tmp_path, entropy=())
+    card, box = _entropy_card(sc), sc.ent_derived_volume
+    assert not card.isVisible()
+    sc.state.settings.processing.volume.integrate_from_flow = True
+    sc._update_disclosure()
+    qapp.processEvents()
+    assert card.isVisible() and box.isVisible()
+    box.setChecked(True)
+    sc._on_field_changed()
+    assert sc.state.settings.input.channels.entropy_derived == ["volume"]
+    box.setChecked(False)
+    sc._on_field_changed()
+    assert sc.state.settings.input.channels.entropy_derived == []

@@ -22,10 +22,11 @@ import pyqtgraph as pg
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
-from respmech.core.settings import ExcludeEntry
+from respmech.core.settings import (ExcludeEntry, _reference_file_has_rest_segment,
+                                    resolve_noise_reference_mode_or_none)
 from respmech.ui.dialogs import TextViewerDialog, short_error
 from respmech.ui.help_text import tooltip as _help_tip
-from respmech.ui.noise_profile_dialog import NOISE_ACCENT
+from respmech.ui.noise_profile_dialog import INTERBURST, NOISE_ACCENT
 from respmech.ui import plot_perf
 from respmech.ui.stft_frames import (MIN_STABLE_FRAMES,
                                      min_seconds_for_frames,
@@ -44,8 +45,10 @@ try:
 except Exception:  # pragma: no cover
     _theme = None
 
+from respmech.core.analysis.signals import Capabilities
+
 from ._figure_fit import _CompactFigureFitter, _fit_compact_figure, refit_compact_figure
-from ._jobs import _FileRunError, _TAB_ECG, _TAB_NOISE
+from ._jobs import _FileRunError, _TAB_ECG, _TAB_MECH, _TAB_NOISE, _TAB_SEGMENTS
 from ._plot_helpers import _FitAxis, _check_icon_url, _pen, _plot_pal, _rms_envelope, _tick_colour
 
 
@@ -69,7 +72,7 @@ _FIDELITY_TITLE = "Noise fidelity frontier (1 = untouched)"
 #: ElidingLabel) so the definition is one hover away wherever the panel's header is used.
 #: The band answers the question nothing on this tab otherwise answers (D04, UI-overhaul);
 #: the parenthetical names the Advanced field this mirrors, in its own wording, so the two
-#: never have to be kept in sync by hand. Before ticket 5.2's reconstruction fix the STFT
+#: never have to be kept in sync by hand. Before the reconstruction fix the STFT
 #: round-trip mixed magnitude and phase additively (masked magnitude, unmasked imaginary
 #: part) instead of scaling one complex number, so fidelity drifted a little over 1 even
 #: at prop_decrease = 0 ("values above 1 are routine" used to be the honest wording here);
@@ -319,7 +322,7 @@ class _EmgNoiseMixin:
         split.setStretchFactor(0, 1); split.setStretchFactor(1, 1); split.setStretchFactor(2, 2)
         split.setSizes([200, 200, 400])
         v.addWidget(split, 1)
-        # clicking a numbered breath in any EMG plot toggles its exclusion too
+        # clicking a numbered breath in any EMG plot marks it too (exclusion: right-click menu)
         self.emg_raw_plots.scene().sigMouseClicked.connect(self._on_emg_raw_clicked)
         self.emg_plots.scene().sigMouseClicked.connect(self._on_emg_detail_clicked)
         self.emg_result_plots.scene().sigMouseClicked.connect(self._on_emg_result_clicked)
@@ -545,21 +548,89 @@ class _EmgNoiseMixin:
         # (test run) table, so 'batch' is in the set now that the modal edits it.
         self._request_autorun({"ecg", "emg_all", "emg_detail", "noise", "batch"})
 
-    # -- EMG tab visibility / channels -------------------------------------
-    def _update_emg_tab_visibility(self):
-        """Show the two EMG sub-tabs only when EMG channels exist, in the fixed pipeline order
-        Mechanics(0) › EMG–ECG reduction(1) › EMG–noise reduction(2)."""
-        has_emg = bool(self.state.settings.input.channels.emg)
-        if has_emg:
-            if self.subtabs.indexOf(self._ecg_tab) < 0:
-                self.subtabs.insertTab(1, self._ecg_tab, _TAB_ECG)     # right after Mechanics(0)
-            if self.subtabs.indexOf(self._emg_tab) < 0:
-                self.subtabs.insertTab(2, self._emg_tab, _TAB_NOISE)   # after the ECG tab(1)
-        else:
-            for tab in (self._emg_tab, self._ecg_tab):
-                idx = self.subtabs.indexOf(tab)
-                if idx >= 0:
-                    self.subtabs.removeTab(idx)
+    # -- sub-tab visibility / channels -------------------------------------
+    def subtab_plan(self, caps):
+        """Ordered ``(widget, title)`` pairs for the sub-tab bar, given a
+        :class:`~respmech.core.analysis.signals.Capabilities` shape (M-17, R7).
+
+        The FIRST tab is the shape's own preview: Mechanics for every
+        flow-bearing shape (Flow only, Flow + Poes, the full family), or the
+        dedicated "EMG – segments" tab (M-26) for an EMG-only signal set — the
+        two are each other's counterpart, mirroring ``_schedule``'s 'mech'/
+        'segments' job gate exactly (``caps.flow`` vs. ``caps.mode ==
+        'emg_only'``), so this plan and that dispatch can never disagree about
+        which shape gets which preview. ``SignalSetDialog``'s EMG-only preset
+        stays disabled in the UI until M-28 activates it; this function is
+        already correct for it (exercised today via hand-built ``Settings``
+        in tests, same as M-25's worker/job-dispatch tests). EMG channels
+        being assigned is the sole trigger for the ECG-reduction/noise-
+        reduction tabs — independent of the flow/pressure family, since a
+        "Flow only"/"Flow + Poes" preset can carry EMG too (the "Also EMG"
+        checkbox), and an EMG-only set always carries it by definition
+        (``caps.emg`` is true whenever ``caps.mode == 'emg_only'``).
+        ``caps=None`` (a malformed ``analysis.signals`` — see
+        ``Capabilities.from_settings_or_none``) has nothing safe to derive a
+        shape from, so it renders as Mechanics alone, same as a flow-bearing
+        shape with no EMG channels."""
+        emg_only = bool(caps is not None and caps.mode == "emg_only")
+        first = (self._segments_tab, _TAB_SEGMENTS) if emg_only else (self._mech_tab, _TAB_MECH)
+        plan = [first]
+        if caps is not None and caps.emg:
+            plan.append((self._ecg_tab, _TAB_ECG))
+            plan.append((self._emg_tab, _TAB_NOISE))
+        return plan
+
+    def _update_subtabs(self):
+        """Build the sub-tab bar from :meth:`subtab_plan`, preserving each tab
+        widget's identity across a rebuild (renamed from
+        ``_update_emg_tab_visibility``, M-17): the has-EMG-channels boolean it
+        used to read directly now comes from ``Capabilities.from_settings``,
+        the one function every other relevance decision in the program also
+        consults, though today it can only ever agree with the old boolean —
+        see :meth:`subtab_plan`. ``emg_channel``/cleanup-contract tests rely on
+        the widgets never being recreated, only inserted/removed. Uses
+        ``from_settings_or_none`` (not the raising ``from_settings``) because
+        this runs on every settings sync AND on ``PreviewScreen`` construction,
+        which sits directly on ``MainWindow.__init__``'s no-try/except path.
+
+        M-26: the FIRST tab is now itself part of the plan (Mechanics XOR the
+        segments tab), not a fixed, always-present tab — rebuilt generically
+        from ``subtab_plan`` instead of hardcoding index 0 to Mechanics, so a
+        signal-set change that flips flow-bearing <-> EMG-only swaps it too.
+
+        Self-review finding: removing the OLD first-slot tab while it is still
+        the CURRENT one lets Qt auto-select whatever tab happens to shift into
+        that slot (the ECG-reduction tab, if EMG channels are assigned on
+        either side of the flip) — not "whatever will replace it". A user
+        parked on Mechanics/segments at the moment a loaded analysis flips
+        shape (File ▸ Open of a different signal set, drag-and-drop — both
+        reachable today, independent of the M-28 UI gate on the EMG-only
+        preset) would be silently dropped onto ECG-reduction with no
+        indication anything moved. Fixed by remembering whether the user was
+        on THAT slot before the rebuild and, if so, explicitly restoring
+        current-ness to its replacement afterwards — inserting a tab at an
+        index at or before the current one only shifts the current INDEX in
+        Qt, it never changes which WIDGET is current, so this cannot be fixed
+        by insertion order alone."""
+        caps = Capabilities.from_settings_or_none(self.state.settings)
+        plan = self.subtab_plan(caps)
+        wanted = [widget for widget, _title in plan]
+        was_on_first_slot = self.subtabs.currentWidget() in (self._mech_tab, self._segments_tab)
+        # drop anything no longer wanted, highest index first so earlier removals
+        # never shift the index of one still to come
+        for idx in reversed(range(self.subtabs.count())):
+            if self.subtabs.widget(idx) not in wanted:
+                self.subtabs.removeTab(idx)
+        # insert/reorder the wanted ones into their plan position
+        for pos, (widget, title) in enumerate(plan):
+            idx = self.subtabs.indexOf(widget)
+            if idx < 0:
+                self.subtabs.insertTab(pos, widget, title)
+            elif idx != pos:
+                self.subtabs.removeTab(idx)          # does not destroy the widget (B02 precedent)
+                self.subtabs.insertTab(pos, widget, title)
+        if was_on_first_slot:
+            self.subtabs.setCurrentWidget(plan[0][0])
 
     def _refresh_emg_channels(self):
         cols = list(self.state.settings.input.channels.emg)
@@ -655,13 +726,28 @@ class _EmgNoiseMixin:
         # the read-out staying visible.
         if not n.reference_file:
             self.noise_ref_readout.setFullText("Rest reference: not set")
-        elif n.use_expiration or not n.reference_intervals:
+            return
+        # M-24: read the RESOLVED mode (M-22), not the raw use_expiration/reference_intervals
+        # pair directly — an EMG-only set ignores use_expiration entirely (it may still sit
+        # at its True default), so the old bare predicate could describe a reference this
+        # test will never actually build that way.
+        mode = resolve_noise_reference_mode_or_none(self.state.settings)
+        if mode == "expiration":
             self.noise_ref_readout.setFullText(
                 f"Rest reference: {n.reference_file}, every expiration")
-        else:
+        elif mode == "rest_segments":
+            self.noise_ref_readout.setFullText(
+                f"Rest reference: {n.reference_file}, rest-typed segment(s)")
+        elif mode == "intervals":
             spans = ", ".join(f"{a:.2f}–{b:.2f} s" for a, b in n.reference_intervals)
             self.noise_ref_readout.setFullText(
                 f"Rest reference: {n.reference_file}, {spans}")
+        elif mode == "interburst":
+            self.noise_ref_readout.setFullText(
+                f"Rest reference: {n.reference_file}, the periods between bursts")
+        else:                                  # 'unresolved'
+            self.noise_ref_readout.setFullText(
+                f"Rest reference: {n.reference_file}, unresolved")
 
     def _on_noise_enabled_changed(self, *_):
         if self._loading_noise:
@@ -712,10 +798,36 @@ class _EmgNoiseMixin:
             self.btn_set_noise.setMinimumHeight(h)
 
     def _toggle_from_emg_click(self, ev, plot_items, offset):
+        # M-20: a right-click/Ctrl+left-click on a breath is handled at item level
+        # (BreathSpansItem.mouseClickEvent -> typeRequested) and accepted there — this
+        # scene-level handler is for the plain left-click toggle only. The button
+        # check is best-effort (getattr, not ev.button() directly): a fake event used
+        # by test_legend_click_does_not_toggle_breath has no .button() at all, and the
+        # ORIGINAL guard here never required one either.
+        # M-27: while 'Place separators' is armed, EVERY click this shared funnel sees
+        # (segments tab, raw/detail/result EMG stacks alike — they all draw the SAME
+        # channels for an EMG-only set) places or removes a separator instead of
+        # toggling a breath, checked FIRST — before the legend/noise-band checks below,
+        # which exist for the ordinary toggle and have nothing to say about this mode.
+        # Known, accepted gap (self-review): SeparatorLinesItem is currently drawn only
+        # on the segments tab's own stack (_update_separator_lines) — arming here and
+        # then clicking on the raw/detail/result views still places/removes a separator
+        # correctly (same settings, same file), but those views show no marker for it,
+        # so a user working from one of them cannot SEE an existing separator or tell a
+        # click will do anything but the usual breath-exclude toggle. Left as is for this
+        # ticket's own scope (the segments tab is where this action lives); extending the
+        # marker to the other views is a candidate for a later ticket, not a correctness
+        # bug in this one.
+        if getattr(self, "_separators_armed", False):
+            self._place_or_remove_separator(ev, plot_items, offset)
+            return
         if not self._breath_spans:
             return
         try:
             if ev.isAccepted():
+                return
+            button = getattr(ev, "button", None)
+            if button is not None and button() != Qt.LeftButton:
                 return
             pos = ev.scenePos()
         except Exception:                              # noqa: BLE001
@@ -732,7 +844,7 @@ class _EmgNoiseMixin:
             if vb is not None and vb.sceneBoundingRect().contains(pos):
                 bno = self._breath_at(vb.mapSceneToView(pos).x() - offset)
                 if bno is not None:
-                    self._toggle_breath(bno)
+                    self._select_breath(bno)
                 return
 
     def _on_emg_raw_clicked(self, ev):
@@ -819,7 +931,12 @@ class _EmgNoiseMixin:
         n = self.state.settings.processing.emg.noise
         shown = self._selected_filename()
         ivals = n.reference_intervals
-        show = bool(shown and not n.use_expiration and ivals and shown == (n.reference_file or ""))
+        # M-24: gate on the RESOLVED mode, not the raw use_expiration flag — for an EMG-only
+        # set that flag is never touched by this screen and stays at its True default, which
+        # used to hide a genuinely-set explicit interval (the flag reads as 'expiration' even
+        # though EMG-only ignores it and the interval IS what the resolver will use).
+        mode = resolve_noise_reference_mode_or_none(self.state.settings)
+        show = bool(shown and mode == "intervals" and ivals and shown == (n.reference_file or ""))
         t0 = t1 = None
         if show:
             try:
@@ -852,6 +969,8 @@ class _EmgNoiseMixin:
         n.reference_file = name
         n.reference_intervals = []
         n.reference_folder = self.state.settings.input.folder
+        if n.reference_mode == "interburst":
+            n.reference_mode = "auto"       # an explicit other choice retires it
         n.use_expiration = True
         self.noise_reference_changed.emit(name, [], True)
         self._refresh_noise_readout()
@@ -877,6 +996,8 @@ class _EmgNoiseMixin:
         n.reference_file = name
         n.reference_intervals = [[t0, t1]]
         n.reference_folder = self.state.settings.input.folder
+        if n.reference_mode == "interburst":
+            n.reference_mode = "auto"       # an explicit other choice retires it
         n.use_expiration = False
         fs = self.state.settings.input.format.sampling_frequency or 0
         span = int(round((t1 - t0) * fs))
@@ -894,6 +1015,58 @@ class _EmgNoiseMixin:
         self._update_actions()
         self._request_autorun()          # re-condition against the new reference
         return (t0, t1)
+
+    def _apply_noise_rest_segments(self):
+        """Define the shared noise reference as this file's rest-typed segment(s) (M-22's
+        ``rest_segments`` mode) — the EMG-only alternative to marking a span by hand, offered
+        only when the file already carries a segment typed 'rest' in ``processing.
+        breath_types`` (see ``modes_available`` in ``_open_noise_profile_dialog``).
+        ``reference_mode`` is left at 'auto': the resolver already prefers a rest-typed
+        segment over an explicit interval whenever both exist, so nothing here needs to
+        force it. Clears ``reference_intervals`` for the same reason ``_apply_noise_expiration``
+        clears them: leaving a stale, unrelated span behind would resurface (as 'intervals')
+        the moment the file's rest typing is ever removed, instead of failing loudly as
+        'unresolved' the way an explicitly-chosen reference that stopped existing should."""
+        name = self._selected_filename()
+        if not name:
+            return None
+        n = self.state.settings.processing.emg.noise
+        n.reference_file = name
+        n.reference_intervals = []
+        n.reference_folder = self.state.settings.input.folder
+        if n.reference_mode == "interburst":
+            n.reference_mode = "auto"       # an explicit other choice retires it
+        self.noise_reference_changed.emit(name, [], False)
+        self._refresh_noise_readout()
+        self._refresh_noise_reference_band()          # no single span -> stays hidden
+        self._set_status(f"Noise profile ← {name}, built from this file's rest-typed "
+                         "segment(s). Enable 'Reduce EMG noise' to apply it.")
+        self._update_actions()
+        self._request_autorun()
+        return True
+
+    def _apply_noise_interburst(self):
+        """Define the shared noise reference as the periods between the bursts of this
+        file (core mode ``'interburst'``, only meaningful for an ``emg_burst``
+        segmentation). Unlike the rest-segments mode, ``'auto'`` never resolves to it, so
+        the mode is written explicitly; the stale span is cleared for the same reason
+        ``_apply_noise_rest_segments`` clears it."""
+        name = self._selected_filename()
+        if not name:
+            return None
+        n = self.state.settings.processing.emg.noise
+        n.reference_file = name
+        n.reference_intervals = []
+        n.reference_folder = self.state.settings.input.folder
+        n.reference_mode = "interburst"
+        self.noise_reference_changed.emit(name, [], False)
+        self._refresh_noise_readout()
+        self._refresh_noise_reference_band()          # no single span -> stays hidden
+        self._set_status(f"Noise profile ← {name}, built from the periods between its "
+                         "bursts. Enable 'Reduce EMG noise' to apply it.")
+        self._update_actions()
+        self._request_autorun()
+        return True
 
     def _use_region_as_noise(self):
         reg = self._noise_region
@@ -924,7 +1097,7 @@ class _EmgNoiseMixin:
         if not data.get("processed"):
             self._set_status("This file has no EMG channels to pick a noise profile from.")
             return
-        from respmech.ui.noise_profile_dialog import EXPIRATION
+        from respmech.ui.noise_profile_dialog import EXPIRATION, REST_SEGMENTS
         n = self.state.settings.processing.emg.noise
         # stage_ecg_reduction falls back to the RAW channels whenever detection/removal
         # raises (see its docstring) and reports NO peaks, regardless of the remove_ecg
@@ -934,19 +1107,45 @@ class _EmgNoiseMixin:
         # reappearing on the error path _ecg.py already guards against — see its own
         # ecg_error handling for the same reasoning).
         ecg_applied = bool(data.get("ecg_applied")) and not data.get("ecg_error")
+        # M-24: which WHOLE modes this picker can offer for THIS signal set/file. 'intervals'
+        # (dragging a span) is always available. 'expiration' only means anything with a flow
+        # channel declared (an EMG-only set has no inspiration/expiration phases at all —
+        # resolve_noise_reference_mode ignores use_expiration entirely once there is no flow).
+        # 'rest_segments' is offered only when the file being opened already carries a
+        # segment typed 'rest' (processing.breath_types) — there is nothing to build a
+        # rest-segments reference FROM otherwise.
+        caps = Capabilities.from_settings_or_none(self.state.settings)
+        has_flow = bool(caps and caps.flow)
+        file_name = self._selected_filename()
+        modes = {"intervals"}
+        if has_flow:
+            modes.add("expiration")
+        elif _reference_file_has_rest_segment(self.state.settings, file_name):
+            modes.add("rest_segments")
+        if (not has_flow
+                and self.state.settings.processing.segmentation.method == "emg_burst"):
+            modes.add("interburst")
+        modes_available = frozenset(modes)
         dlg = NoiseProfileDialog(data["processed"], data["t"], data["fs"], data["cols"],
-                                 parent=self, file_name=self._selected_filename(),
+                                 parent=self, file_name=file_name,
                                  flow=data.get("flow"), reference_file=n.reference_file or "",
                                  peak_times=data.get("peaks"), ecg_applied=ecg_applied,
-                                 win_length=n.win_length, hop_length=n.hop_length)
-        dlg.use_expiration.setChecked(bool(n.use_expiration or not n.reference_intervals))
+                                 win_length=n.win_length, hop_length=n.hop_length,
+                                 modes_available=modes_available)
+        mode = resolve_noise_reference_mode_or_none(self.state.settings)
+        if "expiration" in modes_available:
+            dlg.use_expiration.setChecked(bool(n.use_expiration or not n.reference_intervals))
         # Seed the picker with the reference already saved for this test (D07), so a user
         # who opens the dialog to CHECK what is set — the app's own declared workflow of
         # setting up once and revisiting for many subjects — sees it shaded and can accept
         # as a no-op, instead of an empty picker that only shows something once you drag a
-        # new one over it. Skipped for 'every expiration': that mode has no single span to
-        # shade, and setChecked(True) above already gives it its own unaffected behaviour.
-        if not n.use_expiration and n.reference_intervals:
+        # new one over it. Skipped for 'every expiration'/'rest-typed segments': neither has
+        # a single span to shade, and their own checkbox above/below already reflects them.
+        if "rest_segments" in modes_available and mode == "rest_segments":
+            dlg.use_rest_segments.setChecked(True)
+        elif "interburst" in modes_available and mode == "interburst":
+            dlg.use_interburst.setChecked(True)
+        elif not n.use_expiration and n.reference_intervals:
             try:
                 t0, t1 = float(n.reference_intervals[0][0]), float(n.reference_intervals[0][1])
             except Exception:                        # noqa: BLE001 — malformed shape -> nothing to seed
@@ -957,6 +1156,10 @@ class _EmgNoiseMixin:
             sel = dlg.selected_region()
             if sel is EXPIRATION:
                 self._apply_noise_expiration()
+            elif sel is REST_SEGMENTS:
+                self._apply_noise_rest_segments()
+            elif sel is INTERBURST:
+                self._apply_noise_interburst()
             elif sel is not None:
                 self._apply_noise_reference(sel[0], sel[1])
 

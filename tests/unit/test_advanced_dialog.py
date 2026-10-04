@@ -318,9 +318,14 @@ def test_the_mechanics_card_left_setup_for_the_preview_tab(qapp, tmp_path):
     from PySide6.QtWidgets import QGroupBox
     sc = _settings_screen(qapp, tmp_path)
     titles = {g.title() for g in sc.findChildren(QGroupBox)}
-    # Setup is lean now: Input, Channels, Output, and the conditional Sample entropy card.
+    # Setup is lean now: Input, Channels, Output, and the conditional Sample entropy and
+    # Subjects && lung volumes cards (M-34/M-37; both built unconditionally and merely
+    # hidden while empty via _cond_cards, so findChildren still sees them regardless of
+    # whether this settings object names any subjects) and, likewise conditional, the
+    # Intrinsic PEEP (PEEPi) card, shown once Poes is declared.
     assert "Mechanics" not in titles and "Advanced (rarely changed)" not in titles
-    assert titles == {"Input", "Channels", "Output", "Sample entropy"}
+    assert titles == {"Input", "Channels", "Output", "Sample entropy",
+                      "Intrinsic PEEP (PEEPi)", "Subjects && lung volumes"}
     pv = _preview(qapp, tmp_path)
     assert hasattr(pv, "btn_mech_advanced"), "the Preview Mechanics tab hosts Advanced…"
     pv.shutdown()
@@ -364,6 +369,89 @@ def test_mech_ok_commits_and_cancel_changes_nothing(qapp, tmp_path, accept, monk
     else:
         assert s.processing.segmentation.buffer == before
         assert not edits, "Cancel marked the analysis modified"
+    pv.shutdown()
+
+
+def test_wob_and_ptp_cards_are_hidden_without_poes(qapp, tmp_path, monkeypatch):
+    """M-17 (R7): 'Work of breathing' and 'Pressure–time product' are meaningless without
+    a Poes trace to compute either from (M-14's compute-guards never populate them for a
+    Poes-less analysis) — both cards drop out of the Mechanics — advanced… dialog for a
+    Flow-only signal set, and come back the moment Poes rejoins it. The other cards this
+    ticket does not touch (Breath detection, Volume, End-expiratory trend, Sampling,
+    Lung volumes, Per-file overrides) must stay exactly as many as before. Lung volumes
+    (M-36/M-45) is unrelated to Poes — its fields (require_references/eelv_tracking/
+    aggregate/preceding_breaths) are never filtered by the poes-gate below — so it stays
+    present for a flow-only signal set exactly as it does for the full one, and so does
+    Breathing pattern (flow and volume only)."""
+    from respmech.ui.screens.preview_screen import PreviewScreen
+    from respmech.ui.state import AppState
+
+    flow_only = synth_settings(str(tmp_path), data_out=_OUT,
+                               channels={"poes": None, "pgas": None, "pdi": None, "emg": []})
+    pv = PreviewScreen(AppState(flow_only))
+    pv._refresh_files()
+    seen = {}
+    _mech_stub(monkeypatch, lambda d: seen.setdefault("titles", {c.title() for c in d.cards}))
+    pv._open_mech_advanced()
+    assert "Work of breathing" not in seen["titles"]
+    assert "Pressure–time product" not in seen["titles"]
+    assert "Other" not in seen["titles"], "the hidden fields must not resurface as 'Other'"
+    assert seen["titles"] == {"Breath detection", "Volume", "End-expiratory trend",
+                              "Sampling", "Lung volumes", "Breathing pattern",
+                              "Per-file overrides"}
+    pv.shutdown()
+
+    full = synth_settings(str(tmp_path), data_out=_OUT)
+    pv2 = PreviewScreen(AppState(full))
+    pv2._refresh_files()
+    seen2 = {}
+    _mech_stub(monkeypatch, lambda d: seen2.setdefault("titles", {c.title() for c in d.cards}))
+    pv2._open_mech_advanced()
+    assert {"Work of breathing", "Pressure–time product"} <= seen2["titles"]
+    pv2.shutdown()
+
+    # the exact Flow + Poes preset (no Pgas/Pdi), not just the full family — pins the
+    # acceptance criterion against caps.poes specifically, not caps.pgas/caps.pdi
+    poes_only = synth_settings(str(tmp_path), data_out=_OUT,
+                               channels={"pgas": None, "pdi": None, "emg": []})
+    pv3 = PreviewScreen(AppState(poes_only))
+    pv3._refresh_files()
+    seen3 = {}
+    _mech_stub(monkeypatch, lambda d: seen3.setdefault("titles", {c.title() for c in d.cards}))
+    pv3._open_mech_advanced()
+    assert {"Work of breathing", "Pressure–time product"} <= seen3["titles"]
+    pv3.shutdown()
+
+
+def test_wob_and_ptp_settings_are_unreachable_but_not_reset_while_hidden(
+        qapp, tmp_path, monkeypatch):
+    """Hidden follows the SET, never workflow progress (R7): a Flow-only analysis simply
+    cannot edit processing.wob/processing.ptp through this dialog — proven directly by
+    checking the dialog never BUILT a widget for any of the three keys (not merely that
+    an edit-free open leaves the settings alone, which would hold even if the cards were
+    shown unconditionally) — but the settings themselves are untouched, exactly as they
+    were before the dialog opened, ready to reappear the moment Poes is declared again
+    (Setup ▸ Signals)."""
+    from respmech.ui.screens.preview_screen import PreviewScreen
+    from respmech.ui.state import AppState
+
+    flow_only = synth_settings(str(tmp_path), data_out=_OUT,
+                               channels={"poes": None, "pgas": None, "pdi": None, "emg": []})
+    pv = PreviewScreen(AppState(flow_only))
+    pv._refresh_files()
+    before = (flow_only.processing.wob.calc_from, flow_only.processing.wob.avg_resampling_obs,
+             flow_only.processing.ptp.baseline_window_s)
+    seen = {}
+    # d._fields (AdvancedDialog's own flattened Field-spec list, set in its __init__ from
+    # the sections actually built) is the ground truth for "was a widget ever built for
+    # this key" -- not d.cards[i]._fields, which holds the built QWidgets, not Field specs.
+    _mech_stub(monkeypatch, lambda d: seen.setdefault("keys", {f.key for f in d._fields}))
+    pv._open_mech_advanced()
+    assert not {"calc_from", "avg_resampling_obs", "baseline_window_s"} & seen["keys"], (
+        "a widget was built for a WOB/PTP key even though its card is hidden")
+    after = (flow_only.processing.wob.calc_from, flow_only.processing.wob.avg_resampling_obs,
+            flow_only.processing.ptp.baseline_window_s)
+    assert after == before
     pv.shutdown()
 
 
@@ -1100,3 +1188,90 @@ def test_the_live_count_explains_when_the_thresholds_cannot_be_evaluated(
     pv._open_mech_advanced()
     assert seen["text"] == "Could not count breaths with these breath-detection thresholds."
     pv.shutdown()
+
+
+def test_mechanics_advanced_offers_and_commits_the_mfvl_fields(qapp, tmp_path, monkeypatch):
+    """Lung volumes carries the four MFVL fields (source, EFL tolerances, MVV
+    multiplier); an accepted edit lands on ``processing.mfvl`` and a Cancel changes nothing.
+    Every field names its settings path in its tooltip (the shared help_text contract)."""
+    pv = _preview(qapp, tmp_path)
+    s = pv.state.settings
+    seen = {}
+
+    def _edit(d):
+        for key, path in (("source", "processing.mfvl.source"),
+                          ("efl_rel_tol", "processing.mfvl.efl_rel_tol"),
+                          ("efl_abs_tol_lps", "processing.mfvl.efl_abs_tol_lps"),
+                          ("mvv_fev1_multiplier", "processing.mfvl.mvv_fev1_multiplier")):
+            seen[key] = path in d.widget(key).toolTip()
+        d.widget("source").setCurrentIndex(1)             # Envelope of all attempts
+        d.widget("efl_rel_tol").setValue(0.05)
+        d.widget("efl_abs_tol_lps").setValue(0.1)
+        d.widget("mvv_fev1_multiplier").setValue(35.0)
+
+    _mech_stub(monkeypatch, _edit, accept=False)
+    pv._open_mech_advanced()
+    assert all(seen.values()) and len(seen) == 4
+    assert s.processing.mfvl.source == "single" and s.processing.mfvl.efl_rel_tol == 0.0
+
+    _mech_stub(monkeypatch, _edit, accept=True)
+    pv._open_mech_advanced()
+    assert s.processing.mfvl.source == "envelope"
+    assert s.processing.mfvl.efl_rel_tol == pytest.approx(0.05)
+    assert s.processing.mfvl.efl_abs_tol_lps == pytest.approx(0.1)
+    assert s.processing.mfvl.mvv_fev1_multiplier == pytest.approx(35.0)
+    pv.shutdown()
+
+
+def test_mechanics_advanced_offers_and_commits_the_breathing_pattern_switches(qapp, tmp_path,
+                                                                             monkeypatch):
+    """The Breathing pattern card carries the two opt-in switches (both off by default); an
+    accepted edit lands on ``processing.breathing_pattern`` and a Cancel changes nothing.
+    Each control names its settings path in its tooltip (the shared help_text contract)."""
+    pv = _preview(qapp, tmp_path)
+    s = pv.state.settings
+    seen = {}
+
+    def _edit(d):
+        seen["titles"] = {c.title() for c in d.cards}
+        for key, path in (("extended", "processing.breathing_pattern.extended"),
+                          ("variability", "processing.breathing_pattern.variability")):
+            seen[key] = path in d.widget(key).toolTip()
+        d.widget("extended").setChecked(True)
+        d.widget("variability").setChecked(True)
+
+    _mech_stub(monkeypatch, _edit, accept=False)
+    pv._open_mech_advanced()
+    assert "Breathing pattern" in seen["titles"]
+    assert seen["extended"] and seen["variability"]
+    assert not s.processing.breathing_pattern.extended
+    assert not s.processing.breathing_pattern.variability
+
+    _mech_stub(monkeypatch, _edit, accept=True)
+    pv._open_mech_advanced()
+    assert s.processing.breathing_pattern.extended is True
+    assert s.processing.breathing_pattern.variability is True
+    pv.shutdown()
+
+
+def test_breathing_pattern_card_is_absent_without_flow(qapp, tmp_path, monkeypatch):
+    """Breathing pattern needs Flow: an EMG-only analysis is not offered the switches, and
+    the fields do not resurface under 'Other'."""
+    from respmech.ui.screens.preview_screen import PreviewScreen
+    from respmech.ui.state import AppState
+
+    emg_only = synth_settings(str(tmp_path), data_out=_OUT)
+    emg_only.analysis.signals = ["emg"]
+    emg_only.input.channels.flow = None
+    emg_only.input.channels.volume = None
+    emg_only.input.channels.poes = None
+    emg_only.input.channels.pgas = None
+    emg_only.input.channels.pdi = None
+    pv = PreviewScreen(AppState(emg_only))
+    seen = {}
+    _mech_stub(monkeypatch, lambda d: seen.setdefault("titles", {c.title() for c in d.cards}))
+    pv._open_mech_advanced()
+    pv.shutdown()
+    assert "titles" in seen, "the Mechanics dialog did not open for an EMG-only shape"
+    assert "Breathing pattern" not in seen["titles"]
+    assert "Other" not in seen["titles"]

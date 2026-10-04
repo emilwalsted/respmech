@@ -28,7 +28,11 @@ import pandas as pd
 
 from respmech import __version__
 from respmech.core import quantities as _units
-from respmech.core.summary import build_cohort_summary, normalize_emg_table, reference_values_for_batch
+from respmech.core.analysis import pressure as pressurelib
+from respmech.core.analysis import references as referenceslib
+from respmech.core.analysis.signals import Capabilities, off_signals_text, signals_text
+from respmech.core.settings import resolve_noise_reference_mode
+from respmech.core.summary import build_cohort_summary, normalize_emg_table, resolve_emg_reference
 
 _CREATED = f"Created with RespMech v{__version__} (github.com/emilwalsted/respmech)"
 
@@ -97,17 +101,129 @@ def _units_df(columns, settings=None):
                          "Note": [note.get(c, "") for c in um.keys()]})
 
 
-def _provenance_rows(settings, when, incomplete_note: str | None = None):
+def _segmentation_provenance_key(settings) -> str:
+    """'Breath separation' names a flow/volume breath split; an EMG-only method (no
+    flow channel, so no breath to separate anything FROM) is reported as 'Segmentation'
+    instead -- shared between the Provenance sheet row and the run-report's PROCESSING
+    line so the two can never say something different about the same run."""
+    method = settings.processing.segmentation.method
+    return "Breath separation" if method in ("flow", "volume") else "Segmentation"
+
+
+def _segmentation_provenance_value(settings) -> str:
+    """The value paired with :func:`_segmentation_provenance_key`. 'buffer N' is a
+    flow/volume-only concept (the debounce ``compute.separateintobreathsbyflow`` walks
+    with) -- an EMG-only method never mentions it, so a whole_file run's report cannot
+    misleadingly claim a buffer that was never read."""
+    seg = settings.processing.segmentation
+    if seg.method in ("flow", "volume"):
+        return f"{seg.method}, buffer {seg.buffer}"
+    if seg.method == "whole_file":
+        return "whole file"
+    if seg.method == "separators":
+        counts = [len(e.times_s) for e in seg.separators]
+        if not counts:
+            return "separators (none configured)"
+        if len(set(counts)) == 1:
+            return f"separators ({counts[0]} per file)"
+        return "separators (" + ", ".join(
+            f"{e.file}: {len(e.times_s)}" for e in seg.separators) + ")"
+    if seg.method == "fixed_windows":
+        return f"fixed windows {float(seg.emg.window_s)}/{float(seg.emg.hop_s)} s"
+    # emg_burst: the number of bursts is a result, not a setting; the run report appends
+    # the total over all processed files, and the thresholds have their own Provenance row.
+    return "EMG bursts"
+
+
+#: human text for each mode resolve_noise_reference_mode() can return -- shared
+#: between the Provenance sheet row and the run-report's PROCESSING line (same guard
+#: against the two disagreeing as _segmentation_provenance_value above). 'unresolved'
+#: is included only for safety: Settings.validate() already refuses it while noise
+#: reduction is enabled, so it should never actually reach a written report.
+_NOISE_REFERENCE_TEXT = {
+    "expiration": "expiration (reference file's own quiet period)",
+    "intervals": "explicit reference intervals",
+    "rest_segments": "rest-typed segments",
+    "interburst": "inter-burst",
+    "unresolved": "unresolved",
+}
+
+
+def _noise_reference_provenance_value(settings) -> str:
+    # .get(..., mode), not a bare lookup: resolve_noise_reference_mode() passes an
+    # explicit, non-'auto' reference_mode through UNVALIDATED (by design -- see its own
+    # docstring), so a settings object that reached here without Settings.validate()
+    # having run first (a test double, a future caller) could carry a value this table
+    # has no entry for. A raw, unrecognised string in the report beats a bare KeyError
+    # crashing report generation over a cosmetic label -- the sibling
+    # _segmentation_provenance_value takes the same "never crash on an unmapped value"
+    # stance for exactly this reason.
+    mode = resolve_noise_reference_mode(settings)
+    return _NOISE_REFERENCE_TEXT.get(mode, mode)
+
+
+def _olv_active_files(result) -> set:
+    """The filenames ``core.analysis.lungvol.attach`` actually gave the ``ic_op``
+    column family to, read from ``result.analysis_plan['lung_volume']`` -- the ONE
+    place that decision is recorded (``lungvol.attach``'s own docstring), never
+    re-derived by sniffing a DataFrame's columns at each call site here (three
+    independent, easily-drifting copies of the same check before this helper)."""
+    plan = (getattr(result, "analysis_plan", None) or {}).get("lung_volume") or {}
+    return set(plan.get("active_files", ()))
+
+
+def _ic_reference_provenance_value(used: dict) -> str:
+    """The text for a per-file 'IC reference' Provenance row, from one entry of
+    ``FileResult.references_used`` (``core.analysis.references.attach``'s own shape:
+    ``{'source', 'breaths', 'n', 'value'}``). FVC/max-effort references join this same
+    row family once they have their own consuming column (the maximal-effort reference
+    already does, see ``_max_effort_text``) -- the row is named 'IC reference' rather
+    than 'Reference' so the two are never mistaken for the same thing."""
+    breaths = ", ".join(str(b) for b in used["breaths"])
+    return f"{used['source']} #{breaths} → {used['n']} accepted, {used['value']:.3g} L"
+
+
+def _max_effort_text(used: dict) -> str:
+    """One line naming the maximal-effort reference a file's normalised columns were
+    read against, from ``FileResult.references_used['max_insp']`` (``core.analysis.
+    normalisation.attach``'s shape): source file, breath numbers, the kind(s) behind it
+    (a sniff and a maximal inspiration give different Pdi, so the kind is part of the
+    reference) and the reference values themselves."""
+    breaths = ", ".join(str(b) for b in used["breaths"])
+    vals = [f"{k} {used[k]:.3g}" for k in ("poes_max_ref", "pdi_max_ref", "rms_max_ref")
+            if k in used]
+    text = f"{used['source']} #{breaths} ({' + '.join(used['kinds'])})"
+    return f"{text}: {', '.join(vals)}" if vals else text
+
+
+def _provenance_rows(settings, when, incomplete_note: str | None = None,
+                     reference_note: str | None = None, olv_active: bool = False,
+                     normalisation_note: str | None = None):
     ts = (when or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
     ip = settings.input
+    caps = Capabilities.from_settings(settings)
+    signals_value = signals_text(settings)
+    off = off_signals_text(caps.declared)
+    if off:
+        # M-13: an off signal is deliberate (this shape's own definition), not a gap --
+        # named here so a reader of the Provenance sheet alone (no run-report.txt open)
+        # is never left wondering why, say, no gastric-pressure column exists.
+        signals_value += f" — {off} absent by signal set"
     rows = [("RespMech version", __version__),
             ("Environment", _environment_info()),
             ("Generated", ts),
             ("Input folder", ip.folder),
             ("Input pattern", ip.files),
             ("Sampling frequency (Hz)", ip.format.sampling_frequency),
-            ("Breath separation", f"{settings.processing.segmentation.method}, "
-                                  f"buffer {settings.processing.segmentation.buffer}"),
+            ("Signals", signals_value),
+            ("Analyses", ", ".join(caps.analyses())),
+            (_segmentation_provenance_key(settings), _segmentation_provenance_value(settings)),
+            *(([("EMG burst detection",
+                 f"threshold {settings.processing.segmentation.emg.burst_threshold_frac:g}, "
+                 f"minimum {settings.processing.segmentation.emg.burst_min_s:g} s, "
+                 f"envelope {settings.processing.segmentation.emg.burst_smooth_s:g} s, "
+                 f"minimum contrast {settings.processing.segmentation.emg.burst_min_contrast:g}")]
+              if settings.processing.segmentation.method == "emg_burst" else [])),
             # D22 (UI-overhaul): the same "average vs individual" choice that makes the
             # Preview & QC table's wob* columns either one repeated value or real
             # per-breath variation — named here so it survives into the written file,
@@ -115,12 +231,59 @@ def _provenance_rows(settings, when, incomplete_note: str | None = None):
             ("Work of breathing", _wob_mode_text(settings)),
             ("Drift correction", settings.processing.volume.correct_drift),
             ("EMG normalisation", settings.processing.emg.normalization)]
-    if ip.channels.entropy:
+    if settings.processing.emg.noise.enabled:
+        # M-22: only meaningful once noise reduction is actually on -- an unresolved/
+        # unused reference_mode on a disabled profile would just be noise in the sheet.
+        rows.append(("Noise reference", _noise_reference_provenance_value(settings)))
+    if ip.channels.entropy or ip.channels.entropy_derived:
         # D11 (UI-overhaul): same m/r a reader would need for a methods section, in the same
         # words as the Setup screen's own read-out (settings_screen.py's ent_caption) — only
         # added when entropy is actually computed (an empty channel list means it is not).
         ent = settings.processing.entropy
         rows.append(("Sample entropy", f"m = {ent.epochs - 1}, r = {ent.tolerance:g} × SD"))
+    if "volume" in ip.channels.entropy_derived:
+        rows.append(("Entropy on derived volume",
+                     "conditioned (zero/drift/trend as configured)"))
+    elif ip.channels.entropy and ip.channels.volume in ip.channels.entropy:
+        rows.append(("Entropy on the volume column",
+                     "conditioned volume (zero/drift/trend as configured), not the raw column"))
+    peepi = getattr(getattr(settings.processing, "pressure", None), "peepi", None)
+    if peepi is not None and peepi.enabled and caps.flow and caps.poes:
+        # Which PEEPi value fed the threshold work depends on the signal set (Pgas
+        # present -> gastric-corrected, else dynamic); named here because the two are
+        # different quantities under the same column names (wob_in_thr etc.).
+        rows.append(("PEEPi threshold work",
+                     f"from {pressurelib.peepi_source(caps)} PEEPi "
+                     f"(search window {peepi.search_window_s:g} s, smoothing {peepi.smooth_s:g} s, "
+                     f"onset slope {peepi.onset_slope_frac:g}, minimum deflection "
+                     f"{peepi.min_deflection:g} cmH₂O)"))
+    bp = getattr(settings.processing, "breathing_pattern", None)
+    if bp is not None and caps.flow and (bp.extended or bp.variability):
+        # Names what the opt-in pattern columns are, since some share a stem with an
+        # ordinary column (bf_inst vs bf) and the CVs are per file, not per breath.
+        parts = []
+        if bp.extended:
+            parts.append("per-breath mean flows, phase volumes, instantaneous rate and peak-flow timing")
+        if bp.variability:
+            parts.append("per-file coefficients of variation (sample SD over mean, "
+                         "at least 3 breaths) of VT, Ti, Te, Ttot and Ti/Ttot")
+        rows.append(("Breathing pattern", "; ".join(parts)))
+    if reference_note:
+        # M-35: only present for a file whose IC reference actually resolved -- an
+        # unresolved one is reported as a Quality notice instead (run-report.txt's
+        # DIAGNOSTICS block / FileResult.notices), not here, since there is no
+        # resolved value to show in a Key/Value row.
+        rows.append(("IC reference", reference_note))
+    if normalisation_note:
+        rows.append(("Pressure normalisation", normalisation_note))
+    if olv_active:
+        # M-36: study-wide settings that shape every olv column (not a per-file
+        # resolution outcome -- that is run-report.txt's own LUNG VOLUMES block) --
+        # same "what is configured" register as the IC reference row above.
+        lv = settings.processing.lung_volume
+        tracking_text = "within-file" if lv.ic.eelv_tracking == "within_file" else "none"
+        rows.append(("EELV tracking", tracking_text))
+        rows.append(("EELV datum", "above RV (VC from subjects | linked FVC)"))
     # K-227: a cohort-level workbook (Average breathdata.xlsx, Cohort summary.xlsx) built
     # while some files failed carries nothing else to say so — inserted first so it is
     # the first thing a reader of the Provenance sheet sees, not buried after the routine
@@ -155,7 +318,8 @@ def _autofit(writer):
 
 
 def _write_xlsx(df: pd.DataFrame, path: str, settings=None, when=None, extra_sheets=None,
-                incomplete_note: str | None = None):
+                incomplete_note: str | None = None, reference_note: str | None = None,
+                olv_active: bool = False, normalisation_note: str | None = None):
     """Write a Data sheet plus Units, any extra sheets, Provenance and Version.
 
     Only the Data sheet content is load-bearing (the golden suite pins the DataFrame,
@@ -166,7 +330,9 @@ def _write_xlsx(df: pd.DataFrame, path: str, settings=None, when=None, extra_she
         for name, edf in (extra_sheets or {}).items():
             edf.to_excel(writer, sheet_name=name, index=False)
         if settings is not None:
-            _provenance_rows(settings, when, incomplete_note=incomplete_note).to_excel(
+            _provenance_rows(settings, when, incomplete_note=incomplete_note,
+                             reference_note=reference_note, olv_active=olv_active,
+                             normalisation_note=normalisation_note).to_excel(
                 writer, sheet_name="Provenance", index=False)
         _version_df().to_excel(writer, sheet_name="Version", index=False)
         _autofit(writer)
@@ -219,14 +385,52 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
 
     if settings.output.data.save_breath_by_breath:
         _emit("writing breath-by-breath data")
-        ref_values = reference_values_for_batch(result, settings)   # ticket 5.1 (None -> per-file default)
+        # M-30: a notice (never silent) when the configured reference file resolved to
+        # a real batch file that has nothing to read a reference from — attached to
+        # THAT file's own notices, so it surfaces through the SAME run-report.txt
+        # DIAGNOSTICS -> Quality notices path every other per-file notice already uses.
+        ref_values, ref_notice = resolve_emg_reference(result, settings)   # None -> per-file default
+        if ref_notice:
+            ref_fr = result.ok_files.get(settings.processing.emg.normalization_reference_file)
+            if ref_fr is not None:
+                ref_fr.notices.append(ref_notice)
         for fname, fr in result.ok_files.items():
             p = os.path.join(datadir, f"{fname}.breathdata.xlsx")
             extra = {}
-            norm = normalize_emg_table(fr.breaths_table, settings, reference_values=ref_values)   # P14
-            if norm is not None and len(norm):
-                extra["EMG normalised"] = norm
-            _write_xlsx(fr.breaths_table, p, settings=settings, when=when, extra_sheets=extra)
+            if getattr(fr, "role", "tidal") == "reference":
+                # M-30: no tidal breathdata to be the Data sheet — the Manoeuvres table
+                # (this file's whole reason for being in the batch) takes its place,
+                # and the Provenance sheet says why via the same incomplete_note
+                # mechanism a partial/incomplete cohort run already uses.
+                data_df = fr.manoeuvres_table if fr.manoeuvres_table is not None else pd.DataFrame()
+                note = "This file has no tidal breaths — reference manoeuvres only."
+            else:
+                data_df = fr.breaths_table
+                note = None
+                norm = normalize_emg_table(fr.breaths_table, settings, reference_values=ref_values)   # P14
+                if norm is not None and len(norm):
+                    extra["EMG normalised"] = norm
+                if getattr(fr, "manoeuvres_table", None) is not None and len(fr.manoeuvres_table):
+                    extra["Manoeuvres"] = fr.manoeuvres_table                                          # M-29
+                pn = getattr(fr, "pressure_normalised", None)
+                if pn is not None and len(pn):
+                    extra["Pressure normalised"] = pn      # opt-in normalisation to a maximal effort
+            ic_used = (getattr(fr, "references_used", None) or {}).get("ic")
+            reference_note = _ic_reference_provenance_value(ic_used) if ic_used else None
+            # M-36: read core.analysis.lungvol.attach's own recorded decision (same
+            # "record once in attach(), read it back" convention M-35's own
+            # analysis_plan['ic'] already established for REFERENCE MANOEUVRES below),
+            # never re-derive it by sniffing DataFrame columns.
+            olv_active = fname in _olv_active_files(result)
+            max_used = (getattr(fr, "references_used", None) or {}).get("max_insp")
+            normalisation_note = None
+            if "Pressure normalised" in extra:
+                normalisation_note = (_max_effort_text(max_used) if max_used
+                                      else "no maximal-effort reference resolved for this file "
+                                           "(normalised columns are blank)")
+            _write_xlsx(data_df, p, settings=settings, when=when, extra_sheets=extra,
+                       incomplete_note=note, reference_note=reference_note,
+                       olv_active=olv_active, normalisation_note=normalisation_note)
             written.append(p)
 
     if settings.output.data.save_processed:
@@ -249,8 +453,9 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
             f"excluded from this workbook: {', '.join(sorted(result.failed_files))}"
             if result.failed_files else None)
         p = os.path.join(datadir, "Average breathdata.xlsx")
+        olv_active = bool(_olv_active_files(result))
         _write_xlsx(result.average_table, p, settings=settings, when=when,
-                   incomplete_note=incomplete_note)
+                   incomplete_note=incomplete_note, olv_active=olv_active)
         written.append(p)
         written += _write_cohort_summary(result, settings, datadir, when,
                                          incomplete_note=incomplete_note)   # P8/P15
@@ -264,7 +469,7 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
                                                progress=fig_progress,
                                                cohort_outputs=cohort_outputs)  # P11
     written += fig_written
-    # K-108: without respmech[plots] (or any other figure failure) the run still exits
+    # Without respmech[plots] (or any other figure failure) the run still exits
     # 0 and every workbook is written — the only trace used to be a FIGURES SKIPPED
     # section buried inside run-report.txt. One on-screen warning now accompanies it;
     # the run still completes either way (this is a warning, never a hard failure).
@@ -433,6 +638,38 @@ def _breath_counts(fr) -> tuple[int, int]:
     return total, excluded
 
 
+#: display label per BREATH_KINDS entry (core.settings) for the FILES-line/PROCESSING
+#: "Breath types" text (M-30) — 'rest' is deliberately absent: an EMG-only background
+#: segment (M-28) is not a manoeuvre a reader of this report would want counted here.
+_KIND_LABELS = {
+    "ic": "IC", "fvc": "FVC", "ic_fvc": "IC+FVC",
+    "max_insp": "Max insp", "sniff": "Sniff", "other": "Other",
+}
+
+
+def _typed_breath_numbers(fr) -> dict:
+    """{kind: [breath_no, ...]} for every MANOEUVRE-typed, EXCLUDED breath in a file
+    result (M-30), in first-encountered order — 'rest' is excluded (see
+    ``_KIND_LABELS``), and so, self-review finding, is a typed breath that is NOT
+    itself ``ignored``: on a flow-bearing set every typed kind is always also
+    ignored (``_legacy_ns._merged_exclude_breaths``), but on an EMG-only set only
+    ``rest`` is -- a non-``rest``-typed EMG-only breath is a manoeuvre effort kept
+    IN the used count, not one of the excluded breaths this function's caller
+    subtracts FROM ``excl``. Without this guard the caller's
+    ``plain_excl = excl - n_typed`` could go negative for such a file, since
+    ``n_typed`` would then count a breath that was never in ``excl`` at all."""
+    if not fr.breaths:
+        return {}
+    out: dict = {}
+    for no, b in fr.breaths.items():
+        kind = b.get("kind")
+        if kind and kind != "rest" and b.get("ignored"):
+            out.setdefault(kind, []).append(no)
+    for nos in out.values():
+        nos.sort()
+    return out
+
+
 def _yn(flag) -> str:
     return "yes" if flag else "no"
 
@@ -489,13 +726,16 @@ def _write_run_report(result, settings, outputfolder: str,
     L.append(f"Generated: {ts}")
     L.append(f"Environment: {_environment_info()}")
     ok, failed = result.ok_files, result.failed_files
+    # M-13: computed once, reused both here (the pre-existing poes check) and further
+    # down for the Signals/Analyses lines -- never a second construction.
+    caps = Capabilities.from_settings(settings)
     if not cohort_outputs:
         L.append("")
         cohort_bits = []
         if settings.output.data.save_average:
             cohort_bits.append("Average breathdata.xlsx")
             cohort_bits.append("Cohort summary.xlsx")
-        if settings.output.diagnostics.save_pv_individual:
+        if settings.output.diagnostics.save_pv_individual and caps.poes:
             cohort_bits.append("the cohort Campbell figure")
         if cohort_bits:
             named = (cohort_bits[0] if len(cohort_bits) == 1
@@ -527,13 +767,30 @@ def _write_run_report(result, settings, outputfolder: str,
     L.append(f"  Folder:   {ip.folder}")
     L.append(f"  Pattern:  {ip.files}")
     L.append(f"  Sampling: {ip.format.sampling_frequency} Hz")
+    # M-13: which signals governed this run and what they computed -- the plain-text
+    # counterpart of the Provenance sheet's own 'Signals'/'Analyses' rows.
+    L.append(f"  Signals:  {signals_text(settings)}")
+    L.append(f"  Analyses: {', '.join(caps.analyses())}")
     L.append("")
 
     L.append(f"FILES ({len(ok)} processed, {len(failed)} failed)")
     for fname, fr in ok.items():
         total, excl = _breath_counts(fr)
         used = total - excl
-        note = f" ({excl} excluded → {used} used)" if excl else ""
+        # M-30: distinguish a plain manual exclusion from a TYPED manoeuvre breath —
+        # both are "ignored" for the tidal average, but only one names what it is.
+        typed = _typed_breath_numbers(fr)
+        n_typed = sum(len(nos) for nos in typed.values())
+        plain_excl = excl - n_typed
+        bits = []
+        if plain_excl:
+            bits.append(f"{plain_excl} excluded")
+        if typed:
+            kinds_text = ", ".join(
+                f"{_KIND_LABELS.get(k, k)} " + ",".join(f"#{n}" for n in nos)
+                for k, nos in typed.items())
+            bits.append(f"{n_typed} typed: {kinds_text}")
+        note = f" ({', '.join(bits)} → {used} used)" if bits else ""
         L.append(f"  [ok]   {fname}   {total} breaths{note}")
     for fname, fr in failed.items():
         L.append(f"  [FAIL] {fname}   ERROR: {fr.error}")
@@ -555,10 +812,25 @@ def _write_run_report(result, settings, outputfolder: str,
         L.append("  Trend correction:        No")
     L.append(f"  Resample:                {_yn(samp.resample)}"
              + (f" (→ {samp.resample_to_frequency} Hz)" if samp.resample else ""))
-    L.append(f"  Breath separation:       by {seg.method}, buffer {seg.buffer}")
+    if seg.method in ("flow", "volume"):
+        L.append(f"  Breath separation:       by {seg.method}, buffer {seg.buffer}")
+    elif seg.method == "emg_burst":
+        n_bursts = sum(1 for fr in ok.values() for b in (fr.breaths or {}).values()
+                       if "burst_span" in b)
+        L.append(f"  Segmentation:            {_segmentation_provenance_value(settings)} "
+                 f"({n_bursts})")
+    else:
+        L.append(f"  Segmentation:            {_segmentation_provenance_value(settings)}")
     L.append(f"  ECG removal:             {_yn(emg.remove_ecg)}")
     L.append(f"  EMG noise removal:       {_yn(emg.noise.enabled)}")
+    if emg.noise.enabled:
+        L.append(f"  Noise reference:         {_noise_reference_provenance_value(settings)}")
     L.append(f"  EMG normalisation:       {emg.normalization}")
+    _pp = settings.processing.pressure.peepi
+    if _pp.enabled and caps.flow and caps.poes:
+        # which PEEPi value fed the threshold work (gastric-corrected with Pgas, else
+        # dynamic): same words as the Provenance sheet's "PEEPi threshold work" row
+        L.append(f"  PEEPi source:            {pressurelib.peepi_source(caps)}")
     # K-215: the per-file settings that rescale bf/VE (breath_counts) or change which
     # breaths are averaged (exclude_breaths) most directly, plus the three other
     # analysis-used.toml-only settings the site's own listing of this block omits —
@@ -575,13 +847,63 @@ def _write_run_report(result, settings, outputfolder: str,
                  + ", ".join(f"{e.file}: " + ", ".join(str(b) for b in e.breaths) for e in ex))
     else:
         L.append("  Excluded breaths:        none")
+    # M-30: which breaths are typed as a manoeuvre (IC/FVC/max effort/sniff) rather
+    # than tidal — a study-level setting like the two blocks above, so it belongs in
+    # the same place, not only inferred from a single file's own FILES line.
+    bt_by_file: dict = {}
+    for e in settings.processing.breath_types:
+        if e.kind != "rest":
+            bt_by_file.setdefault(e.file, []).append((e.breath, e.kind))
+    if bt_by_file:
+        parts = []
+        for f, entries in bt_by_file.items():
+            entries.sort()
+            parts.append(f"{f}: " + ", ".join(
+                f"#{b} {_KIND_LABELS.get(k, k)}" for b, k in entries))
+        L.append("  Breath types:            " + "; ".join(parts))
+    else:
+        L.append("  Breath types:            none")
+    # Which files have a manual repair of the automatic flow-/volume-based
+    # segmentation configured -- the STUDY-WIDE setting, same register as
+    # Breath-count overrides/Excluded breaths/Breath types above (an entry with both
+    # lists empty is a no-op the UI could still leave behind, same guard those three
+    # already use; see SegmentationOverrideEntry's _CARRIED_KINDS row).
+    ov_entries = [e for e in settings.processing.segmentation.overrides if e.cut_s or e.join_s]
+    if ov_entries:
+        L.append("  Segmentation overrides:  " + "; ".join(
+            f"{e.file}: {len(e.cut_s)} cuts, {len(e.join_s)} joins" for e in ov_entries))
+    else:
+        L.append("  Segmentation overrides:  none")
+    # M-35: what this analysis's cross-file reference SETTINGS configure (per-file and
+    # per-group IC/FVC/baseline/max-effort links) -- same "what is configured" register
+    # as Breath-count overrides/Excluded breaths/Breath types above; what actually
+    # RESOLVED for each file is a per-run outcome, reported in the REFERENCE
+    # MANOEUVRES block below instead, the same split DIAGNOSTICS already draws between
+    # this study-wide PROCESSING block and its own per-run numbers.
+    ref_entries = settings.processing.references
+    ref_defaults = settings.processing.reference_defaults
+    if ref_entries or ref_defaults:
+        parts = []
+        for r in ref_entries:
+            links = [f"{slot}={getattr(r, slot).file}" for slot in referenceslib.REFERENCE_SLOTS
+                    if getattr(r, slot) is not None]
+            if links:
+                parts.append(f"{r.file}: " + ", ".join(links))
+        for g in ref_defaults:
+            links = [f"{slot}={getattr(g, slot).file}" for slot in referenceslib.REFERENCE_SLOTS
+                    if getattr(g, slot) is not None]
+            if links:
+                parts.append(f"group {g.group}: " + ", ".join(links))
+        L.append("  Reference manoeuvres:    " + ("; ".join(parts) if parts else "none"))
+    else:
+        L.append("  Reference manoeuvres:    none")
     L.append(f"  PTP baseline window:     {settings.processing.ptp.baseline_window_s:g} s")
     L.append(f"  Work of breathing:       from {_wob_mode_text(settings)}")
     L.append(f"  Cohort grouping:         "
              + (settings.output.group_regex or "leading filename token"))
     L.append("")
 
-    # K-113: a misspelled/renamed key is collected (never fatal — Settings.from_dict)
+    # A misspelled/renamed key is collected (never fatal — Settings.from_dict)
     # but, before this, read nowhere: not respmech validate, not this report, not the
     # GUI. The run already used the DEFAULT for whatever the typo meant to set, so this
     # is the one place in the output that can still catch it.
@@ -596,9 +918,9 @@ def _write_run_report(result, settings, outputfolder: str,
     nr = getattr(result, "noise_report", None)
     ecg_auto = getattr(result, "ecg_auto_report", None)
     ecg_files = [(f, fr.ecg) for f, fr in ok.items() if getattr(fr, "ecg", None)]
-    # K-192/K-224: per-file quality notices (ecg_auto_detect mismatch, cardiac-gated
-    # peak refused) — collected on FileResult.notices by core.pipeline, alongside the
-    # SAME text raised via warnings.warn, which reaches a stderr an app user never sees.
+    # Per-file quality notices (ecg_auto_detect mismatch, cardiac-gated peak refused)
+    # — collected on FileResult.notices by core.pipeline, alongside the SAME text
+    # raised via warnings.warn, which reaches a stderr an app user never sees.
     file_notices = [(f, n) for f, fr in ok.items() for n in getattr(fr, "notices", ()) or ()]
     emg_cols = list(settings.input.channels.emg or [])
     if nr or ecg_files or ecg_auto or file_notices:
@@ -627,6 +949,85 @@ def _write_run_report(result, settings, outputfolder: str,
             L.append("  Quality notices:")
             for f, n in file_notices:
                 L.append(f"    {f}: {n}")
+        L.append("")
+
+    # M-35: per-RUN reference-resolution outcomes (never study-wide settings -- those
+    # are the PROCESSING block's own 'Reference manoeuvres:' line above). Conditional
+    # on there being anything at all to say: the IC family absent from this analysis
+    # (the overwhelming common case today -- no processing.references/reference_
+    # defaults/typed IC breaths anywhere) and no external source loaded/failed leaves
+    # this block out entirely, same convention as DIAGNOSTICS above.
+    plan = getattr(result, "analysis_plan", None) or {}
+    ic_plan = plan.get("ic") or {}
+    ext_sources = getattr(result, "references", None) or {}
+    ref_errors = getattr(result, "reference_errors", None) or {}
+    if ic_plan.get("family") or ext_sources or ref_errors:
+        L.append("REFERENCE MANOEUVRES")
+        if ext_sources:
+            L.append("  External sources loaded (not part of this run's own file list):")
+            for src, rows in sorted(ext_sources.items()):
+                L.append(f"    {src}: {len(rows)} typed breath{'s' if len(rows) != 1 else ''}")
+        if ic_plan.get("resolved"):
+            L.append("  IC reference resolved:")
+            for f, used in sorted(ic_plan["resolved"].items()):
+                breaths = ", ".join(str(b) for b in used["breaths"])
+                L.append(f"    {f}: {used['source']} #{breaths} → "
+                         f"{used['n']} accepted, {used['value']:.3g} L")
+        if ic_plan.get("unresolved"):
+            L.append("  IC reference NOT resolved (this analysis names an IC "
+                     "reference elsewhere):")
+            for f in sorted(ic_plan["unresolved"]):
+                L.append(f"    {f}")
+        if ref_errors:
+            L.append("  Reference source errors:")
+            for (src, breath), msg in sorted(
+                    ref_errors.items(),
+                    key=lambda kv: (kv[0][0], -1 if kv[0][1] is None else kv[0][1])):
+                where = src if breath is None else f"{src} #{breath}"
+                L.append(f"    {where}: {msg}")
+        L.append("")
+
+    # M-36: operating lung volumes -- present only when at least one OK tidal file
+    # actually got the `ic_op` column family (core.analysis.lungvol.attach's own
+    # recorded decision, read via _olv_active_files; absent whenever no IC reference
+    # resolves anywhere in the analysis, the overwhelming common case today), same
+    # "leave the block out entirely" rule DIAGNOSTICS/REFERENCE MANOEUVRES already
+    # use above.
+    olv_active_names = _olv_active_files(result)
+    olv_files = {f: fr for f, fr in ok.items() if f in olv_active_names}
+    if olv_files:
+        lv = settings.processing.lung_volume
+        tracking_text = "within-file" if lv.ic.eelv_tracking == "within_file" else "none"
+        L.append("LUNG VOLUMES")
+        L.append(f"  EELV tracking:           {tracking_text}")
+        L.append("  EELV datum:              above RV (VC from subjects | linked FVC)")
+        for f, fr in sorted(olv_files.items()):
+            row = fr.average_row.iloc[0]
+            tlc_s = f"{row['tlc']:.3g} L" if row["tlc"] == row["tlc"] else "n/a"
+            vc_s = f"{row['vc']:.3g} L" if row["vc"] == row["vc"] else "n/a"
+            L.append(f"    {f}: ic_op {row['ic_op']:.3g} L, TLC {tlc_s}, VC {vc_s}")
+        L.append("")
+
+    # Normalisation to a maximal manoeuvre (opt-in): which reference each file's normalised
+    # columns were read against, and which files got none. Present only when the analysis
+    # is on (core.analysis.normalisation.attach's own recorded decision), same "leave the
+    # block out entirely" rule as the blocks above.
+    norm_plan = plan.get("pressure_normalisation") or {}
+    if norm_plan.get("enabled"):
+        L.append("PRESSURE NORMALISATION")
+        for f, used in sorted((norm_plan.get("resolved") or {}).items()):
+            L.append(f"  {f}: {_max_effort_text(used)}")
+        if norm_plan.get("unresolved"):
+            L.append("  No usable maximal-effort reference (normalised columns are blank):")
+            for f in sorted(norm_plan["unresolved"]):
+                L.append(f"    {f}")
+        if norm_plan.get("skipped"):
+            L.append("  Skipped (see the file's quality notice):")
+            for f in sorted(norm_plan["skipped"]):
+                L.append(f"    {f}")
+        if not norm_plan.get("resolved") and not norm_plan.get("unresolved") \
+                and not norm_plan.get("skipped"):
+            L.append("  No file had anything to normalise (no Poes, Pdi or EMG summary).")
         L.append("")
 
     report_name = "run-report.txt"

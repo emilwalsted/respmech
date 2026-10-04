@@ -24,6 +24,10 @@ from PySide6.QtCore import QObject, Signal, Slot
 
 from respmech.core.settings import Settings
 from respmech.core._cancel import Cancelled
+from respmech.core.analysis.signals import SINGLE_SIGNALS, effective_signals
+
+#: M-12's ``peek_header_warning`` floor -- see that function's own docstring.
+_SINGLE_SIGNAL_SET = frozenset(SINGLE_SIGNALS)
 
 
 # ``run_batch`` and ``write_batch`` are the two imports that pulled scipy and pandas into
@@ -723,14 +727,26 @@ def peek_columns(settings: Settings, file_path: str):
 def peek_header_warning(settings: Settings, file_path: str):
     """Cheap two-line consistency probe for the manifest scanner (ticket D01): flags a file
     whose FIRST non-blank line looks like it belongs to an instrument export's preamble
-    rather than real channel data — either because that line's own field count is under 3
-    (a real multi-channel recording needs at least a time column plus two signals; a header
-    line like LabChart's 'Interval=<TAB>0.001 s' has exactly two), or because the first two
-    non-blank lines disagree on field count. Delimited-text files only (.csv/.txt); returns
-    ``None`` for any other extension, an unreadable head, a head this function's fixed
-    encoding chain cannot decode (see below — narrower than it sounds), or a first line
-    that is itself empty — the same "nothing to say" cases ``peek_columns`` already
-    returns ``None`` for. Never raises.
+    rather than real channel data — either because that line's own field count is under
+    the analysis's own floor (M-12: ``1 + `` the number of single-column signal roles
+    (flow/poes/pgas/pdi) actually DECLARED, e.g. 5 for a full analysis, 2 for flow-only —
+    a real recording needs at least a time column plus one field per declared role).
+    EMG never LOWERS this floor below the historical baseline of 3 (self-review finding:
+    EMG has no fixed column count, so letting an EMG-only set collapse the floor to 1
+    would silence the check almost entirely — including for the exact motivating case
+    below, a 2-field LabChart preamble on an EMG-only recording). Nothing is declared
+    yet at all (no channel assigned and no explicit ``analysis.signals`` — this probe runs
+    as part of the manifest scan, which happens BEFORE channel assignment): keep this
+    function's historical, signal-set-agnostic floor of 3 rather than reading "nothing
+    declared" as "expect just one field", which would silence the check almost entirely.
+    A header line like LabChart's 'Interval=<TAB>0.001 s' has exactly two fields, so it is
+    still caught whenever the floor is 3 (nothing declared, or EMG declared) but would
+    slip through only a flow-only set with no volume/pressures/EMG (floor 2).
+    Or because the first two non-blank lines disagree on field count. Delimited-text files
+    only (.csv/.txt); returns ``None`` for any other extension, an unreadable head, a head
+    this function's fixed encoding chain cannot decode (see below — narrower than it
+    sounds), or a first line that is itself empty — the same "nothing to say" cases
+    ``peek_columns`` already returns ``None`` for. Never raises.
 
     Deliberately its OWN small decode block rather than sharing ``peek_columns``'s: the two
     probes answer different questions (this one wants up to two non-blank lines,
@@ -784,7 +800,30 @@ def peek_header_warning(settings: Settings, file_path: str):
     dec = getattr(fmt, "decimal", ".") or "."
     sep = "\t" if ext == ".txt" else (";" if dec == "," else ",")
     counts = [len(ln.split(sep)) for ln in lines]
-    if counts[0] < 3:
+    try:
+        declared = effective_signals(settings)
+    except TypeError:
+        # A malformed ``analysis.signals`` (e.g. a hand-edited bare string instead of a
+        # list) is a ``Settings.validate()`` concern to report, not this cheap probe's —
+        # self-review finding: this call was unguarded and broke the function's own
+        # documented "Never raises" contract, which crashed the ENTIRE manifest scan
+        # (``ui.manifest.build_manifest``'s per-file loop has no surrounding try/except
+        # of its own either). Fall back to the historical, signal-set-agnostic floor.
+        declared = frozenset()
+    if not declared:
+        floor = 3          # nothing declared yet (a pre-signal-set manifest scan)
+    else:
+        # EMG has no fixed column count (a rig can carry any number of EMG channels), so
+        # "1 + declared single-column roles" alone would collapse to 1 for an EMG-only
+        # set -- self-review finding: that is low enough to let ANY non-blank line pass,
+        # including the exact classic LabChart preamble this function's own docstring
+        # names as the motivating case ("Interval=<TAB>0.001 s", 2 fields). EMG therefore
+        # never LOWERS the floor below the historical baseline of 3, though a set with
+        # enough OTHER declared roles can still raise it past that baseline.
+        floor = 1 + len(declared & _SINGLE_SIGNAL_SET)
+        if "emg" in declared:
+            floor = max(floor, 3)
+    if counts[0] < floor:
         plural = "" if counts[0] == 1 else "s"
         return (f"the first row has only {counts[0]} field{plural} — too few to be "
                "channel data")
@@ -930,6 +969,7 @@ def stage_noise_fidelity(settings: Settings, cancel_check=None) -> dict:
     from respmech.core.pipeline import _build_noise_set, match_input_files
     from respmech.core import compute
     from respmech.core.io.loaders import DataValidationError
+    from respmech.core.analysis.segments import EmgSegmentationError
 
     s = to_legacy_ns(settings)
     # SAME matcher as run_batch: the shared noise profile must be built from exactly the
@@ -975,16 +1015,41 @@ def stage_noise_fidelity(settings: Settings, cancel_check=None) -> dict:
         except Exception:                                   # noqa: BLE001
             pass          # the report itself is intact; the caption just stays hidden
         return report
-    except (compute.TrimError, DataValidationError, FileNotFoundError, ImportError) as e:
-        # A user-fixable precondition on the reference/input files — most often a misassigned or
-        # inverted flow channel, so the reference has no segmentable breaths for the quiet-
-        # expiration clip. Surface it as a clean, single-line, actionable message (rendered by
-        # _on_noise_result -> _FileRunError) instead of a raw traceback. Genuine bugs
-        # (IndexError / KeyError / numeric) are NOT caught here and still propagate.
+    except (compute.TrimError, DataValidationError, FileNotFoundError, ImportError,
+            EmgSegmentationError) as e:
+        # A user-fixable precondition on the reference/input files. Surface it as a clean,
+        # single-line, actionable message (rendered by _on_noise_result -> _FileRunError)
+        # instead of a raw traceback. Genuine bugs (IndexError / KeyError / numeric) are NOT
+        # caught here and still propagate.
+        #
+        # effective_signals(settings), not the _or_none form: by this point ``to_legacy_ns``
+        # above has already run ``Capabilities.from_settings`` (RAW) successfully, which calls
+        # the identical ``effective_signals`` -- so a malformed ``analysis.signals`` that would
+        # make this raise has ALREADY crashed this function earlier and unconditionally, before
+        # this except clause could ever be reached. This call is therefore exactly as safe as
+        # ``to_legacy_ns``'s own; degrading it here alone would not make the function tolerant
+        # of malformed settings (a pre-existing, out-of-scope property of this function).
         name = os.path.basename(ref_path) if ref_path else "the rest reference"
+        # The hint that actually applies depends on the signal set. A flow-bearing set's most
+        # common cause is a misassigned or inverted flow channel, so the reference has no
+        # segmentable breaths for the quiet-expiration clip -- 'use expiration' and reference
+        # intervals both mean something there. An EMG-only set has neither a flow channel nor
+        # an expiration phase; its own two buildable sources (M-22) are a rest-typed segment
+        # or an explicit interval, so the hint points at those instead.
+        if "flow" in effective_signals(settings):
+            hint = ("Check the flow channel and inverse-flow assignment, or turn off "
+                    "'use expiration' and set explicit reference intervals.")
+        elif settings.processing.segmentation.method == "emg_burst":
+            hint = ("Check that the reference file has bursts with quiet stretches between "
+                    "them: lower the minimum contrast or shorten the envelope window in "
+                    "Preview & QC ▸ EMG – segments ▸ Advanced…, or set explicit reference "
+                    "intervals in the noise picker instead.")
+        else:
+            hint = ("Check the reference file's rest-typed segment(s) (Preview & QC's "
+                    "EMG segments tab), or set explicit reference intervals in the noise "
+                    "picker instead.")
         return {"error": (f"Could not build the noise profile from '{name}' or the input files: "
-                          f"{e} Check the flow channel and inverse-flow assignment, or turn off "
-                          f"'use expiration' and set explicit reference intervals.")}
+                          f"{e} {hint}")}
 
 
 class EmgAllChannelsWorker(QObject):
@@ -1037,6 +1102,7 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
     from respmech.core._legacy_ns import to_legacy_ns
 
     s = to_legacy_ns(settings)
+    caps = s.capabilities
     flow, volume, poes, pgas, pdi, ent, emg = load(file_path, s)
     fs = s.input.format.samplingfrequency
     tc = np.arange(len(flow)) / fs
@@ -1056,9 +1122,18 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
         # Breath detection needs a trimmable flow signal; when it fails (e.g. wrong flow
         # channel / inverseflow), still return the RAW channels so the preview can show
         # the signal and the user can fix it — instead of a blank 'failed' error card.
-        series = {"flow": np.asarray(flow, float), "volume": np.asarray(volume, float),
-                  "poes": np.asarray(poes, float), "pgas": np.asarray(pgas, float),
-                  "pdi": np.asarray(pdi, float)}
+        # An absent pressure channel (caps.poes/pgas/pdi False) is omitted entirely rather
+        # than kept as an empty array, matching the trimmed path below and R1's "documented
+        # absence, not a hidden NaN/empty" principle — a consumer not yet updated for a
+        # reduced signal set (ui/screens/preview/_mechanics.py, M-17) is unreachable today,
+        # since nothing in the UI can select such a signal set until that ticket lands.
+        series = {"flow": np.asarray(flow, float), "volume": np.asarray(volume, float)}
+        if caps.poes:
+            series["poes"] = np.asarray(poes, float)
+        if caps.pgas:
+            series["pgas"] = np.asarray(pgas, float)
+        if caps.pdi:
+            series["pdi"] = np.asarray(pdi, float)
         return {
             "name": name, "fs": fs, "t": tc, "series": series, "spans": [],
             "label_y": float(np.nanmax(series["flow"])) if series["flow"].size else 0.0,
@@ -1067,6 +1142,7 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
             "trim_error": str(e),
             "trend_error": None,
             "vol_drift": None,
+            "suggested_fvc": None,   # no breaths at all on this path
         }
 
     voldrift = (compute.correctdrift(compute.zero(volT), s)
@@ -1087,13 +1163,30 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
     # K-035: the boundary breath trim KEEPS is never verified as complete — surface it
     # here too, so the warning is visible while tuning, before a batch is ever run.
     boundary_notices = compute.trim_boundary_notices(breaths, s)
+    # M-31: the type menu's disabled 'Suggested: FVC' hint reads this directly, so the
+    # suggestion is computed once here (a pure function of the SAME raw breath dicts the
+    # menu itself is about to be popped up for) rather than re-derived in the UI from
+    # spans that never carry the expiration data suggest_fvc needs.
+    from respmech.core.analysis.manoeuvres import suggest_fvc
+    suggested_fvc = suggest_fvc(breaths)
 
     t = np.arange(len(flowT)) / fs
-    series = {"flow": flowT, "volume": volc, "poes": poesT, "pgas": pgasT, "pdi": pdiT}
+    series = {"flow": flowT, "volume": volc}
+    if caps.poes:
+        series["poes"] = poesT
+    if caps.pgas:
+        series["pgas"] = pgasT
+    if caps.pdi:
+        series["pdi"] = pdiT
     spans, cum = [], 0
     for bno, b in breaths.items():
-        length = len(np.atleast_1d(b["poes"]))
-        spans.append((bno, cum / fs, (cum + length) / fs, bool(b["ignored"])))
+        length = len(np.atleast_1d(b["time"]))
+        # M-20: kind is one of None (plain tidal), the pseudo-kind 'excluded' (manually
+        # excluded, no BREATH_KINDS entry), or a BREATH_KINDS member (typed, M-19) —
+        # b['kind'] is only ever set by compute._make_breath for the latter, so a merely
+        # excluded breath falls through to the 'excluded' pseudo-kind here.
+        kind = b["kind"] if b["kind"] else ("excluded" if b["ignored"] else None)
+        spans.append((bno, cum / fs, (cum + length) / fs, kind))
         cum += length
     label_y = float(np.nanmax(series["flow"])) if len(series["flow"]) else 0.0
     return {
@@ -1107,7 +1200,67 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
         # drift-corrected volume: what the trend detector actually sees, so the advanced
         # dialog can count anchors for THIS file live while the thresholds are edited.
         "vol_drift": np.asarray(voldrift, float),
+        "suggested_fvc": suggested_fvc,
     }
+
+
+def stage_emg_segments_preview(settings: Settings, file_path: str) -> dict:
+    """Stage an EMG-only file's segmentation for the preview: load + ECG-condition
+    the EMG channels (the same cached ``_load_and_condition`` stage 1+2 the other EMG
+    panels share, tolerant of an entirely absent flow channel — see its own docstring),
+    then split the whole matrix into segments with the configured method (``whole_file``/
+    ``separators``, ``core.analysis.segments`` via ``compute.separateintobreaths``).
+
+    There is no flow-derived trim window for an EMG-only signal set — the whole raw
+    recording IS the analysis window, exactly as ``core.pipeline.segment_file``'s own
+    ``emg_only`` branch treats it — so every span is already in the file's own,
+    untrimmed clock and ``startix``/``endix`` are always ``0``/``len``. Reuses the core
+    exactly as ``run_batch``'s EMG-only branch does; never writes to disk and never
+    touches Qt.
+
+    A bad separator placement (:class:`~respmech.core.analysis.segments.
+    EmgSegmentationError`) is a precondition failure of THIS recording's
+    configuration, not a bug: caught here and reported as ``segment_error`` instead of
+    raised, so the preview keeps showing the raw EMG channels (no segments to shade)
+    with an explanatory status line, mirroring ``stage_mechanics_preview``'s own
+    ``TrimError`` handling — never a copyable 'failed' error card for an ordinary
+    misconfiguration."""
+    import os
+
+    from respmech.core import compute
+    from respmech.core._legacy_ns import to_legacy_ns
+    from respmech.core.analysis.segments import EmgSegmentationError
+
+    s = to_legacy_ns(settings)
+    name = os.path.basename(file_path)
+    fs = int(s.input.format.samplingfrequency)
+    emg, cond, ecg_applied, ecg_error, flow_full = _load_and_condition(settings, s, file_path)
+    n = cond.shape[0]
+    t = np.arange(n, dtype=float) / fs
+    empty = np.array([])
+    separator_times = dict(s.processing.mechanics.separators).get(name, [])
+    common = {
+        "name": name, "fs": fs, "t": t, "emg": emg, "emg_conditioned": cond,
+        "emg_flow": flow_full, "startix": 0, "endix": n, "separators": separator_times,
+        "ecg_applied": ecg_applied, "ecg_error": ecg_error,
+    }
+    try:
+        segs = compute.separateintobreaths(
+            s.processing.mechanics.separateby, name, t, empty, empty, empty, empty, empty,
+            [], cond, s)
+    except EmgSegmentationError as e:
+        return {**common, "spans": [], "segment_error": str(e)}
+    spans = []
+    for num, seg in segs.items():
+        time = np.atleast_1d(seg["time"])
+        length = time.size
+        t0 = float(time[0]) if length else 0.0
+        # half-open [t0, t0 + length/fs), not time[-1] -- matches the sample-count
+        # convention stage_mechanics_preview's own spans use (cum/fs, (cum+length)/fs),
+        # so adjacent segments touch exactly at the boundary with no visual gap.
+        t1 = t0 + length / fs
+        spans.append((num, t0, t1, bool(seg["ignored"]), seg["kind"]))
+    return {**common, "spans": spans, "segment_error": None}
 
 
 class FnWorker(QObject):

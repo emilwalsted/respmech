@@ -17,6 +17,8 @@ figures (vector, paginated) under ``<out>/diagnostics/``, driven by the
 * ``save_drift``        → the staged volume-correction figure (uncorrected → zeroed →
   drift-corrected → trend-adjusted), the trend-adjustment diagnostic (when trend
   correction is on), and the end-expiratory/end-inspiratory endpoint trend check.
+* ``save_flow_volume``  → the file's tidal flow-volume loops placed inside its own maximal
+  flow-volume loop (MFVL), when a breath is typed as a forced vital capacity.
 * ``save_emg``          → per-channel EMG overviews at each conditioning stage (raw /
   ECG-removed / noise-reduced) with the flow reference, R-peak capture markers and
   breath boundaries; ``processing.emg.plot_yscale`` sets the y-range.
@@ -35,6 +37,9 @@ import os
 import numpy as np
 
 from respmech.core import plot_style
+from respmech.core.analysis import mfvl as mfvllib
+from respmech.core.analysis.pressure import mean_peepi_rectangle_height, peepi_rectangle_height  # noqa: F401 (re-exported for the Preview panel)
+from respmech.core.analysis.signals import Capabilities
 
 _BRAND = "#2C6E9B"
 _ACCENT = "#5CA9DD"
@@ -66,7 +71,29 @@ def _breaths(fr):
     return [b for b in _ordered(fr) if not b.get("ignored")]
 
 
-def _recoil_and_polygon(ax, eilv, eelv, alpha_line=1.0, alpha_fill=0.5):
+def draw_peepi_rectangle(ax, eilv, eelv, height, *, color="#D9822B", alpha=0.35, zorder=None):
+    """Hatched PEEPi rectangle of the modified Campbell diagram: it spans the tidal volume
+    (EELV to EILV) and rises ``height`` cmH2O above the end-expiratory Poes, so its area is the
+    threshold work the elastic-recoil polygon does not hold. Draw it BEFORE the polygon.
+    A no-op without a positive finite height or a usable EELV/EILV pair, which is what keeps a
+    figure without the feature identical to what it always was."""
+    from matplotlib.patches import Rectangle
+    if height is None or not np.isfinite(height) or height <= 0:
+        return
+    try:
+        x0, y0 = float(eelv[0]), float(eelv[1])
+        x1 = float(eilv[0])
+    except (TypeError, ValueError, IndexError):
+        return
+    if not np.isfinite([x0, y0, x1]).all():
+        return
+    kw = {} if zorder is None else {"zorder": zorder}
+    ax.add_patch(Rectangle((min(x0, x1), y0), abs(x1 - x0), float(height), facecolor=color,
+                           edgecolor=color, alpha=alpha, hatch="////", fill=True, lw=0.6,
+                           label="PEEPi", **kw))
+
+
+def _recoil_and_polygon(ax, eilv, eelv, alpha_line=1.0, alpha_fill=0.5, peepi_height=None):
     """Draw the elastic-recoil line (EILV↔EELV) and the shaded elastic-WOB triangle,
     exactly as the legacy Campbell diagrams did: Polygon(eelv, eilv, [eilv_x, eelv_y])."""
     from matplotlib.lines import Line2D
@@ -75,6 +102,7 @@ def _recoil_and_polygon(ax, eilv, eelv, alpha_line=1.0, alpha_fill=0.5):
         lx, ly = zip(eilv, eelv)
     except (TypeError, ValueError):
         return
+    draw_peepi_rectangle(ax, eilv, eelv, peepi_height)
     ax.add_line(Line2D(lx, ly, linewidth=2, alpha=alpha_line, color=_BRAND))
     tri = [[eelv[0], eelv[1]], [eilv[0], eilv[1]], [eilv[0], eelv[1]]]
     ax.add_patch(Polygon(tri, alpha=alpha_fill, color="#999999", fill=True))
@@ -103,7 +131,7 @@ def _pv_limits(breaths, vkey, pkey):
 # --------------------------------------------------------------------------- #
 def _pv_average(fr, fname, path):
     bs = _breaths(fr)
-    if not bs:
+    if not bs or not len(bs[0].get("poes", [])):
         return None
     fig = _canvas((5.6, 5.8))
     ax = fig.add_subplot(111)
@@ -114,7 +142,8 @@ def _pv_average(fr, fname, path):
             and len(b0["volumeavg"]) and len(b0["poesavg"]):
         ax.plot(b0["volumeavg"], b0["poesavg"], color=_BRAND, lw=2.4, label="average breath")
         if b0.get("eilvavg") is not None and b0.get("eelvavg") is not None:
-            _recoil_and_polygon(ax, b0["eilvavg"], b0["eelvavg"])
+            _recoil_and_polygon(ax, b0["eilvavg"], b0["eelvavg"],
+                                peepi_height=mean_peepi_rectangle_height(bs))
         ax.legend(loc="best", frameon=False)
     ax.set_xlabel("Volume (L)")
     ax.set_ylabel("Oesophageal pressure (cmH₂O)")
@@ -124,7 +153,8 @@ def _pv_average(fr, fname, path):
     return _save(fig, path)
 
 
-def _pv_grid(breaths, title_prefix, path, cols, rows, vkey, pkey, ekey_i, ekey_e, titler):
+def _pv_grid(breaths, title_prefix, path, cols, rows, vkey, pkey, ekey_i, ekey_e, titler,
+             peepi_height=peepi_rectangle_height):
     """Paginated Campbell grid (one loop per breath), shared axes, inverted x-axis,
     recoil line + WOB polygon, ignored breaths crossed out. Multi-page PDF."""
     from matplotlib.backends.backend_pdf import PdfPages
@@ -151,7 +181,7 @@ def _pv_grid(breaths, title_prefix, path, cols, rows, vkey, pkey, ekey_i, ekey_e
                     ax.plot([minx, maxx], [miny, maxy], "-r", lw=1)
                     ax.plot([minx, maxx], [maxy, miny], "-r", lw=1)
                 elif b.get(ekey_i) is not None and b.get(ekey_e) is not None:
-                    _recoil_and_polygon(ax, b[ekey_i], b[ekey_e])
+                    _recoil_and_polygon(ax, b[ekey_i], b[ekey_e], peepi_height=peepi_height(b))
                 ax.set_title(titler(b), fontsize=9)
                 ax.tick_params(labelsize=7)
                 ax.grid(True, color=_MUTED, alpha=0.2)
@@ -163,7 +193,7 @@ def _pv_grid(breaths, title_prefix, path, cols, rows, vkey, pkey, ekey_i, ekey_e
 
 def _pv_individual(fr, fname, path, cols, rows):
     bs = _ordered(fr)
-    if not bs:
+    if not bs or not len(bs[0].get("poes", [])):
         return None
     return _pv_grid(bs, f"{fname} — Campbell diagrams", path, cols, rows,
                     "volume", "poes", "eilv", "eelv",
@@ -174,15 +204,77 @@ def _pv_cohort(result, path, cols, rows):
     """One panel per file: that file's MEAN Campbell loop — the cross-subject overview
     the old 'All files – average Campbell.pdf' provided."""
     reps = []
+    heights = {}
     for fname, fr in result.ok_files.items():
         bs = _breaths(fr)
-        if bs and bs[0].get("volumeavg") is not None and len(bs[0]["volumeavg"]):
+        if (bs and bs[0].get("volumeavg") is not None and len(bs[0]["volumeavg"])
+                and len(bs[0].get("poes", []))):
             reps.append(bs[0])
+            heights[id(bs[0])] = mean_peepi_rectangle_height(bs)
     if not reps:
         return None
     return _pv_grid(reps, "All files — average Campbell", path, cols, rows,
                     "volumeavg", "poesavg", "eilvavg", "eelvavg",
-                    lambda b: str(b.get("filename", "?")))
+                    lambda b: str(b.get("filename", "?")),
+                    peepi_height=lambda b: heights.get(id(b)))
+
+
+# --------------------------------------------------------------------------- #
+# Flow-volume: tidal loops inside the MFVL
+# --------------------------------------------------------------------------- #
+def draw_flow_volume_mfvl(ax, placed, *, loop=_MUTED, mean=_BRAND, envelope="black",
+                          marker=_MUTED, label=_MUTED):
+    """Draw ``mfvl.placed_tidal_loops``'s result onto ``ax``: grey tidal loops, a bold
+    mean loop, the MFVL envelope and dotted EELV/EILV markers. Volume runs from TLC on the
+    left. The colours are parameters so the Preview panel can draw the same picture in its
+    own theme; the defaults are the light-theme colours the PDF uses."""
+    for x, flow in placed["loops"]:
+        ax.plot(x, flow, color=loop, alpha=0.35, lw=0.8, zorder=1)
+    if placed["mean"] is not None:
+        ax.plot(placed["mean"][0], placed["mean"][1], color=mean, lw=2.4, zorder=3,
+                label="average tidal breath")
+    ax.plot(placed["mefv_v"], placed["mefv_flow"], color=envelope, lw=1.8, zorder=2,
+            label="MFVL")
+    if placed["eelv"] is not None:
+        ax.axvline(placed["eelv"], color=marker, ls=":", lw=1.0, zorder=0)
+        ax.text(placed["eelv"], 0.02, " EELV", transform=ax.get_xaxis_transform(),
+                va="bottom", ha="left", fontsize=8, color=label)
+    if placed["eilv"] is not None:
+        ax.axvline(placed["eilv"], color=marker, ls=":", lw=1.0, zorder=0)
+        ax.text(placed["eilv"], 0.02, "EILV ", transform=ax.get_xaxis_transform(),
+                va="bottom", ha="right", fontsize=8, color=label)
+    ax.axhline(0, color=marker, lw=0.8, zorder=0)
+    note = None
+    if placed["ic_op"] is None:
+        note = "No inspiratory-capacity reference: tidal loops cannot be placed"
+    elif placed.get("in_domain_pct") is not None and placed["in_domain_pct"] < 99.5:
+        note = (f"{100.0 - placed['in_domain_pct']:.0f}% of the tidal loop lies outside the "
+                "MFVL's volume range")
+    if note:
+        ax.text(0.5, 0.04, note, transform=ax.transAxes, ha="center", va="bottom",
+                fontsize=7, color=label)
+
+
+def _flow_volume_mfvl(fr, fname, path, settings):
+    """Tidal flow-volume loops placed inside the file's own maximal flow-volume loop
+    (MFVL). ``None`` for a file without a resolved FVC reference; with an FVC but no IC
+    reference only the envelope is drawn (the loops cannot be anchored to the TLC axis),
+    and loops that fall outside the envelope's volume range are flagged, both by a note
+    on the figure (see ``draw_flow_volume_mfvl``)."""
+    placed = mfvllib.placed_tidal_loops(
+        fr.breaths, getattr(fr, "manoeuvres", None), settings.processing.mfvl,
+        settings.processing.lung_volume.ic)
+    if placed is None:
+        return None
+    fig = _canvas((6.4, 5.4))
+    ax = fig.add_subplot(111)
+    draw_flow_volume_mfvl(ax, placed)
+    ax.set_xlabel("Volume below TLC (L)")
+    ax.set_ylabel("Flow (L/s)")
+    ax.grid(True, color=_MUTED, alpha=0.2)
+    ax.set_title(f"{fname} — tidal breathing in the MFVL")
+    ax.legend(loc="upper right", frameon=False, fontsize=8)
+    return _save(fig, path)
 
 
 # --------------------------------------------------------------------------- #
@@ -197,9 +289,14 @@ def _signals_trimmed(fr, fname, path):
         return np.concatenate([np.asarray(b[key], float) for b in bs])
     panels = [("Flow (L/s)", "flow"), ("Volume (L)", "volume"), ("Poes (cmH₂O)", "poes"),
               ("Pgas (cmH₂O)", "pgas"), ("Pdi (cmH₂O)", "pdi")]
-    panels = [(lbl, k) for lbl, k in panels if k in bs[0]]
-    # cumulative breath boundaries in the concatenated sample axis
-    bounds = np.cumsum([0] + [len(np.asarray(b["flow"], float)) for b in bs])
+    # A channel absent from the declared signal set is still a KEY (compute.py leaves it as
+    # an empty array, never removes it) — `k in bs[0]` alone no longer tells present from
+    # absent, so this checks LENGTH instead.
+    panels = [(lbl, k) for lbl, k in panels if len(bs[0].get(k, []))]
+    # cumulative breath boundaries in the concatenated sample axis, taken from `time` (always
+    # non-empty for a phased breath) rather than `flow` (not guaranteed once a future signal
+    # set can omit it, e.g. an EMG-only whole-file segment)
+    bounds = np.cumsum([0] + [len(np.asarray(b["time"], float)) for b in bs])
     fig = _canvas((11.0, 1.8 * len(panels)))
     for i, (lbl, key) in enumerate(panels):
         ax = fig.add_subplot(len(panels), 1, i + 1)
@@ -378,7 +475,11 @@ def _emg_overview(fr, fname, path, ylim, stage_key, stage_label):
     if data.ndim == 1:
         data = data[:, None]
     t = np.asarray(sig.get("time"), float)
-    flow = np.asarray(sig.get("flow"), float)
+    # Forward-compat guard: today `sig["flow"]` is always an array (core/pipeline.py sets it
+    # unconditionally), but if a future signal set without flow ever leaves it None, guard here
+    # before np.asarray(None) turns it into an unsized 0-d array and `len(flow)` below raises.
+    flow_raw = sig.get("flow")
+    flow = np.asarray(flow_raw, float) if flow_raw is not None else np.asarray([])
     peaks = np.asarray(sig.get("emg_peaks", []), float)
     cols = sig.get("emg_cols") or list(range(1, data.shape[1] + 1))
     nch = data.shape[1]
@@ -481,20 +582,50 @@ def per_file_figure_jobs(settings):
     detectable anchors) — the JOB existing is settings-driven and static; whether it
     actually produces a file for a particular recording is data-driven and is not decided
     here. Callers that need a ceiling, not a promise, must treat this list's length as an
-    upper bound per file, never an exact count."""
+    upper bound per file, never an exact count.
+
+    Channel-aware since this ticket: the Campbell jobs need Poes (``Capabilities.poes``) and
+    the volume-correction/trend/drift jobs need a volume trace (``Capabilities.volume``) —
+    a signal set without one of those never gets the job added at all, so it never shows up
+    in ``core.io.plan.plan_outputs``' ceiling either (the two read this exact list).
+
+    Uses ``from_settings_or_none``: this is the exact function backing Setup's 'You will
+    get' preview (``diagnostic_figure_type_count``), which — per ``SettingsScreen.
+    _update_save_preview``'s own docstring — resolves one event-loop turn into
+    ``MainWindow``'s real startup, still before ``Settings.validate()`` ever runs. A
+    malformed, hand-edited ``analysis.signals`` must degrade the same way the UI's other
+    render paths do (no capability-gated jobs added) rather than throw out of a deferred
+    Qt callback."""
     dg = settings.output.diagnostics
     cols, rows = dg.pv_columns, dg.pv_rows
+    caps = Capabilities.from_settings_or_none(settings)
+    poes = caps is not None and caps.poes
+    volume = caps is not None and caps.volume
+    # _signals_raw/_signals_trimmed draw ONLY flow/volume/poes/pgas/pdi panels (never EMG);
+    # an EMG-only signal set (mode "emg_only") has none of those, so `panels` would be empty
+    # and `fig.axes[-1]` would raise IndexError on a figure with zero subplots. Gated the
+    # same way the Poes/volume jobs already are, rather than letting the per-job try/except
+    # in _write_figures_impl silently absorb it as an unexplained failure on every run.
+    any_pressure_or_flow = caps is not None and (
+        caps.flow or caps.volume or caps.poes or caps.pgas or caps.pdi)
     jobs = []
-    if dg.save_pv_average:
+    if dg.save_pv_average and poes:
         jobs.append(("PV average", _pv_average, "Campbell (average).pdf"))
-    if dg.save_pv_individual:
+    if dg.save_pv_individual and poes:
         jobs.append(("PV individual", lambda fr, fn, p: _pv_individual(fr, fn, p, cols, rows),
                      "Campbell (breaths).pdf"))
-    if dg.save_raw:
+    if dg.save_raw and any_pressure_or_flow:
         jobs.append(("raw signals", _signals_raw, "signals (raw).pdf"))
-    if dg.save_trimmed:
+    if dg.save_trimmed and any_pressure_or_flow:
         jobs.append(("trimmed signals", _signals_trimmed, "signals (trimmed).pdf"))
-    if dg.save_drift:
+    # the MFVL figure needs a flow trace and a typed FVC breath (settings-only ceiling; a
+    # file with no resolvable FVC still returns None from the job itself)
+    if (getattr(dg, "save_flow_volume", True) and caps is not None and caps.flow
+            and caps.volume and mfvllib.fvc_typed_in_settings(settings)):
+        jobs.append(("flow-volume MFVL",
+                     lambda fr, fn, p: _flow_volume_mfvl(fr, fn, p, settings),
+                     "flow-volume (tidal in MFVL).pdf"))
+    if dg.save_drift and volume:
         jobs.append(("volume correction", _volume_correction, "volume correction.pdf"))
         jobs.append(("trend", lambda fr, fn, p: _trend(fr, fn, p, settings), "volume trend.pdf"))
         jobs.append(("drift", _drift, "volume endpoints.pdf"))
@@ -556,6 +687,7 @@ def _write_figures_impl(result, settings, outputfolder: str, progress=None,
 
     jobs = per_file_figure_jobs(settings)
     cols, rows = dg.pv_columns, dg.pv_rows
+    caps = Capabilities.from_settings(settings)
 
     figdir = os.path.join(outputfolder, "diagnostics")
     written, failures = [], []
@@ -598,8 +730,10 @@ def _write_figures_impl(result, settings, outputfolder: str, progress=None,
                 failures.append((f"{fname}/EMG audio", str(e)))
 
     # one cohort "all-files average" Campbell across the whole batch — never built from a
-    # subset (A05): a 2+-file re-run/single-file write is still not the whole study.
-    if dg.save_pv_individual and len(result.ok_files) > 1 and cohort_outputs:
+    # subset (A05): a 2+-file re-run/single-file write is still not the whole study. Gated
+    # on Capabilities.poes too (this ticket): a signal set without Poes has no Campbell loop
+    # to average across files, per-file or cohort.
+    if dg.save_pv_individual and len(result.ok_files) > 1 and cohort_outputs and caps.poes:
         path = os.path.join(figdir, "All files – Campbell (average).pdf")
         try:
             p = _pv_cohort(result, path, cols, rows)

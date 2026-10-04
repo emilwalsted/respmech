@@ -278,3 +278,97 @@ _(Historical note — the milestone breakdown below is retained for provenance.)
 them; the new `processing.emg.noise` settings in TOML + migrator mapping and a GUI
 fidelity/noise preview; and regenerating the golden from this canonical code —
 everything non-EMG/non-PTP is held constant.
+
+## 6. EMG-only noise references
+
+A flow-bearing analysis has always resolved its rest reference from one of two saved
+choices: `use_expiration` (the reference file's own expiration, ~500 STFT frames,
+stable) or, when that is false, explicit `reference_intervals`. An EMG-only signal set
+(no flow channel — nothing to split into inspiration/expiration at all) needed its own
+rule, since neither concept means anything without a flow-derived breath.
+
+`core.settings.resolve_noise_reference_mode(settings)` is the one function that decides
+which source `_reference_noise_clip` actually builds from, returning `'expiration'` |
+`'intervals'` | `'rest_segments'` | `'interburst'` | `'unresolved'`. `processing.emg.
+noise.reference_mode` (default `'auto'`) drives it:
+
+* **With a flow channel declared**, `'auto'` reproduces the existing rule exactly —
+  `'expiration'` when `use_expiration` is true (or no intervals are set), `'intervals'`
+  otherwise. `use_expiration`/`reference_intervals` remain the two saved fields for this
+  case; `reference_mode` adds nothing new here.
+* **Without a flow channel**, `'auto'` looks for a segment typed `'rest'` in the
+  reference file (`BREATH_KINDS` — a right-clicked, or hand-edited, segment; segment
+  numbers are `whole_file`/`separators`' own segment numbers, not breaths). If one
+  exists, the mode is `'rest_segments'` and the clip is the concatenation of every
+  `'rest'`-typed segment's EMG. Otherwise, explicit `reference_intervals` still work
+  (`'intervals'`); with neither, the mode is `'unresolved'` and `Settings.validate()`
+  refuses to enable noise reduction at all, rather than let an unbuildable profile reach
+  the pipeline mid-batch.
+* `'rest_segments'`/`'interburst'` can also be set explicitly, but only for an EMG-only
+  set — `Settings.validate()` rejects either while a flow channel is declared, and either
+  without a `reference_file` while noise reduction is enabled. `'interburst'` is the
+  quiet periods between the bursts of the automatic `emg_burst` segmentation (each
+  shrunk by a guard band, measured from the wide coarse edges of the bursts; see
+  `docs/REVERSE_ENGINEERING.md` §5.12) and is accepted only with that method.
+
+**Decision:** a typed breath (any manoeuvre kind — IC, FVC, a maximal effort, `'rest'`
+itself, or `'other'`) is excluded from the flow-bearing reference file's own expiration
+mask when building the `'expiration'`-mode clip: its expiration is not the
+diaphragm-quiet period the profile is trusted for. A no-op for the overwhelming common
+case (no typed breaths at all) — every existing scenario is unaffected. See
+`core.pipeline._emg_segmented`'s `exclude_typed_from_expiration` parameter.
+
+**Automatic strength (`auto_prop`) for an EMG-only set** exists only for the `emg_burst`
+segmentation, where "active" is the bursts and "quiet" the periods between them
+(`_emg_segmented` returns those masks instead of inspiration/expiration ones). For the
+other EMG-only methods there is no such split (a rest-typed active/quiet split is not
+built), so `Settings.validate()` requires `auto_prop` off whenever noise reduction is
+enabled for them: a clear, named restriction rather than an unguarded crash. A file with
+no quiet period at all is left out of the pooled sets, like an unreadable one.
+
+## 7. The expiration mask now follows the analysis's own segmentation, not a hardcoded copy
+
+`core.pipeline._emg_segmented` builds the `'expiration'`-mode reference clip (and
+gathers the active/quiet EMG `auto_prop` samples from) by segmenting a file into
+breaths and reading each one's inspiration/expiration sample counts. Until now it did
+this with its own private, hardcoded copy of the trim/zero/drift/segment sequence:
+always flow-method breath separation, and volume drift correction only (never trend
+correction), regardless of what `processing.mechanics.separateby`/`processing.volume.
+correct_trend` actually said. A volume-segmented or trend-corrected analysis therefore
+built its noise masks from breaths that did not match the ones the analysis itself
+used — the mask and the analysis could quietly disagree about where inspiration ends
+and expiration begins.
+
+`_emg_segmented` now calls `core.pipeline.segment_file` (the same trim/zero/drift/
+trend/segment sequence `run_batch`'s main loop and `_rest_segments_clip` already use)
+instead of re-implementing a piece of it. The mask it returns is therefore always
+built from the SAME breaths the analysis itself will use, whatever the configured
+method or trend setting. This is a deliberate, documented numerical change for
+exactly the combinations that could previously disagree — noise reduction enabled AND
+(`separateby == 'volume'` OR `correct_trend` on) — every flow-method, no-trend
+scenario (every existing golden/synthetic scenario, and the overwhelming common case
+in practice) is unaffected, since `segment_file` reduces to byte-identical behaviour
+there. See `tests/unit/test_noise.py::test_emg_segmented_mask_equals_main_loop_mask`.
+
+A caching note for anyone touching this again: `segment_file`'s own per-file load/
+ECG-removal cache lookup is consuming (`cache.pop`), by design, for the main loop's
+single pass over each file. `_emg_segmented` is a SECOND, earlier caller of
+`segment_file` for the same file (during noise-profile building, before the main
+loop reaches it), so it must not let that pop drain the shared cache — see the
+function's own docstring for how it hands `segment_file` a throwaway one-entry cache
+instead, keeping the real one intact for the main loop's later call
+(`tests/unit/test_load_cache.py` pins the "loaded/ECG-removed at most once per run"
+invariant this preserves).
+
+A UI-cache note, for the same reason: `ui.screens._preview_cache.ref_clip_key`/
+`noise_report_key` (the Preview screen's memoisation of the reference-clip/
+noise-fidelity computation) previously excluded volume drift and trend correction
+from their keys on the stated grounds that the mask never depended on them. That was
+already only half true for `method == 'volume'` — `separateintobreathsbyvolume`
+searches for inspiratory/expiratory peaks by an absolute height threshold against the
+drift-(and, once configured, trend-)corrected volume, so drift correction alone can
+shift which samples are detected as peaks, independently of trend. Both keys now
+include drift, trend and the volume-peak thresholds (`_method_sensitive_key` in that
+module) wherever they already depend on the segmentation method, so a Preview panel
+can no longer keep showing a fidelity/reference-clip result computed under a
+volume-peak, drift or trend setting the user has since changed.
