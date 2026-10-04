@@ -137,6 +137,7 @@ jobs:
           name: dist
           path: dist/
           if-no-files-found: error
+          retention-days: 5
 
   # ── 3a. Publish to PyPI (real releases: on a v* tag only) ────────────────────────────
   publish-pypi:
