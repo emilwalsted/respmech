@@ -577,6 +577,55 @@ def test_placed_tidal_loops_anchors_the_loop_on_the_tlc_axis():
     assert placed["mefv_v"][-1] == pytest.approx(4.0)       # the envelope is the FVC curve
 
 
+def test_placed_tidal_loops_carries_the_fvc_inspiratory_limb_on_the_tlc_axis():
+    breaths, manoeuvres = _placed_inputs()
+    placed = m.placed_tidal_loops(breaths, manoeuvres, _cfg(), IcSettings())
+    # the fixture inhales 0 -> 4 L at -1 L/s; "volume below TLC" runs 4 -> 0, closing at TLC
+    assert placed["insp_v"] == pytest.approx([4.0, 0.0])
+    assert placed["insp_flow"] == pytest.approx([-1.0, -1.0])
+    assert placed["insp_v"][-1] == pytest.approx(placed["mefv_v"][0])   # joins the expiration at TLC
+
+
+def test_placed_tidal_loops_has_the_inspiratory_limb_without_an_ic_reference():
+    breaths, manoeuvres = _placed_inputs(with_ic=False)
+    placed = m.placed_tidal_loops(breaths, manoeuvres, _cfg(), IcSettings())
+    assert placed["insp_v"] is not None and placed["insp_flow"] is not None
+
+
+def test_placed_tidal_loops_inspiratory_limb_is_the_largest_fvc_attempts_own():
+    breaths, manoeuvres = _placed_inputs()
+    second = _analytical_fvc_breath(v_tlc=3.0, pef=1.0)
+    second["ignored"] = True
+    second["inspiration"]["flow"] = np.array([-2.0, -2.0])
+    breaths[6] = second
+    manoeuvres[6] = {"kind": "fvc", "fvc": 3.0, "mfvl_peak_ex_flow": 1.0, "quality": []}
+    for source in ("single", "envelope"):
+        placed = m.placed_tidal_loops(breaths, manoeuvres, _cfg(source=source), IcSettings())
+        assert placed["insp_v"][0] == pytest.approx(4.0)           # the 4 L attempt, not the 3 L
+        assert placed["insp_flow"] == pytest.approx([-1.0, -1.0])
+
+
+def test_inspiratory_limb_degrades_to_none_for_an_unusable_inspiration():
+    good = _analytical_fvc_breath()
+    assert m.inspiratory_limb(good) is not None
+    no_insp = {k: v for k, v in good.items() if k != "inspiration"}
+    assert m.inspiratory_limb(no_insp) is None
+    one_sample = _analytical_fvc_breath()
+    one_sample["inspiration"] = {"volume": np.array([1.0]), "flow": np.array([-1.0])}
+    assert m.inspiratory_limb(one_sample) is None
+    nan_flow = _analytical_fvc_breath()
+    nan_flow["inspiration"]["flow"] = np.array([-1.0, np.nan])
+    assert m.inspiratory_limb(nan_flow) is None
+    mismatched = _analytical_fvc_breath()
+    mismatched["inspiration"]["flow"] = np.array([-1.0])
+    assert m.inspiratory_limb(mismatched) is None
+    # a broken inspiration still leaves the expiratory envelope drawable
+    breaths, manoeuvres = _placed_inputs()
+    breaths[1]["inspiration"]["flow"] = np.array([-1.0])
+    placed = m.placed_tidal_loops(breaths, manoeuvres, _cfg(), IcSettings())
+    assert placed["insp_v"] is None and placed["mefv_v"].size > 0
+
+
 def test_placed_tidal_loops_without_ic_keeps_only_the_envelope():
     breaths, manoeuvres = _placed_inputs(with_ic=False)
     placed = m.placed_tidal_loops(breaths, manoeuvres, _cfg(), IcSettings())

@@ -1868,8 +1868,10 @@ def test_mfvl_figure_draws_every_tidal_loop_the_mean_and_the_markers(tmp_path):
     ax = _drawn(placed)
     labels = [ln.get_label() for ln in ax.lines]
     assert "MFVL" in labels and "average tidal breath" in labels
-    # one line per loop, plus the mean, the envelope, two dotted markers and the zero line
-    assert len(ax.lines) == n_tidal + 5
+    # one line per loop, plus the mean, the envelope's expiratory curve and the FVC's
+    # inspiratory limb, two dotted markers and the zero line
+    assert len(ax.lines) == n_tidal + 6
+    assert labels.count("MFVL") == 1                   # the limb shares the one legend entry
     assert {t.get_text().strip() for t in ax.texts} >= {"EELV", "EILV"}
 
 

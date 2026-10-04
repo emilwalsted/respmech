@@ -499,8 +499,7 @@ def resolve_same_file_curve(fr_manoeuvres: dict, breaths: dict, mfvl_cfg
     curve built by ``np.interp``/``np.fmax``, exactly the kind of spike
     :func:`_pef`'s own smoothing exists to reject -- using it here silently
     disagreed with the smoothed PEF already written to the Manoeuvres sheet)."""
-    candidates = [(no, row) for no, row in fr_manoeuvres.items()
-                 if row.get("kind") in ("fvc", "ic_fvc") and _finite(row.get("fvc"))]
+    candidates = _fvc_candidates(fr_manoeuvres)
     if not candidates:
         return None
     if mfvl_cfg.source == "envelope" and len(candidates) > 1:
@@ -510,6 +509,34 @@ def resolve_same_file_curve(fr_manoeuvres: dict, breaths: dict, mfvl_cfg
     best_no, best_row = max(candidates, key=lambda item: item[1]["fvc"])
     v, flow, v_tlc = mefv_curve(breaths[best_no])
     return v, flow, v_tlc, [best_row]
+
+
+def _fvc_candidates(fr_manoeuvres: dict) -> list[tuple[int, dict]]:
+    """The file's typed ``fvc``/``ic_fvc`` attempts that resolved an ``fvc`` value."""
+    return [(no, row) for no, row in fr_manoeuvres.items()
+            if row.get("kind") in ("fvc", "ic_fvc") and _finite(row.get("fvc"))]
+
+
+def inspiratory_limb(breath) -> tuple[np.ndarray, np.ndarray] | None:
+    """``(v, flow)`` for the inspiratory limb of ONE typed FVC breath, on the same
+    "volume below TLC" axis as :func:`mefv_curve` (``v = v_tlc - insp['volume']``: 0 at
+    TLC, the end of the inhalation, rising towards where the inhalation started), so
+    drawn with the expiratory curve it closes the manoeuvre's flow-volume loop at TLC.
+    Flow keeps the breath's own sign (inspiratory flow is negative). ``None`` for a
+    breath without a usable inspiration (a missing key, fewer than two samples, a
+    non-finite sample, or mismatched lengths): the limb is a display aid, so a
+    half-built breath degrades to the expiratory curve alone instead of raising."""
+    try:
+        insp = breath["inspiration"]
+        vol = _arr(insp["volume"])
+        flow = _arr(insp["flow"])
+    except (KeyError, TypeError):
+        return None
+    if vol.size < 2 or vol.size != flow.size:
+        return None
+    if not (np.isfinite(vol).all() and np.isfinite(flow).all()):
+        return None
+    return float(vol[-1]) - vol, flow
 
 
 def resolve_same_file_ic_op(fr_manoeuvres: dict, ic_cfg) -> float | None:
@@ -697,10 +724,15 @@ def placed_tidal_loops(breaths, manoeuvres, mfvl_cfg, ic_cfg) -> dict | None:
     ``(x, flow)`` per non-ignored tidal breath), ``mean`` (``(x, flow)`` or ``None``),
     ``eelv``/``eilv`` (mean end-expiratory/end-inspiratory position on the x axis, or
     ``None``; ``eelv`` is ``ic_op`` by construction, the same held-fixed
-    ``eelv_tracking='none'`` reading the columns use, so it shows no drift), and
+    ``eelv_tracking='none'`` reading the columns use, so it shows no drift),
     ``in_domain_pct`` (share of the drawn samples inside the envelope's own volume range,
-    ``None`` without loops). A breath with a missing key, an empty phase or a non-finite
-    sample is skipped rather than blanking the mean."""
+    ``None`` without loops), and ``insp_v``/``insp_flow`` (the inspiratory limb of the
+    largest-FVC attempt on the same axis, closing the manoeuvre's loop at TLC; ``None``
+    when that breath has no usable inspiration. Under ``source='envelope'`` the
+    expiratory curve is a per-volume composite but the inspiratory limb is still the
+    one largest attempt's own: there is no standard composite of the inhalation, and
+    the largest FVC is the same attempt ``source='single'`` would draw). A breath with a missing key, an empty
+    phase or a non-finite sample is skipped rather than blanking the mean."""
     if not manoeuvres or not breaths:
         return None
     curve = resolve_same_file_curve(manoeuvres, breaths, mfvl_cfg)
@@ -737,6 +769,10 @@ def placed_tidal_loops(breaths, manoeuvres, mfvl_cfg, ic_cfg) -> dict | None:
             lo, hi = float(np.nanmin(mefv_v)), float(np.nanmax(mefv_v))
             in_domain_pct = 100.0 * float(np.mean(
                 [np.mean((x >= lo) & (x <= hi)) for x, _f in loops]))
+    best_no, _best_row = max(_fvc_candidates(manoeuvres), key=lambda item: item[1]["fvc"])
+    limb = inspiratory_limb(breaths[best_no])
     return {"mefv_v": mefv_v, "mefv_flow": mefv_flow, "v_tlc": float(v_tlc),
             "ic_op": ic_op, "loops": loops, "mean": _mean_loop(mean_items),
-            "eelv": eelv, "eilv": eilv, "in_domain_pct": in_domain_pct}
+            "eelv": eelv, "eilv": eilv, "in_domain_pct": in_domain_pct,
+            "insp_v": None if limb is None else limb[0],
+            "insp_flow": None if limb is None else limb[1]}

@@ -969,7 +969,11 @@ it. The x axis is volume below TLC (the MEFV curve's own axis, TLC on the left);
 non-ignored tidal breath is drawn at `x(t) = ic_op − (V(t) − vol_endexp)`, so the end
 of expiration (EELV) sits at `ic_op` and the end of inspiration (EILV) one tidal volume
 nearer TLC. The bold average loop resamples every breath onto 200 points by breath
-fraction (a display construct, not a per-column value). Without an IC reference the
+fraction (a display construct, not a per-column value). The FVC manoeuvre's own
+inhalation to TLC is drawn as well (`insp_v`/`insp_flow`: `x = V_TLC − insp volume`,
+flow keeping its negative sign), closing the loop at TLC; it is the LARGEST-FVC
+attempt's limb, also under `source = "envelope"`, where only the expiratory curve is a
+composite. Without an IC reference the
 loops cannot be anchored and only the envelope is drawn, with a note. The job is
 planned only when `processing.breath_types` names an `fvc`/`ic_fvc` breath and
 `output.diagnostics.save_flow_volume` (default true) is on; a file with no resolvable
