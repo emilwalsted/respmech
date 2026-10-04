@@ -1446,6 +1446,14 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
                             self.emg_raw_plots, self.emg_result_plots, self.emg_plots,
                             self.segments_plots):
             plot_perf.close_plots(_container)
+        # The breath bar's 'IC reference for' button owns a QMenu, and a QMenu is a window in
+        # its own right (it counts among QApplication.topLevelWidgets() even with a parent),
+        # so it would outlive a closed screen. Detach and delete it with the plots' menus.
+        _ic_btn = getattr(self, "btn_breath_ic_ref", None)
+        _ic_menu = _ic_btn.menu() if _ic_btn is not None else None
+        if _ic_menu is not None:
+            _ic_btn.setMenu(None)
+            _ic_menu.deleteLater()
 
     def panel_busy(self, key):
         ov = self._overlays.get(key)
