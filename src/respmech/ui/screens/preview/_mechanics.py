@@ -2692,6 +2692,8 @@ class _MechanicsMixin:
         typed = self._current_breath_kind(name, sel) if marked else None
         can_ref = usable and typed in _IC_REFERENCE_KINDS
         menu = self.btn_breath_ic_ref.menu()
+        if menu is None:                    # released by shutdown(): a closed screen has none
+            return
         menu.clear()
         if marked:
             group = group_key(name, self.state.settings)
