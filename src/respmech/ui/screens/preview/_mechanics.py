@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QScrollArea, QSplitter, QTableView,
                                QTabWidget, QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt, QEvent, QObject, QSize, QThread, QTimer, Signal
-from PySide6.QtGui import QBrush, QCursor, QFont, QFontMetrics
+from PySide6.QtGui import QBrush, QCursor, QFont, QFontMetrics, QFontMetricsF
 
 import pyqtgraph as pg
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -99,6 +99,27 @@ _TYPE_MENU_STATUS_TIPS = {
     "rest": "Mark as a quiet-breathing reference segment for noise-profile estimation.",
     "other": "Mark as typed without extracting any manoeuvre values.",
 }
+
+#: The second line of a breath's label (ticket: show the breath type as text under the
+#: breath number). Plain tidal breathing has none. 'excluded' reads "(Excluded)" as
+#: Emil asked; the typed kinds use the SHORT names the Manoeuvres sheet uses, not the
+#: menu's longer sentences, so the line stays about as wide as a breath span usually is.
+_KIND_TAG = {
+    "excluded": "(Excluded)", "ic": "IC", "fvc": "FVC", "ic_fvc": "IC+FVC",
+    "max_insp": "Max insp", "sniff": "Sniff", "rest": "Rest", "other": "Other",
+}
+#: The compact stand-in used instead of the text when the view is zoomed out so far that
+#: the text would run into its neighbours: one or two characters, still in the kind's own
+#: colour, so the type stays readable (initials, with '×' for an exclusion and '…' for
+#: 'other') without needing a symbol font.
+_KIND_ICON = {
+    "excluded": "×", "ic": "I", "fvc": "F", "ic_fvc": "IF",
+    "max_insp": "M", "sniff": "S", "rest": "R", "other": "…",
+}
+#: Spare pixels required between a label's text and the edge of its own breath span
+#: before the full text is judged to fit (labels are centred on their span, so a label
+#: wider than its span is what collides with its neighbour).
+_LABEL_FIT_PAD_PX = 4.0
 
 #: slot -> the BreathTypeEntry.kind values that count as "this breath is already typed
 #: as slot" for the quick 'Use as IC reference for' submenu (M-37) -- mirrors
@@ -1576,7 +1597,7 @@ class _MechanicsMixin:
         except Exception:                        # noqa: BLE001 — cosmetic
             pass
 
-    def _breath_text(self, num, kind):
+    def _breath_text(self, num, kind, span=None):
         """A breath-number TextItem, sized for the SHORT stacked mechanics channel plots
         (~46 px of data area each): at the 13 pt app font the box is 23 px, so the headroom
         needed to show it swallows half the plot.
@@ -1584,11 +1605,16 @@ class _MechanicsMixin:
         Both steps matter, and the second is the one that counts: the default box is 23 px
         almost entirely because QTextDocument adds a 4 px margin on every side — setting a
         smaller font ALONE leaves it at 23 px. Font 9 pt + documentMargin 0 gives ~15 px."""
-        txt = pg.TextItem(self._breath_label(num),
+        txt = pg.TextItem(self._breath_label(num, kind),
                           color=self._breath_label_color(kind), anchor=(0.5, 0.0))
         f = QFont(); f.setPointSizeF(9.0)
         txt.setFont(f)
-        txt.textItem.document().setDocumentMargin(0)
+        doc = txt.textItem.document()
+        doc.setDocumentMargin(0)
+        opt = doc.defaultTextOption(); opt.setAlignment(Qt.AlignHCenter)
+        doc.setDefaultTextOption(opt)            # the type line is centred under '#n'
+        txt._rm_label = {"num": num, "kind": kind, "span": span, "compact": False,
+                         "full_px": self._label_full_width_px(txt, num, kind) if kind else 0.0}
         txt.updateTextPos()
         return txt
 
@@ -1644,10 +1670,18 @@ class _MechanicsMixin:
             return lambda: None
 
         def _unpin():
-            try:
-                vb.sigYRangeChanged.disconnect(_reposition)
-            except Exception:                          # noqa: BLE001
-                pass
+            for sig, slot in ((vb.sigYRangeChanged, _reposition), (vb.sigXRangeChanged, _recompact),
+                         (vb.sigResized, _recompact)):
+                try:
+                    sig.disconnect(slot)
+                except Exception:                      # noqa: BLE001
+                    pass
+
+        def _recompact(*_):
+            # x zoom changes how many pixels a breath span gets: swap each typed label
+            # between its full type text and the compact marker (see _refresh_breath_label)
+            for t in texts:
+                self._refresh_breath_label(t)
 
         def _reposition(*_):
             try:
@@ -1661,14 +1695,55 @@ class _MechanicsMixin:
                 _unpin()
 
         vb.sigYRangeChanged.connect(_reposition)
+        vb.sigXRangeChanged.connect(_recompact)
+        vb.sigResized.connect(_recompact)          # a resize changes px/s without changing x range
         _reposition()                                  # place at the CURRENT view top now
+        _recompact()
         return _unpin
 
     @staticmethod
-    def _breath_label(num):
-        """The per-breath number label, e.g. '#3'. The word 'breath' is intentionally
-        omitted from per-breath numbering — it is implicit from context on every graph."""
-        return f"#{num}"
+    def _breath_label(num, kind=None, compact=False):
+        """The per-breath label: the number, e.g. '#3', and for a typed or excluded breath
+        its type on a second line (``_KIND_TAG``), e.g. '#3\nFVC' or '#3\n(Excluded)'.
+        ``compact`` swaps that second line for the kind's one-or-two-character stand-in
+        (``_KIND_ICON``), used when the full text would collide with a neighbour. The word
+        'breath' is intentionally omitted from per-breath numbering — it is implicit from
+        context on every graph. Plain tidal breathing (``kind`` falsy) stays a bare '#3'."""
+        if not kind:
+            return f"#{num}"
+        second = (_KIND_ICON if compact else _KIND_TAG).get(kind, _KIND_ICON["other"] if compact else _KIND_TAG["other"])
+        return f"#{num}\n{second}"
+
+    @staticmethod
+    def _label_full_width_px(txt, num, kind):
+        """The rendered width, in pixels, of ``txt``'s FULL (non-compact) label."""
+        fm = QFontMetricsF(txt.textItem.font())
+        return max(fm.horizontalAdvance(line)
+                   for line in _MechanicsMixin._breath_label(num, kind).split("\n"))
+
+    def _refresh_breath_label(self, txt):
+        """Pick, for one breath-number TextItem, between the full type text and the compact
+        marker, from the zoom the label's own view currently has: the full text when the
+        breath's span is wide enough on screen to hold it, the marker otherwise. A no-op
+        for an untyped breath (nothing to shorten) and for a label whose view has no laid-out
+        width yet (it keeps the full text until a real range arrives)."""
+        st = getattr(txt, "_rm_label", None)
+        if not st or not st["kind"]:
+            return
+        compact = False
+        try:
+            vb = txt.getViewBox()
+            span = st.get("span")
+            if vb is not None and span is not None and vb.width() > 0:
+                (x0, x1) = vb.viewRange()[0]
+                if x1 > x0:
+                    span_px = (span[1] - span[0]) / (x1 - x0) * float(vb.width())
+                    compact = span_px < st["full_px"] + _LABEL_FIT_PAD_PX
+        except Exception:                        # noqa: BLE001 — cosmetic
+            return
+        if compact != st["compact"]:
+            st["compact"] = compact
+            txt.setText(self._breath_label(st["num"], st["kind"], compact))
 
     def _draw_breath_overlays(self, spans, label_y=0.0, carried=False, plots=None):
         """Shade every breath + a number label on ``plots`` (default: the Mechanics
@@ -1703,7 +1778,7 @@ class _MechanicsMixin:
                 self._breath_regions[n].append((item, i))
         if plots:
             for n, t0, t1, kind in spans:
-                txt = self._breath_text(n, kind)
+                txt = self._breath_text(n, kind, span=(t0, t1))
                 txt.setPos((t0 + t1) / 2.0, label_y)
                 plots[0].addItem(txt, ignoreBounds=True)
                 self._breath_texts[n] = txt
@@ -1891,7 +1966,7 @@ class _MechanicsMixin:
             item.set_brush(idx, self._breath_brush(paint_kind))
         txt = self._breath_texts.get(breath_no)
         if txt is not None:
-            txt.setColor(self._breath_label_color(paint_kind))
+            self._retag_breath_label(txt, breath_no, paint_kind, self._breath_texts)
         for view in ("raw", "detail", "result"):
             rec = self._bov.get(view)
             if not rec:
@@ -1904,9 +1979,32 @@ class _MechanicsMixin:
             t = rec["texts"].get(breath_no)
             if t is not None:
                 try:
-                    t.setColor(self._breath_label_color(paint_kind))
+                    self._retag_breath_label(t, breath_no, paint_kind, rec["texts"])
                 except Exception:                      # noqa: BLE001
                     pass
+
+    def _retag_breath_label(self, txt, breath_no, paint_kind, txt_map):
+        """Live counterpart of ``_breath_text``: give an already-drawn label its new colour
+        AND its new type line (``_breath_label``) after a type/exclusion change, then let
+        ``_refresh_breath_label`` choose text vs. marker for the current zoom. A label that
+        has just grown a second line may be taller than the headroom reserved above the
+        signal when the view was drawn (an all-tidal file reserves one line), so the
+        headroom is re-fitted once, and only when it has actually grown."""
+        txt.setColor(self._breath_label_color(paint_kind))
+        st = getattr(txt, "_rm_label", None)
+        if st is None:
+            return
+        before = txt.boundingRect().height()
+        st["kind"] = paint_kind
+        st["compact"] = False
+        st["full_px"] = self._label_full_width_px(txt, breath_no, paint_kind) if paint_kind else 0.0
+        txt.setText(self._breath_label(breath_no, paint_kind))
+        self._refresh_breath_label(txt)             # may swap to the marker for the current zoom
+        if txt.boundingRect().height() > before + 1.0:
+            vb = txt.getViewBox()
+            plot = getattr(vb, "parentItem", lambda: None)() if vb is not None else None
+            if plot is not None:
+                self._label_headroom(plot, label_px=self._label_px(txt_map))
 
     def _toggle_breath(self, breath_no):
         # D24: the single funnel both the Mechanics-stack click (_on_plot_clicked above)
@@ -2487,7 +2585,7 @@ class _MechanicsMixin:
             for i, (num, _a, _b, _k) in enumerate(spans):
                 reg_map.setdefault(num, []).append((item, i))
         for num, a, b, kind in spans:
-            txt = self._breath_text(num, kind)
+            txt = self._breath_text(num, kind, span=(a, b))
             txt.setPos((a + b) / 2.0, label_y)
             plot_items[0].addItem(txt, ignoreBounds=True)
             items.append((plot_items[0], txt)); txt_map[num] = txt

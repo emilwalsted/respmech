@@ -1006,3 +1006,90 @@ def test_exclude_key_changes_when_breath_types_changes(qapp, tmp_path):
     s.processing.breath_types[0].kind = "ic"
     after_kind_change = _exclude_key(s)
     assert after_kind_change != after_add, "changing a typed breath's kind must change the cache key"
+
+
+# --------------------------------------------------------------------------- #
+# The breath's type as text under its number
+# --------------------------------------------------------------------------- #
+def test_breath_label_text_carries_the_type_on_a_second_line():
+    from respmech.ui.screens.preview._mechanics import _MechanicsMixin as M
+    assert M._breath_label(7) == "#7"                      # plain tidal: unchanged
+    assert M._breath_label(7, None) == "#7"
+    assert M._breath_label(3, "fvc") == "#3\nFVC"
+    assert M._breath_label(3, "excluded") == "#3\n(Excluded)"
+    assert M._breath_label(3, "ic_fvc") == "#3\nIC+FVC"
+    # compact stand-in, and an unknown kind falls back to 'other' rather than raising
+    assert M._breath_label(3, "fvc", compact=True) == "#3\nF"
+    assert M._breath_label(3, "excluded", compact=True) == "#3\n×"
+    assert M._breath_label(3, "not-a-kind") == "#3\nOther"
+
+
+def _label_text(pv, n):
+    return pv._breath_texts[n].textItem.toPlainText()
+
+
+def test_typing_and_excluding_a_breath_retags_its_label_live(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    n = next(iter(pv._breath_spans))
+    assert _label_text(pv, n) == f"#{n}"
+
+    assert pv._set_breath_type(n, "fvc") == "fvc"
+    assert _label_text(pv, n).split("\n")[0] == f"#{n}"
+    assert _label_text(pv, n).split("\n")[1] in ("FVC", "F")   # full text or compact, per zoom
+
+    assert pv._toggle_breath(n) is True                        # excluded (a typed breath is retyped)
+    assert _label_text(pv, n).split("\n")[1] in ("(Excluded)", "×")
+
+    assert pv._set_breath_type(n, "tidal") == "tidal"
+    assert _label_text(pv, n) == f"#{n}"
+    win.close()
+
+
+def test_label_swaps_to_the_marker_when_its_span_is_too_narrow_on_screen(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    n = next(iter(pv._breath_spans))
+    pv._set_breath_type(n, "fvc")
+    txt = pv._breath_texts[n]
+    st = txt._rm_label
+    vb = txt.getViewBox()
+    vb.resize(800, 200)       # give the (never shown) view a real width: the rule needs pixels
+    assert vb.width() > 0, "the view must be laid out for this test to mean anything"
+
+    # pretend a tiny span (as when zoomed far out) and a laid-out view
+    st["span"] = (0.0, 0.001)
+    st["full_px"] = 40.0
+    vb.setXRange(0.0, 100.0, padding=0)
+    pv._refresh_breath_label(txt)
+    assert txt.textItem.toPlainText() == f"#{n}\nF"
+    # wide span again -> full text
+    st["span"] = (0.0, 100.0)
+    pv._refresh_breath_label(txt)
+    assert txt.textItem.toPlainText() == f"#{n}\nFVC"
+    win.close()
+
+
+def test_x_zoom_re_evaluates_labels_through_the_pin_slot(qapp, tmp_path):
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    win = MainWindow(AppState(s)); pv = win.preview_screen
+    _render_mech(pv, s)
+    n = next(iter(pv._breath_spans))
+    pv._set_breath_type(n, "ic")
+    txt = pv._breath_texts[n]
+    vb = txt.getViewBox()
+    vb.resize(800, 200)       # give the (never shown) view a real width: the rule needs pixels
+    assert vb.width() > 0, "the view must be laid out for this test to mean anything"
+    t0, t1 = pv._breath_spans[n]
+    st = txt._rm_label
+    st["full_px"] = vb.width() * 0.5               # needs half the view to fit its text
+    vb.setXRange(t0, t1, padding=0)                # zoomed in on the breath: span fills the view
+    assert txt.textItem.toPlainText() == f"#{n}\nIC"
+    vb.setXRange(t0 - 1000, t1 + 1000, padding=0)  # zoomed far out: span is a sliver
+    assert txt.textItem.toPlainText() == f"#{n}\nI"
+    win.close()
