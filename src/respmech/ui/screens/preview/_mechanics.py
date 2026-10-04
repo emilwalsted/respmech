@@ -1670,7 +1670,8 @@ class _MechanicsMixin:
             return lambda: None
 
         def _unpin():
-            for sig, slot in ((vb.sigYRangeChanged, _reposition), (vb.sigXRangeChanged, _recompact)):
+            for sig, slot in ((vb.sigYRangeChanged, _reposition), (vb.sigXRangeChanged, _recompact),
+                         (vb.sigResized, _recompact)):
                 try:
                     sig.disconnect(slot)
                 except Exception:                      # noqa: BLE001
@@ -1695,6 +1696,7 @@ class _MechanicsMixin:
 
         vb.sigYRangeChanged.connect(_reposition)
         vb.sigXRangeChanged.connect(_recompact)
+        vb.sigResized.connect(_recompact)          # a resize changes px/s without changing x range
         _reposition()                                  # place at the CURRENT view top now
         _recompact()
         return _unpin
@@ -1997,7 +1999,7 @@ class _MechanicsMixin:
         st["compact"] = False
         st["full_px"] = self._label_full_width_px(txt, breath_no, paint_kind) if paint_kind else 0.0
         txt.setText(self._breath_label(breath_no, paint_kind))
-        self._refresh_breath_label(txt)
+        self._refresh_breath_label(txt)             # may swap to the marker for the current zoom
         if txt.boundingRect().height() > before + 1.0:
             vb = txt.getViewBox()
             plot = getattr(vb, "parentItem", lambda: None)() if vb is not None else None

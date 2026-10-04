@@ -1058,18 +1058,19 @@ def test_label_swaps_to_the_marker_when_its_span_is_too_narrow_on_screen(qapp, t
     txt = pv._breath_texts[n]
     st = txt._rm_label
     vb = txt.getViewBox()
+    vb.resize(800, 200)       # give the (never shown) view a real width: the rule needs pixels
+    assert vb.width() > 0, "the view must be laid out for this test to mean anything"
 
     # pretend a tiny span (as when zoomed far out) and a laid-out view
     st["span"] = (0.0, 0.001)
     st["full_px"] = 40.0
     vb.setXRange(0.0, 100.0, padding=0)
     pv._refresh_breath_label(txt)
-    if vb.width() > 0:
-        assert txt.textItem.toPlainText() == f"#{n}\nF"
-        # wide span again -> full text
-        st["span"] = (0.0, 100.0)
-        pv._refresh_breath_label(txt)
-        assert txt.textItem.toPlainText() == f"#{n}\nFVC"
+    assert txt.textItem.toPlainText() == f"#{n}\nF"
+    # wide span again -> full text
+    st["span"] = (0.0, 100.0)
+    pv._refresh_breath_label(txt)
+    assert txt.textItem.toPlainText() == f"#{n}\nFVC"
     win.close()
 
 
@@ -1082,8 +1083,8 @@ def test_x_zoom_re_evaluates_labels_through_the_pin_slot(qapp, tmp_path):
     pv._set_breath_type(n, "ic")
     txt = pv._breath_texts[n]
     vb = txt.getViewBox()
-    if vb.width() <= 0:
-        pytest.skip("view has no laid-out width in this environment")
+    vb.resize(800, 200)       # give the (never shown) view a real width: the rule needs pixels
+    assert vb.width() > 0, "the view must be laid out for this test to mean anything"
     t0, t1 = pv._breath_spans[n]
     st = txt._rm_label
     st["full_px"] = vb.width() * 0.5               # needs half the view to fit its text
