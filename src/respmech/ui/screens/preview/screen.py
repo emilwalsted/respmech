@@ -253,6 +253,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         bar.addWidget(self.btn_next_file)
         bar.addSpacing(12)   # detach Refresh a little from the ◀ ▶ cluster
         bar.addWidget(self.btn_refresh_all)
+        self._build_breath_bar(bar)      # the right-click menu's choices, for the marked breath
         bar.addStretch(1)
         root.addLayout(bar)
         # Status is shown ONLY in the main-window bottom status bar (via status_changed).
@@ -613,6 +614,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         EMG plot's click handler call through) are closed, each with a reason a user who
         clicks anyway can actually read."""
         self._run_active = active
+        self._update_breath_bar()
         self.btn_process_file.setEnabled(self._process_ready and not active)
         self.btn_process_file.setToolTip(
             "Locked while a run is in progress." if active
@@ -866,6 +868,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         ecg_on = emg.remove_ecg
         jr = self._job_running
         self.btn_refresh_all.setEnabled(has_file)
+        self._update_breath_bar()
         self.emg_channel.setEnabled(has_emg)
         # The enable checkbox and the reference picker only need ECG removal on (so the user
         # can turn noise on and choose a reference); the parameter chip additionally needs

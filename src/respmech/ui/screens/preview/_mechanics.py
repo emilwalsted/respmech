@@ -1865,6 +1865,7 @@ class _MechanicsMixin:
                       getattr(self, "_segtable_model", None)):
             if model is not None:
                 model.set_highlight_breath(None)
+        self._update_breath_bar()
 
     def _apply_breath_selection(self, redraw_loop=True):
         """Paint ``self._selected_breath`` (or its absence) on every surface that shows
@@ -1874,6 +1875,7 @@ class _MechanicsMixin:
         if sel is not None and sel not in self._breath_spans \
                 and sel not in {b[0] for b in self._breaths}:
             sel = self._selected_breath = None          # a stale number: nothing to mark
+        self._update_breath_bar()
         seen = set()
         items = [it for lst in self._breath_regions.values() for it, _i in lst]
         for rec in self._bov.values():
@@ -2535,6 +2537,7 @@ class _MechanicsMixin:
 
     def _apply_breath_type_choice(self, breath_no, kind):
         result = self._set_breath_type(breath_no, kind)
+        self._update_breath_bar()           # also resets the selector if the write was refused
         if result is None:
             return
         name = self._selected_filename()
@@ -2582,14 +2585,110 @@ class _MechanicsMixin:
             global_pos = view.mapToGlobal(view.mapFromScene(scene_pos))
         else:                                          # pragma: no cover — defensive only
             global_pos = QCursor.pos()
+        menu = self._build_type_menu(breath_no, self._type_menu_kinds())
+        menu.popup(global_pos)
+
+    def _type_menu_kinds(self):
+        """The breath kinds on offer for the current signal set (see
+        ``_handle_type_requested`` for why they differ). Shared by the right-click menu
+        and the breath action bar, so the two can never offer different choices."""
         caps = Capabilities.from_settings_or_none(self.state.settings)
         emg_only = bool(caps is not None and caps.mode == "emg_only")
         if emg_only:
-            kinds = tuple(k for k in _TYPE_MENU_KINDS if k in ("tidal", "excluded", "rest", "other"))
+            return tuple(k for k in _TYPE_MENU_KINDS if k in ("tidal", "excluded", "rest", "other"))
+        return tuple(k for k in _TYPE_MENU_KINDS if k != "rest")
+
+    # -- Breath action bar ---------------------------------------------------
+    # The right-click menu's choices as controls on the toolbar row next to Refresh: a type
+    # selector, the 'Use as IC reference for' menu and 'Reference manoeuvres…'. They act on
+    # the MARKED breath (_selected_breath), reuse the menu's own funnels
+    # (_apply_breath_type_choice / _set_reference / _open_reference_picker) and are
+    # disabled until a breath is marked. _update_breath_bar is the one place that decides
+    # their state.
+    def _build_breath_bar(self, bar):
+        bar.addSpacing(12)
+        self.breath_bar_label = QLabel("Breath:")
+        self.breath_type_combo = QComboBox()
+        self.breath_type_combo.setAccessibleName("Type of the marked breath")
+        self.breath_type_combo.setPlaceholderText("Type")
+        self.breath_type_combo.activated.connect(self._on_breath_type_combo)
+        self.btn_breath_ic_ref = QPushButton("IC reference for")
+        self.btn_breath_ic_ref.setAccessibleName("Use the marked breath as IC reference")
+        self.btn_breath_ic_ref.setMenu(QMenu(self.btn_breath_ic_ref))
+        self.btn_breath_refs = QPushButton("Reference manoeuvres…")
+        self.btn_breath_refs.clicked.connect(lambda _c=False: self._open_reference_picker())
+        self._breath_combo_kinds = ()
+        for w in (self.breath_bar_label, self.breath_type_combo, self.btn_breath_ic_ref,
+                  self.btn_breath_refs):
+            w.setEnabled(False)          # nothing marked yet; the file rail does not exist
+            bar.addWidget(w)             # at this point, so no _update_breath_bar() here
+
+    def _on_breath_type_combo(self, index):
+        sel = self._selected_breath
+        kind = self.breath_type_combo.itemData(index)
+        if sel is None or kind is None:
+            return
+        self._apply_breath_type_choice(sel, kind)
+
+    def _update_breath_bar(self):
+        """Sync the action bar with the marked breath, its kind, the signal set and the run
+        lock. Safe to call at any time (before the first render, with nothing marked)."""
+        combo = getattr(self, "breath_type_combo", None)
+        if combo is None:
+            return
+        from respmech.core.summary import group_key  # noqa: PLC0415
+
+        name = self._selected_filename()
+        sel = self._selected_breath
+        marked = sel is not None and bool(name)
+        locked = bool(self._run_active)
+        usable = marked and not locked
+        if not marked:
+            why = "Mark a breath first: click it in a plot."
+        elif locked:
+            why = "Locked while a run is in progress."
         else:
-            kinds = tuple(k for k in _TYPE_MENU_KINDS if k != "rest")
-        menu = self._build_type_menu(breath_no, kinds)
-        menu.popup(global_pos)
+            why = ""
+        self.breath_bar_label.setText(f"Breath {sel}:" if marked else "Breath:")
+        kinds = self._type_menu_kinds()
+        combo.blockSignals(True)
+        try:
+            if kinds != self._breath_combo_kinds:
+                combo.clear()
+                for k in kinds:
+                    combo.addItem(_TYPE_MENU_LABELS.get(k, k.capitalize()).rstrip("…"), k)
+                self._breath_combo_kinds = kinds
+            kind = (self._breath_kind_now(sel) or "tidal") if marked else None
+            idx = combo.findData(kind) if kind is not None else -1
+            combo.setCurrentIndex(idx)
+        finally:
+            combo.blockSignals(False)
+        combo.setEnabled(usable)
+        combo.setToolTip(why or "Set the type of the marked breath (same choices as the right-click menu).")
+        # 'IC reference for' needs the marked breath to be an IC manoeuvre already, exactly
+        # as in the right-click menu.
+        typed = self._current_breath_kind(name, sel) if marked else None
+        can_ref = usable and typed in _IC_REFERENCE_KINDS
+        menu = self.btn_breath_ic_ref.menu()
+        menu.clear()
+        if marked:
+            group = group_key(name, self.state.settings)
+            menu.addAction("This file").triggered.connect(
+                lambda _c=False, n=name, b=sel: self._set_reference(n, b, "file"))
+            menu.addAction(f"All files of {group}").triggered.connect(
+                lambda _c=False, n=name, b=sel: self._set_reference(n, b, "group"))
+            menu.addAction("All files").triggered.connect(
+                lambda _c=False, n=name, b=sel: self._set_reference(n, b, "all"))
+        self.btn_breath_ic_ref.setEnabled(can_ref)
+        if not usable:
+            self.btn_breath_ic_ref.setToolTip(why)
+        elif not can_ref:
+            self.btn_breath_ic_ref.setToolTip("Type this breath as an IC manoeuvre (or IC + FVC) first.")
+        else:
+            self.btn_breath_ic_ref.setToolTip("Point another file's (or this group's) IC reference at this manoeuvre.")
+        self.btn_breath_refs.setEnabled(usable)
+        self.btn_breath_refs.setToolTip(
+            why or "Browse and link IC/FVC/baseline/maximal-effort manoeuvres across files.")
 
     def _request_batch_recompute(self):
         """Debounced recompute of the mechanics test run (Campbell + per-breath table) after
