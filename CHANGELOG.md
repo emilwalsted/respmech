@@ -36,6 +36,21 @@ input.channels.emg must name at least one column" for an analysis with an explic
 `analysis.signals` that lists `emg`, such as the built-in sample, because the test run drops
 the EMG channels (the EMG tabs show that work) but kept naming EMG in the signal set.
 
+**A normal range behind the maximal flow-volume loop.** When a participant's sex, age and
+height are given in `[[input.subjects]]` (`sex`, `age_years`, `height_cm`, all optional and
+all three needed), the maximal flow-volume figure, in Preview & QC and in
+`flow-volume (tidal in MFVL).pdf`, shades the normal range behind the participant's own
+curve and draws the expected curve dashed. The size of the range comes from the GLI 2022
+race-neutral reference equations (expected FVC and FEV1 with their lower and upper limits
+of normal); GLI 2022 has no flow-volume curve, so the *shape* is a typical expiratory limb
+taken from the ECCS 1993 equations for peak flow and the flows at 25, 50 and 75 % of FVC,
+scaled so that the curve's FVC and its FEV1 (the volume exhaled after one second) are the
+GLI values. The shape is indicative, not a published reference, and a discreet note in the
+figure says which sources were used. Nothing is drawn without the three values, and no
+result column changes. Other reference materials can be added later in one place
+(`core/analysis/normal_range.py`); choosing between them from a setting is not part of
+this release.
+
 **Smaller changes since 2.4.0.**
 
 - The Provenance sheet and `run-report.txt` now record the Python, numpy, scipy, pandas

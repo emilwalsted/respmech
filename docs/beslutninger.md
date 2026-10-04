@@ -6,6 +6,40 @@ decision <date>" — never an internal ticket reference; this repo is public).
 
 ---
 
+**04-10-2026 — The normal range in the maximal flow-volume figure: GLI 2022 for the size,
+ECCS 1993 for the shape (author's decision, 04-10-2026).** The figure draws a shaded
+normal range behind the participant's own maximal flow-volume loop, from the optional
+`sex`, `age_years` and `height_cm` of the participant's `[[input.subjects]]` entry.
+
+1. **GLI 2022 (race-neutral) supplies expected FVC and FEV1 and their limits of normal,
+   nothing more.** It publishes no flow-volume curve and no PEF, so a curve needs a second
+   source for its shape. The author chose a typical normal curve over a bare vertical band
+   at the expected FVC.
+2. **The shape is ECCS 1993** (PEF and the flows at 25, 50 and 75 % of FVC, used only as
+   ratios between flows) and is scaled so that the curve's FVC is the GLI FVC and the
+   volume exhaled in one second is the GLI FEV1. The same scaling at the lower and upper
+   limits of normal gives the band. It is a shape-preserving drawing aid, labelled
+   "indicative" on the figure, and must not be quoted as a published reference range for
+   flows. A band built from PEF or MEF predictions of a single source would be a
+   different, and also unpublished, construction; it was not chosen.
+3. **The GLI 2022 tables are vendored from the MIT-licensed `pyspiro` 0.9.3 package**
+   (`core/analysis/_gli2022_tables.py`, with the source and the file's SHA-256 in its
+   header), not re-read from the Global Lung Function Initiative's own spreadsheet. They
+   were cross-checked against pyspiro's own implementation over a grid of ages and heights
+   (agreement within 0.0025 L); a check against the official GLI calculator or
+   spreadsheet is still open and is the first thing to do if a value ever looks wrong. The
+   spline lookup uses the age rounded to the nearest quarter year and the equation the
+   exact age, which is the GLI convention.
+4. **Reference materials are a registry, the choice is not a setting yet.**
+   `normal_range.REGISTRY`/`register()`/`get_reference()` is the seam for adding another
+   reference; the figure code asks for `DEFAULT_REFERENCE`. Exposing the choice as a
+   setting was deliberately left for later.
+5. **No demographics, no band.** Missing sex, age or height, or a value outside the
+   reference's range (age 3-95 years), draws nothing and changes no number; the three
+   fields never reach the calculation core.
+
+---
+
 **29-09-2026 — The modular analysis, in one place: seven choices that are easy to undo
 by accident (author's decisions, 26-09-2026).** The individual features each have their
 own entry here or a section in `docs/REVERSE_ENGINEERING.md` (§5.11-5.17); these seven

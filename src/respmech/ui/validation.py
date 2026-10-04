@@ -195,12 +195,13 @@ _GROUP_REFERENCE_ENTRY_FORM_RE = re.compile(
     r"^processing\.reference_defaults\[\d+\] must be a table with group$")
 _GROUP_REFERENCE_ENTRY_DUPLICATE_RE = re.compile(
     r"^processing\.reference_defaults: group .+ appears more than once$")
-#: SubjectEntry's three checks (malformed, duplicate key, out-of-range volumes) all
+#: SubjectEntry's checks (malformed, duplicate key, out-of-range volumes, sex/age/height) all
 #: point at the same not-yet-built Setup card, so they share ONE friendly sentence
 #: rather than three separate ones.
 _SUBJECT_ENTRY_RE = re.compile(
     r"^input\.subjects\[\d+\](?: must be a table with key|\.(?:tlc_l must be between 0 "
-    r"and 15 L|rv_l must be below tlc_l))$")
+    r"and 15 L|rv_l must be below tlc_l|sex must be \"male\" or \"female\"|"
+    r"age_years must be between 3 and 95|height_cm must be between 80 and 230 cm))$")
 _SUBJECT_ENTRY_DUPLICATE_RE = re.compile(r"^input\.subjects: key .+ must be unique$")
 #: a single-channel-role "is required" message, with an OPTIONAL " by analysis.signals"
 #: suffix (R7): the suffix means the role was named in an EXPLICIT ``analysis.signals``
