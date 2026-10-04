@@ -172,7 +172,9 @@ explaining why. A new figure, `flow-volume (tidal in MFVL).pdf`, draws those tid
 loops inside the file's own maximal flow-volume curve (grey loops, a bold average
 loop, EELV and EILV marked), and for a Flow-only analysis the Preview panel shows the
 same picture whenever the previewed file has a breath typed as a forced vital
-capacity. Mechanics ▸ Advanced… ▸ Lung volumes gained the curve source (largest
+capacity. The forced vital capacity manoeuvre is drawn as a whole loop: the inhalation
+to total lung capacity is shown beside the forced expiration, both in the figure and in
+the Preview panel. Mechanics ▸ Advanced… ▸ Lung volumes gained the curve source (largest
 attempt or envelope), the two flow-limitation tolerances and the FEV1-to-MVV
 multiplier; the figure can be switched off with `output.diagnostics.save_flow_volume`.
 

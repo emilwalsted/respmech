@@ -421,6 +421,16 @@ def test_campbell_panel_draws_tidal_loops_in_the_mfvl_with_a_typed_fvc(qapp, tmp
     assert ax.get_xlabel().startswith(("Volume below TLC", "Below TLC", "V ("))
     n_tidal = sum(1 for b in fr.breaths.values() if not b["ignored"])
     assert len(ax.lines) >= n_tidal + 2, "the tidal loops and the envelope must all be drawn"
+    # the typed FVC's inhalation to TLC is drawn too, closing its loop: a second line in the
+    # envelope's colour whose flow is inspiratory (negative) and which ends at TLC (x = 0)
+    mfvl_lines = [ln for ln in ax.lines if ln.get_label() == "MFVL"]
+    env_colour = mfvl_lines[0].get_color()
+    limbs = [ln for ln in ax.lines
+             if ln.get_label() != "MFVL" and ln.get_color() == env_colour
+             and ln.get_linewidth() == mfvl_lines[0].get_linewidth()]
+    assert len(limbs) == 1
+    x, y = limbs[0].get_data()
+    assert float(y.max()) < 0 and float(x.min()) == 0.0
     assert pv.btn_export_fig.isEnabled()
     assert pv._campbell_panel._title_label.fullText() == "Flow-volume loop"
 

@@ -225,7 +225,8 @@ def _pv_cohort(result, path, cols, rows):
 def draw_flow_volume_mfvl(ax, placed, *, loop=_MUTED, mean=_BRAND, envelope="black",
                           marker=_MUTED, label=_MUTED):
     """Draw ``mfvl.placed_tidal_loops``'s result onto ``ax``: grey tidal loops, a bold
-    mean loop, the MFVL envelope and dotted EELV/EILV markers. Volume runs from TLC on the
+    mean loop, the MFVL envelope (expiratory curve plus the FVC manoeuvre's own
+    inspiratory limb) and dotted EELV/EILV markers. Volume runs from TLC on the
     left. The colours are parameters so the Preview panel can draw the same picture in its
     own theme; the defaults are the light-theme colours the PDF uses."""
     for x, flow in placed["loops"]:
@@ -235,6 +236,10 @@ def draw_flow_volume_mfvl(ax, placed, *, loop=_MUTED, mean=_BRAND, envelope="bla
                 label="average tidal breath")
     ax.plot(placed["mefv_v"], placed["mefv_flow"], color=envelope, lw=1.8, zorder=2,
             label="MFVL")
+    if placed.get("insp_v") is not None:
+        # the inhalation to TLC that precedes the forced expiration: same colour and no
+        # legend entry of its own, since together the two limbs are ONE manoeuvre's loop
+        ax.plot(placed["insp_v"], placed["insp_flow"], color=envelope, lw=1.8, zorder=2)
     if placed["eelv"] is not None:
         ax.axvline(placed["eelv"], color=marker, ls=":", lw=1.0, zorder=0)
         ax.text(placed["eelv"], 0.02, " EELV", transform=ax.get_xaxis_transform(),
