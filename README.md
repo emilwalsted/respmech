@@ -442,4 +442,4 @@ or cite a specific version using that version's DOI (click the badge for the lis
 
 An example citation:
 
-_[...] were calculated using the Python package RespMech (E Walsted, RespMech v2.4.0, 2026, https://github.com/emilwalsted/respmech/, DOI: 10.5281/zenodo.3270825) [...]_
+_[...] were calculated using the Python package RespMech (E Walsted, RespMech v2.5.0, 2026, https://github.com/emilwalsted/respmech/, DOI: 10.5281/zenodo.3270825) [...]_

@@ -1,4 +1,4 @@
-__version__ = "2.4.0"
+__version__ = "2.5.0"
 
 # The year shown in the app's own citation example (About dialog). Bump it alongside
 # __version__ whenever a release crosses into a new calendar year; RELEASING.md's

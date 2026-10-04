@@ -5,7 +5,7 @@ Dates are the release (tag) date. See [Releasing](docs/RELEASING.md) for how a
 release is cut, and the [GitHub releases](https://github.com/emilwalsted/respmech/releases)
 for the installers themselves.
 
-## Unreleased
+## v2.5.0 — 2026-10-04
 
 **A modular analysis: signal sets, typed breaths, reference manoeuvres, EMG-only
 recordings and operating lung volumes.** This release stops assuming that every
