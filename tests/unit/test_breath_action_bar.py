@@ -162,3 +162,29 @@ def test_switching_file_clears_the_mark_and_the_controls(qapp, tmp_path):
     pv._select_breath(next(iter(pv._breath_spans)))
     pv._clear_breath_selection()
     assert not any(w.isEnabled() for w in _controls(pv))
+
+
+def test_picking_the_current_type_again_writes_nothing(qapp, tmp_path):
+    win, pv, s = _screen(tmp_path)
+    _render(pv, s)
+    n = next(iter(pv._breath_spans))
+    pv._select_breath(n)
+    seen = []
+    pv.settings_edited.connect(lambda: seen.append(1))
+    combo = pv.breath_type_combo
+    combo.activated.emit(combo.findData("tidal"))
+    assert not seen
+    combo.activated.emit(combo.findData("ic"))
+    combo.activated.emit(combo.findData("ic"))
+    assert len(seen) == 1
+
+
+def test_an_outside_settings_write_resyncs_the_selector(qapp, tmp_path):
+    from respmech.core.settings import ExcludeEntry
+    win, pv, s = _screen(tmp_path)
+    _render(pv, s)
+    n = next(iter(pv._breath_spans))
+    pv._select_breath(n)
+    s.processing.exclude_breaths.append(ExcludeEntry(file=NAME, breaths=[n]))
+    pv.settings_edited.emit()
+    assert pv.breath_type_combo.currentData() == "excluded"
