@@ -174,6 +174,10 @@ file's workbook:
 * A **maximal inspiratory effort** or **sniff** reports its own peak pressures and EMG, the
   reference [normalisation](#operating-lung-volumes-efl-and-peepi) uses.
 
+The same choices are also available as controls on the toolbar row next to **Refresh**
+(a type selector, *Use as IC reference for* and *Reference manoeuvres…*). They act on the
+marked breath and stay disabled until one is marked.
+
 A dedicated recording in which every breath is typed (a separate IC or FVC file) is
 analysed too; its Manoeuvres table stands in for the breath-by-breath data.
 

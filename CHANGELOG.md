@@ -475,6 +475,11 @@ gaps between what the two run.**
   the marked breath again to unmark it, or another breath to move the mark. To exclude or
   include a breath, right-click it and choose *Excluded* or *Tidal*; the mark is a view
   aid only, it never changes the analysis and is left out of exported figures.
+- **The breath right-click menu's choices are now also controls next to Refresh.** In
+  Preview & QC, a row beside the Refresh button offers the marked breath's type, *Use as IC
+  reference for* and *Reference manoeuvres…*, with the same effect as the right-click menu.
+  They stay disabled until a breath is marked (and while a run is in progress), and the row
+  wraps onto a second line on a narrow window.
 - **A recording cut mid-breath at either end is now flagged instead of analysed
   silently.** Trimming only ever discarded a leading partial expiration and a trailing
   partial inspiration — it never verified that the breath it *keeps* at either
