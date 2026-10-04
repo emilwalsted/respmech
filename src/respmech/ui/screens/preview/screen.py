@@ -254,7 +254,6 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         bar.addSpacing(12)   # detach Refresh a little from the ◀ ▶ cluster
         bar.addWidget(self.btn_refresh_all)
         self._build_breath_bar(bar)      # the right-click menu's choices, for the marked breath
-        bar.addStretch(1)
         root.addLayout(bar)
         # Status is shown ONLY in the main-window bottom status bar (via status_changed).
         # Keep the label object (state holder + tests read pv.status) but never place it

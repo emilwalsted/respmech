@@ -43,8 +43,9 @@ def test_bar_sits_on_the_refresh_row_and_starts_disabled(qapp, tmp_path):
     win, pv, s = _screen(tmp_path)
     bar = pv.layout().itemAt(0).layout()
     widgets = [bar.itemAt(i).widget() for i in range(bar.count()) if bar.itemAt(i).widget()]
-    for w in (pv.btn_refresh_all, *_controls(pv)):
-        assert w in widgets
+    assert pv.btn_refresh_all in widgets and pv.breath_bar in widgets
+    for w in _controls(pv):
+        assert pv.breath_bar.isAncestorOf(w)
     _render(pv, s)
     assert not any(w.isEnabled() for w in _controls(pv))
     assert "Mark a breath first" in pv.breath_type_combo.toolTip()
@@ -125,7 +126,7 @@ def test_reference_manoeuvres_button_opens_the_picker(qapp, tmp_path, monkeypatc
     seen = []
     monkeypatch.setattr(type(pv), "_open_reference_picker", lambda self, f=None: seen.append(f))
     pv.btn_breath_refs.click()
-    assert seen == [None]
+    assert seen == [NAME]
 
 
 def test_a_run_locks_the_controls_with_a_reason_and_releases_them(qapp, tmp_path):
@@ -188,3 +189,12 @@ def test_an_outside_settings_write_resyncs_the_selector(qapp, tmp_path):
     s.processing.exclude_breaths.append(ExcludeEntry(file=NAME, breaths=[n]))
     pv.settings_edited.emit()
     assert pv.breath_type_combo.currentData() == "excluded"
+
+
+def test_the_breath_row_can_wrap_instead_of_widening_the_window(qapp, tmp_path, windows_metrics):
+    win, pv, s = _screen(tmp_path)
+    row = pv.breath_bar
+    one_line = sum(row.layout().itemAt(i).sizeHint().width()
+                   for i in range(row.layout().count()))
+    assert row.minimumSizeHint().width() < one_line            # it can break onto a second line
+    assert row.hasHeightForWidth()

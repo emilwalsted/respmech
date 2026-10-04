@@ -2606,24 +2606,39 @@ class _MechanicsMixin:
     # disabled until a breath is marked. _update_breath_bar is the one place that decides
     # their state.
     def _build_breath_bar(self, bar):
+        from respmech.ui.flow_layout import cluster, install_flow  # noqa: PLC0415
+
         bar.addSpacing(12)
+        # A wrapping row (FlowLayout): the controls drop to a second line on a narrow window
+        # instead of raising the window's minimum width.
+        self.breath_bar = QWidget()
+        flow = install_flow(self.breath_bar, h=8, v=4)
         self.breath_bar_label = QLabel("Breath:")
         self.breath_type_combo = QComboBox()
         self.breath_type_combo.setAccessibleName("Type of the marked breath")
         self.breath_type_combo.setPlaceholderText("Type")
+        self.breath_type_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.breath_type_combo.setMinimumContentsLength(14)
+        self.breath_bar_label.setBuddy(self.breath_type_combo)
+        fm = self.breath_bar_label.fontMetrics()
+        self.breath_bar_label.setMinimumWidth(fm.horizontalAdvance("Breath 999:"))   # no jump on mark
         self.breath_type_combo.activated.connect(self._on_breath_type_combo)
-        self.btn_breath_ic_ref = QPushButton("IC reference for")
-        self.btn_breath_ic_ref.setAccessibleName("Use the marked breath as IC reference")
+        self.btn_breath_ic_ref = QPushButton("Use as IC reference for")
+        self.btn_breath_ic_ref.setAccessibleName("Use as IC reference for")
         self.btn_breath_ic_ref.setMenu(QMenu(self.btn_breath_ic_ref))
         self.btn_breath_refs = QPushButton("Reference manoeuvres…")
-        self.btn_breath_refs.clicked.connect(lambda _c=False: self._open_reference_picker())
+        self.btn_breath_refs.clicked.connect(
+            lambda _c=False: self._open_reference_picker(self._selected_filename()))
         self._breath_combo_kinds = ()
         # any write to the exclusions/types (from whichever surface) re-syncs the bar
         self.settings_edited.connect(self._update_breath_bar)
-        bar.addWidget(self.breath_bar_label)
-        for w in (self.breath_type_combo, self.btn_breath_ic_ref, self.btn_breath_refs):
+        controls = (self.breath_type_combo, self.btn_breath_ic_ref, self.btn_breath_refs)
+        for w in controls:
             w.setEnabled(False)          # nothing marked yet; the file rail does not exist
-            bar.addWidget(w)             # at this point, so no _update_breath_bar() here
+        flow.addLayout(cluster(self.breath_bar_label, self.breath_type_combo))
+        flow.addWidget(self.btn_breath_ic_ref)
+        flow.addWidget(self.btn_breath_refs)
+        bar.addWidget(self.breath_bar, 1)    # no _update_breath_bar() here (see above)
 
     def _on_breath_type_combo(self, index):
         sel = self._selected_breath
@@ -2661,6 +2676,9 @@ class _MechanicsMixin:
                 combo.clear()
                 for k in kinds:
                     combo.addItem(_TYPE_MENU_LABELS.get(k, k.capitalize()).rstrip("…"), k)
+                    tip = _TYPE_MENU_STATUS_TIPS.get(k)
+                    if tip:
+                        combo.setItemData(combo.count() - 1, tip, Qt.ToolTipRole)
                 self._breath_combo_kinds = kinds
             kind = (self._breath_kind_now(sel) or "tidal") if marked else None
             idx = combo.findData(kind) if kind is not None else -1
