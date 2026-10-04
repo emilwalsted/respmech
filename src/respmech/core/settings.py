@@ -94,6 +94,12 @@ class SubjectEntry:
     rv_l: float | None = None
     fev1_l: float | None = None
     mvv_lpm: float | None = None
+    # Sex ("male"/"female"), age (years) and height (cm): optional, used ONLY to draw the
+    # reference (normal) range behind the maximal flow-volume loop (core.analysis.
+    # normal_range). Without all three no normal range is drawn; they never reach compute.
+    sex: str | None = None
+    age_years: float | None = None
+    height_cm: float | None = None
     folder: str | None = None
 
 
@@ -1293,6 +1299,21 @@ class Settings:
             if (subj.rv_l is not None and subj.tlc_l is not None
                     and not (subj.rv_l < subj.tlc_l)):
                 raise SettingsError(f"input.subjects[{i}].rv_l must be below tlc_l")
+            from respmech.core.analysis.normal_range import normalise_sex  # noqa: PLC0415
+            if subj.sex is not None and normalise_sex(subj.sex) is None:
+                raise SettingsError(
+                    f'input.subjects[{i}].sex must be "male" or "female"')
+            def _num(x):
+                return (isinstance(x, (int, float)) and not isinstance(x, bool)
+                        and x == x and abs(x) != float("inf"))
+            if subj.age_years is not None and not (
+                    _num(subj.age_years) and 3.0 <= subj.age_years <= 95.0):
+                raise SettingsError(
+                    f"input.subjects[{i}].age_years must be between 3 and 95")
+            if subj.height_cm is not None and not (
+                    _num(subj.height_cm) and 80.0 <= subj.height_cm <= 230.0):
+                raise SettingsError(
+                    f"input.subjects[{i}].height_cm must be between 80 and 230 cm")
 
         return self
 

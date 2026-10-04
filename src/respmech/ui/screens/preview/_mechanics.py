@@ -3174,8 +3174,11 @@ class _MechanicsMixin:
         fig.set_facecolor(pal["mpl_bg"])
         ax = fig.add_subplot(111)
         ax.set_facecolor(pal["mpl_bg"])
+        from respmech.core.analysis.normal_range import normal_band_for  # noqa: PLC0415
+        name = self._previewed_file or self._selected_filename()
         draw_flow_volume_mfvl(ax, placed, loop=pal["mpl_loop"], mean=pal["mpl_accent"],
-                              envelope=pal["fg"], marker=pal["mpl_zeroline"], label=pal["fg"])
+                              envelope=pal["fg"], marker=pal["mpl_zeroline"], label=pal["fg"],
+                              normal=normal_band_for(self.state.settings, name) if name else None)
         ax.set_xlabel(_MFVL_XLABEL_VARIANTS[0])
         ax.set_ylabel(_FV_YLABEL_VARIANTS[0])
         _fit_compact_figure(

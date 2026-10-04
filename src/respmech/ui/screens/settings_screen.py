@@ -370,9 +370,10 @@ class SettingsScreen(QWidget):
         # subjects at all.
         gsub = QGroupBox("Subjects && lung volumes")
         vsub = QVBoxLayout(gsub)
-        self.subjects_table = QTableWidget(0, 6)
+        self.subjects_table = QTableWidget(0, 9)
         self.subjects_table.setHorizontalHeaderLabels(
-            ["Key", "TLC (L)", "VC (L)", "RV (L)", "FEV1 (L)", "MVV (L/min)"])
+            ["Key", "TLC (L)", "VC (L)", "RV (L)", "FEV1 (L)", "MVV (L/min)",
+             "Sex", "Age (y)", "Height (cm)"])
         self.subjects_table.verticalHeader().setVisible(False)
         self.subjects_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.subjects_table.setSelectionMode(QAbstractItemView.NoSelection)
@@ -381,7 +382,9 @@ class SettingsScreen(QWidget):
             "Per-participant spirometry, keyed on the same group as the cohort "
             "summary. Used by operating-lung-volume calculations (Preview & QC ▸ "
             "Mechanics ▸ Advanced… ▸ Lung volumes) when no per-file TLC/VC is "
-            "available another way."))
+            "available another way. Sex, age and height are used only to draw the "
+            "normal flow-volume range (GLI 2022) behind the maximal flow-volume loop; "
+            "they are entered in the settings file (TOML)."))
         vsub.addWidget(self.subjects_table)
 
         # 'What to save' lives inside the Output card now (one place for everything the run
@@ -897,7 +900,8 @@ class SettingsScreen(QWidget):
         subs = self.state.settings.input.subjects
         self.subjects_table.setRowCount(len(subs))
         for row, sub in enumerate(subs):
-            values = (sub.key, sub.tlc_l, sub.vc_l, sub.rv_l, sub.fev1_l, sub.mvv_lpm)
+            values = (sub.key, sub.tlc_l, sub.vc_l, sub.rv_l, sub.fev1_l, sub.mvv_lpm,
+                      sub.sex, sub.age_years, sub.height_cm)
             for col, v in enumerate(values):
                 text = v if isinstance(v, str) else ("—" if v is None else f"{v:g}")
                 item = QTableWidgetItem(text)

@@ -38,6 +38,7 @@ import numpy as np
 
 from respmech.core import plot_style
 from respmech.core.analysis import mfvl as mfvllib
+from respmech.core.analysis import normal_range
 from respmech.core.analysis.pressure import mean_peepi_rectangle_height, peepi_rectangle_height  # noqa: F401 (re-exported for the Preview panel)
 from respmech.core.analysis.signals import Capabilities
 
@@ -222,13 +223,30 @@ def _pv_cohort(result, path, cols, rows):
 # --------------------------------------------------------------------------- #
 # Flow-volume: tidal loops inside the MFVL
 # --------------------------------------------------------------------------- #
+def draw_normal_band(ax, band, *, color=_MUTED, label=_MUTED):
+    """Draw a ``core.analysis.normal_range.NormalBand`` behind a flow-volume figure: a
+    shaded band between the curves at the lower and upper limits of normal, a dashed
+    expected curve and a discreet reference note in the top-left corner. ``None`` draws
+    nothing. Same axis as the MFVL itself (volume below TLC, expiratory flow upward)."""
+    if band is None:
+        return
+    ax.fill_between(band.v_band, band.flow_lower, band.flow_upper, color=color, alpha=0.16,
+                    lw=0, zorder=0, label=f"normal range, indicative ({band.reference_label})")
+    ax.plot(band.v_expected, band.flow_expected, color=color, lw=1.0, ls="--", alpha=0.7,
+            zorder=0)
+    ax.text(0.01, 0.99, band.note(), transform=ax.transAxes, ha="left", va="top",
+            fontsize=6, color=label, alpha=0.8)
+
+
 def draw_flow_volume_mfvl(ax, placed, *, loop=_MUTED, mean=_BRAND, envelope="black",
-                          marker=_MUTED, label=_MUTED):
+                          marker=_MUTED, label=_MUTED, normal=None):
     """Draw ``mfvl.placed_tidal_loops``'s result onto ``ax``: grey tidal loops, a bold
     mean loop, the MFVL envelope (expiratory curve plus the FVC manoeuvre's own
     inspiratory limb) and dotted EELV/EILV markers. Volume runs from TLC on the
     left. The colours are parameters so the Preview panel can draw the same picture in its
-    own theme; the defaults are the light-theme colours the PDF uses."""
+    own theme; the defaults are the light-theme colours the PDF uses. ``normal`` is an
+    optional ``normal_range.NormalBand`` drawn behind everything."""
+    draw_normal_band(ax, normal, color=marker, label=label)
     for x, flow in placed["loops"]:
         ax.plot(x, flow, color=loop, alpha=0.35, lw=0.8, zorder=1)
     if placed["mean"] is not None:
@@ -273,7 +291,8 @@ def _flow_volume_mfvl(fr, fname, path, settings):
         return None
     fig = _canvas((6.4, 5.4))
     ax = fig.add_subplot(111)
-    draw_flow_volume_mfvl(ax, placed)
+    draw_flow_volume_mfvl(ax, placed,
+                          normal=normal_range.normal_band_for(settings, fname))
     ax.set_xlabel("Volume below TLC (L)")
     ax.set_ylabel("Flow (L/s)")
     ax.grid(True, color=_MUTED, alpha=0.2)
