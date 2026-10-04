@@ -22,7 +22,7 @@ on:
     paths:
       - .github/workflows/actions-storage-cleanup.yml
   schedule:
-    - cron: '41 4 * * 0'
+    - cron: '41 4 * * 6'
   workflow_dispatch:
     inputs:
       dry_run:
