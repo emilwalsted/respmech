@@ -161,6 +161,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         # breath-overlay interaction state (feature A)
         self._channel_plots = []
         self._breath_spans = {}
+        self._selected_breath = None      # the marked breath (single click), see _select_breath
         self._breath_regions = {}
         self._breath_texts = {}
         self._mech_unpin = lambda: None   # detaches the mechanics label-pin slot

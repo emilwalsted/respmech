@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import numpy as np
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QFrame, QHBoxLayout, QLabel, QMenu, QProgressBar, QPushButton,
-                               QScrollArea, QSplitter, QTableView,
+                               QAbstractItemView, QScrollArea, QSplitter, QTableView,
                                QTabWidget, QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt, QEvent, QObject, QSize, QThread, QTimer, Signal
 from PySide6.QtGui import QBrush, QCursor, QFont, QFontMetrics, QFontMetricsF
@@ -41,6 +41,7 @@ from respmech.ui.workers import (BatchWorker, EmgAllChannelsWorker,
                                   stage_ecg_reduction, stage_mechanics_preview,
                                   stage_noise_fidelity)
 from respmech.ui import prefs as _prefs
+from respmech.ui.theme import SELECTED_BREATH_RGB, SELECTED_BREATH_HEX
 
 try:
     from respmech.ui import theme as _theme
@@ -861,13 +862,17 @@ class _MechanicsMixin:
         breaths = getattr(self, "_campbell_breaths", None)
         redrawn = False
         try:
-            if breaths is not None and _theme is not None and _theme.is_dark():
+            if breaths is not None and ((_theme is not None and _theme.is_dark())
+                                         or self._selected_breath is not None):
+                # (a marked breath also forces a redraw: its green loop is screen-only)
                 # set BEFORE the call it guards: _draw_campbell_or_loop begins by clearing
                 # the figure, so a failure part-way through still leaves the on-screen
                 # diagram destroyed and the finally-branch below is the only thing that puts
                 # it back
                 redrawn = True
-                self._draw_campbell_or_loop(breaths, pal=_theme._PLOT_LIGHT)
+                self._loop_export = True
+                dark = _theme is not None and _theme.is_dark()
+                self._draw_campbell_or_loop(breaths, pal=_theme._PLOT_LIGHT if dark else None)
             # The export is a stand-alone figure with no panel header around it, so it gets
             # the title back that the on-screen panel leaves to its header — and then loses
             # it again straight away. Leaving it set showed the title twice on screen, once
@@ -887,6 +892,7 @@ class _MechanicsMixin:
         except Exception as e:                          # noqa: BLE001
             self._set_status(f"Could not save figure: {short_error(str(e))}")
         finally:
+            self._loop_export = False
             if redrawn:                                 # put the on-screen figure back
                 try:
                     self._draw_campbell_or_loop(breaths)
@@ -1106,8 +1112,8 @@ class _MechanicsMixin:
                          "Per-file override of the breath count used for per-minute scaling — "
                          "one 'filename = count' per line. Blank = each file's detected count.",
                          placeholder="one 'filename = count' per line",
-                         note="Excluded breaths are NOT set here — click a breath in the "
-                              "channel plots above to include/exclude it; the file rail "
+                         note="Excluded breaths are NOT set here — right-click a breath in "
+                              "the channel plots above and choose Excluded or Tidal; the file rail "
                               "shows each file's exclusion count.")
         bc_text = "\n".join(f"{e.file} = {e.count}" for e in s.processing.breath_counts)
         # Which card each setting is shown on, in display order. Grouping only: the flat
@@ -1276,7 +1282,8 @@ class _MechanicsMixin:
         n = f"{total} breath{'s' if total != 1 else ''}"
         excl = f", {excluded} excluded" if excluded else ""
         self.mech_caption.setFullText(
-            f"{n}{excl} — click a shaded breath to include/exclude (red = excluded).")
+            f"{n}{excl} — click a shaded breath to mark it; right-click to exclude it or set its "
+            f"type (red = excluded).")
 
     def _render_preview(self, data):
         """Draw the mechanics channel stack + breath overlays and the raw EMG
@@ -1505,7 +1512,8 @@ class _MechanicsMixin:
                 f"{data['name']}: {data['nbreaths']} breaths"
                 + (f" ({nign} excluded)" if nign else "")
                 + f", trimmed to {data['startix'] / fs:.2f}–{data['endix'] / fs:.2f} s. "
-                "Click a shaded breath to include/exclude (red = excluded)."
+                "Click a shaded breath to mark it; right-click to exclude it or set its type "
+                "(red = excluded)."
                 + (f" {boundary_note}" if boundary_note else ""))
             self._set_mech_caption(data['nbreaths'], nign)
 
@@ -1786,6 +1794,10 @@ class _MechanicsMixin:
             # size the headroom from the label's REAL rendered height, not a guess
             self._label_headroom(plots[0], label_px=self._label_px(self._breath_texts))
             self._mech_unpin = self._pin_breath_labels(plots[0], self._breath_texts)
+        # a mark survives a re-render only while its breath still exists in this render
+        if self._selected_breath is not None and self._selected_breath not in self._breath_spans:
+            self._clear_breath_selection()
+        self._apply_breath_selection(redraw_loop=False)
 
     def _breath_at(self, t):
         for n, (t0, t1) in self._breath_spans.items():
@@ -1821,8 +1833,87 @@ class _MechanicsMixin:
             if vb is not None and vb.sceneBoundingRect().contains(pos):
                 bno = self._breath_at(vb.mapSceneToView(pos).x())
                 if bno is not None:
-                    self._toggle_breath(bno)
+                    self._select_breath(bno)
                 return
+
+    # -- Marked (selected) breath -------------------------------------------
+    # A plain left click MARKS a breath instead of toggling its exclusion (exclusion
+    # now lives in the right-click menu, _build_type_menu's Tidal/Excluded). The mark is
+    # one number, self._selected_breath, painted in the SAME green everywhere that
+    # breath shows: its span on every plot, its number label, its row in the result
+    # tables (scrolled into view) and its loop plus legend entry in the Campbell /
+    # flow-volume diagram. Clicking the marked breath again clears it; clicking another
+    # moves it. Purely a view state: it never touches settings, so it is allowed while a
+    # run is in progress and never emits settings_edited.
+    def _select_breath(self, breath_no):
+        """Mark ``breath_no``, or clear the mark if it is already the marked one."""
+        if breath_no not in self._breath_spans:
+            return
+        self._selected_breath = None if self._selected_breath == breath_no else breath_no
+        name = self._selected_filename()
+        if self._selected_breath is None:
+            self._set_status(f"{name}: breath {breath_no} unmarked.")
+        else:
+            self._set_status(f"{name}: breath {breath_no} marked. Click it again to unmark; "
+                             f"right-click it to exclude it or set its type.")
+        self._apply_breath_selection()
+
+    def _clear_breath_selection(self):
+        """Drop the mark without repainting (file change, stale breath numbers)."""
+        self._selected_breath = None
+        for model in (getattr(self, "_table_model", None), getattr(self, "_manoeuvres_model", None),
+                      getattr(self, "_segtable_model", None)):
+            if model is not None:
+                model.set_highlight_breath(None)
+
+    def _apply_breath_selection(self, redraw_loop=True):
+        """Paint ``self._selected_breath`` (or its absence) on every surface that shows
+        breaths: the span items of the Mechanics stack and of the EMG views, the number
+        labels, the result tables and (``redraw_loop``) the Campbell / flow-volume diagram."""
+        sel = self._selected_breath
+        if sel is not None and sel not in self._breath_spans \
+                and sel not in {b[0] for b in self._breaths}:
+            sel = self._selected_breath = None          # a stale number: nothing to mark
+        seen = set()
+        items = [it for lst in self._breath_regions.values() for it, _i in lst]
+        for rec in self._bov.values():
+            items.extend(it for _p, it in rec.get("items", []) if isinstance(it, BreathSpansItem))
+            for num, txt in rec.get("texts", {}).items():
+                self._style_breath_label(txt, num == sel)
+        for it in items:
+            if id(it) not in seen:
+                seen.add(id(it))
+                it.set_selected(sel)
+        for num, txt in self._breath_texts.items():
+            self._style_breath_label(txt, num == sel)
+        for model, view in ((self._table_model, self.table),
+                            (self._manoeuvres_model, self.manoeuvres_table),
+                            (self._segtable_model, self.segtable)):
+            row = model.set_highlight_breath(sel)
+            if row is not None:
+                view.scrollTo(model.index(row, 0), QAbstractItemView.EnsureVisible)
+        if redraw_loop:
+            breaths = getattr(self, "_campbell_breaths", None)
+            if breaths is not None:
+                try:
+                    self._draw_campbell_or_loop(breaths)
+                except Exception:                      # noqa: BLE001 — cosmetic
+                    pass
+
+    def _style_breath_label(self, txt, selected):
+        """Number label in the selection green (bold) while marked, back to its kind's
+        own colour when not."""
+        st = getattr(txt, "_rm_label", None)
+        if st is None:
+            return
+        if selected:
+            txt.setColor(pg.mkColor(*SELECTED_BREATH_RGB))
+        else:
+            txt.setColor(self._breath_label_color(st["kind"]))
+        f = txt.textItem.font()
+        if f.bold() != bool(selected):
+            f.setBold(bool(selected))
+            txt.setFont(f)
 
     def _set_breath_type(self, breath_no, kind):
         """Single funnel for every breath-classification write: the plain include/
@@ -2591,6 +2682,10 @@ class _MechanicsMixin:
             items.append((plot_items[0], txt)); txt_map[num] = txt
         self._label_headroom(plot_items[0], label_px=self._label_px(txt_map))   # labels above the signal
         self._bov[view]["unpin"] = self._pin_breath_labels(plot_items[0], txt_map)
+        for it in (i for _p, i in items if isinstance(i, BreathSpansItem)):
+            it.set_selected(self._selected_breath)
+        for num, txt in txt_map.items():
+            self._style_breath_label(txt, num == self._selected_breath)
 
     def _repaint_view_breaths(self, view):
         """Repaint one EMG view IF it has rendered real data (label_y sentinel set)."""
@@ -2632,6 +2727,7 @@ class _MechanicsMixin:
         self._breath_spans = {}
         self._breath_regions = {}
         self._breath_texts = {}
+        self._clear_breath_selection()          # breath numbers belong to the file being left
         self._emg_raw_subplots = []
         self._raw_label_y = self._detail_label_y = self._result_label_y = None
         self._trim_offset_s = 0.0
@@ -2976,6 +3072,7 @@ class _MechanicsMixin:
         kept = [b for b in breaths.values() if not b["ignored"]]
         for b in kept:
             ax.plot(b["volume"], b["poes"], color=pal["mpl_loop"], lw=0.7, alpha=0.5, zorder=1)
+        self._plot_selected_loop(ax, kept, "volume", "poes")
         # P12: overlay the average breath bold, draw the elastic recoil (relaxation)
         # line EELV→EILV, and shade the inspiratory resistive work between the Poes
         # trace and it (the elastic triangle itself is not shaded here).
@@ -3020,17 +3117,35 @@ class _MechanicsMixin:
         kept = [b for b in breaths.values() if not b["ignored"]]
         for b in kept:
             ax.plot(b["volume"], b["flow"], color=pal["mpl_loop"], lw=0.7, alpha=0.5, zorder=1)
+        marked = self._plot_selected_loop(ax, kept, "volume", "flow")
         ax.axhline(0, color=pal["mpl_zeroline"], lw=0.8, zorder=0)
         ax.set_xlabel(_FV_XLABEL_VARIANTS[0])
         ax.set_ylabel(_FV_YLABEL_VARIANTS[0])
         # No figure title on screen — the panel header carries it (_update_campbell_panel_title).
         _fit_compact_figure(
             self.campbell, ax,
-            legend_kw=None,           # no average/recoil overlay here to label — see docstring
+            # no average/recoil overlay here to label (see docstring); a legend appears only
+            # to name the marked breath's loop
+            legend_kw={"loc": "upper right", "frameon": False, "fontsize": 7} if marked else None,
             xlabel_variants=_FV_XLABEL_VARIANTS,
             ylabel_variants=_FV_YLABEL_VARIANTS)
         self.campbell.draw()
         self.btn_export_fig.setEnabled(True)         # a diagram now exists to export
+
+    def _plot_selected_loop(self, ax, kept, xkey, ykey):
+        """Draw the marked breath's loop (see ``_select_breath``) over the grey ones, in the
+        selection green with a legend entry ('breath #n'). Returns whether one was drawn.
+        Skipped while an export re-renders the figure (``_loop_export``): a figure made for a
+        report must not carry a screen-only mark."""
+        n = self._selected_breath
+        if n is None or getattr(self, "_loop_export", False):
+            return False
+        b = next((b for b in kept if b.get("number") == n), None)
+        if b is None:
+            return False
+        ax.plot(b[xkey], b[ykey], color=SELECTED_BREATH_HEX, lw=1.9, alpha=1.0, zorder=5,
+                label=f"breath #{n}")
+        return True
 
     def _overlay_campbell_work(self, ax, kept, pal):
         """Draw the average PV loop + elastic recoil line + shaded inspiratory

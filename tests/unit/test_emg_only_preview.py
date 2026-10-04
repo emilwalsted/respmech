@@ -310,7 +310,7 @@ def test_clicking_a_segment_toggles_exclusion_via_the_shared_toggle_breath_funne
     win.close()
 
 
-def test_a_real_click_on_the_segments_stack_toggles_exclusion(tmp_path):
+def test_a_real_click_on_the_segments_stack_marks_the_segment(tmp_path):
     """The test above calls ``_toggle_breath`` directly, which proves the shared funnel
     works but never touches THIS ticket's own new wiring: ``segments_plots.scene().
     sigMouseClicked`` -> ``_on_segments_clicked`` -> ``_toggle_from_emg_click`` (hit-
@@ -369,8 +369,9 @@ def test_a_real_click_on_the_segments_stack_toggles_exclusion(tmp_path):
     pv._segments_subplots = [_Plot()]
     pv._on_segments_clicked(_Ev())
 
-    entry = next(e for e in pv.state.settings.processing.exclude_breaths if e.file == FILENAME)
-    assert entry.breaths == [num]
+    # a plain click now MARKS the segment; exclusion lives in the right-click menu
+    assert pv._selected_breath == num
+    assert not [e for e in pv.state.settings.processing.exclude_breaths if e.file == FILENAME]
     win.close()
 
 

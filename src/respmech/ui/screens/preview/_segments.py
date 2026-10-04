@@ -276,7 +276,8 @@ class _SegmentsMixin:
             self.segments_caption.setFullText(
                 f"{nseg} segment{'s' if nseg != 1 else ''}"
                 + (f", {nign} excluded" if nign else "")
-                + ". Click a shaded segment to include/exclude (red = excluded).")
+                + ". Click a shaded segment to mark it; right-click to exclude it or set its type "
+                + "(red = excluded).")
 
     def _fill_segtable(self, df):
         self._segtable_model.set_dataframe(df)

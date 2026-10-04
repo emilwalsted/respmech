@@ -265,8 +265,8 @@ def check_breaths(breaths, filename, settings):
     if breaths:
         raise NoBreathsError(
             f"All {len(breaths)} breath(s) detected in {filename} are excluded, so there "
-            f"is nothing to analyse. Re-include at least one — click a shaded breath in "
-            f"Preview & QC, or clear this file's entry under processing.exclude_breaths.")
+            f"is nothing to analyse. Re-include at least one — right-click a shaded breath in "
+            f"Preview & QC and choose Tidal, or clear this file's entry under processing.exclude_breaths.")
     by = settings.processing.mechanics.separateby
     channel = "flow" if by == "flow" else "volume"
     raise NoBreathsError(

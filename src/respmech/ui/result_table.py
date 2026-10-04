@@ -36,10 +36,11 @@ from __future__ import annotations
 import numbers
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
-from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut
+from PySide6.QtGui import QBrush, QColor, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import QAbstractItemView, QTableView
 
 from respmech.core import quantities as _quantities
+from respmech.ui.theme import SELECTED_BREATH_RGB
 
 # A single very wide column (a long file path, say) must not eat the whole viewport —
 # measured 4800 px of 100-px-each columns on the sample analysis (48 columns) before
@@ -85,6 +86,8 @@ class ResultTableModel(QAbstractTableModel):
         super().__init__(parent)
         self._df = None
         self._columns: list = []
+        self._highlight_breath = None      # breath_no whose row is painted as selected
+        self._highlight_row = None
         self.set_dataframe(df)
 
     def set_dataframe(self, df) -> None:
@@ -97,7 +100,33 @@ class ResultTableModel(QAbstractTableModel):
         else:
             self._df = df.reset_index(drop=True)
             self._columns = list(self._df.columns)
+        self._highlight_row = self._row_of_breath(self._highlight_breath)
         self.endResetModel()
+
+    def _row_of_breath(self, breath_no):
+        """Row index of ``breath_no`` in a table that has a ``breath_no`` column, else None."""
+        if breath_no is None or self._df is None or "breath_no" not in self._columns:
+            return None
+        try:
+            hits = self._df.index[self._df["breath_no"] == breath_no]
+        except Exception:                        # noqa: BLE001 — cosmetic
+            return None
+        return int(hits[0]) if len(hits) else None
+
+    def set_highlight_breath(self, breath_no):
+        """Paint the row of ``breath_no`` as selected (green), or clear with ``None``.
+        The number is remembered across ``set_dataframe`` (a recompute refills the table
+        and the mark must survive it). Returns the highlighted row, or ``None`` when the
+        breath has no row here (not a breath of this table, or an excluded breath, which
+        the table leaves out)."""
+        old_row = self._highlight_row
+        self._highlight_breath = breath_no
+        self._highlight_row = self._row_of_breath(breath_no)
+        for row in {old_row, self._highlight_row} - {None}:
+            if self._columns:
+                self.dataChanged.emit(self.index(row, 0),
+                                      self.index(row, len(self._columns) - 1))
+        return self._highlight_row
 
     # -- Qt.QAbstractTableModel -------------------------------------------------
     def rowCount(self, parent=QModelIndex()):
@@ -121,6 +150,9 @@ class ResultTableModel(QAbstractTableModel):
             # never the only place the real value is readable. None matches
             # DisplayRole's blank rendering rather than the literal word "None".
             return "" if raw is None else str(raw)
+        if role == Qt.ItemDataRole.BackgroundRole and index.row() == self._highlight_row:
+            r, g, b = SELECTED_BREATH_RGB
+            return QBrush(QColor(r, g, b, 90))
         if role == Qt.ItemDataRole.TextAlignmentRole:
             if _is_plain_number(raw):
                 return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)

@@ -322,7 +322,7 @@ class _EmgNoiseMixin:
         split.setStretchFactor(0, 1); split.setStretchFactor(1, 1); split.setStretchFactor(2, 2)
         split.setSizes([200, 200, 400])
         v.addWidget(split, 1)
-        # clicking a numbered breath in any EMG plot toggles its exclusion too
+        # clicking a numbered breath in any EMG plot marks it too (exclusion: right-click menu)
         self.emg_raw_plots.scene().sigMouseClicked.connect(self._on_emg_raw_clicked)
         self.emg_plots.scene().sigMouseClicked.connect(self._on_emg_detail_clicked)
         self.emg_result_plots.scene().sigMouseClicked.connect(self._on_emg_result_clicked)
@@ -844,7 +844,7 @@ class _EmgNoiseMixin:
             if vb is not None and vb.sceneBoundingRect().contains(pos):
                 bno = self._breath_at(vb.mapSceneToView(pos).x() - offset)
                 if bno is not None:
-                    self._toggle_breath(bno)
+                    self._select_breath(bno)
                 return
 
     def _on_emg_raw_clicked(self, ev):

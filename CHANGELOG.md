@@ -465,6 +465,14 @@ gaps between what the two run.**
   the duration of a run — previously only the header's Analysis button was, while the
   File menu's identical actions (and their keyboard shortcuts) still worked and could
   swap the running settings out from under the batch.
+- **A single click on a breath now marks it instead of toggling its exclusion.** In
+  Preview & QC, clicking a breath (on the Mechanics stack, the EMG views or the segments
+  tab) paints it green on every plot, in its number label and in its row of the
+  per-breath or Manoeuvres table (scrolled into view if it is off screen), and draws its
+  loop in green, with a legend entry, in the Campbell diagram or flow-volume loop. Click
+  the marked breath again to unmark it, or another breath to move the mark. To exclude or
+  include a breath, right-click it and choose *Excluded* or *Tidal*; the mark is a view
+  aid only, it never changes the analysis and is left out of exported figures.
 - **A recording cut mid-breath at either end is now flagged instead of analysed
   silently.** Trimming only ever discarded a leading partial expiration and a trailing
   partial inspiration — it never verified that the breath it *keeps* at either
