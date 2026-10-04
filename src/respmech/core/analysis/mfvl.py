@@ -731,8 +731,8 @@ def placed_tidal_loops(breaths, manoeuvres, mfvl_cfg, ic_cfg) -> dict | None:
     when that breath has no usable inspiration. Under ``source='envelope'`` the
     expiratory curve is a per-volume composite but the inspiratory limb is still the
     one largest attempt's own: there is no standard composite of the inhalation, and
-    the largest FVC is the same attempt ``source='single'`` would draw). A breath with a missing key, an empty phase or a non-finite
-    sample is skipped rather than blanking the mean."""
+    the largest FVC is the same attempt ``source='single'`` would draw). A breath with a missing key, an empty
+    phase or a non-finite sample is skipped rather than blanking the mean."""
     if not manoeuvres or not breaths:
         return None
     curve = resolve_same_file_curve(manoeuvres, breaths, mfvl_cfg)
