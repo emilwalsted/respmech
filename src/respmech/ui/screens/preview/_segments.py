@@ -424,6 +424,7 @@ class _SegmentsMixin:
         edit of an existing one — the same carried-over-state rule ``ExcludeEntry``/
         ``BreathTypeEntry`` already follow (see ``_set_breath_type`` in
         ``_mechanics.py``)."""
+        self._clear_breath_selection()           # segments are renumbered: a mark would drift
         from respmech.core.analysis.segments import remap_segment_number  # noqa: PLC0415
 
         proc = self.state.settings.processing

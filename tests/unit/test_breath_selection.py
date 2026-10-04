@@ -149,10 +149,13 @@ def test_the_marked_label_is_green_and_bold_and_restores(qapp, tmp_path):
     num = next(iter(pv._breath_texts))
     txt = pv._breath_texts[num]
     pv._select_breath(num)
-    assert txt.textItem.font().bold()
+    assert txt.textItem.defaultTextColor().getRgb()[:3] == SELECTED_BREATH_RGB
+    # a type change on the marked breath keeps the mark colour on the label
+    pv._set_breath_type(num, "excluded")
+    pv._retag_breath_label(txt, num, "excluded", pv._breath_texts)
     assert txt.textItem.defaultTextColor().getRgb()[:3] == SELECTED_BREATH_RGB
     pv._select_breath(num)
-    assert not txt.textItem.font().bold()
+    assert txt.textItem.defaultTextColor().getRgb()[:3] != SELECTED_BREATH_RGB
     win.close()
 
 

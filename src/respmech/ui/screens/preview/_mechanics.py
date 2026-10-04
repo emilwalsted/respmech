@@ -1892,7 +1892,7 @@ class _MechanicsMixin:
             row = model.set_highlight_breath(sel)
             if row is not None:
                 view.scrollTo(model.index(row, 0), QAbstractItemView.EnsureVisible)
-        if redraw_loop:
+        if redraw_loop and not getattr(self, "_loop_no_mark", False):
             breaths = getattr(self, "_campbell_breaths", None)
             if breaths is not None:
                 try:
@@ -1901,7 +1901,8 @@ class _MechanicsMixin:
                     pass
 
     def _style_breath_label(self, txt, selected):
-        """Number label in the selection green (bold) while marked, back to its kind's
+        """Number label in the selection green while marked (colour only: a bold face would be
+        wider than the width the compact-label logic measured), back to its kind's
         own colour when not."""
         st = getattr(txt, "_rm_label", None)
         if st is None:
@@ -1910,10 +1911,6 @@ class _MechanicsMixin:
             txt.setColor(pg.mkColor(*SELECTED_BREATH_RGB))
         else:
             txt.setColor(self._breath_label_color(st["kind"]))
-        f = txt.textItem.font()
-        if f.bold() != bool(selected):
-            f.setBold(bool(selected))
-            txt.setFont(f)
 
     def _set_breath_type(self, breath_no, kind):
         """Single funnel for every breath-classification write: the plain include/
@@ -2081,7 +2078,8 @@ class _MechanicsMixin:
         has just grown a second line may be taller than the headroom reserved above the
         signal when the view was drawn (an all-tidal file reserves one line), so the
         headroom is re-fitted once, and only when it has actually grown."""
-        txt.setColor(self._breath_label_color(paint_kind))
+        txt.setColor(pg.mkColor(*SELECTED_BREATH_RGB) if breath_no == self._selected_breath
+                     else self._breath_label_color(paint_kind))
         st = getattr(txt, "_rm_label", None)
         if st is None:
             return
@@ -2193,6 +2191,7 @@ class _MechanicsMixin:
         ``SegmentationOverrideEntry`` is created here, never on an edit of an
         existing one — the same carried-over-state rule every other tagged kind
         already follows (see ``_set_breath_type``)."""
+        self._clear_breath_selection()           # the breaths are renumbered: a mark would drift
         from respmech.core.analysis.segments import remap_segment_number  # noqa: PLC0415
 
         proc = self.state.settings.processing
@@ -2728,6 +2727,7 @@ class _MechanicsMixin:
         self._breath_regions = {}
         self._breath_texts = {}
         self._clear_breath_selection()          # breath numbers belong to the file being left
+        self._campbell_breaths = None           # and so do the cached loops a mark would redraw
         self._emg_raw_subplots = []
         self._raw_label_y = self._detail_label_y = self._result_label_y = None
         self._trim_offset_s = 0.0
@@ -3016,6 +3016,8 @@ class _MechanicsMixin:
         # No Poes but a forced vital capacity typed in this file -> the tidal loops
         # inside that file's own MFVL; anything else keeps the plain flow-volume loop.
         placed = self._placed_mfvl(breaths)
+        # the tidal-loops-in-MFVL picture has no per-breath loop to mark: skip the redraw
+        self._loop_no_mark = placed is not None
         if placed is not None:
             self._draw_flow_volume_in_mfvl(breaths, placed, pal=pal)
         else:
