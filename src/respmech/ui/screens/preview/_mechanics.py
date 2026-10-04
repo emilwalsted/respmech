@@ -2618,8 +2618,8 @@ class _MechanicsMixin:
         self.btn_breath_refs = QPushButton("Reference manoeuvres…")
         self.btn_breath_refs.clicked.connect(lambda _c=False: self._open_reference_picker())
         self._breath_combo_kinds = ()
-        for w in (self.breath_bar_label, self.breath_type_combo, self.btn_breath_ic_ref,
-                  self.btn_breath_refs):
+        bar.addWidget(self.breath_bar_label)
+        for w in (self.breath_type_combo, self.btn_breath_ic_ref, self.btn_breath_refs):
             w.setEnabled(False)          # nothing marked yet; the file rail does not exist
             bar.addWidget(w)             # at this point, so no _update_breath_bar() here
 
