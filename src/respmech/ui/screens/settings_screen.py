@@ -383,7 +383,8 @@ class SettingsScreen(QWidget):
             "summary. Used by operating-lung-volume calculations (Preview & QC ▸ "
             "Mechanics ▸ Advanced… ▸ Lung volumes) when no per-file TLC/VC is "
             "available another way. Sex, age and height are used only to draw the "
-            "normal flow-volume range (GLI 2022) behind the maximal flow-volume loop."))
+            "normal flow-volume range (GLI 2022) behind the maximal flow-volume loop; "
+            "they are entered in the settings file (TOML)."))
         vsub.addWidget(self.subjects_table)
 
         # 'What to save' lives inside the Output card now (one place for everything the run

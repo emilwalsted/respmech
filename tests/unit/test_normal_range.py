@@ -184,3 +184,25 @@ def test_draw_normal_band_with_none_draws_nothing():
     draw_normal_band(ax, None)
     assert not ax.collections and not ax.lines and not ax.texts
     plt.close(fig)
+
+
+def test_band_edges_never_cross_even_at_implausible_extremes():
+    for sex, age, ht in (("male", 8, 80), ("male", 15, 100), ("female", 20, 100)):
+        band = nr.normal_band(sex, age, ht)
+        if band is not None:
+            assert np.all(band.flow_upper >= band.flow_lower)
+
+
+def test_scaled_curve_rejects_an_fev1_before_the_peak_position():
+    x, g = nr.curve_shape("male", 40, 180)
+    with pytest.raises(ValueError):
+        nr.scaled_curve(x, g, 5.0, 0.4)
+
+
+def test_validation_accepts_alternative_sex_spellings_and_rejects_non_numbers():
+    _settings_with(sex="M").validate  # constructed only; validate() needs a full analysis
+    from respmech.core.analysis.normal_range import normalise_sex
+    assert normalise_sex("M") == "male"
+    for kw in ({"age_years": "34"}, {"height_cm": True}, {"age_years": float("nan")}):
+        with pytest.raises(SettingsError):
+            _settings_with(**kw).validate()

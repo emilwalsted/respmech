@@ -231,7 +231,7 @@ def draw_normal_band(ax, band, *, color=_MUTED, label=_MUTED):
     if band is None:
         return
     ax.fill_between(band.v_band, band.flow_lower, band.flow_upper, color=color, alpha=0.16,
-                    lw=0, zorder=0, label=f"normal range ({band.reference_label})")
+                    lw=0, zorder=0, label=f"normal range, indicative ({band.reference_label})")
     ax.plot(band.v_expected, band.flow_expected, color=color, lw=1.0, ls="--", alpha=0.7,
             zorder=0)
     ax.text(0.01, 0.99, band.note(), transform=ax.transAxes, ha="left", va="top",

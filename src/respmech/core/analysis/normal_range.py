@@ -260,6 +260,8 @@ def scaled_curve(x: np.ndarray, g: np.ndarray, fvc: float, fev1: float
     # singular start (g ~ sqrt(x), integrable) done analytically up to the peak.
     xf = fev1 / fvc
     xp = PEF_VOLUME_FRACTION
+    if xf <= xp:
+        raise ValueError("FEV1/FVC is below the peak-flow position of the shape")
     head = 2.0 * xp                       # integral_0^xp dx / sqrt(x / xp)
     mask = (x >= xp) & (x <= xf)
     xs = x[mask]
@@ -288,7 +290,7 @@ class NormalBand:
     shape_citation: str
 
     def note(self) -> str:
-        return f"Normal range: {self.reference_label}; shape ECCS 1993 (indicative)"
+        return f"{self.reference_label} FVC/FEV1 limits; shape ECCS 1993 (adult, indicative)"
 
 
 def normal_band(sex, age_years, height_cm, reference: str | None = None
@@ -310,8 +312,9 @@ def normal_band(sex, age_years, height_cm, reference: str | None = None
     except ValueError:
         return None
     grid = np.linspace(0.0, float(v_hi[-1]), 500)
-    lower = np.interp(grid, v_lo, f_lo, right=0.0)
-    upper = np.interp(grid, v_hi, f_hi, right=0.0)
+    a = np.interp(grid, v_lo, f_lo, right=0.0)
+    b = np.interp(grid, v_hi, f_hi, right=0.0)
+    lower, upper = np.minimum(a, b), np.maximum(a, b)   # edges may cross at implausible extremes
     return NormalBand(v_expected=v_e, flow_expected=f_e, v_band=grid,
                       flow_lower=lower, flow_upper=upper, prediction=pred,
                       reference_label=ref.label, shape_citation=_ECCS_CITATION)

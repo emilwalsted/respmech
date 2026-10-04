@@ -126,7 +126,9 @@ baseline_window_s = 0.05        # s — window whose mean is the pressure-time-p
 # --- Subjects: per-participant spirometry, applied to every file of that group ---
 # vc_l anchors the operating lung volumes above residual volume; tlc_l adds the absolute
 # values; fev1_l (preferred over a value derived from a typed FVC breath) feeds the MVV
-# estimate, mvv_lpm overrides it; both feed the breathing-reserve columns.
+# estimate, mvv_lpm overrides it; both feed the breathing-reserve columns. sex, age_years and
+# height_cm are optional and used only to draw the normal flow-volume range (GLI 2022) behind
+# the maximal flow-volume loop; all three are needed, or nothing is drawn.
 # [[input.subjects]]
 # key     = "P03"
 # tlc_l   = 6.12
@@ -134,8 +136,6 @@ baseline_window_s = 0.05        # s — window whose mean is the pressure-time-p
 # rv_l    = 1.90
 # fev1_l  = 3.10
 # mvv_lpm = 124.0
-# Sex, age and height are optional and used only to draw the normal flow-volume range
-# (GLI 2022) behind the maximal flow-volume loop; all three are needed, or nothing is drawn.
 # sex        = "male"        # "male" or "female"
 # age_years  = 41.0
 # height_cm  = 180.0
