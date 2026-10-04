@@ -54,6 +54,11 @@ the EMG channels (the EMG tabs show that work) but kept naming EMG in the signal
 - Axis labels in the mechanics and ECG channel stacks no longer run into each other on a
   short panel: a label is written in full, then as the name alone, then left out, and comes
   back when the panel grows again.
+- A breath that has been typed (IC, FVC, sniff and so on) or excluded now says so in text
+  under its number in Preview & QC, besides its colour: "#3" over "FVC", or over
+  "(Excluded)". When the view is zoomed out so far that the text would run into the next
+  breath's, the text gives way to a one- or two-character marker in the same colour (the
+  initial, "×" for an excluded breath), and returns when you zoom in.
 - `.xls` (the old binary Excel format) is no longer offered as an input format: it could
   not be read without a dependency RespMech does not have and failed with an import error;
   `.xlsx` is unchanged. The unused `seaborn` dependency was removed.
