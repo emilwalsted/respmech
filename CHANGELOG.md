@@ -53,6 +53,14 @@ this release.
 
 **Smaller changes since 2.4.0.**
 
+- The "Subjects && lung volumes" card on Setup is editable and always shown. It used to be
+  read-only and hidden while `[[input.subjects]]` was empty, so it disappeared when an
+  analysis was opened with `subjects = []` or started from scratch, and there was no way to
+  add a participant without editing the TOML file. Double-click a cell to edit TLC, VC, RV,
+  FEV1, MVV, sex, age and height; "Add subject", "Add from recordings" (one row per group
+  the matched files fall into) and "Remove selected" manage the rows. A value that cannot
+  be used (not a number, a duplicate key, an unknown sex) is refused in place with a note.
+  Leave FEV1 empty to take it from the file's own FVC manoeuvre, as before.
 - The Provenance sheet and `run-report.txt` now record the Python, numpy, scipy, pandas
   and librosa versions next to the RespMech version, so a numerical difference against an
   older result can be checked against a library upgrade before it is treated as a
