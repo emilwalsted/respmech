@@ -515,8 +515,10 @@ without pushing a tag".
 
 - **A release notifies the website.** The last step of the release workflow sends
   a `repository_dispatch` to the website repo, which bumps its version and
-  redeploys; if that hook is ever unavailable, the website's own daily poll picks
-  up the release within a day regardless. Keep the notify step non-fatal and
+  redeploys. The website no longer deploys on a push to its `main` and has no
+  daily poll (deploys there are explicit since 05-10-2026), so if this hook is
+  unavailable the release reaches the site only at the next requested deploy.
+  Keep the notify step non-fatal and
   strictly after `gh release create`.
 - **The changelog is mirrored, not duplicated by hand:** the website's changelog
   page renders `CHANGELOG.md` trimmed to what a user of the app cares about, and
