@@ -248,13 +248,13 @@ def test_subjects_card_is_visible_with_no_subjects_and_in_a_new_analysis(qapp, t
     sc.group_regex.editingFinished.emit()
     qapp.processEvents()
     assert sc._card_subjects.isVisible()
+    sc._mark_clean()                 # a dirty window would ask to discard on close
     win.close()
 
 
 def test_add_subject_then_edit_cells_writes_the_model(qapp, tmp_path):
     from respmech.core.settings import SubjectEntry  # noqa: F401
     win, sc = _subjects_screen(qapp, tmp_path)
-    dirty_before = sc._dirty
     sc._mark_clean()
     sc.btn_subject_add.click()
     subs = sc.state.settings.input.subjects
@@ -274,7 +274,7 @@ def test_add_subject_then_edit_cells_writes_the_model(qapp, tmp_path):
     assert subs[0].fev1_l is None
     assert subs[0].folder == sc.state.settings.input.folder     # an edit never restamps
     sc.state.settings.validate()
-    del dirty_before
+    sc._mark_clean()                 # a dirty window would ask to discard on close
     win.close()
 
 
@@ -294,6 +294,7 @@ def test_subject_cell_rejects_unusable_values_and_reverts(qapp, tmp_path):
     assert subs[1].key == "B"
     t.item(1, 6).setText("other")
     assert subs[1].sex is None and t.item(1, 6).text() == ""
+    sc._mark_clean()                 # a dirty window would ask to discard on close
     win.close()
 
 
@@ -310,6 +311,7 @@ def test_add_subjects_from_recordings_and_remove(qapp, tmp_path):
     sc.btn_subject_remove.click()
     assert len(sc.state.settings.input.subjects) == n - 1
     assert sc.subjects_table.rowCount() == n - 1
+    sc._mark_clean()                 # a dirty window would ask to discard on close
     win.close()
 
 

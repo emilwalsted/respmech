@@ -141,7 +141,8 @@ def test_editing_them_still_marks_the_analysis_modified(qapp, tmp_path):
 
 # -- Subjects && lung volumes (M-37) ------------------------------------------
 def _subjects_card(sc):
-    return _card(sc, "Subjects && lung volumes")
+    # not in sc._cond_cards any more (it is always shown), so not found via _card()
+    return sc._card_subjects
 
 
 def test_subjects_card_is_visible_even_when_no_subjects_are_declared(qapp, tmp_path):
