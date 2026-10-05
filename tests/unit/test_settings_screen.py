@@ -204,11 +204,10 @@ def test_entropy_fields_are_named_and_explained_for_what_they_are(qapp, tmp_path
     win.close()
 
 
-def test_subjects_table_renders_the_declared_subjects_read_only(qapp, tmp_path):
-    """M-37: the 'Subjects && lung volumes' card is read-only (input.subjects has no
-    Setup widget of its own -- it is written by the reference model/an analysis's own
-    .toml) -- populated by _refresh_subjects_table, which _sync_widgets calls on load."""
-    from PySide6.QtCore import Qt
+def test_subjects_table_renders_the_declared_subjects(qapp, tmp_path):
+    """The 'Subjects && lung volumes' card shows input.subjects -- populated by
+    _refresh_subjects_table, which _sync_widgets calls on load. A missing value is an
+    empty cell (editable), not a placeholder string that could be mistaken for data."""
     from respmech.core.settings import SubjectEntry
     from respmech.ui.main_window import MainWindow
     s = synth_settings(str(tmp_path))
@@ -221,13 +220,96 @@ def test_subjects_table_renders_the_declared_subjects_read_only(qapp, tmp_path):
     sc._refresh_subjects_table()
     t = sc.subjects_table
     assert t.rowCount() == 1
-    assert t.item(0, 0).text() == "synth_case"
-    assert t.item(0, 1).text() == "6.5"
-    assert t.item(0, 2).text() == "5"
-    assert t.item(0, 3).text() == "—"                  # None renders as an em dash, not "None"
-    assert t.item(0, 4).text() == "4.1"
-    assert t.item(0, 5).text() == "150"
-    assert not (t.item(0, 0).flags() & Qt.ItemIsEditable)
+    assert [t.item(0, c).text() for c in range(6)] == [
+        "synth_case", "6.5", "5", "", "4.1", "150"]
+    win.close()
+
+
+def _subjects_screen(qapp, tmp_path, subjects=()):
+    from respmech.ui.main_window import MainWindow
+    s = synth_settings(str(tmp_path))
+    s.input.subjects = list(subjects)
+    win = MainWindow(AppState(s))
+    win.show()
+    qapp.processEvents()
+    return win, win.settings_screen
+
+
+def test_subjects_card_is_visible_with_no_subjects_and_in_a_new_analysis(qapp, tmp_path):
+    """Regression (ticket: the card vanished for ``subjects = []`` and for a new analysis,
+    so a subject could never be added from the UI): the card is always shown, and the
+    three buttons that edit it are reachable."""
+    win, sc = _subjects_screen(qapp, tmp_path)
+    assert not sc.state.settings.input.subjects
+    assert sc._card_subjects.isVisible()
+    assert sc.btn_subject_add.isVisible() and sc.btn_subject_from_files.isVisible()
+    # editing the grouping pattern (the second reported scenario) must not hide it
+    sc.group_regex.setText(r"^(synth)")
+    sc.group_regex.editingFinished.emit()
+    qapp.processEvents()
+    assert sc._card_subjects.isVisible()
+    win.close()
+
+
+def test_add_subject_then_edit_cells_writes_the_model(qapp, tmp_path):
+    from respmech.core.settings import SubjectEntry  # noqa: F401
+    win, sc = _subjects_screen(qapp, tmp_path)
+    dirty_before = sc._dirty
+    sc._mark_clean()
+    sc.btn_subject_add.click()
+    subs = sc.state.settings.input.subjects
+    assert len(subs) == 1 and subs[0].key == ""
+    assert subs[0].folder == sc.state.settings.input.folder      # provenance stamped at creation
+    assert sc._dirty
+    sc.btn_subject_add.click()                                  # reuses the blank row
+    assert len(subs) == 1
+    t = sc.subjects_table
+    t.item(0, 0).setText("P01")
+    t.item(0, 1).setText("6,5")                                 # comma decimal accepted
+    t.item(0, 4).setText("4.1")
+    t.item(0, 6).setText("F")
+    assert (subs[0].key, subs[0].tlc_l, subs[0].fev1_l, subs[0].sex) == ("P01", 6.5, 4.1, "female")
+    assert t.item(0, 6).text() == "female"                      # normalised spelling shown
+    t.item(0, 4).setText("")                                    # clearing a value stores None
+    assert subs[0].fev1_l is None
+    assert subs[0].folder == sc.state.settings.input.folder     # an edit never restamps
+    sc.state.settings.validate()
+    del dirty_before
+    win.close()
+
+
+def test_subject_cell_rejects_unusable_values_and_reverts(qapp, tmp_path):
+    from respmech.core.settings import SubjectEntry
+    win, sc = _subjects_screen(qapp, tmp_path, [
+        SubjectEntry(key="A", tlc_l=6.0), SubjectEntry(key="B")])
+    t, subs = sc.subjects_table, sc.state.settings.input.subjects
+    t.item(0, 1).setText("abc")
+    assert subs[0].tlc_l == 6.0 and t.item(0, 1).text() == "6"
+    assert sc.subjects_note.isVisible()
+    t.item(0, 1).setText("-1")
+    assert subs[0].tlc_l == 6.0
+    t.item(1, 0).setText("A")                                   # duplicate key
+    assert subs[1].key == "B" and t.item(1, 0).text() == "B"
+    t.item(1, 0).setText("")                                    # empty key
+    assert subs[1].key == "B"
+    t.item(1, 6).setText("other")
+    assert subs[1].sex is None and t.item(1, 6).text() == ""
+    win.close()
+
+
+def test_add_subjects_from_recordings_and_remove(qapp, tmp_path):
+    win, sc = _subjects_screen(qapp, tmp_path)
+    sc._update_format_readout()                                 # builds the manifest
+    sc.btn_subject_from_files.click()
+    subs = sc.state.settings.input.subjects
+    assert subs and all(s.key and s.folder == sc.state.settings.input.folder for s in subs)
+    n = len(subs)
+    sc.btn_subject_from_files.click()                           # nothing new the second time
+    assert len(subs) == n
+    sc.subjects_table.selectRow(0)
+    sc.btn_subject_remove.click()
+    assert len(sc.state.settings.input.subjects) == n - 1
+    assert sc.subjects_table.rowCount() == n - 1
     win.close()
 
 
