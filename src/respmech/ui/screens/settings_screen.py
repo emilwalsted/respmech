@@ -422,6 +422,7 @@ class SettingsScreen(QWidget):
         self.btn_subject_from_files.clicked.connect(self._add_subjects_from_files)
         self.btn_subject_remove.clicked.connect(self._remove_subject)
         self._subjects_loading = False
+        self._pending_subjects = []
 
         # 'What to save' lives inside the Output card now (one place for everything the run
         # produces and where it goes), so these rows attach to the Output form (fo). The two
@@ -930,11 +931,13 @@ class SettingsScreen(QWidget):
     _SUBJECT_COLS = ("key", "tlc_l", "vc_l", "rv_l", "fev1_l", "mvv_lpm",
                      "sex", "age_years", "height_cm")
 
-    def _refresh_subjects_table(self):
+    def _refresh_subjects_table(self, force=False):
         """Repopulate the Subjects && lung volumes card from ``input.subjects`` -- called
         wherever a loaded/opened/imported analysis can change the list
         (``_sync_widgets``) and after every add/remove. Cell edits do NOT come through
         here (the edited cell already holds what the user typed)."""
+        if not force and self.subjects_table.state() == QAbstractItemView.EditingState:
+            return            # never replace the cell the user is typing in
         subs = self.state.settings.input.subjects
         self._subjects_loading = True
         try:
@@ -1024,17 +1027,34 @@ class SettingsScreen(QWidget):
     def _new_subject(self, key=""):
         from respmech.core.settings import SubjectEntry
         # the carried-over provenance tag, stamped once at creation like every other
-        # folder-tracked entry (see _CARRIED_KINDS) -- never on a later cell edit
-        return SubjectEntry(key=key, folder=self.state.settings.input.folder)
+        # folder-tracked entry (see _CARRIED_KINDS) -- never on a later cell edit. With no
+        # input folder chosen yet the tag is "unproven", so the entry is remembered and
+        # stamped when a folder is first chosen (_adopt_pending_subject_folders);
+        # otherwise a row typed into a new analysis would be flagged as carried over from
+        # another folder the moment the folder is picked.
+        entry = SubjectEntry(key=key, folder=self.state.settings.input.folder or None)
+        if not entry.folder:
+            self._pending_subjects.append(entry)
+        return entry
+
+    def _adopt_pending_subject_folders(self):
+        folder = self.state.settings.input.folder
+        if folder and self._pending_subjects:
+            live = self.state.settings.input.subjects
+            for e in self._pending_subjects:
+                if any(e is x for x in live) and not e.folder:
+                    e.folder = folder
+            self._pending_subjects = []
 
     def _add_subject(self):
         """Append an empty row and put the cursor in its Key cell. The row is written
-        to the model with an empty key; validate() reports it if it is left that way."""
+        to the model with an empty key (harmless: it matches no file; remove it with
+        "Remove selected" if it is not wanted)."""
         subs = self.state.settings.input.subjects
         blank = next((i for i, s in enumerate(subs) if not s.key), None)
         if blank is None:                    # reuse a row still waiting for its key
             subs.append(self._new_subject())
-            self._refresh_subjects_table()
+            self._refresh_subjects_table(force=True)
             self._subjects_edited()
             blank = len(subs) - 1
         row = blank
@@ -1061,7 +1081,7 @@ class SettingsScreen(QWidget):
                 "muted")
             return
         subs.extend(self._new_subject(k) for k in new)
-        self._refresh_subjects_table()
+        self._refresh_subjects_table(force=True)
         self._subject_note(f"Added {len(new)} subject row(s): {', '.join(new[:6])}"
                            + (" …" if len(new) > 6 else ""), "muted")
         self._subjects_edited()
@@ -1073,7 +1093,7 @@ class SettingsScreen(QWidget):
             if 0 <= r < len(subs):
                 del subs[r]
         if rows:
-            self._refresh_subjects_table()
+            self._refresh_subjects_table(force=True)
             self._subject_note("")
             self._subjects_edited()
 
@@ -1241,6 +1261,7 @@ class SettingsScreen(QWidget):
         core.settings.carried_over_state, and the banner built in _build(). Wording is
         built from `_CARRIED_PHRASES`, keyed on the SAME kinds `_CARRIED_KINDS` tracks
         (M-07), so a new tagged kind never needs a new if/elif branch here."""
+        self._adopt_pending_subject_folders()
         from respmech.core.settings import carried_over_state
         state = carried_over_state(self.state.settings)
         if not state:
@@ -1277,6 +1298,7 @@ class SettingsScreen(QWidget):
     def _clear_carried_banner(self):
         from respmech.core.settings import clear_carried_over
         clear_carried_over(self.state.settings)
+        self._refresh_subjects_table(force=True)   # subjects can be among what was just cleared
         self._mark_dirty()
         self.carried_banner.setVisible(False)
         # exclude_breaths/breath_counts/the noise reference all just changed — the same

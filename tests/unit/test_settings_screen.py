@@ -315,6 +315,29 @@ def test_add_subjects_from_recordings_and_remove(qapp, tmp_path):
     win.close()
 
 
+def test_subject_typed_before_a_folder_is_chosen_is_not_flagged_as_carried(qapp, tmp_path):
+    """Review finding: a row added while input.folder is empty was stamped '' (unproven), so
+    choosing the folder made the carried-over banner call it foreign and Clear deleted it
+    (leaving a stale table row)."""
+    from respmech.core.settings import carried_over_state
+    win, sc = _subjects_screen(qapp, tmp_path)
+    s = sc.state.settings
+    real = s.input.folder
+    s.input.folder = ""
+    sc.btn_subject_add.click()
+    sc.subjects_table.item(0, 0).setText("A")
+    s.input.folder = real
+    sc._update_carried_banner()
+    assert s.input.subjects[0].folder == real
+    assert "subject_keys" not in str(carried_over_state(s).kinds_present())
+    # and Clear keeps the table in step with the model for a genuinely foreign row
+    s.input.subjects[0].folder = str(tmp_path / "elsewhere")
+    sc._clear_carried_banner()
+    assert sc.subjects_table.rowCount() == len(s.input.subjects)
+    sc._mark_clean()
+    win.close()
+
+
 def test_subjects_table_fits_under_windows_font_metrics(qapp, tmp_path, windows_metrics):
     """Acceptance criterion: '...Subjects-kortet...består windows_metrics-ratiotests'.
     Unlike a FlowLayout chip row, a QTableWidget does not elide its own header/cell
