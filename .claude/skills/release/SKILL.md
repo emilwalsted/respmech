@@ -71,8 +71,10 @@ redeploys — so the site updates within seconds of a release.
 - Requires the secret **`WEBSITE_DISPATCH_TOKEN`** here: a fine-grained PAT with
   **Contents: write** on `emilwalsted/respmech-website`. If it is absent the step
   is skipped and the release/build is unaffected.
-- Without the hook, the website's daily poll still catches a new release within a
-  day. Full docs: `deploy/README.md` in the website repo. Since 10-09-2026 the
+- Without the hook, a new release reaches the site at the next explicitly
+  requested website deploy: the website no longer deploys on a push to its `main`
+  and has no daily poll (explicit deploys since 05-10-2026). The dispatch is the
+  one automatic trigger kept there. Full docs: `deploy/README.md` in the website repo. Since 10-09-2026 the
   website deploys through the shared engine `emilwalsted/onecom-deploy@deploy-v1`
   (its SFTP secrets are set with `bin/setup-secrets respmech` from that repo; the
   old `deploy/setup.sh` is gone), and the deploy result is read on the website
