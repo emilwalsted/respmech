@@ -406,7 +406,8 @@ def test_a_long_filename_with_every_badge_fits_the_rail_on_windows_metrics(windo
     from PySide6.QtGui import QFontMetrics
 
     from respmech.ui.file_rail import (_RAIL_ITEM_PADDING_PX, FileRailEntry,
-                                       _elided_row_text, _row_text)
+                                       _elided_row_text, _row_prefix, _row_suffix,
+                                       _row_text)
 
     long_name = "a_very_long_synthetic_recording_name_32c.csv"   # 32+ characters
     assert len(long_name) >= 32
@@ -424,7 +425,16 @@ def test_a_long_filename_with_every_badge_fits_the_rail_on_windows_metrics(windo
     # the filename itself was actually shortened under this budget (fixed segments alone
     # eat most of a 280 px rail once every badge is active)
     assert fm.horizontalAdvance(elided) < fm.horizontalAdvance(full)
-    assert fm.horizontalAdvance(elided) <= avail + 2       # +2px rounding slack
+    # The row fits the budget -- unless the never-elided badges ALONE outgrow it, in which
+    # case the contract (see _elided_row_text) is that the filename gives way entirely
+    # and the row is exactly as wide as the badges, never wider. That second case is
+    # what the real Windows and macOS runners hit: their ✓ ◆ ⇢ ↺ ⚠ glyphs come from
+    # wider symbol/emoji fallback fonts than DejaVu's, and this fixture's 145 % stretch
+    # then lands on top of those already-wider real metrics (measured 338 px on macOS,
+    # 350 px on Windows against a 270 px budget, vs 208 px of badges on Linux) -- so a
+    # flat `<= avail` here was asserting something the delegate never promised.
+    fixed_w = fm.horizontalAdvance(_row_prefix(e)) + fm.horizontalAdvance(_row_suffix(e))
+    assert fm.horizontalAdvance(elided) <= max(avail, fixed_w) + 2   # +2px rounding slack
 
 
 def test_a_short_filename_with_no_badges_is_not_elided(qapp):
