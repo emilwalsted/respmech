@@ -59,29 +59,38 @@ def test_run_batch_aborts_inside_the_mechanics_loop(tmp_path):
     file aborts with Cancelled from inside compute.calculatemechanics/sample_entropy instead of
     finishing the file.
 
-    Two pre-loop guards now run before any breath is reached (M-35's external-reference
-    forepass, ``pipeline.py`` ~line 995, plus the pre-existing per-file guard just below it)
-    — both silently return an (empty-batch) result rather than raising, exactly like the
-    between-files guard always has, so ``cc()`` must stay False through BOTH of them to reach
-    a real in-file checkpoint at all."""
+    Every guard run_batch checks BEFORE the file (the noise-profile build, the cross-file
+    reference forepass and its post-forepass check, the per-file guard) silently returns an
+    (empty-batch) result on True rather than raising, exactly like the between-files guard
+    always has, so ``cc()`` must answer False through all of them to reach a real in-file
+    checkpoint at all."""
     from respmech.core.pipeline import run_batch
     s = synth_settings(str(tmp_path),
                        data_out={"saveaveragedata": True, "savebreathbybreathdata": True})
-    calls = {"n": 0}
+    # The checker flips True only once run_batch has actually ENTERED the file (its own
+    # ``file_start`` progress event), never on a call count. A count has to be re-tuned
+    # every time a pre-file guard is added (it already had to be once, for the forepass),
+    # and until it is, the flip lands on one of those guards and the run ends with a quiet
+    # "cancelled" return instead of the in-file Cancelled this test is about.
+    entered = {"file": False}
+    calls = {"after_entry": 0}
+
+    def on_progress(ev):
+        if ev.kind == "file_start":
+            entered["file"] = True
 
     def cc():
-        calls["n"] += 1
-        return calls["n"] > 2        # False on the two pre-file guards (forepass + per-file
-                                      # entry); True once inside the file
+        if entered["file"]:
+            calls["after_entry"] += 1
+        return entered["file"]
 
     with pytest.raises(Cancelled):
-        run_batch(s, cancel_check=cc, only_files=["synth_case_A.csv"])
-    # proves the abort came from an IN-FILE checkpoint (the per-breath loop), not either
-    # pre-loop guard alone: both return silently rather than raising, so the raise needed a
-    # 3rd check.
-    assert calls["n"] >= 3
+        run_batch(s, progress=on_progress, cancel_check=cc, only_files=["synth_case_A.csv"])
+    # proves the abort came from an IN-FILE checkpoint (segmentation / the per-breath loop),
+    # not a pre-file guard: every check answered False until the file was entered, and at
+    # least one check ran after that -- the one that raised.
+    assert entered["file"] and calls["after_entry"] >= 1
 
     # default path (no checker) still runs the file to completion -> byte-identical golden path
-    calls["n"] = 0
     result = run_batch(s, cancel_check=None, only_files=["synth_case_A.csv"])
     assert result.files and "synth_case_A.csv" in result.files
