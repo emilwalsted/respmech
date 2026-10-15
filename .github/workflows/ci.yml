@@ -222,8 +222,12 @@ jobs:
   # win/mac matrix above remains the portability proof (fonts/encoding/paths differ);
   # a green here does NOT imply a green there.
   smoke-linux:
+    # The job name keeps "ubuntu-latest" on purpose: it is a status-check name that may be
+    # required on master, so it must not follow the runner. The runner itself is pinned
+    # because this job installs Qt system libraries with apt, and package names can differ
+    # on the Ubuntu release that ubuntu-latest moves to from 19-10-2026.
     name: GUI smoke · ubuntu-latest · py3.12
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 60, arrived at empirically: 30 assumed "Linux beats the Windows runner" and run #207
     # was killed mid-suite at exactly 30m00s (the ~1280-test suite alone is ~30 min;
     # Windows' whole job is ~32-34 min). 50 fit the measured runtime; the swap step below
@@ -362,7 +366,8 @@ jobs:
 
   golden:
     name: Numerical golden (synthetic, rtol 1e-9)
-    runs-on: ubuntu-latest
+    # Pinned so a new default image (glibc, libm) cannot move a byte-for-byte numerical result.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
