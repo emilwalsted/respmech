@@ -69,22 +69,28 @@ this release.
   `L/min` where the documentation used `L·s⁻¹` and `L·min⁻¹`; both now use the dot form.
 - Preview's shaded area on the Campbell diagram is labelled "inspiratory resistive work",
   which is what it shows (the read-out above it is the total work of breathing).
+  <!-- site: 0 merged "Preview's shaded area on the Campbell diagram" the page lists it among its small corrections -->
 - The citation example (README, About dialog) points at the concept DOI
   10.5281/zenodo.3270825, which always resolves to the latest archived version, instead of
   the version DOI of a 2019 test release; the About dialog also shows the citation year.
-- The "Run & results" drawer button reads "Run & results" again; it had shipped in 2.4.0
+  <!-- site: 0 docs "The citation example (README, About dialog)" repository and About-dialog wording only -->
+- The 'Run & results' drawer button reads 'Run & results' again; it had shipped in 2.4.0
   as "Run _results" (a lone ampersand is a mnemonic marker in Qt).
+  <!-- site: 0 merged "The 'Run & results' drawer button" the page lists it among its small corrections -->
 - Axis labels in the mechanics and ECG channel stacks no longer run into each other on a
   short panel: a label is written in full, then as the name alone, then left out, and comes
   back when the panel grows again.
+  <!-- site: 0 merged "Axis labels in the mechanics and ECG channel stacks" the page lists it among its small corrections -->
 - A breath that has been typed (IC, FVC, sniff and so on) or excluded now says so in text
   under its number in Preview & QC, besides its colour: "#3" over "FVC", or over
   "(Excluded)". When the view is zoomed out so far that the text would run into the next
   breath's, the text gives way to a one- or two-character marker in the same colour (the
   initial, "×" for an excluded breath), and returns when you zoom in.
+  <!-- site: 0 merged "A breath that has been typed (IC, FVC, sniff and so on) or excluded" the page says it in the bullet about marking a breath -->
 - `.xls` (the old binary Excel format) is no longer offered as an input format: it could
   not be read without a dependency RespMech does not have and failed with an import error;
   `.xlsx` is unchanged. The unused `seaborn` dependency was removed.
+  <!-- site: 0 merged "`.xls` (the old binary Excel format)" the page lists it among its small corrections -->
 
 **Sample entropy on a volume column now uses the conditioned volume (numbers change for
 analyses with entropy on the volume column).** When the volume column is also ticked as an
@@ -412,11 +418,13 @@ reconciled with the channels actually assigned.
   other write path): the channel's role is added to the list, and a plain-English
   notice says so (visible in the desktop app and in `run-report.txt`, the same way
   every other schema-upgrade notice already is).
+  <!-- site: 0 merged "A hand-edited `settings.toml` that assigns a channel" the page says it in the bullet about pressure channels no longer being required -->
 - Saving an analysis omits the `[analysis]` table entirely while its signal set still
   matches the assigned channels (the ordinary case) — an explicit table is only
   written once it genuinely diverges. The run manifest (`analysis-used.toml`) always
   records the actual, effective set, explicit or not, so a run's own provenance is
   never ambiguous about which signals it used.
+  <!-- site: 0 merged "Saving an analysis omits the `[analysis]` table" the page says it in the bullet about pressure channels no longer being required -->
 
 **The CLI now validates several things only the desktop app used to catch, closing
 gaps between what the two run.**
@@ -432,6 +440,7 @@ gaps between what the two run.**
 - `processing.emg.detect_channel` (a 0-based index into `input.channels.emg`) is now
   rejected by `Settings.validate()` when it is out of range, instead of crashing the
   batch mid-run with a raw `IndexError`.
+  <!-- site: 0 merged "`processing.emg.detect_channel` (a 0-based index" the page says it in the bullet about mistakes in a settings file -->
 - A misspelled or renamed TOML key is no longer silently ignored: `respmech validate`
   and the new `UNKNOWN SETTINGS KEYS` section of `run-report.txt` both name it,
   alongside the default that was used instead.
@@ -439,10 +448,12 @@ gaps between what the two run.**
   same real write-and-remove check the desktop app's Dry run performs — never
   `os.access`, which is unreliable against Windows ACLs), so a read-only or missing
   output folder is caught before an entire batch has been computed rather than after.
+  <!-- site: 0 merged "`respmech validate` now also probes that the output folder" the page says it in the bullet about mistakes in a settings file -->
 - `respmech run --dry-run` now prints the same output plan (`core.io.plan.plan_outputs`)
   the desktop app's Dry run shows — every output group and its file count under
   `data/`, `diagnostics/` and the provenance files — instead of only per-file breath
   counts.
+  <!-- site: 0 merged "`respmech run --dry-run` now prints the same output plan" the page says it in the command-line bullet -->
 - Running without the `plots` extra (or any other diagnostic-figure failure) now also
   prints a `WARNING: N diagnostic figure(s) skipped …` line to stderr (and to the
   desktop app's Run log) as it happens, in addition to the existing `FIGURES SKIPPED`
@@ -451,23 +462,28 @@ gaps between what the two run.**
   in-process because the isolated subprocess was unavailable or disabled
   (`RESPMECH_NO_FIGURE_SUBPROCESS=1`, or a packaged build) are not skipped — every
   figure is still written — so that case no longer triggers the warning.
+  <!-- site: 0 merged "Running without the `plots` extra" the page says it in the bullet about mistakes in a settings file -->
 - `respmech run`'s final line now reports the file count against the output folder
   itself (`Wrote N file(s) to <output.folder>`) rather than `<output.folder>/data`,
   which undercounted everything written outside `data/` (diagnostics, WAV exports, the
   two provenance files).
+  <!-- site: 0 merged "`respmech run`'s final line now reports" the page says it in the bullet about mistakes in a settings file -->
 - `run-report.txt`'s `PROCESSING` block now also names any breath-count overrides,
   excluded breaths, the PTP baseline window, the work-of-breathing source and the
   cohort grouping regex — settings that previously only lived in `analysis-used.toml`,
   even though they can change the reported numbers the most directly.
+  <!-- site: 0 merged "`run-report.txt`'s `PROCESSING` block" the page says it in the bullet about what results and the run report record -->
 - `run-report.txt`'s `DIAGNOSTICS` block now names every EMG channel by BOTH its
   0-based index into `input.channels.emg` and its 1-based data-column number (e.g.
   `channel index 1 (column 4)`) — previously only the index was shown, which could be
   misread against the workbook's `rms_col_<n>` columns and `EMG col <n>` WAV filenames,
   both 1-based.
+  <!-- site: 0 merged "`run-report.txt`'s `DIAGNOSTICS` block now names every EMG channel" the page says it in the bullet about what results and the run report record -->
 - Per-file quality notices (an `ecg_auto_detect` quality-check mismatch, or the reason
   a cardiac-gated peak column came out NaN) are now also recorded in `run-report.txt`'s
   `DIAGNOSTICS` block — previously visible only as a Python warning on stderr, which a
   packaged desktop app never shows.
+  <!-- site: 0 merged "Per-file quality notices (an `ecg_auto_detect`" the page says it in the bullet about what results and the run report record -->
 - Fixed a crash when an assigned pressure or flow channel is an all-integer column in
   the source file (for example an unused "dummy" port wired to a constant `0`): the
   loader now casts every channel to float64 on load, so arithmetic further down the
@@ -477,14 +493,17 @@ gaps between what the two run.**
   longer crashes with a bare `IndexError` when it cannot pair every inspiratory peak
   with an expiratory one (which can happen with slow breathing and pauses at zero flow
   between phases) — it now raises a named, explanatory error instead.
+  <!-- site: 0 merged "Volume-based breath segmentation (`processing.segmentation.method" the page says it in the bullet about three crashes -->
 - A batch where at least one file failed now marks `Average breathdata.xlsx` and
   `Cohort summary.xlsx` as incomplete (an `INCOMPLETE` row in each workbook's
   Provenance sheet, and a `COHORT FILES INCOMPLETE` line in `run-report.txt`, both
   naming which files failed) — previously both were written from the successful files
   alone with nothing inside either file to say one was missing.
+  <!-- site: 0 merged "A batch where at least one file failed now marks" the page says it in the bullet about what results and the run report record -->
 - `outlier_rms_sd_limit` (EMG RMS outlier filtering) no longer raises a `KeyError` on
   an analysis with no EMG channels configured; it now has nothing to filter and does
   nothing, matching every other EMG-only setting.
+  <!-- site: 0 merged "`outlier_rms_sd_limit` (EMG RMS outlier filtering)" the page says it in the bullet about three crashes -->
 - The desktop app's File menu (New analysis, Open analysis…, Save, Save as…, Get
   started…, Explore with sample data, Duplicate…, and Open Recent) is now locked for
   the duration of a run — previously only the header's Analysis button was, while the
@@ -503,6 +522,7 @@ gaps between what the two run.**
   reference for* and *Reference manoeuvres…*, with the same effect as the right-click menu.
   They stay disabled until a breath is marked (and while a run is in progress), and the row
   wraps onto a second line on a narrow window.
+  <!-- site: 0 merged "**The breath right-click menu's choices are now also controls" the page says it in the bullet about marking a breath -->
 - **A recording cut mid-breath at either end is now flagged instead of analysed
   silently.** Trimming only ever discarded a leading partial expiration and a trailing
   partial inspiration — it never verified that the breath it *keeps* at either
@@ -524,6 +544,7 @@ gaps between what the two run.**
   0.8/3 as before. A study whose recordings have unusually high natural
   breath-to-breath variability can raise the threshold itself instead of living with
   more false notices; nothing changes for an analysis that does not set these fields.
+  <!-- site: 0 merged "The boundary-truncation notice's threshold" the page says it in the bullet about recordings cut mid-breath -->
 
 **Sample entropy's default `Template length (m + 1)` has changed from 2 to 3.** The
 previous default of 2 reported a sample entropy computed at m = 1, not the m = 2 that is
@@ -603,6 +624,7 @@ QC strip) and by `respmech validate`, from the same shared logic:
   breaking change for an analysis that happens to have an intentionally flat-zero flow
   channel or pause, which is not a realistic configuration to analyse as breaths
   either way.
+  <!-- site: 0 merged "An assigned channel (flow, Poes, Pgas, Pdi, an EMG channel" the page says it in the bullet about two new checks -->
 - `DegenerateBreathError`'s message ("an incomplete breath right at the start or end
   of a recording") is now only shown for an actual first-or-last breath. A degenerate
   breath in the middle of a recording gets its own message instead, naming the
@@ -611,6 +633,7 @@ QC strip) and by `respmech validate`, from the same shared logic:
   by a user whose file's real problem was the merged-timestamps case above, but whose
   only symptom was a misleading "start or end" error for one breath in the middle of
   the recording.
+  <!-- site: 0 merged "`DegenerateBreathError`'s message" the page says it in the bullet about two new checks -->
 - Settings keys this version does not recognise (a whole unknown table, a whole
   unknown list of tables, or an unrecognised field on one entry of an otherwise-known
   list such as `processing.exclude_breaths`) now survive a save instead of being
@@ -629,12 +652,14 @@ QC strip) and by `respmech validate`, from the same shared logic:
   column emitted by the pipeline today follows one of these conventions through the
   Units sheet or the on-screen result table, so nothing currently visible changes —
   this is groundwork for upcoming result columns that will.
+  <!-- site: 0 internal "`core/quantities.py`'s unit lookup" groundwork; nothing visible changes yet -->
 - The ECG and EMG-normalisation references are now folder-tracked, like the noise
   reference: picking either against one recordings folder and later opening the
   analysis against a different one now shows the Setup Keep/Clear banner, instead of
   the reference either applying invisibly or (for the ECG reference specifically)
   being silently cleared the moment "Duplicate for another recordings folder…" pointed
   the analysis somewhere new.
+  <!-- site: 0 merged "The ECG and EMG-normalisation references are now folder-tracked" the page says it in the bullet about the File menu lock -->
 
 <!-- changelog-skip be4ee99 internal, behaviour-neutral groundwork for a future modular
      analysis pipeline: a Qt-free capabilities/signal-set skeleton (its own new module and
