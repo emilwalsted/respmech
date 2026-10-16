@@ -25,11 +25,11 @@ placement of tidal loops in the maximal flow-volume curve (expiratory flow limit
 ventilatory capacity), opt-in PEEPi with a modified Campbell diagram, normalisation of
 pressure and EMG to a maximal effort with tension-time indices, automatic EMG-only
 segmentation (fixed windows and EMG bursts), manual repair of the breath detector, and
-the `respmech init` and `respmech breaths` commands. Everything new is off, empty or
+the `respmech init` and `respmech breaths` commands. Every new analysis feature is off, empty or
 absent until it is asked for, an analysis that does not use it is read, run and written
 as before. Earlier results change only where an entry below says so (sample entropy on a
-volume column, the default entropy template length, the noise-reduction reconstruction and
-the ECG R-wave detector). README has a section on each part, and
+volume column, the default entropy template length, the noise-reduction reconstruction, the
+ECG R-wave detector and the EMG noise profile's breath segmentation). README has a section on each part, and
 `examples/settings.toml` a commented example of every new settings table.
 **An analysis that uses the new settings tables must not be opened and saved by RespMech
 older than 2.5**, which drops the tables it does not know (see `docs/INSTALL.md`).
@@ -55,7 +55,7 @@ this release.
 
 **Smaller changes since 2.4.0.**
 
-- Setup has a new "Subjects && lung volumes" card for the per-participant spirometry
+- Setup has a new "Subjects & lung volumes" card for the per-participant spirometry
   (`[[input.subjects]]`) that the lung-volume calculations use. It is always shown, and a
   participant can be added without editing the TOML file. Double-click a cell to edit TLC,
   VC, RV, FEV1, MVV, sex, age and height; "Add subject", "Add from recordings" (one row per
@@ -75,7 +75,7 @@ this release.
   10.5281/zenodo.3270825, which always resolves to the latest archived version, instead of
   the version DOI of a 2019 test release; the About dialog also shows the citation year.
   <!-- site: 0 docs "The citation example (README, About dialog)" repository and About-dialog wording only -->
-- The 'Run & results' drawer button reads 'Run & results' again; it had shipped in 2.4.0
+- The 'Run & results' drawer button reads 'Run & results'; it had shipped in 2.4.0
   as "Run _results" (a lone ampersand is a mnemonic marker in Qt).
   <!-- site: 0 merged "The 'Run & results' drawer button" the page lists it among its small corrections -->
 - Axis labels in the mechanics and ECG channel stacks no longer run into each other on a
@@ -267,12 +267,12 @@ QC ▸ Mechanics for "Use as IC reference for ▸ this file / all files of its g
 files", or open "Reference manoeuvres…" (also on a file's row in the file rail) for the
 full picker across all four reference kinds and any file's typed breaths. A resolved IC
 reference shows next to the analysis window; the Run screen's commitment sheet names how
-many files have one linked; and Setup has a "Subjects && lung volumes" card for the
+many files have one linked; and Setup has a "Subjects & lung volumes" card for the
 per-participant spirometry (`[[input.subjects]]`) these calculations use (see the
 Setup card under "Smaller changes since 2.4.0").
 
 **Operating lung volumes derived from a resolved IC reference.** Once a file has a
-resolved inspiratory-capacity reference (see above), every tidal breath now also
+resolved inspiratory-capacity reference (see above), every tidal breath also
 reports its operating IC, EELV, EILV and inspiratory reserve volume (IRV) — as a
 volume above residual volume (from a spirometry-derived vital capacity entered on the Subjects card,
 `[[input.subjects]]`) and, alongside it whenever a total lung capacity is entered,
@@ -305,7 +305,7 @@ without separators" above.
      reachable end to end for the first time. -->
 
 **Right-click a breath to mark it as an IC manoeuvre and get its volume and Poes
-without hand extraction.** Preview & QC ▸ Mechanics's breath overlays now take a
+without hand extraction.** Preview & QC ▸ Mechanics's breath overlays take a
 right-click (or Ctrl+left-click), offering Tidal, Excluded, IC manoeuvre, FVC
 manoeuvre, IC + FVC, Maximal inspiratory effort, Sniff and Other… (the EMG-only 'EMG –
 segments' tab offers Tidal, Excluded, Rest and Other… instead — the flow-only kinds
@@ -316,9 +316,9 @@ measurement against a repeat attempt in the same file, or a manoeuvre right at t
 of the recording — in a new "Manoeuvres" table shown right under the ordinary
 breath-by-breath one, and in its own sheet alongside that file's workbook. A `fvc`/
 `ic_fvc`-typed breath's expiration is checked for a plausible forced-manoeuvre
-duration (the numeric extraction is described in the FVC/FEV1/PEF entry below); a
+duration (the numeric extraction is described in the FVC/FEV1/PEF entry above); a
 `max_insp`/`sniff`-typed breath reports its own peak effort (Poes/Pdi/EMG) as a
-reference value for the normalisation described below. A disabled "Suggested: FVC" hint
+reference value for the normalisation described above. A disabled "Suggested: FVC" hint
 points at the untyped breath with the longest expiration, the most plausible untyped
 candidate. A dedicated recording where every breath is typed (a separate IC or FVC
 file, say) runs and writes its own workbook; the Manoeuvres table stands in for the
@@ -412,7 +412,7 @@ reconciled with the channels actually assigned.
   legacy roles: an analysis with no Poes/Pgas/Pdi channel assigned (and none named in
   `analysis.signals`) validates fine, and simply computes fewer columns. Requesting a
   pressure signal (Poes/Pgas/Pdi) without Flow, or an unrecognised signal name, is
-  still rejected — breath segmentation needs Flow either way.
+  rejected — breath segmentation needs Flow either way.
 - A hand-edited `settings.toml` that assigns a channel without adding it to an
   explicit `analysis.signals` list is reconciled automatically on load (never on any
   other write path): the channel's role is added to the list, and a plain-English
@@ -426,8 +426,8 @@ reconciled with the channels actually assigned.
   never ambiguous about which signals it used.
   <!-- site: 0 merged "Saving an analysis omits the `[analysis]` table" the page says it in the bullet about pressure channels no longer being required -->
 
-**The CLI now validates several things only the desktop app used to catch, closing
-gaps between what the two run.**
+**Validation, run-report and desktop-app corrections, closing gaps between what the CLI
+and the desktop app check.**
 
 - **`processing.emg.noise.enabled` now requires `processing.emg.remove_ecg` to also be
   on — enforced in `Settings.validate()`, not just as a GUI activation gate.** A
@@ -646,13 +646,11 @@ QC strip) and by `respmech validate`, from the same shared logic:
   automatically, instead of needing a column-by-column entry; the new PEEPi,
   tension-time, percentage and variability columns use them.
   <!-- site: 0 internal "`core/quantities.py`'s unit lookup" unit lookup for the new columns; no separate user-facing change -->
-- The ECG and EMG-normalisation references are now folder-tracked, like the noise
-  reference: picking either against one recordings folder and later opening the
-  analysis against a different one now shows the Setup Keep/Clear banner, instead of
-  the reference either applying invisibly or (for the ECG reference specifically)
-  being silently cleared the moment "Duplicate for another recordings folder…" pointed
-  the analysis somewhere new.
-  <!-- site: 0 merged "The ECG and EMG-normalisation references are now folder-tracked" the page says it in the bullet about the File menu lock -->
+- The ECG reference is now folder-tracked, like the noise reference: opening the
+  analysis against a different recordings folder shows the Setup Keep/Clear banner,
+  where "Duplicate for another recordings folder…" used to clear it silently. The new
+  EMG-normalisation reference is tracked the same way from the start.
+  <!-- site: 0 merged "The ECG reference is now folder-tracked" the page says it in the bullet about the File menu lock -->
 
 <!-- changelog-skip be4ee99 internal, behaviour-neutral groundwork for a future modular
      analysis pipeline: a Qt-free capabilities/signal-set skeleton (its own new module and
