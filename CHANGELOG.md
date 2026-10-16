@@ -34,15 +34,13 @@ the ECG R-wave detector). README has a section on each part, and
 **An analysis that uses the new settings tables must not be opened and saved by RespMech
 older than 2.5**, which drops the tables it does not know (see `docs/INSTALL.md`).
 
-**The Mechanics test run in Preview & QC works on a complete signal set that names EMG
-explicitly.** The per-breath table and the Campbell diagram showed "Test run failed:
-input.channels.emg must name at least one column" for an analysis with an explicit
-`analysis.signals` that lists `emg`, such as the built-in sample, because the test run drops
-the EMG channels (the EMG tabs show that work) but kept naming EMG in the signal set.
+<!-- changelog-skip d4ecb2a a defect in the signal-set work itself (the Mechanics test run on a
+     signal set that names EMG explicitly) that never shipped in any release; nothing for a reader
+     comparing with 2.4.0 to be told -->
 
 **A normal range behind the maximal flow-volume loop.** When a participant's sex, age and
-height are given in `[[input.subjects]]` (`sex`, `age_years`, `height_cm`, all optional and
-all three needed), the maximal flow-volume figure, in Preview & QC and in
+height are given on the Subjects card (`[[input.subjects]]`: `sex`, `age_years`, `height_cm`,
+all optional and all three needed), the maximal flow-volume figure, in Preview & QC and in
 `flow-volume (tidal in MFVL).pdf`, shades the normal range behind the participant's own
 curve and draws the expected curve dashed. The size of the range comes from the GLI 2022
 race-neutral reference equations (expected FVC and FEV1 with their lower and upper limits
@@ -57,14 +55,13 @@ this release.
 
 **Smaller changes since 2.4.0.**
 
-- The "Subjects && lung volumes" card on Setup is editable and always shown. It used to be
-  read-only and hidden while `[[input.subjects]]` was empty, so it disappeared when an
-  analysis was opened with `subjects = []` or started from scratch, and there was no way to
-  add a participant without editing the TOML file. Double-click a cell to edit TLC, VC, RV,
-  FEV1, MVV, sex, age and height; "Add subject", "Add from recordings" (one row per group
-  the matched files fall into) and "Remove selected" manage the rows. A value that cannot
-  be used (not a number, a duplicate key, an unknown sex) is refused in place with a note.
-  Leave FEV1 empty to take it from the file's own FVC manoeuvre, as before.
+- Setup has a new "Subjects && lung volumes" card for the per-participant spirometry
+  (`[[input.subjects]]`) that the lung-volume calculations use. It is always shown, and a
+  participant can be added without editing the TOML file. Double-click a cell to edit TLC,
+  VC, RV, FEV1, MVV, sex, age and height; "Add subject", "Add from recordings" (one row per
+  group the matched files fall into) and "Remove selected" manage the rows. A value that
+  cannot be used (not a number, a duplicate key, an unknown sex) is refused in place with a
+  note. Leave FEV1 empty to take it from the file's own FVC manoeuvre.
 - The Provenance sheet and `run-report.txt` now record the Python, numpy, scipy, pandas
   and librosa versions next to the RespMech version, so a numerical difference against an
   older result can be checked against a library upgrade before it is treated as a
@@ -115,7 +112,7 @@ whole breath, inspiration and expiration (`sample_entropy_col_volume`,
 `sample_entropy_max`, `_min` or `_mean`.
 
 **Tidal EMG-only recordings without separators.** The third question in the EMG-only signal
-set, 'Tidal breathing — detect bursts automatically', now works: each file is cut at the
+set, 'Tidal breathing — detect bursts automatically', cuts each file at the
 onset of every burst of inspiratory EMG activity, found on the envelope of the
 ECG-removed signal (the raw signal when ECG removal is off; a threshold with hysteresis, a minimum duration for a burst and for a
 gap, after Hodges & Bui 1996). Every segment reports the neural timing of its own cycle
@@ -151,7 +148,7 @@ saying why; the Provenance sheet and the run report name the reference used, inc
 whether it was a sniff or a maximal inspiration, since those give different
 diaphragm pressures. Nothing else changes with it on or off. Independently of that setting, the Manoeuvres sheet of a
 `max_insp`/`sniff` breath gains each EMG channel's own peak (`rms_max_ref_col_<channel>`), a
-sniff's pressure swings are now taken over the whole typed breath, and the
+sniff's pressure swings are taken over the whole typed breath, and the
 shared EMG normalisation reference (`processing.emg.normalization_reference_file`, with
 `normalization = "per_file_max"`) is read at the file's typed `max_insp`/`sniff` breath when it has one (each channel against
 its own peak in that breath), which also lets a file containing nothing but the
@@ -190,7 +187,7 @@ values with caution until the thresholds are tuned.
 
 **FVC/FEV1/PEF from a typed forced-vital-capacity breath, and how well a tidal
 breath's own flow keeps up with it.** A `fvc`/`ic_fvc`-typed breath's Manoeuvres row
-now carries the numeric extraction the previous release deferred: FVC, FEV1 and its
+carries the numeric extraction: FVC, FEV1 and its
 %FVC, PEF, the back-extrapolated volume (flagged when it is unusually large), forced
 expiratory time and whether the manoeuvre reached a genuine end (ATS/ERS 2019), a peak
 inspiratory-flow reference from a near-maximal breath right after it (some protocols
@@ -210,7 +207,7 @@ loop, EELV and EILV marked), and for a Flow-only analysis the Preview panel show
 same picture whenever the previewed file has a breath typed as a forced vital
 capacity. The forced vital capacity manoeuvre is drawn as a whole loop: the inhalation
 to total lung capacity is shown beside the forced expiration, both in the figure and in
-the Preview panel. Mechanics ▸ Advanced… ▸ Lung volumes gained the curve source (largest
+the Preview panel. Mechanics ▸ Advanced… ▸ Lung volumes holds the curve source (largest
 attempt or envelope), the two flow-limitation tolerances and the FEV1-to-MVV
 multiplier; the figure can be switched off with `output.diagnostics.save_flow_volume`.
 
@@ -223,7 +220,7 @@ numbers a real run's output uses — and suggests which untyped breath looks lik
 forced vital capacity manoeuvre, with a ready-to-paste settings snippet for it.
 `respmech validate` now also reports any reference/subject link that will not resolve
 once the batch's real files are known (advisory, except a genuinely missing reference
-source when `require_references` is set, which now fails validation). `respmech run
+source when `require_references` is set, which fails validation). `respmech run
 --dry-run` prints each file's resolved inspiratory-capacity/forced-vital-capacity
 reference. `respmech migrate`'s report now has a "Defaulted" section (an absent
 Pgas/Pdi channel, or the derived signal set — a legacy file never named either).
@@ -251,13 +248,13 @@ signal set.** `respmech init new_settings.toml --signals flow,poes,emg [--folder
 --files MASK --fs 1000]` writes a commented starting TOML file with only the channel
 entries the chosen signal set needs. `respmech validate` prints a `Signals: ... ·
 Entropy: N columns · Analyses: ... · off: ...` summary line after "Settings valid",
-the same `Analyses:` line is now part of `respmech run --dry-run`'s output and the
+the same `Analyses:` line is part of `respmech run --dry-run`'s output and the
 Run screen's commitment sheet, and run-report.txt and each workbook's Provenance
 sheet both gain "Signals"/"Analyses" rows.
 
-**One IC file per participant can now reference all of that participant's other
-files.** A recording's inspiratory-capacity reference no longer has to be a breath
-in the SAME file — a dedicated IC recording (or a shared, per-participant default)
+**One IC file per participant can reference all of that participant's other
+files.** A recording's inspiratory-capacity reference does not have to be a breath
+in the same file: a dedicated IC recording (or a shared, per-participant default)
 can supply the value for every one of that participant's exercise files, and a file
 excluded from a single-file test run still resolves the same reference a full batch
 would. Reported as new `vol_ic_ref`/`ic_ref_n`/`ic_ref_source` columns, a
@@ -265,36 +262,35 @@ would. Reported as new `vol_ic_ref`/`ic_ref_n`/`ic_ref_source` columns, a
 in a resolved file's own Provenance sheet.
 
 **Choose which IC/FVC/baseline/maximal-effort manoeuvre a file references — in the
-same file or a different one.** The reference-picker menu entries mentioned above are
-live: right-click an already-typed IC manoeuvre in Preview & QC ▸ Mechanics for "Use
-as IC reference for ▸ this file / all files of its group / all files", or open
-"Reference manoeuvres…" (also on a file's row in the file rail) for the full picker
-across all four reference kinds and any file's typed breaths. A resolved IC reference
-now shows next to the analysis window; the Run screen's commitment sheet names how
-many files have one linked; and Setup gets a read-only "Subjects && lung volumes"
-card listing the per-participant spirometry (`[[input.subjects]]`) these calculations
-use.
+same file or a different one.** Right-click an already-typed IC manoeuvre in Preview &
+QC ▸ Mechanics for "Use as IC reference for ▸ this file / all files of its group / all
+files", or open "Reference manoeuvres…" (also on a file's row in the file rail) for the
+full picker across all four reference kinds and any file's typed breaths. A resolved IC
+reference shows next to the analysis window; the Run screen's commitment sheet names how
+many files have one linked; and Setup has a "Subjects && lung volumes" card for the
+per-participant spirometry (`[[input.subjects]]`) these calculations use (see the
+Setup card under "Smaller changes since 2.4.0").
 
 **Operating lung volumes derived from a resolved IC reference.** Once a file has a
 resolved inspiratory-capacity reference (see above), every tidal breath now also
 reports its operating IC, EELV, EILV and inspiratory reserve volume (IRV) — as a
-volume above residual volume (from a spirometry-derived vital capacity entered in
+volume above residual volume (from a spirometry-derived vital capacity entered on the Subjects card,
 `[[input.subjects]]`) and, alongside it whenever a total lung capacity is entered,
 the same set as an absolute value above RV. Per-file TLC/VC and the change in
 IC/EELV against a baseline recording are reported too. A new "LUNG VOLUMES" block in
 the run report and two new Provenance rows name the tracking mode and datum used.
-Settings-file only for now, same as the reference feature it builds on.
 
 **EMG-only analyses of maximal manoeuvres, with no flow channel at all.** Choosing
 'EMG only' in the signal-set picker (New analysis, or Setup ▸ Signals ▸ Change… on an
-existing analysis) now asks how each recording should be split into the segments
+existing analysis) asks how each recording should be split into the segments
 RMS/integral-EMG/sample-entropy are computed on — 'One maximal manoeuvre' treats the
 entire file as one segment, or 'Several efforts or breaths — I will place separators'
 lets you mark the boundaries yourself in Preview & QC's 'EMG – segments' tab (click to
 place, click near an existing one to remove; any exclusion or type on a segment follows
 it through a renumbering). 'Try it on sample data' opens a ready-made EMG-only demo,
 already split at its own natural breath boundaries. Tidal breathing, with nothing to
-place separators on, has its own door in the picker: see the next entry.
+place separators on, has its own door in the picker: see "Tidal EMG-only recordings
+without separators" above.
 <!-- changelog-skip 6f2151f developer project-memory files only (the three CLAUDE.md files);
      nothing in the app or its user documentation changes. -->
 <!-- changelog-skip f4e19c8 documentation-only decision record (docs/beslutninger.md); no
@@ -325,9 +321,8 @@ duration (the numeric extraction is described in the FVC/FEV1/PEF entry below); 
 reference value for the normalisation described below. A disabled "Suggested: FVC" hint
 points at the untyped breath with the longest expiration, the most plausible untyped
 candidate. A dedicated recording where every breath is typed (a separate IC or FVC
-file, say) used to fail the whole file with "no breaths detected"; it now runs and
-writes its own workbook (the Manoeuvres table stands in for the usual breath-by-breath
-data, with a note explaining why) instead. The reference-picker menu entries ("Use as IC
+file, say) runs and writes its own workbook; the Manoeuvres table stands in for the
+usual breath-by-breath data, with a note explaining why. The reference-picker menu entries ("Use as IC
 reference for…", "Reference manoeuvres…") are described above.
 <!-- changelog-skip f380c02 the right-click/Ctrl+left-click primitive itself landed in
      this commit (BreathSpansItem.typeRequested + a minimal Tidal/Excluded/Rest menu);
@@ -377,24 +372,22 @@ reference for…", "Reference manoeuvres…") are described above.
      pending calibration against that same real recording. -->
 
 **Explore with sample data follows the signal set.** The startup chooser's own
-'Explore with sample data' door still always opens the complete demo recording, but
-'File/Analysis > Explore with sample data' now opens a sample matching whichever
+'Explore with sample data' door always opens the complete demo recording, but
+'File/Analysis > Explore with sample data' opens a sample matching whichever
 signal set the current analysis declares: Flow only or Flow + Poes opens a matching
 reduced sample (no pressure/EMG channels it would not otherwise have), and every other
-signal set (including the full one) still opens the complete recording with ECG
+signal set (including the full one) opens the complete recording with ECG
 removal and noise reduction demonstrated. `examples/settings.toml`'s Poes/Pgas/Pdi
-channels are documented as optional now, matching what `Settings.validate()` has
-allowed since the signal-set model was introduced.
+channels are documented as optional, matching what `Settings.validate()` allows.
 
-**A new analysis now starts with a choice of signal set, and two reduced presets are
-usable end to end: Flow only, and Flow + Poes.** 'New analysis' (from the startup
+**A new analysis starts with a choice of signal set, with two reduced presets: Flow
+only, and Flow + Poes.** 'New analysis' (from the startup
 chooser, 'Get started…' and File/Analysis > New) opens a picker naming which signals
 the analysis will use before anything else is set up; 'New from last rig' carries its
-previous analysis's signal set forward automatically and skips the picker. Three
-presets are reachable now — Flow only, Flow + Poes, and the complete set (Flow + Poes
-+ Pgas + Pdi, still the default) — each with or without an 'Also EMG' toggle; 'EMG only'
-is described in its own entry below, and 'Custom…' is shown but stays disabled until a
-checkbox picker exists. Preview & QC follows the chosen set: with Poes absent, the
+previous analysis's signal set forward automatically and skips the picker. There
+are three presets — Flow only, Flow + Poes, and the complete set (Flow + Poes
++ Pgas + Pdi, the default) — each with or without an 'Also EMG' toggle; 'EMG only'
+is described in its own entries above, and 'Custom…' is shown but disabled. Preview & QC follows the chosen set: with Poes absent, the
 EMG sub-tabs still track EMG channels alone, the Mechanics channel stack draws only
 the present channels, the Campbell panel draws a flow-volume loop instead of a
 Campbell diagram (nothing to plot work of breathing against without Poes), and the
@@ -465,10 +458,10 @@ gaps between what the two run.**
   prints a `WARNING: N diagnostic figure(s) skipped …` line to stderr (and to the
   desktop app's Run log) as it happens, in addition to the existing `FIGURES SKIPPED`
   section of `run-report.txt`. The run still completes; this is a warning, never a
-  hard failure. Fixed a false positive from this same warning: figures drawn
-  in-process because the isolated subprocess was unavailable or disabled
-  (`RESPMECH_NO_FIGURE_SUBPROCESS=1`, or a packaged build) are not skipped — every
-  figure is still written — so that case no longer triggers the warning.
+  hard failure. A figure drawn
+  in-process because the isolated subprocess is unavailable or disabled
+  (`RESPMECH_NO_FIGURE_SUBPROCESS=1`, or a packaged build) is not skipped and does
+  not trigger the warning.
   <!-- site: 0 merged "Running without the `plots` extra" the page says it in the bullet about mistakes in a settings file -->
 - `respmech run`'s final line now reports the file count against the output folder
   itself (`Wrote N file(s) to <output.folder>`) rather than `<output.folder>/data`,
@@ -545,12 +538,11 @@ gaps between what the two run.**
   boundary breath only modestly shorter than usual is not flagged. The file still
   completes either way; nothing about the computed numbers changes.
 - The boundary-truncation notice's threshold (how much shorter than the file's own
-  typical breath counts as truncated) and minimum-comparison-breaths floor are now a
-  per-analysis setting (`processing.segmentation.boundary_notice_min_relative_duration`
-  / `boundary_notice_min_other_breaths` in `settings.toml`), defaulting to the same
-  0.8/3 as before. A study whose recordings have unusually high natural
-  breath-to-breath variability can raise the threshold itself instead of living with
-  more false notices; nothing changes for an analysis that does not set these fields.
+  typical breath counts as truncated) and minimum-comparison-breaths floor are
+  per-analysis settings (`processing.segmentation.boundary_notice_min_relative_duration`
+  / `boundary_notice_min_other_breaths` in `settings.toml`), defaulting to 0.8 and 3. A
+  study whose recordings have unusually high natural breath-to-breath variability can
+  change the threshold to avoid false notices.
   <!-- site: 0 merged "The boundary-truncation notice's threshold" the page says it in the bullet about recordings cut mid-breath -->
 
 **Sample entropy's default `Template length (m + 1)` has changed from 2 to 3.** The
@@ -647,19 +639,13 @@ QC strip) and by `respmech validate`, from the same shared logic:
   silently dropped. Previously, opening a `settings.toml` written by a newer RespMech
   and saving it again from this version quietly deleted every table it didn't
   understand — **an analysis carrying settings this version doesn't recognise must
-  not be saved by RespMech older than 2.5**, or that content is lost for good. Fixed
-  in the same pass: a settings field declared with Python's `X | None` union syntax
-  (rather than `typing.Optional[X]`) that points at another dataclass was built from
-  the raw dict instead of an `X` instance — not yet reachable from any existing
-  setting, but load-bearing groundwork for fields landing in upcoming releases.
+  not be saved by RespMech older than 2.5**, or that content is lost for good.
 - `core/quantities.py`'s unit lookup gained generic naming-convention rules — a
   result column named with a `_pct`/`_frac`/`_cv`/`_db` suffix or a `t_`/`peepi`/`tt_`
   prefix now resolves to the right unit (%, dimensionless, %, dB, s, cmH₂O)
-  automatically, instead of needing a column-by-column entry. Latent for now: no
-  column emitted by the pipeline today follows one of these conventions through the
-  Units sheet or the on-screen result table, so nothing currently visible changes —
-  this is groundwork for upcoming result columns that will.
-  <!-- site: 0 internal "`core/quantities.py`'s unit lookup" groundwork; nothing visible changes yet -->
+  automatically, instead of needing a column-by-column entry; the new PEEPi,
+  tension-time, percentage and variability columns use them.
+  <!-- site: 0 internal "`core/quantities.py`'s unit lookup" unit lookup for the new columns; no separate user-facing change -->
 - The ECG and EMG-normalisation references are now folder-tracked, like the noise
   reference: picking either against one recordings folder and later opening the
   analysis against a different one now shows the Setup Keep/Clear banner, instead of
