@@ -18,7 +18,8 @@ one-process gate had taken 65 min. Two decisions:
    of `publish-pypi.yml` from master with a `tag` input checks the tag out and runs the same
    gate, build, version check and upload as the tag push. It refuses outside master, for a
    non-semver or missing tag, and for a tag off master's history, and it shares the tag
-   push's concurrency group. A patch release (2.5.1) and re-pushing the tag were both
+   push's concurrency group. It uploads no PEP 740 attestation, because the run's own
+   commit (master's tip) would be named as the source instead of the tag's. A patch release (2.5.1) and re-pushing the tag were both
    rejected: the first costs a full release round for a version that differs only in
    packaging, the second breaks the rule that a tag is never moved or re-pushed.
 2. **The gate runs the unit suite file by file, like `ci.yml`'s macOS job**, with the

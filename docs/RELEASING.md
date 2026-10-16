@@ -219,7 +219,9 @@ workflow*, branch **master**, **tag** `vX.Y.Z`. The run refuses unless it runs f
 and the tag is plain semver, exists and lies on master's history. It then checks the tag
 out and runs the same test gate, changelog check, build and version-equals-tag check as the
 tag push, and publishes to PyPI in the `pypi` environment. It shares the tag push's
-concurrency group, so the two can never upload side by side.
+concurrency group, so the two can never upload side by side. One thing is left out on
+purpose: no PEP 740 attestation is uploaded, because a run on master would attest master's
+tip as the source commit, not the tag's. A tag push still uploads one.
 
 This is not a re-upload: a version PyPI already has is refused by PyPI, and the rule below
 stands. If the `pypi` environment has a deployment-branch rule that allows only tags, the

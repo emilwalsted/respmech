@@ -18,7 +18,10 @@ name: Publish to PyPI
 # test gate ran out of time on 16-10-2026, after the GitHub release and the installers were
 # already out), and a PyPI version cannot be re-pushed under the same tag. The run checks the
 # tag out, runs the same test gate and changelog check on it, builds it and refuses unless the
-# built version equals the tag, exactly as on a tag push. Nothing else differs.
+# built version equals the tag, exactly as on a tag push. Two things differ, both because the
+# run is on master: the deployment to the `pypi` environment carries refs/heads/master (the
+# environment must allow master; it has no restriction today), and no PEP 740 attestation is
+# uploaded, since it would name master's tip as the source commit instead of the tag's.
 #
 # ── One-time maintainer setup on PyPI (no secrets involved) ───────────────────────────
 #   PyPI ▸ your account ▸ Publishing ▸ "Add a pending publisher":
@@ -53,7 +56,9 @@ concurrency:
 jobs:
   # ── 0. What is being published ────────────────────────────────────────────────────────
   # Decides, once, which commit every later job checks out and whether this run publishes
-  # for real. A tag push publishes its own tag. A manual run publishes the tag it names, and
+  # for real. It hands on the commit SHA, never a ref name: a name is resolved again by each
+  # job's checkout, and on a busy branch the dry-run would then build a commit the gate never
+  # tested (before this job existed, both jobs checked out github.sha). A tag push publishes its own tag. A manual run publishes the tag it names, and
   # only from master and only for an existing plain-semver tag on master's history, so a
   # typo or a stray branch cannot reach real PyPI. The input reaches the shell only through
   # an environment variable, never interpolated into the script.
@@ -64,7 +69,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      ref: ${{ steps.resolve.outputs.ref }}
+      sha: ${{ steps.resolve.outputs.sha }}
       tag: ${{ steps.resolve.outputs.tag }}
       real: ${{ steps.resolve.outputs.real }}
     steps:
@@ -77,6 +82,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
           REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
           INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
@@ -85,9 +91,9 @@ jobs:
               refs/tags/v*) ;;
               *) echo "::error::a push run must be a v* tag, got $REF"; exit 1 ;;
             esac
-            tag="$REF_NAME"; ref="$REF"; real=true
+            tag="$REF_NAME"; sha="$SHA"; real=true
           elif [ -z "$INPUT_TAG" ]; then
-            tag=""; ref="$REF"; real=false
+            tag=""; sha="$SHA"; real=false
             echo "Manual run without a tag: TestPyPI dry-run of $REF."
           else
             if [ "$REF" != "refs/heads/master" ]; then
@@ -103,11 +109,11 @@ jobs:
             if ! git merge-base --is-ancestor "refs/tags/$INPUT_TAG^{commit}" origin/master; then
               echo "::error::tag $INPUT_TAG does not point at master's history"; exit 1
             fi
-            tag="$INPUT_TAG"; ref="refs/tags/$INPUT_TAG"; real=true
-            echo "Manual publish of $tag ($(git rev-parse --short "refs/tags/$tag^{commit}")) to PyPI."
+            tag="$INPUT_TAG"; sha=$(git rev-parse "refs/tags/$INPUT_TAG^{commit}"); real=true
+            echo "Manual publish of $tag (${sha:0:7}) to PyPI."
           fi
           {
-            echo "ref=$ref"
+            echo "sha=$sha"
             echo "tag=$tag"
             echo "real=$real"
           } >> "$GITHUB_OUTPUT"
@@ -138,7 +144,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.target.outputs.ref }}
+          ref: ${{ needs.target.outputs.sha }}
           # Full history AND tags: tools/check_changelog.py measures a
           # commit interval between two tags, and the default depth (1) gives
           # neither tags nor history. Measured: without this, the check
@@ -209,16 +215,14 @@ jobs:
     name: Build sdist + wheel
     needs: [target, test]
     runs-on: ubuntu-latest
-    # Same rationale as the test job's timeout: no reliable measured runtime available
-    # (Actions history unreadable, 403), so 60 min is a 2x-margin guess pending Emil
-    # tightening it after a real release.
+    # A pure hang guard: for 2.4.0 this job took 14 s and the publish job 18 s.
     timeout-minutes: 60
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.target.outputs.ref }}
+          ref: ${{ needs.target.outputs.sha }}
           # Full history AND tags: tools/check_changelog.py measures a
           # commit interval between two tags, and the default depth (1) gives
           # neither tags nor history. Measured: without this, the check
@@ -260,7 +264,7 @@ jobs:
     needs: [target, build]
     if: needs.target.outputs.real == 'true'
     runs-on: ubuntu-latest
-    # See build job's comment: no measured runtime available, 2x-margin guess.
+    # A pure hang guard (see the build job's comment).
     timeout-minutes: 60
     environment: pypi
     permissions:
@@ -285,6 +289,11 @@ jobs:
         # twine==7.0.0 / packaging==26.2, verified against this project's own 2.4.0 wheel and
         # sdist in a venv built to those exact versions — both PASSED.
         uses: pypa/gh-action-pypi-publish@v1.14.2
+        with:
+          # PEP 740 attestations (the action's default) name the run's own commit as the
+          # source. On a tag push that is the tag's commit; on a manual publish of a tag it is
+          # master's tip, which is not the code that was built, so none is uploaded then.
+          attestations: ${{ github.event_name == 'push' }}
 
   # ── 3b. Publish to TestPyPI (manual dry-run: workflow_dispatch without a tag) ─────────
   publish-testpypi:
@@ -292,7 +301,7 @@ jobs:
     needs: [target, build]
     if: github.event_name == 'workflow_dispatch' && needs.target.outputs.real == 'false'
     runs-on: ubuntu-latest
-    # See build job's comment: no measured runtime available, 2x-margin guess.
+    # A pure hang guard (see the build job's comment).
     timeout-minutes: 60
     environment: testpypi
     permissions:
