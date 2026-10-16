@@ -302,7 +302,7 @@ added to an already-carried entry still reads as carried until the whole entry i
 Any FUTURE state this pattern is extended to needs the same treatment: know every path that can create OR resolve it, not
 just the one this ticket happened to add a banner for.
 
-**Generalized into one table, `core/settings._CARRIED_KINDS` (ticket M-07, part of the
+**Generalized into one table, `core/settings._CARRIED_KINDS` (part of the
 modular-analysis program).** The six hand-spread call sites the paragraphs above describe
 (`CarriedOverState`, `carried_over_state`, `clear_carried_over`, `toml_io._rebase_folders`,
 `toml_io.save_toml`, and the Setup banner's wording) now all iterate ONE table instead of
@@ -311,7 +311,7 @@ list, forgotten in one place, reintroduces the B06 bug"). A row is `(path, kind,
 clear_fn)`: `path` is a dotted attribute path (see `core.settings._walk`) resolving to
 EITHER a list of entries each carrying their own `.folder` (`ExcludeEntry`,
 `BreathCountEntry`) OR directly to a scalar `*_folder` field
-(`NoiseSettings.reference_folder`, and — retrofitted by M-07 — `EmgSettings.
+(`NoiseSettings.reference_folder`, and — retrofitted by the carried-over table — `EmgSettings.
 ecg_reference_folder`/`normalization_reference_folder`); which mode applies is decided by
 the resolved value's *type* at runtime, never declared twice. `settingsio/toml_io.py`
 imports the table under the name `_FOLDER_TAG_PATHS` (`from core.settings import
@@ -321,13 +321,13 @@ not a mirrored second table. `CarriedOverState` is now dict-backed
 `noise_reference` kept as properties so every pre-existing caller is unaffected; the two
 new kinds (`ecg_reference`, `normalization_reference`) follow `noise_reference`'s bool
 shape, since like it they name a single batch-wide reference, not a per-file list. **A
-future tagged kind (M-19 `breath_types`, M-21 `separators`, M-34
+future tagged kind (typed breaths `breath_types`, manual separators `separators`, reference resolution
 `references`/`reference_defaults`/`subjects`) adds ONE row here** (plus, if it needs
 special banner wording, one entry in `ui/screens/settings_screen.py`'s `_CARRIED_PHRASES`)
 — never touch the six call sites individually again. Note the retrofitted
 `ecg_reference_folder`/`normalization_reference_folder` currently have NO live UI/CLI
 write site that sets `ecg_reference_file`/`normalization_reference_file` in the first
-place (both are TOML/CLI-only fields today, confirmed by grep before M-07 shipped) — a
+place (both are TOML/CLI-only fields today, confirmed by grep before the carried-over table shipped) — a
 future ticket that adds one must stamp the folder tag at that write site, mirroring
 `preview/_emg_noise.py`'s `_apply_noise_reference`/`_apply_noise_expiration` (lines
 ~854/879), which is the one thing this ticket could not do for lack of a call site to

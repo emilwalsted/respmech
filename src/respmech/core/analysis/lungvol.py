@@ -1,5 +1,5 @@
-"""Operating lung volumes (M-36): per-tidal-breath EELV/EILV/IRV, derived from a
-file's already-resolved IC reference (``core.analysis.references.attach``, M-35), and
+"""Operating lung volumes: per-tidal-breath EELV/EILV/IRV, derived from a
+file's already-resolved IC reference (``core.analysis.references.attach``), and
 per-file summary volumes (TLC, VC, the change in IC/EELV against a baseline file).
 
 Qt-free, numpy/pandas only. Sign convention throughout: a RISE in end-expiratory lung
@@ -16,9 +16,9 @@ Two EELV DATA are reported side by side, never merged into one column family
   volume at end-expiration, i.e. ERV by definition (there is no separate ``vol_erv``
   column). ``vc_src`` is ``input.subjects``' own ``vc_l`` for this file's group, else
   the linked FVC reference's own ``fvc`` value (not yet ever populated --
-  ``core.analysis.manoeuvres.extract`` computes no numeric FVC value until M-42's
-  ``mfvl.py`` lands; this module already reads whichever key is there, so the moment
-  M-42 adds it, the fallback starts working with no change here). This is the primary
+  ``core.analysis.manoeuvres.extract`` computes no numeric FVC value until the FVC/MFVL analysis
+  (``mfvl.py``) lands; this module already reads whichever key is there, so the moment
+  the FVC/MFVL analysis adds it, the fallback starts working with no change here). This is the primary
   family because it needs no plethysmography (a spirometry-derived VC is far more often
   available than a measured TLC) -- a deliberate, PRACTICAL reason, not merely
   Emil's preference.
@@ -30,7 +30,7 @@ Two EELV DATA are reported side by side, never merged into one column family
   request that could not actually track (see ``attach``'s own docstring).
 
 ``eelv_tracking`` (``processing.lung_volume.ic.eelv_tracking``, already declared and
-validated by M-29's ``IcSettings``) decides whether ``ic_op`` is simply the file's
+validated by the ``IcSettings``) decides whether ``ic_op`` is simply the file's
 resolved reference IC unchanged across the whole file (``"none"``, the default -- the
 ordinary "IC measured once, assumed constant" convention) or tracks each tidal
 breath's own end-expiratory drift AWAY from the reference IC's own end-expiratory
@@ -59,10 +59,10 @@ def _aggregate_field(result, ref, ic_cfg, field: str) -> tuple[float | None, int
     ``references.lookup_manoeuvre``) and are not flagged with one of ``ic_cfg.reject_flags``
     -- the SAME two-part filter ``references._aggregate_ic`` applies to ``vol_ic``,
     generalised to any manoeuvre field (``ic_eelv_pre`` for within-file tracking,
-    ``vol_ic`` for a ``baseline_ic`` link, ``fvc`` once M-42 populates it). A breath
+    ``vol_ic`` for a ``baseline_ic`` link, ``fvc`` once the FVC/MFVL analysis populates it). A breath
     that resolves but simply has no value for ``field`` yet (``fvc`` today) is skipped
     like a missing one -- this is what lets the VC fallback below silently do nothing
-    until M-42 exists, rather than raising or NaNing the whole file over it.
+    until the FVC/MFVL analysis exists, rather than raising or NaNing the whole file over it.
 
     Returns ``(None, 0)`` when nothing usable resolved -- the caller treats that
     exactly like an unresolved reference (NaN, and a notice only when the link was
@@ -103,7 +103,7 @@ def _resolve_vc(result, settings, filename: str, subject, ic_cfg) -> float | Non
     """``subjects.vc_l`` first (a formal spirometry value); else the linked ``fvc``
     reference's own ``fvc`` field, aggregated the same way an IC reference is (mean/
     median over accepted breaths) -- ``None`` for both today whenever no subject VC is
-    entered, since ``manoeuvres.extract`` does not populate ``fvc`` until M-42."""
+    entered, since ``manoeuvres.extract`` does not populate ``fvc`` until the FVC/MFVL analysis."""
     if subject is not None and subject.vc_l is not None:
         return float(subject.vc_l)
     ref = referenceslib.resolve_reference(filename, "fvc", settings)
@@ -134,7 +134,7 @@ def _resolve_baseline_ic_ref(
     file's `vol_ic_ref` is actually AVAILABLE (i.e. whether it was itself processed
     in THIS run) can differ, which is an honest "not resolved in this run" NaN, not a
     different decision about WHICH file is the baseline. The alphabetically first
-    match's ALREADY-RESOLVED ``vol_ic_ref`` (M-35's own per-file scalar) is used
+    match's ALREADY-RESOLVED ``vol_ic_ref`` (the per-file scalar) is used
     directly, rather than re-aggregating specific breaths -- deliberately simpler
     than the explicit-link path, since a whole file matched by name is naturally
     "this file's own IC reference is the baseline", not a hand-picked breath subset.

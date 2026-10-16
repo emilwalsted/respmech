@@ -3,7 +3,7 @@
 core, and categorise every changed column so we can prove that only EMG (this
 milestone) and PTP (the earlier approved window-baseline, Commit B) changed —
 timing / WOB / pressures / entropy stay intact. Also runs the v2-only production
-scenarios (TYPED_IC_SCENARIOS, M-41) that have no legacy-dict shape at all — see
+scenarios (TYPED_IC_SCENARIOS) that have no legacy-dict shape at all — see
 ``_run_typed_ic_scenario``'s own docstring.
 
     python regen_production_emg_golden.py            # compare + report only
@@ -44,7 +44,7 @@ SCENARIO_CFG = {
     "emg_h6_ecg_noise_outlier": {"files": "RIU_H6_*.txt", "noise_ref": "RIU_H6_Baseline.txt"},
 }
 
-# v2-only production scenarios (typed IC + cross-file references, M-41): unlike every
+# v2-only production scenarios (typed IC + cross-file references): unlike every
 # entry in SCENARIO_CFG above, these have no legacy-dict shape at all (breath typing
 # and processing.references do not exist in the frozen v1 oracle -- exactly the reason
 # tests/golden/scenarios/typed_ic_crossfile.toml is a committed v2-native TOML rather
@@ -53,7 +53,7 @@ SCENARIO_CFG = {
 # breath numbers for a real recording -- gitignored, never committed, same as every
 # other settings_py/expected/ file already under that tree) -- see
 # tests/golden/README.md's production-scenario table for what Emil authors there and
-# how (respmech migrate + respmech breaths, M-39's own CLI).
+# how (respmech migrate + respmech breaths, the CLI).
 TYPED_IC_TOML = {
     "typed_ic_h5": os.path.join(bpg.PROD, "EMG processing fix test", "RIU_H5_typed_ic.toml"),
 }

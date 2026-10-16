@@ -27,7 +27,7 @@ def test_defaults_and_parse():
 
 
 def test_ic_settings_from_dict_round_trip():
-    """M-29: IcSettings is a nested dataclass field (processing.lung_volume.ic), built
+    """ IcSettings is a nested dataclass field (processing.lung_volume.ic), built
     by the same generic `_build`/`_coerce` mechanism as every other nested settings
     block -- a hand-edited TOML table overrides its defaults, and `reject_flags` (a
     plain `list[str]`, not a list of entry-dataclasses like `exclude_breaths`) survives
@@ -872,7 +872,7 @@ def test_clear_carried_over_is_a_no_op_when_nothing_is_carried():
 
 
 def test_carried_over_state_default_constructor_has_no_kind():
-    """The dict-backed CarriedOverState (M-07) must construct with no args, same as
+    """The dict-backed CarriedOverState must construct with no args, same as
     before it was generalized — every caller (including this test file's own
     ``CarriedOverState()`` comparisons above) relies on that."""
     assert CarriedOverState() == CarriedOverState()
@@ -881,7 +881,7 @@ def test_carried_over_state_default_constructor_has_no_kind():
 
 
 def test_carried_over_state_ecg_and_normalization_references_follow_the_noise_pattern():
-    """The two references retrofitted by M-07 behave exactly like the existing noise
+    """The two references retrofitted by the carried-over table behave exactly like the existing noise
     reference: a bool property, named in `kinds_present()`, and independent of one
     another and of the noise reference."""
     s = Settings()
@@ -912,7 +912,7 @@ def test_clear_carried_over_resets_ecg_and_normalization_references_independentl
     assert s.processing.emg.normalization_reference_folder == "/data/S02"
 
 
-# -- ticket M-07: _CARRIED_KINDS/_FOLDER_TAG_PATHS is ONE generalized table --------------
+# -- the carried-over table: _CARRIED_KINDS/_FOLDER_TAG_PATHS is ONE generalized table --------------
 # Every row gets the identical treatment (rebase at load, relativize at save, carried/
 # clear against the live input folder) — this proves the table-driven machinery itself
 # generalizes, not just the two kinds (exclude_breaths, noise) it originally shipped with.

@@ -283,7 +283,7 @@ def ignorebreaths(curfile, settings):
 
 def breathkinds(curfile, settings):
     """Mirrors :func:`ignorebreaths`' file-keyed lookup, for the kind (not just the
-    exclusion) a typed breath carries (M-19). Returns ``{breath_no: kind}`` for
+    exclusion) a typed breath carries. Returns ``{breath_no: kind}`` for
     ``curfile`` -- read alongside ``ignorebreaths``' result in both segmenterers so a
     typed breath's dict also gets ``kind`` set, not just ``ignored=True``."""
     d = dict(getattr(settings.processing.mechanics, "breathtypes", []))

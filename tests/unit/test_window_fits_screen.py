@@ -130,9 +130,9 @@ def test_the_run_action_bar_wraps_rather_than_summing_its_buttons(qapp, tmp_path
 
 
 def test_the_segments_action_band_fits_on_windows_metrics(qapp, tmp_path, windows_metrics):
-    """M-26's own new action band (the segments tab's twin of the Mechanics one) must not
+    """the new action band (the segments tab's twin of the Mechanics one) must not
     demand the sum of its chips on the widest metrics we ship to — same ratio guard as
-    the Run action bar above, at the metrics that actually break these. M-27 added a
+    the Run action bar above, at the metrics that actually break these. manual separators added a
     THIRD element ('Place separators', between the QC chip and the process button) —
     this same test now covers all three, unchanged in shape (the ratio guard does not
     care how many widgets sum to the row's natural width, only that the row can still
@@ -171,7 +171,7 @@ def test_the_segments_action_band_fits_on_windows_metrics(qapp, tmp_path, window
         qapp.processEvents()
 
     band = pv._segments_action_band
-    # M-27: confirm the row really does carry all its elements before measuring it —
+    # confirm the row really does carry all its elements before measuring it —
     # a widget silently dropped from the layout would still pass the ratio check below
     # (a smaller row squeezes just as easily), so the count is asserted explicitly. The
     # fourth is 'Advanced…' (the automatic segmentations' parameters), added with them.

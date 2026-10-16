@@ -504,7 +504,7 @@ def test_dumps_toml_never_crashes_on_a_malformed_signals_value():
 
 
 # ---------------------------------------------------------------------------------- #
-# M-13: signals_text/off_signals_text -- the shared formatting `respmech validate`,
+# signals_text/off_signals_text -- the shared formatting `respmech validate`,
 # run-report.txt, the Provenance sheet, the GUI commitment sheet and `respmech run
 # --dry-run` all reuse, tested here directly and in isolation (not only indirectly
 # through those five call sites' own tests).
@@ -518,7 +518,7 @@ def test_signals_text_says_derived_when_analysis_signals_is_unset():
 
 
 def test_signals_text_says_declared_for_an_explicit_analysis_signals_list():
-    """The ONE case none of M-13's other (CLI/report/GUI) tests exercise: every one of
+    """The ONE case none of the other (CLI/report/GUI) tests exercise: every one of
     them builds settings via synth_settings/examples/settings.toml, which both leave
     analysis.signals empty (derived)."""
     s = _settings(_ch(flow=5, poes=7), analysis_signals=["flow", "poes"])

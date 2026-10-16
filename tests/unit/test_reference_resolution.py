@@ -1,4 +1,4 @@
-"""``core.analysis.references``: resolution order, ``check_links`` cautions, and (M-35)
+"""``core.analysis.references``: resolution order, ``check_links`` cautions, and
 the forepass/afterpass that wires cross-file references into ``core.pipeline.run_batch``.
 
 ``resolve_reference``/``check_links``/``external_reference_sources`` and the ``attach()``
@@ -246,7 +246,7 @@ def test_check_links_full_path_filenames_resolve_group_keys_correctly():
 
 
 def test_check_links_flags_an_outlier_reference_source_when_given_the_name():
-    """M-38: an informational caution, distinct from every other check_links kind --
+    """An informational caution, distinct from every other check_links kind --
     it never depends on resolve_reference/breath typing at all, just the (caller-
     supplied) set of names that are both a column-count outlier and a named source."""
     s = _settings()
@@ -292,7 +292,7 @@ def test_check_links_can_report_both_a_missing_source_and_an_outlier_caution_for
 
 
 # --------------------------------------------------------------------------- #
-# reference_source_names / predicted_reference_only (M-38)
+# reference_source_names / predicted_reference_only
 # --------------------------------------------------------------------------- #
 
 def test_reference_source_names_collects_every_slot_from_both_entry_kinds():
@@ -311,7 +311,7 @@ def test_reference_source_names_is_empty_for_a_settings_with_no_references():
 
 def test_predicted_reference_only_requires_both_typed_and_a_named_source():
     """Neither condition alone is enough: a typed-but-unreferenced file is an ordinary
-    tidal file with an embedded manoeuvre (M-29/M-30's own scenario), and a named
+    tidal file with an embedded manoeuvre (manoeuvre extraction/the scenario), and a named
     source with no typed breaths yet is simply not typed yet."""
     s = _settings()
     s.processing.references.append(ReferenceEntry(
@@ -349,7 +349,7 @@ def test_predicted_reference_only_is_empty_when_nothing_is_typed_at_all():
 
 
 def test_predicted_reference_only_ignores_a_rest_typed_breath_like_has_typed_does():
-    """Self-review finding: core.pipeline.run_batch's own ``has_typed`` (the real M-30
+    """Self-review finding: core.pipeline.run_batch's own ``has_typed`` (the real reference-only files
     reference-only test) explicitly excludes 'rest' -- a rest-typed breath marks an EMG
     noise-reference segment, never a manoeuvre, and never by itself makes a file
     reference-only. A file typed ONLY 'rest' but named as a baseline_ic source (which
@@ -478,7 +478,7 @@ def test_references_and_subjects_never_reach_to_legacy_ns():
 
 
 # --------------------------------------------------------------------------- #
-# M-35: external_reference_sources (pure, no file I/O)
+# external_reference_sources (pure, no file I/O)
 # --------------------------------------------------------------------------- #
 
 def test_external_reference_sources_excludes_files_already_in_the_batch():
@@ -504,7 +504,7 @@ def test_external_reference_sources_empty_when_nothing_configured():
 
 
 # --------------------------------------------------------------------------- #
-# M-35: attach() -- pure, hand-built FileResult/BatchResult, no file I/O
+# attach() -- pure, hand-built FileResult/BatchResult, no file I/O
 # --------------------------------------------------------------------------- #
 
 def _manoeuvre_row(vol_ic, quality=None):
@@ -687,7 +687,7 @@ def test_reference_link_error_is_importable_and_a_value_error():
 
 
 # --------------------------------------------------------------------------- #
-# M-35: forepass + subset/full-run equivalence -- real pipeline over the
+# forepass + subset/full-run equivalence -- real pipeline over the
 # committed synthetic recordings (requires_synth(), same convention as
 # test_core_outputs.py). Individually @requires_synth()-decorated rather than a
 # file-wide pytestmark, since every test above this section needs no synthetic

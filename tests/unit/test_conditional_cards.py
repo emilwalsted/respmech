@@ -99,7 +99,7 @@ def test_a_card_holding_the_focused_widget_is_not_yanked_away(qapp, tmp_path):
 
 def test_the_declared_signal_set_never_hides_the_entropy_card(qapp, tmp_path):
     """R8, restated as a regression: entropy is bool(ch.entropy) alone, never a function of
-    ``analysis.signals`` — unlike the Work-of-breathing/PTP cards M-17 makes conditional on
+    ``analysis.signals`` — unlike the Work-of-breathing/PTP cards the Poes-less Campbell panel makes conditional on
     Poes, the entropy card's predicate is untouched by that ticket and must stay that way.
     A Flow-only (no Poes/Pgas/Pdi/EMG) and an EMG-only-SHAPED (no flow at all) declared set
     both still show it, as long as a column is assigned to entropy."""
@@ -139,7 +139,7 @@ def test_editing_them_still_marks_the_analysis_modified(qapp, tmp_path):
         assert sc.is_dirty(), f"{name} no longer marks the analysis modified"
 
 
-# -- Subjects && lung volumes (M-37) ------------------------------------------
+# -- Subjects && lung volumes ------------------------------------------
 def _subjects_card(sc):
     # not in sc._cond_cards any more (it is always shown), so not found via _card()
     return sc._card_subjects

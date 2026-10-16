@@ -456,7 +456,7 @@ class RunScreen(QWidget):
         second hand-rolled count; then every current blocker as a full sentence, or a
         plain statement that the run can start.
 
-        M-13: a second line, 'Analyses: ...', is inserted right after the head — what
+        a second line, 'Analyses: ...', is inserted right after the head — what
         this signal set actually computes, the same line `respmech run --dry-run`
         prints for the identical settings (``cli.__main__.cmd_run``), so the two never
         describe an analysis differently. Unlike the References line below, it does not
@@ -467,7 +467,7 @@ class RunScreen(QWidget):
         crash it — the line is simply omitted for that one tick, same degrade-quietly
         contract every other frequent-tick caller in this codebase already follows.
 
-        M-37: a THIRD line, 'References: N/M linked', is inserted BETWEEN the (now two)
+        a THIRD line, 'References: N/M linked', is inserted BETWEEN the (now two)
         head lines and the blocker/ready line — never appended after it — so existing
         callers reading ``.text().split("\\n")[-1]`` for the blocker/ready line are
         unaffected regardless of whether this line is present. Shown only when this
@@ -494,7 +494,7 @@ class RunScreen(QWidget):
         else:
             head += f" — into {out or '(output not set)'}"
         proc = s.processing
-        # M-13: `from_settings_or_none`, NOT `from_settings` -- this method runs on every
+        # `from_settings_or_none`, NOT `from_settings` -- this method runs on every
         # settings-changed tick, unconditionally (that is the point of an
         # always-visible commitment sheet), with no surrounding try/except, so a
         # hand-edited `analysis.signals = "flow"` (a bare string instead of a list --
@@ -1695,7 +1695,7 @@ class RunScreen(QWidget):
         for fname, fr in files.items():
             err = getattr(fr, "error", None)
             bt = getattr(fr, "breaths_table", None)
-            # M-32: role rides along with the same result breaths/verdict already come
+            # role rides along with the same result breaths/verdict already come
             # from — see FileRailEntry.role's own docstring.
             self.file_rail.mark_result(fname, ok=err is None,
                                        breaths=None if err else (len(bt) if bt is not None else 0),

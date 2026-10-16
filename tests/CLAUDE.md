@@ -192,7 +192,7 @@ in `test_column_stack.py`/`test_channel_summary.py`/`test_channel_setup.py`/
 
 ### A test-built `QMenu`/popup whose action closure captures the widget under test needs `shiboken6.delete()`, not just `close()`
 
-M-32's own context-menu test (`test_file_rail.py`) built a `QMenu` via a factory method
+the context-menu test (`test_file_rail.py`) built a `QMenu` via a factory method
 whose action connects a `lambda: self.referencesRequested.emit(name)` — `self` there is the
 `FileRail` widget under test, captured by the closure. `menu.close()` +
 `Qt.WA_DeleteOnClose` is the established pattern for a transient popup menu (see

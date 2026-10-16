@@ -65,13 +65,13 @@ class FileResult:
     breaths: object = None             # raw computed breaths (for plotting)
     ecg: object = None                 # ECG-removal diagnostics (n_peaks, suppression)
     signals: object = None             # diagnostic signal arrays for the plotting/audio consumer
-    # M-29: {breath_no: core.analysis.manoeuvres.extract(...) result} for every TYPED
+    # {breath_no: core.analysis.manoeuvres.extract(...) result} for every TYPED
     # breath in this file (rest excluded -- see run_batch), and its Manoeuvres-sheet
     # DataFrame (None when manoeuvres is empty -- "the sheet exists only when a typed
     # breath is present", the ticket's own acceptance criterion).
     manoeuvres: dict = field(default_factory=dict)
     manoeuvres_table: object = None
-    # M-30: 'tidal' (the ordinary shape -- a breaths_table/average_row from tidal
+    # 'tidal' (the ordinary shape -- a breaths_table/average_row from tidal
     # breathing) or 'reference' (every breath in this file is typed, none tidal --
     # a dedicated IC/FVC recording, say). breaths_table/average_row are both None
     # for a 'reference' file; manoeuvres/manoeuvres_table carry its actual content.
@@ -173,7 +173,7 @@ def _first_present_length(*arrays) -> int:
     raw time axis without assuming any one particular channel (conventionally flow) is
     present. Every channel in a valid recording shares one sample count, so whichever
     non-empty one is checked first gives the same answer; the generality exists for the
-    day flow itself can be absent (M-21's EMG-only segmentation, which needs a raw time
+    day flow itself can be absent (the EMG-only segmentation, which needs a raw time
     axis before any flow-based trim/segment step runs), not because it changes anything
     for today's E2 scope: flow is always present there, so it is always the first
     non-empty argument, and this always resolves to the same answer as before."""
@@ -587,17 +587,17 @@ def segment_file(settings: Settings, s, path, *, cache=None, cancel_check=None,
 
 
 def _emg_segmented(settings, s, path, cache=None, cancel_check=None, *, exclude_typed_from_expiration=False):
-    """Segment a file through ``segment_file`` (M-23) and return (emg, insp_mask,
+    """Segment a file through ``segment_file`` and return (emg, insp_mask,
     exp_mask) over that segmentation's own EMG -- ECG-removed but never noise-reduced
     (``segment_file``'s ``noise_set=None`` default), exactly as before. Used to build
     the noise reference (expiration) and to gather active/quiet EMG for prop selection.
 
-    Before M-23 this hardcoded flow-method segmentation and never trend-corrected the
+    Before the configurable segmentation this hardcoded flow-method segmentation and never trend-corrected the
     volume (``separateintobreaths('flow', ...)``, ``compute.zero(vT)`` with no
     ``correcttrend``, regardless of ``processing.mechanics.separateby``/
     ``processing.volume.correct_trend``), so a volume-segmented or trend-corrected
     analysis built its noise masks from breaths it never actually used for the
-    analysis itself. Routing through ``segment_file`` (M-06) makes the
+    analysis itself. Routing through ``segment_file`` makes the
     mask follow the SAME configured method/trend every other consumer of that
     trim/zero/drift/trend/segment sequence already uses -- a deliberate, documented
     numerical change for exactly those settings combinations (this ticket); every
@@ -617,7 +617,7 @@ def _emg_segmented(settings, s, path, cache=None, cancel_check=None, *, exclude_
     guaranteed hit, the real ``cache`` is never touched by the pop, and the main loop
     finds the entry still there later.
 
-    ``exclude_typed_from_expiration`` (M-22, decision 11): when true, a breath typed
+    ``exclude_typed_from_expiration`` (decision 11): when true, a breath typed
     via ``processing.breath_types`` (any kind -- an IC/FVC/sniff/max_insp/other
     manoeuvre, never tidal breathing) contributes NOTHING to the returned expiration
     mask, because a manoeuvre's expiration is not diaphragm-quiet the way an ordinary
@@ -662,8 +662,7 @@ def _emg_segmented(settings, s, path, cache=None, cancel_check=None, *, exclude_
 
 def _rest_segments_clip(settings, s, path, *, cache=None, cancel_check=None):
     """The EMG-only counterpart of the 'expiration' branch below: concatenate the
-    reference file's own segments typed ``'rest'`` (M-22). Reuses ``segment_file``
-    (M-06/M-21) so the clip is built from the SAME whole_file/separators segmentation
+    reference file's own segments typed ``'rest'``. Reuses ``segment_file`` so the clip is built from the SAME whole_file/separators segmentation
     -- and the same kind lookup -- the analysis itself will use; boundaries never
     drift between what a preview shows and what the reference clip is actually built
     from. ``noise_set=None`` (segment_file's default): there is no profile to apply
@@ -697,7 +696,7 @@ def _reference_noise_clip(settings, s, cache=None, cancel_check=None):
     ``FileNotFoundError`` specifically, and a bare ``ValueError`` here would silently
     fall through both (self-review finding, 10-08-2026).
 
-    M-22: which of the four buildable sources (``resolve_noise_reference_mode``'s
+    which of the four buildable sources (``resolve_noise_reference_mode``'s
     ``'expiration'``/``'intervals'``/``'rest_segments'``/``'interburst'`` -- ``'unresolved'``
     never reaches here, rejected by ``Settings.validate()`` first) is now decided by that ONE resolver, not by
     re-deriving the same predicate here. For a flow-bearing analysis this reproduces
@@ -770,7 +769,7 @@ def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=
     if cfg.auto_prop:
         # Gather active/quiet EMG across the test (capped) to choose prop ONCE. Built on
         # inspiration/expiration PHASES (_emg_segmented, now via segment_file -- follows
-        # the configured separateby/trend since M-23, no longer hardcoded to flow). An
+        # the configured separateby/trend since the configurable segmentation, no longer hardcoded to flow). An
         # EMG-only signal set has no phases; for one segmented on its bursts
         # (``emg_burst``) _emg_segmented returns the burst / between-burst masks instead,
         # so "active" and "quiet" below are bursts and the periods between them, and
@@ -890,8 +889,7 @@ def _load_external_references(settings: Settings, s, files: list, *, cache: dict
 
     Reuses exactly the same primitives the main loop's own manoeuvre extraction does
     (``segment_file``, ``manoeuvres.extract``, ``manoeuvres.apply_repeatability``) so a
-    source loaded here and one loaded as an ordinary in-batch reference-only file
-    (M-30) produce byte-identical results for the same breath. A source is dropped
+    source loaded here and one loaded as an ordinary in-batch reference-only file produce byte-identical results for the same breath. A source is dropped
     from consideration ENTIRELY if it cannot be loaded/segmented at all (its whole-file
     failure is recorded, never raised -- the batch keeps going); one breath's own
     extraction failing does not drop the rest of that same source's typed breaths.
@@ -929,7 +927,7 @@ def _load_external_references(settings: Settings, s, files: list, *, cache: dict
             try:
                 rows[breathno] = manoeuvreslib.extract(
                     breath, kind, tidal_breaths, s.capabilities, s)
-                # M-42: fvc_metrics is deliberately NOT part of manoeuvres.extract
+                # fvc_metrics is deliberately NOT part of manoeuvres.extract
                 # itself (that module's own docstring keeps it out of scope) --
                 # merged in here, and identically in the main loop below, so an
                 # external reference source's own FVC row matches an in-batch one.
@@ -1032,7 +1030,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
     # reference rows a full run would (this ticket's own acceptance test). A source
     # already in `files` needs no separate load here: the main loop extracts its
     # manoeuvres itself, in `result.files[...].manoeuvres`, exactly like an in-batch
-    # reference-only file (M-30) already does.
+    # reference-only file already does.
     result.references, result.reference_errors = _load_external_references(
         settings, s, files, cache=load_cache, cancel_check=cancel_check, progress=progress)
     # The forepass's own loop only BREAKS on a cancellation flagged mid-load (never
@@ -1116,7 +1114,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
             # have) apply to a signal set with no flow channel at all.
             emg_only = getattr(s, "capabilities", Capabilities.FULL).mode == "emg_only"
 
-            # M-30: a file where EVERY breath is typed (no tidal breathing at all) is not
+            # a file where EVERY breath is typed (no tidal breathing at all) is not
             # an error -- it is a reference-only file (a dedicated IC/FVC recording, say).
             # Detected up front, before check_breaths would otherwise refuse it by name
             # (`check_breaths` cannot itself tell "nothing to analyse" apart from "this IS
@@ -1169,7 +1167,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
             # to gate on. An undetected beat is neither subtracted nor blanked, so gating a
             # file with missed beats reports a heartbeat with extra confidence — hence the
             # guard, evaluated once here rather than per breath.
-            # M-30 self-review finding: skipped for a reference-only file too -- the ONLY
+            # Self-review finding: skipped for a reference-only file too -- the ONLY
             # consumers of gate_peaks/gate_ok/gate_reason are the per-breath mechanics loop
             # (already skipped below, `if not reference_only:`) and compute_segment_emg,
             # neither of which a reference-only file ever reaches. Without this guard, a
@@ -1198,7 +1196,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                     # so the "no R-peaks -- is remove_ecg on?" reason was invisible everywhere.
                     file_notices.append(f"cardiac-gated peak EMG reported as NaN — {gate_reason}")
 
-            # M-30: a reference-only file has nothing for this loop to do (every breath
+            # a reference-only file has nothing for this loop to do (every breath
             # is typed, so `tidal_breaths` is empty and the loop's own
             # `if breath["ignored"]: continue` would skip every single one anyway) --
             # skipped explicitly rather than relying on that, since `vefactor`/
@@ -1297,8 +1295,8 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                 file_notices.append(
                     f"Breathing pattern reported as NaN for {len(bp_notes)} breath(s) -- {_detail}")
 
-            # M-29/M-30: typed (non-`rest`) breaths never reach calculatemechanics above
-            # (M-19 unions every typed kind into `excludebreaths` on a flow-bearing set,
+            # typed (non-`rest`) breaths never reach calculatemechanics above
+            # (typed breaths unions every typed kind into `excludebreaths` on a flow-bearing set,
             # so the loop's own `if breath["ignored"]: continue` skips them) -- extract
             # their manoeuvre values here instead, straight from the raw breath dict.
             # EMG-only breaths have no inspiration/expiration split (`has_phases=False`,
@@ -1321,7 +1319,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                     try:
                         fr_manoeuvres[breathno] = manoeuvreslib.extract(
                             breath, kind, tidal_breaths, s.capabilities, s)
-                        # M-42: fvc_metrics is deliberately NOT part of manoeuvres.
+                        # fvc_metrics is deliberately NOT part of manoeuvres.
                         # extract itself (that module's own docstring keeps it out of
                         # scope) -- merged in here, identically to the external-
                         # reference forepass above, so an in-batch FVC row and one
@@ -1336,11 +1334,11 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                 if fr_manoeuvres:
                     manoeuvreslib.apply_repeatability(fr_manoeuvres, s.processing.lung_volume.ic)
                     mfvllib.apply_tlc_consistency(fr_manoeuvres, s.processing.lung_volume.ic)
-                    # M-42: stamps breath['mfvl_ext'] on every TIDAL breath of THIS
+                    # stamps breath['mfvl_ext'] on every TIDAL breath of THIS
                     # file (same-file fvc/ic reference only -- see mfvl.attach's own
                     # docstring for why), BEFORE build_breath_table below joins it in
                     # exactly like breath['wob'] already is. Never for a reference-
-                    # only file (M-30) or an EMG-only signal set (no tidal breaths
+                    # only file or an EMG-only signal set (no tidal breaths
                     # with a real flow-volume trace to compare against an MEFV curve).
                     # Self-review finding: one breath's own manoeuvre extraction failing
                     # (the try/except a few lines above) leaves a half-built row in
@@ -1363,7 +1361,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                                 file_notices.append(f"{filename}: {mfvl_notice}")
             manoeuvres_table = build_manoeuvre_table(fr_manoeuvres)
 
-            # M-30: a reference-only file has no tidal breath table or average row to
+            # a reference-only file has no tidal breath table or average row to
             # build at all -- skip build_breath_table (which would otherwise raise
             # NoBreathsError, correctly, for a set with nothing tidal in it) rather than
             # feed it a set it will always refuse.
@@ -1371,7 +1369,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                 breaths_table, average_row = None, None
             else:
                 breaths_table, average_row = build_breath_table(filename, breaths, s)
-                # M-42: fev1_source is a TEXT column (unlike everything else
+                # fev1_source is a TEXT column (unlike everything else
                 # mfvl.attach computed) -- self-review finding: joining a string
                 # column in via breath['mfvl_ext'] (build_breath_table's own
                 # mechanics.mean() reduction, same join point as breath['wob'])
@@ -1430,7 +1428,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
                 manoeuvres=fr_manoeuvres, manoeuvres_table=manoeuvres_table,
                 role="reference" if reference_only else "tidal",
                 notices=file_notices)
-            # M-30: average_rows feeds result.average_table (the cross-file "Average
+            # average_rows feeds result.average_table (the cross-file "Average
             # breathdata" concat below) -- a reference-only file's average_row is always
             # None (there is no tidal average to contribute), so it is left out rather
             # than appended as a row of NaNs.
@@ -1458,7 +1456,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
     # (the common case: require_references off, or every file resolved) this is the
     # exact same set of average_row objects, in the same order, as the list above.
     referenceslib.attach(result, settings, allfiles)
-    # M-36: operating lung volumes (EELV/EILV/IRV per tidal breath, TLC/VC/delta_ic
+    # operating lung volumes (EELV/EILV/IRV per tidal breath, TLC/VC/delta_ic
     # per file) CONSUME references.attach's vol_ic_ref, so it must run strictly after
     # -- and, like it, before average_rows is rebuilt below, so the new columns are
     # already on each average_row when pd.concat's outer join runs.

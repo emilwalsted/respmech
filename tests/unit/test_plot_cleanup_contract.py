@@ -106,7 +106,7 @@ def test_previewscreen_closeevent_releases_plot_menus_without_a_mainwindow(qapp,
 
 
 def test_previewscreen_closeevent_releases_the_segments_stack_s_plot_menus(qapp, tmp_path):
-    """M-26's own new stack (``segments_plots``) needs the same coverage as the
+    """the new stack (``segments_plots``) needs the same coverage as the
     Mechanics stack above — a DIFFERENT ``GraphicsLayoutWidget``, added to
     ``PreviewScreen.shutdown()``'s own container tuple alongside the pre-existing ones."""
     from respmech.ui.workers import stage_emg_segments_preview

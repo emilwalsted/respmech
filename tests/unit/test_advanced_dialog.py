@@ -319,7 +319,7 @@ def test_the_mechanics_card_left_setup_for_the_preview_tab(qapp, tmp_path):
     sc = _settings_screen(qapp, tmp_path)
     titles = {g.title() for g in sc.findChildren(QGroupBox)}
     # Setup is lean now: Input, Channels, Output, and the conditional Sample entropy and
-    # Subjects && lung volumes cards (M-34/M-37; both built unconditionally and merely
+    # Subjects && lung volumes cards (reference resolution/cross-file references; both built unconditionally and merely
     # hidden while empty via _cond_cards, so findChildren still sees them regardless of
     # whether this settings object names any subjects) and, likewise conditional, the
     # Intrinsic PEEP (PEEPi) card, shown once Poes is declared.
@@ -373,13 +373,12 @@ def test_mech_ok_commits_and_cancel_changes_nothing(qapp, tmp_path, accept, monk
 
 
 def test_wob_and_ptp_cards_are_hidden_without_poes(qapp, tmp_path, monkeypatch):
-    """M-17 (R7): 'Work of breathing' and 'Pressure–time product' are meaningless without
-    a Poes trace to compute either from (M-14's compute-guards never populate them for a
+    """the Poes-less Campbell panel (R7): 'Work of breathing' and 'Pressure–time product' are meaningless without
+    a Poes trace to compute either from (the compute-guards never populate them for a
     Poes-less analysis) — both cards drop out of the Mechanics — advanced… dialog for a
     Flow-only signal set, and come back the moment Poes rejoins it. The other cards this
     ticket does not touch (Breath detection, Volume, End-expiratory trend, Sampling,
-    Lung volumes, Per-file overrides) must stay exactly as many as before. Lung volumes
-    (M-36/M-45) is unrelated to Poes — its fields (require_references/eelv_tracking/
+    Lung volumes, Per-file overrides) must stay exactly as many as before. Lung volumes is unrelated to Poes — its fields (require_references/eelv_tracking/
     aggregate/preceding_breaths) are never filtered by the poes-gate below — so it stays
     present for a flow-only signal set exactly as it does for the full one, and so does
     Breathing pattern (flow and volume only)."""

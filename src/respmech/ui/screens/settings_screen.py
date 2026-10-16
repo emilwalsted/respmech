@@ -39,7 +39,7 @@ from respmech.ui.channel_summary import ChannelSummary
 # channel-setup OK so the single-pattern core batch runner still finds the files)
 _DEFAULT_MASK = "*.csv; *.txt"
 
-# M-11: the Setup Signals row's chip captions, one per name in
+# the Setup Signals row's chip captions, one per name in
 # core.analysis.signals.SINGLE_SIGNALS plus 'emg' — the same vocabulary
 # apply_signal_set/effective_signals/SignalSetDialog already share, read in the order a
 # 'full' analysis lists its own components (Capabilities.analyses()'s own ordering).
@@ -52,9 +52,9 @@ _SIGNAL_CHIP_LABELS = {**_cs.REQUIRED_LABELS, "emg": _cs.ROLE_NAMES["emg"]}
 _SIGNAL_CHIP_TIPS = dict(_cs.ROLES)
 
 # The Setup Behold/Ryd banner's wording, one phrase per `core.settings.CarriedOverState`
-# kind (see its `kinds_present()`) — table-driven so a future kind (M-19/M-21/M-34's own
+# kind (see its `kinds_present()`) — table-driven so a future kind (typed breaths, manual separators, reference resolution
 # folder-tagged state) reaches the banner by adding an entry here, not by extending an
-# if/elif chain (M-07). ``SettingsScreen`` is referenced lazily inside each lambda, so its
+# if/elif chain. ``SettingsScreen`` is referenced lazily inside each lambda, so its
 # position ahead of the class definition is fine — nothing here is called before the
 # class (and the module) has finished loading.
 _CARRIED_PHRASES = {
@@ -148,7 +148,7 @@ class SettingsScreen(QWidget):
         gin = QGroupBox("Input")
         f = QFormLayout(gin)
         f.setRowWrapPolicy(QFormLayout.WrapLongRows)   # long labels wrap the field below instead of clipping
-        # Signals row (M-11, R7): one chip per signal this analysis declares, plus the
+        # Signals row (R7): one chip per signal this analysis declares, plus the
         # 'Change...' door onto apply_signal_set (SignalSetDialog) — the same funnel the
         # New-analysis picker uses, so Setup and 'File > New' can never disagree about what
         # changing the set does. A FlowLayout, not a plain QHBoxLayout: five chips plus a
@@ -362,7 +362,7 @@ class SettingsScreen(QWidget):
 
         # Subjects & lung volumes ---------------------------------------------
         # input.subjects (SubjectEntry: TLC/VC/RV/FEV1/MVV + sex/age/height per participant,
-        # M-34) is edited HERE. It was read-only and hidden while empty (M-37), which left
+        # reference resolution) is edited HERE. It was read-only and hidden while empty, which left
         # no way to add the first subject from the UI and made the card vanish on an
         # analysis with ``subjects = []`` or a new one. The card is now always visible
         # (not in _cond_cards) and its table writes straight back to the model through
@@ -926,7 +926,7 @@ class SettingsScreen(QWidget):
         self._refresh_channel_view()   # 'Volume: derived from flow' follows the model
         self._update_save_preview()
         self._update_entropy_caption()   # a loaded analysis may set m/r without a valueChanged
-        self._refresh_subjects_table()   # M-37: a loaded analysis brings its own subjects
+        self._refresh_subjects_table()   # a loaded analysis brings its own subjects
 
     _SUBJECT_COLS = ("key", "tlc_l", "vc_l", "rv_l", "fev1_l", "mvv_lpm",
                      "sex", "age_years", "height_cm")
@@ -1259,8 +1259,7 @@ class SettingsScreen(QWidget):
     def _update_carried_banner(self):
         """Show/hide the carried-over exclusions/breath-counts/reference notice — see
         core.settings.carried_over_state, and the banner built in _build(). Wording is
-        built from `_CARRIED_PHRASES`, keyed on the SAME kinds `_CARRIED_KINDS` tracks
-        (M-07), so a new tagged kind never needs a new if/elif branch here."""
+        built from `_CARRIED_PHRASES`, keyed on the SAME kinds `_CARRIED_KINDS` tracks, so a new tagged kind never needs a new if/elif branch here."""
         self._adopt_pending_subject_folders()
         from respmech.core.settings import carried_over_state
         state = carried_over_state(self.state.settings)
@@ -1925,7 +1924,7 @@ class SettingsScreen(QWidget):
         elif not wants_flow and proc.segmentation.method in ("flow", "volume"):
             proc.segmentation.method = "whole_file"
 
-        # M-11: analysis.signals is now part of _channel_view_signature, so this always
+        # analysis.signals is now part of _channel_view_signature, so this always
         # detects a real change and rebuilds — the Signals row and 'Analyses: …' must
         # reflect the newly declared set immediately, not only once some unrelated field
         # happens to touch the signature next (e.g. the guided flow's own folder reset).
@@ -2023,7 +2022,7 @@ class SettingsScreen(QWidget):
         # the batch's true size, instead of only ever describing the majority subset.
         excluded = ([(f.filename, f.columns) for f in self._manifest.outliers]
                    if self._manifest is not None else [])
-        # M-12: the dialog offers/requires only the roles THIS analysis actually declared
+        # the dialog offers/requires only the roles THIS analysis actually declared
         # (Capabilities.declared), instead of always forcing flow+poes+pgas+pdi regardless
         # of the chosen signal set. ``_capabilities_for_view`` (not a raw
         # ``Capabilities.from_settings`` call): a malformed hand-edited
@@ -2205,7 +2204,7 @@ class SettingsScreen(QWidget):
         every keystroke would be unusable, so the render is skipped unless one of these
         moved.
 
-        M-11: includes ``analysis.signals`` (as a tuple — the list itself is mutable and
+        includes ``analysis.signals`` (as a tuple — the list itself is mutable and
         so unhashable/uncomparable-by-identity, and ``apply_signal_set`` replaces it
         wholesale rather than mutating in place) — the Signals row and the 'Analyses: …'
         line both depend on it, and it can change (via 'Change…'/File > New) without any
@@ -2476,14 +2475,14 @@ class SettingsScreen(QWidget):
                            "for EMG — Preview & QC ▸ Mechanics ▸ Advanced… ▸ Sampling")
             else:
                 out.append(f"sampling frequency {fs_eff} Hz is low for EMG")
-        # M-37: reference/subject cautions -- lowest priority (informational, never a
+        # reference/subject cautions -- lowest priority (informational, never a
         # blocker unless processing.lung_volume.require_references is set, in which case
         # ui.validation.path_problem already surfaces the missing-source half of this as
         # a hard error ahead of any of the notes above). filenames is the batch's OWN
         # glob (matching_files), never the manifest's majority-column-count subset --
         # check_links' own doctrine, see its docstring.
         matches = matching_files(s.input.folder, s.input.files)
-        # M-38: the manifest already knows which outliers are also named reference
+        # the manifest already knows which outliers are also named reference
         # sources -- check_links stays Qt-free and does no column probing of its own.
         m = self._manifest
         outlier_refs = m.outlier_reference_names if m is not None else None
@@ -2708,8 +2707,7 @@ class SettingsScreen(QWidget):
         return True
 
     def surface_notices(self):
-        """Tell the user about any schema upgrade applied while loading this analysis, and
-        (M-11) about any key this version could not make sense of at all.
+        """Tell the user about any schema upgrade applied while loading this analysis, and about any key this version could not make sense of at all.
 
         A setting this version reads differently from the version that saved the file
         changes the results, so it is said on screen at open time — not only in the run
@@ -2728,7 +2726,7 @@ class SettingsScreen(QWidget):
         just 'processing'): the full internal path is meaningless to a user, and every
         unknown value is archived as one whole table/list/field under a real, recognised
         ancestor field, so its first segment always names something that already appears
-        elsewhere in this screen. Self-review (M-11) found the wording cannot honestly
+        elsewhere in this screen. Self-review found the wording cannot honestly
         promise unconditional preservation: ``_merge_unknown``'s own docstring documents
         that a per-element unknown field (that ``[0]``-style path) is dropped if the list
         entry that carried it is later removed in this session — reachable today via
@@ -2804,7 +2802,7 @@ class SettingsScreen(QWidget):
 
         Copies the recording out of the temp input folder into an ``input`` subfolder next
         to the destination file, and repoints ``input.folder``/``output.folder`` and every
-        row in ``core.settings._CARRIED_KINDS`` (M-07) that named the same temp folder —
+        row in ``core.settings._CARRIED_KINDS`` that named the same temp folder —
         the carried-folder tags this screen elsewhere compares against the live
         ``input.folder`` (``core.settings.is_carried_folder``) would otherwise still point
         at the OLD temp folder while ``input.folder`` itself moved, making a breath
@@ -2916,7 +2914,7 @@ class SettingsScreen(QWidget):
         ``input.folder`` makes every entry recorded against the OLD folder "carried-over"
         by B06's own definition (``core.settings.carried_over_state``), so the Setup
         Behold/Ryd banner this screen already shows will ask about exactly that state
-        right after — reusing B06's existing ask, not a second copy of it. Before M-07,
+        right after — reusing B06's existing ask, not a second copy of it. Before the carried-over table,
         ``processing.emg.ecg_reference_file`` had no such folder-tracked ask mechanism and
         was cleared directly here instead; now that it (and normalization_reference_file)
         carry their own folder tag, force-clearing it would just be a second, redundant

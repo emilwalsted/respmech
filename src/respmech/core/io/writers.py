@@ -205,7 +205,7 @@ def _provenance_rows(settings, when, incomplete_note: str | None = None,
     signals_value = signals_text(settings)
     off = off_signals_text(caps.declared)
     if off:
-        # M-13: an off signal is deliberate (this shape's own definition), not a gap --
+        # an off signal is deliberate (this shape's own definition), not a gap --
         # named here so a reader of the Provenance sheet alone (no run-report.txt open)
         # is never left wondering why, say, no gastric-pressure column exists.
         signals_value += f" — {off} absent by signal set"
@@ -232,7 +232,7 @@ def _provenance_rows(settings, when, incomplete_note: str | None = None,
             ("Drift correction", settings.processing.volume.correct_drift),
             ("EMG normalisation", settings.processing.emg.normalization)]
     if settings.processing.emg.noise.enabled:
-        # M-22: only meaningful once noise reduction is actually on -- an unresolved/
+        # only meaningful once noise reduction is actually on -- an unresolved/
         # unused reference_mode on a disabled profile would just be noise in the sheet.
         rows.append(("Noise reference", _noise_reference_provenance_value(settings)))
     if ip.channels.entropy or ip.channels.entropy_derived:
@@ -269,7 +269,7 @@ def _provenance_rows(settings, when, incomplete_note: str | None = None,
                          "at least 3 breaths) of VT, Ti, Te, Ttot and Ti/Ttot")
         rows.append(("Breathing pattern", "; ".join(parts)))
     if reference_note:
-        # M-35: only present for a file whose IC reference actually resolved -- an
+        # only present for a file whose IC reference actually resolved -- an
         # unresolved one is reported as a Quality notice instead (run-report.txt's
         # DIAGNOSTICS block / FileResult.notices), not here, since there is no
         # resolved value to show in a Key/Value row.
@@ -277,7 +277,7 @@ def _provenance_rows(settings, when, incomplete_note: str | None = None,
     if normalisation_note:
         rows.append(("Pressure normalisation", normalisation_note))
     if olv_active:
-        # M-36: study-wide settings that shape every olv column (not a per-file
+        # study-wide settings that shape every olv column (not a per-file
         # resolution outcome -- that is run-report.txt's own LUNG VOLUMES block) --
         # same "what is configured" register as the IC reference row above.
         lv = settings.processing.lung_volume
@@ -385,7 +385,7 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
 
     if settings.output.data.save_breath_by_breath:
         _emit("writing breath-by-breath data")
-        # M-30: a notice (never silent) when the configured reference file resolved to
+        # a notice (never silent) when the configured reference file resolved to
         # a real batch file that has nothing to read a reference from — attached to
         # THAT file's own notices, so it surfaces through the SAME run-report.txt
         # DIAGNOSTICS -> Quality notices path every other per-file notice already uses.
@@ -398,7 +398,7 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
             p = os.path.join(datadir, f"{fname}.breathdata.xlsx")
             extra = {}
             if getattr(fr, "role", "tidal") == "reference":
-                # M-30: no tidal breathdata to be the Data sheet — the Manoeuvres table
+                # no tidal breathdata to be the Data sheet — the Manoeuvres table
                 # (this file's whole reason for being in the batch) takes its place,
                 # and the Provenance sheet says why via the same incomplete_note
                 # mechanism a partial/incomplete cohort run already uses.
@@ -411,14 +411,14 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
                 if norm is not None and len(norm):
                     extra["EMG normalised"] = norm
                 if getattr(fr, "manoeuvres_table", None) is not None and len(fr.manoeuvres_table):
-                    extra["Manoeuvres"] = fr.manoeuvres_table                                          # M-29
+                    extra["Manoeuvres"] = fr.manoeuvres_table
                 pn = getattr(fr, "pressure_normalised", None)
                 if pn is not None and len(pn):
                     extra["Pressure normalised"] = pn      # opt-in normalisation to a maximal effort
             ic_used = (getattr(fr, "references_used", None) or {}).get("ic")
             reference_note = _ic_reference_provenance_value(ic_used) if ic_used else None
-            # M-36: read core.analysis.lungvol.attach's own recorded decision (same
-            # "record once in attach(), read it back" convention M-35's own
+            # read core.analysis.lungvol.attach's own recorded decision (same
+            # "record once in attach(), read it back" convention the own
             # analysis_plan['ic'] already established for REFERENCE MANOEUVRES below),
             # never re-derive it by sniffing DataFrame columns.
             olv_active = fname in _olv_active_files(result)
@@ -639,8 +639,8 @@ def _breath_counts(fr) -> tuple[int, int]:
 
 
 #: display label per BREATH_KINDS entry (core.settings) for the FILES-line/PROCESSING
-#: "Breath types" text (M-30) — 'rest' is deliberately absent: an EMG-only background
-#: segment (M-28) is not a manoeuvre a reader of this report would want counted here.
+#: "Breath types" text — 'rest' is deliberately absent: an EMG-only background
+#: segment is not a manoeuvre a reader of this report would want counted here.
 _KIND_LABELS = {
     "ic": "IC", "fvc": "FVC", "ic_fvc": "IC+FVC",
     "max_insp": "Max insp", "sniff": "Sniff", "other": "Other",
@@ -649,7 +649,7 @@ _KIND_LABELS = {
 
 def _typed_breath_numbers(fr) -> dict:
     """{kind: [breath_no, ...]} for every MANOEUVRE-typed, EXCLUDED breath in a file
-    result (M-30), in first-encountered order — 'rest' is excluded (see
+    result, in first-encountered order — 'rest' is excluded (see
     ``_KIND_LABELS``), and so, self-review finding, is a typed breath that is NOT
     itself ``ignored``: on a flow-bearing set every typed kind is always also
     ignored (``_legacy_ns._merged_exclude_breaths``), but on an EMG-only set only
@@ -726,7 +726,7 @@ def _write_run_report(result, settings, outputfolder: str,
     L.append(f"Generated: {ts}")
     L.append(f"Environment: {_environment_info()}")
     ok, failed = result.ok_files, result.failed_files
-    # M-13: computed once, reused both here (the pre-existing poes check) and further
+    # computed once, reused both here (the pre-existing poes check) and further
     # down for the Signals/Analyses lines -- never a second construction.
     caps = Capabilities.from_settings(settings)
     if not cohort_outputs:
@@ -767,7 +767,7 @@ def _write_run_report(result, settings, outputfolder: str,
     L.append(f"  Folder:   {ip.folder}")
     L.append(f"  Pattern:  {ip.files}")
     L.append(f"  Sampling: {ip.format.sampling_frequency} Hz")
-    # M-13: which signals governed this run and what they computed -- the plain-text
+    # which signals governed this run and what they computed -- the plain-text
     # counterpart of the Provenance sheet's own 'Signals'/'Analyses' rows.
     L.append(f"  Signals:  {signals_text(settings)}")
     L.append(f"  Analyses: {', '.join(caps.analyses())}")
@@ -777,7 +777,7 @@ def _write_run_report(result, settings, outputfolder: str,
     for fname, fr in ok.items():
         total, excl = _breath_counts(fr)
         used = total - excl
-        # M-30: distinguish a plain manual exclusion from a TYPED manoeuvre breath —
+        # distinguish a plain manual exclusion from a TYPED manoeuvre breath —
         # both are "ignored" for the tidal average, but only one names what it is.
         typed = _typed_breath_numbers(fr)
         n_typed = sum(len(nos) for nos in typed.values())
@@ -847,7 +847,7 @@ def _write_run_report(result, settings, outputfolder: str,
                  + ", ".join(f"{e.file}: " + ", ".join(str(b) for b in e.breaths) for e in ex))
     else:
         L.append("  Excluded breaths:        none")
-    # M-30: which breaths are typed as a manoeuvre (IC/FVC/max effort/sniff) rather
+    # which breaths are typed as a manoeuvre (IC/FVC/max effort/sniff) rather
     # than tidal — a study-level setting like the two blocks above, so it belongs in
     # the same place, not only inferred from a single file's own FILES line.
     bt_by_file: dict = {}
@@ -874,7 +874,7 @@ def _write_run_report(result, settings, outputfolder: str,
             f"{e.file}: {len(e.cut_s)} cuts, {len(e.join_s)} joins" for e in ov_entries))
     else:
         L.append("  Segmentation overrides:  none")
-    # M-35: what this analysis's cross-file reference SETTINGS configure (per-file and
+    # what this analysis's cross-file reference SETTINGS configure (per-file and
     # per-group IC/FVC/baseline/max-effort links) -- same "what is configured" register
     # as Breath-count overrides/Excluded breaths/Breath types above; what actually
     # RESOLVED for each file is a per-run outcome, reported in the REFERENCE
@@ -951,7 +951,7 @@ def _write_run_report(result, settings, outputfolder: str,
                 L.append(f"    {f}: {n}")
         L.append("")
 
-    # M-35: per-RUN reference-resolution outcomes (never study-wide settings -- those
+    # per-RUN reference-resolution outcomes (never study-wide settings -- those
     # are the PROCESSING block's own 'Reference manoeuvres:' line above). Conditional
     # on there being anything at all to say: the IC family absent from this analysis
     # (the overwhelming common case today -- no processing.references/reference_
@@ -987,7 +987,7 @@ def _write_run_report(result, settings, outputfolder: str,
                 L.append(f"    {where}: {msg}")
         L.append("")
 
-    # M-36: operating lung volumes -- present only when at least one OK tidal file
+    # operating lung volumes -- present only when at least one OK tidal file
     # actually got the `ic_op` column family (core.analysis.lungvol.attach's own
     # recorded decision, read via _olv_active_files; absent whenever no IC reference
     # resolves anywhere in the analysis, the overwhelming common case today), same

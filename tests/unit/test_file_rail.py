@@ -277,7 +277,7 @@ def test_manifest_from_filenames_has_no_caveats():
 
 
 # --------------------------------------------------------------------------- #
-# typed manoeuvres / reference / segments / role (M-32)
+# typed manoeuvres / reference / segments / role
 # --------------------------------------------------------------------------- #
 def test_typed_glyph_and_tooltip_breakdown(qapp):
     rail = FileRail()
@@ -385,7 +385,7 @@ def test_role_is_set_by_mark_result_and_cleared_on_failure(qapp):
 
 
 def test_typed_reference_segments_role_default_to_empty_none(qapp):
-    """A plain, untouched row must not accidentally render any M-32 badge."""
+    """A plain, untouched row must not accidentally render any file-rail badge."""
     rail = FileRail()
     rail.set_manifest(_manifest(["a.csv"]))
     e = rail.entry("a.csv")
@@ -399,7 +399,7 @@ def test_typed_reference_segments_role_default_to_empty_none(qapp):
 # eliding delegate — a long filename must never push a state glyph off-screen
 # --------------------------------------------------------------------------- #
 def test_a_long_filename_with_every_badge_fits_the_rail_on_windows_metrics(windows_metrics):
-    """M-32's own acceptance criterion: a long filename with every badge active either
+    """the acceptance criterion: a long filename with every badge active either
     fits the 280 px rail or is elided, but the state glyphs/badges are never the part
     that gets cut. Modelled on the Windows runner's wider font metrics (macOS is the
     friendliest platform we ship to — see tests/CLAUDE.md)."""
@@ -451,7 +451,7 @@ def test_a_short_filename_with_no_badges_is_not_elided(qapp):
 
 
 def test_existing_rail_badges_are_unaffected_by_the_m32_fields(qapp):
-    """Acceptance criterion: the pre-M-32 exclusion badge is unchanged in shape."""
+    """Acceptance criterion: the previous exclusion badge is unchanged in shape."""
     rail = FileRail()
     rail.set_manifest(_manifest(["a.csv"]))
     rail.set_excluded_count("a.csv", 2, carried=True)
@@ -460,7 +460,7 @@ def test_existing_rail_badges_are_unaffected_by_the_m32_fields(qapp):
 
 
 # --------------------------------------------------------------------------- #
-# row context menu — plumbing for M-37 (M-32)
+# row context menu — plumbing for cross-file references
 # --------------------------------------------------------------------------- #
 def test_row_context_menu_emits_references_requested_for_the_right_row(qapp):
     rail = FileRail()

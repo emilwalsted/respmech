@@ -1,11 +1,11 @@
-"""``_kinds_for_settings_path`` (``ui.screens.preview._jobs``), capability-aware (M-24).
+"""``_kinds_for_settings_path`` (``ui.screens.preview._jobs``), capability-aware.
 
 ``caps=None`` — every call site that predates this ticket — must reproduce the old,
 flow-only rule byte-for-byte: 'the mechanics test run strips EMG' holds for a flow-bearing
 signal set (the test run never touches EMG there), but NOT for an EMG-only one, where
-``core.pipeline.run_batch``'s own S2 branch (M-21) builds the test run's mechanics FROM the
+``core.pipeline.run_batch``'s own S2 branch builds the test run's mechanics FROM the
 EMG channels — so a real EMG-only ``Capabilities`` must widen the EMG-related buckets to
-include 'batch' (and the not-yet-existing 'segments' preview job M-25 adds — inert today,
+include 'batch' (and the not-yet-existing 'segments' preview job the EMG-only preview adds — inert today,
 since ``_schedule_all`` only ever dispatches a kind that is a member of ``_AUTO_KINDS``).
 """
 from respmech.core.analysis.signals import Capabilities
@@ -73,7 +73,7 @@ def test_emg_only_capabilities_do_not_widen_the_narrow_or_gated_emg_rules():
 
 
 def test_breath_types_and_separators_fall_through_to_every_auto_kind():
-    """M-24's own omfang note: both paths are deliberately left on the wide catch-all — a
+    """the omfang note: both paths are deliberately left on the wide catch-all — a
     typed breath changes the noise reference mask itself (decision 11), so it must NOT get
     the narrower processing.exclude_breaths treatment; a separator edit feeds the same
     ref_clip_key rest_segments branch a segmentation.buffer edit already does."""

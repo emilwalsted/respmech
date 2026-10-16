@@ -218,7 +218,7 @@ def _signal_order(declared) -> list:
 def signals_text(settings) -> str:
     """``'flow, poes (derived)'`` / ``'... (declared)'`` -- the signal list plus whether
     it came from an explicit ``analysis.signals`` or was derived from the assigned
-    channels (M-13). The ONE place that decides both the order and the
+    channels. The ONE place that decides both the order and the
     derived/declared wording, reused by ``respmech validate``, run-report.txt and the
     Provenance sheet so a saved analysis is never described in three different words."""
     declared = effective_signals(settings)

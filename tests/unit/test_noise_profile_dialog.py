@@ -469,7 +469,7 @@ def test_the_tab_and_dialog_quote_the_same_frame_count(qapp, tmp_path):
     dlg.deleteLater()
 
 
-# -- M-24: modes_available -----------------------------------------------------------
+# -- the rest-segment noise option: modes_available -----------------------------------------------------------
 
 def test_default_modes_available_is_todays_two_whole_modes(qapp):
     """Every call site predating this ticket omits modes_available entirely and must see

@@ -87,7 +87,7 @@ def test_units_registry_fallback_is_used_only_when_rules_leave_a_name_blank():
 
 
 def test_units_resolve_manoeuvre_columns():
-    """M-29's Manoeuvres-sheet columns — the ones _RULES' generic prefix/suffix
+    """the Manoeuvres-sheet columns — the ones _RULES' generic prefix/suffix
     conventions cannot already classify (see core/analysis/registry.py::_MANOEUVRES'
     own docstring for which ones ARE already covered by _RULES alone). Every column
     `extract()` can emit is here, including the four already covered by _RULES alone
@@ -107,7 +107,7 @@ def test_units_resolve_manoeuvre_columns():
 
 
 def test_units_resolve_reference_manoeuvre_columns():
-    """M-35's cross-file-reference columns. `vol_ic_ref` is already covered by
+    """the cross-file-reference columns. `vol_ic_ref` is already covered by
     _RULES' `vol_` prefix alone (pinned here anyway, same precedent as
     test_units_resolve_manoeuvre_columns above); `ic_ref_n`/`ic_ref_source` are
     neither a volume nor any other _RULES-matched shape, so their registry
@@ -286,11 +286,11 @@ def test_emg_normalization_reference_file_falls_back_when_absent():
 
 
 def test_resolve_emg_reference_notices_when_the_reference_file_has_no_breath_table():
-    """M-30: ``resolve_emg_reference`` is a thin wrapper around
+    """ ``resolve_emg_reference`` is a thin wrapper around
     ``reference_values_for_batch`` (unchanged, see the test above) that ALSO returns a
     notice for the one case that function itself cannot distinguish from "not
     configured" -- the reference file IS present in the batch, but has nothing to read
-    (a reference-only file, M-30, has no ``breaths_table``). Every other
+    (a reference-only file has no ``breaths_table``). Every other
     None-returning case stays silent, exactly as before."""
     from respmech.core.summary import resolve_emg_reference
 
@@ -324,7 +324,7 @@ def test_resolve_emg_reference_notices_when_the_reference_file_has_no_breath_tab
 
 
 def test_reference_only_file_as_emg_reference_notices_in_the_run_report_end_to_end(tmp_path):
-    """M-30, end to end through the real pipeline (not just the pure-function test
+    """reference-only files, end to end through the real pipeline (not just the pure-function test
     above): configuring a reference-only file as
     ``processing.emg.normalization_reference_file`` must not silently drop the
     notice on the floor -- ``write_batch`` has to actually attach it to that file's
@@ -356,7 +356,7 @@ def test_reference_only_file_as_emg_reference_notices_in_the_run_report_end_to_e
 
 
 # --------------------------------------------------------------------------- #
-# M-29 — Manoeuvres sheet (typed IC/FVC/max_insp/sniff breaths)
+# manoeuvre extraction — Manoeuvres sheet (typed IC/FVC/max_insp/sniff breaths)
 # --------------------------------------------------------------------------- #
 def test_build_manoeuvre_table_is_none_when_empty():
     from respmech.core.results import build_manoeuvre_table
@@ -719,7 +719,7 @@ def test_provenance_names_sample_entropy_only_when_it_is_computed(tmp_path):
 
 
 def test_provenance_names_signals_and_analyses(tmp_path):
-    """M-13: the Provenance sheet gets 'Signals'/'Analyses' rows naming the signal set
+    """The Provenance sheet gets 'Signals'/'Analyses' rows naming the signal set
     an analysis actually uses and what it computes, ADDED (never replacing an existing
     row) alongside the other rows this file's siblings already test above. A reduced
     signal set (no Pgas/Pdi) also appends a note to the Signals row naming what is off
@@ -757,7 +757,7 @@ def test_provenance_names_the_wob_source(tmp_path):
 
 
 def test_provenance_names_the_ic_reference_when_resolved(tmp_path):
-    """M-35: only present when a `reference_note` is actually passed (a file whose IC
+    """Only present when a `reference_note` is actually passed (a file whose IC
     reference resolved) -- write_batch derives it from FileResult.references_used;
     _provenance_rows itself is tested directly here, same convention as the WOB/
     entropy rows above."""
@@ -856,7 +856,7 @@ def test_run_report_accounts_for_excluded_and_failed(tmp_path):
 
 
 def test_run_report_input_block_names_signals_and_analyses(tmp_path):
-    """M-13: 'Signals:'/'Analyses:' are ADDED lines under INPUT, never a rewording of
+    """ 'Signals:'/'Analyses:' are ADDED lines under INPUT, never a rewording of
     the pre-existing Folder/Pattern/Sampling lines above them -- the acceptance
     criterion is explicitly that run-report.txt is 'otherwise unchanged'."""
     from types import SimpleNamespace
@@ -874,13 +874,13 @@ def test_run_report_input_block_names_signals_and_analyses(tmp_path):
     assert "  Signals:  flow, poes, emg (derived)" in input_block
     assert ("  Analyses: Breath timing, Work of breathing, EMG, Sample entropy"
            in input_block)
-    # M-13's own scope note: the "absent by signal set" wording is _provenance_rows-only.
+    # the scope note: the "absent by signal set" wording is _provenance_rows-only.
     assert "absent by signal set" not in report
     assert "not in signal set" not in report
 
 
 def test_run_report_files_line_distinguishes_typed_from_plainly_excluded_breaths(tmp_path):
-    """M-30: the FILES line's accounting must tell a manually-excluded breath apart
+    """The FILES line's accounting must tell a manually-excluded breath apart
     from a TYPED manoeuvre breath (both are ``ignored`` for the tidal average, but
     only one names what it actually is) -- lightweight fakes again, no full batch."""
     from types import SimpleNamespace
@@ -977,9 +977,8 @@ def test_run_report_processing_block_lists_overrides_exclusions_and_grouping(tmp
 
 
 def test_run_report_processing_block_lists_breath_types(tmp_path):
-    """M-30: which breaths are typed as a manoeuvre is a study-level setting like
-    breath-count overrides/exclusions above -- 'rest' (an EMG-only background segment,
-    M-28) is deliberately left out, since it names a segment to discard, not a
+    """Which breaths are typed as a manoeuvre is a study-level setting like
+    breath-count overrides/exclusions above -- 'rest' (an EMG-only background segment) is deliberately left out, since it names a segment to discard, not a
     manoeuvre a reader would want counted here."""
     from respmech.core.settings import BreathTypeEntry
     from respmech.core.io.writers import _write_run_report
@@ -998,7 +997,7 @@ def test_run_report_processing_block_lists_breath_types(tmp_path):
 
 
 def test_run_report_processing_block_lists_reference_manoeuvres(tmp_path):
-    """M-35: what processing.references/reference_defaults CONFIGURE (never what
+    """What processing.references/reference_defaults CONFIGURE (never what
     actually resolved -- that is the REFERENCE MANOEUVRES block's own job), same
     study-level register as Breath-count overrides/Excluded breaths/Breath types."""
     from respmech.core.settings import BreathRef, GroupReferenceEntry, ReferenceEntry
@@ -1062,7 +1061,7 @@ def test_run_report_processing_block_segmentation_line(tmp_path):
 
 
 def test_run_report_processing_block_noise_reference_line(tmp_path):
-    """M-22: a new 'Noise reference:' line names which of the resolved sources
+    """A new 'Noise reference:' line names which of the resolved sources
     (expiration/intervals/rest-typed segments) the shared profile was actually built
     from -- shown only once noise reduction is on, and the SAME text on the
     Provenance sheet's own row (_provenance_rows), so the two can never disagree."""
@@ -1189,7 +1188,7 @@ def test_diagnostics_carries_per_file_quality_notices(tmp_path):
 
 
 def test_run_report_omits_reference_manoeuvres_block_when_nothing_to_say(tmp_path):
-    """M-35: the block is left out entirely when the IC family is absent from this
+    """The block is left out entirely when the IC family is absent from this
     analysis and no external source was loaded or failed -- the overwhelming common
     case today, same convention DIAGNOSTICS already follows above."""
     from respmech.core.io.writers import _write_run_report
@@ -1203,7 +1202,7 @@ def test_run_report_omits_reference_manoeuvres_block_when_nothing_to_say(tmp_pat
 
 
 def test_run_report_reference_manoeuvres_block(tmp_path):
-    """M-35: per-RUN outcomes (never study-wide settings, see the PROCESSING-block
+    """Per-RUN outcomes (never study-wide settings, see the PROCESSING-block
     test above) -- external sources loaded, resolved/unresolved files, and forepass
     errors, hand-built the same way test_diagnostics_carries_per_file_quality_notices
     above builds a fake result rather than running the real pipeline."""

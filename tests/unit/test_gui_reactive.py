@@ -435,7 +435,7 @@ def test_settings_change_scopes_recompute_to_affected_panels(qapp, tmp_path):
 
 
 def test_a_rest_typed_breath_redispatches_emg_all(qapp, tmp_path):
-    """M-24 acceptance: typing a breath 'rest' (M-19's BreathTypeEntry) changes the noise
+    """the rest-segment noise option acceptance: typing a breath 'rest' (the BreathTypeEntry) changes the noise
     reference mask (decision 11), so a rest-typing must re-dispatch emg_all — via
     _kinds_for_settings_path's wide, unclassified-path catch-all, deliberately NOT the
     narrower rule processing.exclude_breaths gets (see that function's own docstring)."""
@@ -454,8 +454,8 @@ def test_a_rest_typed_breath_redispatches_emg_all(qapp, tmp_path):
 
 
 def test_an_emg_only_processing_edit_redispatches_batch(qapp, tmp_path):
-    """M-24 acceptance: for an EMG-only signal set, the test run's OWN mechanics are built
-    from EMG (M-21's S2 branch in core.pipeline.run_batch) — unlike a flow-bearing set,
+    """the rest-segment noise option acceptance: for an EMG-only signal set, the test run's OWN mechanics are built
+    from EMG (the S2 branch in core.pipeline.run_batch) — unlike a flow-bearing set,
     where the same edit leaves 'batch' alone (see test_settings_change_scopes_recompute_to_
     affected_panels above, whose {"emg_all","emg_detail"} & emg / "batch" not in emg
     assertion is the flow-bearing counterpart this must NOT change)."""

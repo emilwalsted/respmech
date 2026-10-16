@@ -1,8 +1,8 @@
-"""Manoeuvre extraction (M-29): pull the values a single breath TYPED as a named
+"""Manoeuvre extraction: pull the values a single breath TYPED as a named
 manoeuvre (inspiratory capacity, forced vital capacity, a maximal inspiratory/sniff
 effort — see ``BreathTypeEntry``/``BREATH_KINDS`` in ``core.settings``) is captured
 for, straight from its raw breath dict — never from ``calculatemechanics``' output,
-which a typed breath never even reaches (M-19 unions every typed kind into
+which a typed breath never even reaches (typed breaths unions every typed kind into
 ``excludebreaths`` on a flow-bearing signal set, so the ordinary mechanics loop skips
 it exactly like a manually excluded breath).
 
@@ -13,7 +13,7 @@ batch run compute an identical value for the same file (the acceptance criterion
 module is built to satisfy: "LOW_EFFORT-flaget udregnes identisk fra en
 delmængdekørsel og en fuld kørsel").
 
-FVC/MFVL numerics (the actual FVC/FEV1/PEF/flow-volume curve) are M-42's scope, not
+FVC/MFVL numerics (the actual FVC/FEV1/PEF/flow-volume curve) are the FVC/MFVL analysis's scope, not
 this one — ``validate_fvc_manoeuvre``/``suggest_fvc`` here are quality/UI helpers
 only, deliberately empty of any spirometric arithmetic.
 
@@ -263,7 +263,7 @@ def max_effort_from_breath(breath, caps, s, kind=None) -> dict:
     absolute resting offset — never physiologically meaningful).
 
     ``rms_max_ref`` is computed here rather than read off the breath dict because a
-    typed breath is `ignored=True` (M-19's union rule) and so never reaches the
+    typed breath is `ignored=True` (the union rule) and so never reaches the
     ordinary per-breath ``compute_segment_emg`` call in the mechanics loop — nothing
     upstream has computed an RMS envelope for it yet.
     """
@@ -303,10 +303,10 @@ def max_effort_from_breath(breath, caps, s, kind=None) -> dict:
 def validate_fvc_manoeuvre(breath) -> list[str]:
     """Minimal, non-numeric quality flags for a breath's EXPIRATORY limb as a
     candidate forced-vital-capacity manoeuvre. Deliberately does not compute FVC,
-    FEV1, PEF or any other spirometric value — that arithmetic is M-42's
+    FEV1, PEF or any other spirometric value — that arithmetic is the FVC/MFVL analysis's
     (``core.analysis.mfvl``) scope; this only answers "is this expiration even a
     plausible forced manoeuvre to look at", for the Manoeuvres sheet and the UI's
-    quality display before M-42 exists.
+    quality display before the FVC/MFVL analysis exists.
     """
     exp = breath.get("expiration")
     if not exp or len(_arr(exp.get("time", []))) < 2:
@@ -316,7 +316,7 @@ def validate_fvc_manoeuvre(breath) -> list[str]:
 
 
 def suggest_fvc(breaths: dict) -> int | None:
-    """A plain, deterministic heuristic hint for the UI (M-31's "Suggested-hint"):
+    """A plain, deterministic heuristic hint for the UI (the "Suggested-hint"):
     the untyped, non-ignored breath with the LONGEST expiration in the file — a
     forced vital capacity manoeuvre is, by definition, a deliberately prolonged
     forced exhalation, so the longest expiration in an otherwise ordinary tidal
@@ -349,7 +349,7 @@ def extract(breath, kind: str, tidal_breaths, caps, s) -> dict:
     ``tidal_breaths`` is the file's own non-ignored (untyped) breaths, in whatever
     order the caller holds them in — every helper here re-sorts by breath NUMBER
     itself, never assuming list order. Returns ``{'kind': kind}`` alone for a kind
-    this ticket does not extract numeric values for yet (``other`` — see the M-29
+    this ticket does not extract numeric values for yet (``other`` — see the manoeuvre extraction
     ticket's scope; ``rest`` is never passed here at all, the caller skips it, since
     it names a noise-reference segment, not a manoeuvre).
     """

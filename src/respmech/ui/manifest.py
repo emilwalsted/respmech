@@ -78,7 +78,7 @@ class Manifest:
     narrowed_out_count: int = 0                 # how many matched files that narrowing excluded
     files: tuple = ()                           # every file the (narrowed) mask matched
     majority_columns: int | None = None
-    # M-38: the SAME Settings object build_manifest() was given, kept for two
+    # the SAME Settings object build_manifest() was given, kept for two
     # properties (reference_only/outlier_reference_sources) that predict from
     # processing.breath_types/references -- state that changes independently of a
     # folder/mask rescan (typing a breath happens on Preview & QC, a different screen,
@@ -105,12 +105,12 @@ class Manifest:
     @property
     def reference_only(self):
         """Files predicted reference-only (``core.pipeline.FileResult.role ==
-        "reference"``, M-30) from SETTINGS alone -- see
+        "reference"``) from SETTINGS alone -- see
         ``core.analysis.references.predicted_reference_only``'s own docstring for the
         two-condition heuristic and its limits. Used by Setup's cohort read-out
         (:func:`group_readout`) to keep "N files -> M groups" truthful to what
         ``core.summary.build_cohort_summary`` will actually write: a reference-only
-        file's ``average_row`` is always ``None`` (M-30), so it never contributes a row
+        file's ``average_row`` is always ``None``, so it never contributes a row
         to the written cohort summary either."""
         if self.settings is None:
             return ()
@@ -295,11 +295,11 @@ def group_readout(filenames, settings, file_limit=3, group_limit=6):
     which is exactly the "typed something objectively wrong" case a live read-out should
     not be quiet about).
 
-    **Reference-only files (M-38).** A file :func:`respmech.core.analysis.references.
+    **Reference-only files.** A file :func:`respmech.core.analysis.references.
     predicted_reference_only` guesses reference-only (settings alone -- see that
     function's own docstring for the two-condition heuristic) is EXCLUDED from ``n`` and
     from the grouping itself, exactly like ``core.summary.build_cohort_summary`` already
-    excludes it (a reference-only file's ``average_row`` is always ``None``, M-30, so it
+    excludes it (a reference-only file's ``average_row`` is always ``None``, so it
     never contributes a row to the written cohort/by-group sheet at all). Its count is
     still surfaced as a parenthetical, e.g. ``"4 files (1 reference-only) -> 2 groups ·
     …"``, so the reader can tell "the study has 5 matched files, 1 of which is a
@@ -516,6 +516,6 @@ def build_manifest(folder, mask, settings, *, columns_prober=None, freq_prober=N
                     mask_narrowed_from=narrowed_from,
                     narrowed_out_exts=tuple(sorted(dropped)), narrowed_out_count=narrowed_out_count,
                     files=tuple(entries), majority_columns=majority,
-                    settings=settings)   # M-38: kept for reference_only/outlier_reference_sources,
+                    settings=settings)   # kept for reference_only/outlier_reference_sources,
                     # recomputed live from THIS object on every access -- see Manifest's own
                     # field docstring for why a build-time snapshot would go stale.

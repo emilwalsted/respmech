@@ -19,7 +19,7 @@ from respmech.core.analysis.signals import derived_signals, effective_signals
 # core.settings (as `_CARRIED_KINDS`; CarriedOverState/carried_over_state/
 # clear_carried_over are its other consumers) and imported here under the name this
 # module's own functions were already written against, so the two can never drift the
-# way the six hand-spread call sites this replaces already had (B06/M-07).
+# way the six hand-spread call sites this replaces already had (B06/the carried-over table).
 from respmech.core.settings import Settings, _CARRIED_KINDS as _FOLDER_TAG_PATHS, _walk
 
 _INDEX_RE = re.compile(r"^\[(\d+)\]$")
@@ -195,7 +195,7 @@ def _merge_unknown(data: dict, unknown: dict) -> dict:
     belonged to no longer exists, so there is nowhere left to put it back.
 
     KNOWN, ACCEPTED LIMITATIONS (found by self-review, deliberately not fixed here --
-    this ticket's scope is making the existing M-01 archival format round-trip through
+    this ticket's scope is making the existing archival format round-trip through
     a save, not redesigning it; each is pinned by a test in test_settings.py so a
     future change to this function doesn't silently alter the accepted shape):
 

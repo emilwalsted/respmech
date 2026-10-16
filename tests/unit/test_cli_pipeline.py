@@ -52,7 +52,7 @@ def test_segment_file_equals_run_batch_breath_keys(tmp_path):
     """``segment_file()``, called directly on one file, must build the exact same
     breaths run_batch's main loop builds for that file at the SAME point in the
     pipeline (right after segmentation, before calculatemechanics runs and adds its
-    own keys such as 'mechanics'/'wob'/'rms') — the extraction (M-06) is supposed
+    own keys such as 'mechanics'/'wob'/'rms') — the extraction is supposed
     to be a pure move, never a behaviour change. ``ref_breaths`` here is
     ``result.ok_files[...].breaths``: calculatemechanics mutates those SAME dicts
     in place (adding keys, never touching 'time'/'flow'/'emgcols'), so the base
@@ -442,7 +442,7 @@ def test_cli_validate_the_golden_synthetic_files_have_no_new_caveats(tmp_path, c
 
 
 def test_cli_validate_prints_the_signal_set_summary_line(capsys):
-    """M-13 acceptance criterion 1, against examples/settings.toml (the full pressure
+    """the init/validate output acceptance criterion 1, against examples/settings.toml (the full pressure
     family + EMG + a 3-column entropy set, all DERIVED -- no [analysis] table in that
     file): 'respmech validate' prints a Signals/Entropy/Analyses line and exits 0.
     Nothing is off (every core signal is declared), so there is no '· off:' segment."""
@@ -476,7 +476,7 @@ def test_cli_validate_names_off_signals_for_a_reduced_set(tmp_path, capsys):
 
 
 def test_cli_run_dry_run_prints_the_analyses_line(tmp_path, capsys):
-    """M-13: `respmech run --dry-run` prints the same 'Analyses: ...' line the GUI's
+    """ `respmech run --dry-run` prints the same 'Analyses: ...' line the GUI's
     commitment sheet shows for the identical settings (run_screen.py's
     `_update_commitment`), right after the output plan's Total line."""
     from respmech.settingsio.toml_io import save_toml

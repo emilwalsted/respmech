@@ -57,7 +57,7 @@ except Exception:  # pragma: no cover
 #: sentinel returned by ``selected_region`` for the whole-expiration option
 EXPIRATION = "expiration"
 #: sentinel returned by ``selected_region`` for the EMG-only "use this file's rest-typed
-#: segment(s)" option (M-24; the corresponding core mode is M-22's ``resolve_noise_
+#: segment(s)" option (the rest-segment noise option; the corresponding core mode is the ``resolve_noise_
 #: reference_mode``'s ``'rest_segments'``).
 REST_SEGMENTS = "rest_segments"
 #: sentinel returned by ``selected_region`` for the EMG-only "use the periods between this
@@ -65,7 +65,7 @@ REST_SEGMENTS = "rest_segments"
 #: segmented with ``emg_burst``).
 INTERBURST = "interburst"
 #: the two "whole modes" every caller has always been able to reach, before ``modes_available``
-#: existed (M-24) -- every call site predating this ticket omits the argument and gets exactly
+#: existed -- every call site predating this ticket omits the argument and gets exactly
 #: this, so behaviour for them is unchanged byte-for-byte.
 DEFAULT_MODES_AVAILABLE = frozenset({"expiration", "intervals"})
 
@@ -116,7 +116,7 @@ class NoiseProfileDialog(QDialog):
                 win_length=DEFAULT_WIN_LENGTH, hop_length=DEFAULT_HOP_LENGTH,
                 modes_available=DEFAULT_MODES_AVAILABLE):
         super().__init__(parent)
-        # M-24: which whole modes the CALLER says this signal set/file can offer.
+        # which whole modes the CALLER says this signal set/file can offer.
         # 'intervals' (drag a span) is not gated by this at all -- see selected_region -- it
         # is always reachable regardless of what modes_available says, since dragging a span
         # is the one mode every signal set (flow-bearing or EMG-only) has always supported.
@@ -304,12 +304,12 @@ class NoiseProfileDialog(QDialog):
         if "expiration" in self._modes_available:
             v.addWidget(self.use_expiration)
         else:
-            # M-24: an EMG-only signal set has no inspiration/expiration phases for this
+            # an EMG-only signal set has no inspiration/expiration phases for this
             # option to mean anything about -- absent, not merely disabled, so the picker
             # never shows a control that could never do anything if ticked.
             self.use_expiration.setVisible(False)
 
-        # M-24: EMG-only alternative to the expiration checkbox above -- offered only when
+        # EMG-only alternative to the expiration checkbox above -- offered only when
         # the caller found a segment already typed 'rest' on this file (see
         # ``_reference_file_has_rest_segment`` and ``modes_available`` in
         # ``_open_noise_profile_dialog``). Same on/off shape as ``use_expiration``, kept as
@@ -614,7 +614,7 @@ class NoiseProfileDialog(QDialog):
         self._sync_mode_ui()
 
     def _on_rest_mode_changed(self, on):
-        """M-24 counterpart of ``_on_mode_changed`` for the 'rest-typed segments' checkbox
+        """the rest-segment noise option counterpart of ``_on_mode_changed`` for the 'rest-typed segments' checkbox
         -- same mutual-exclusion-by-hand as the expiration/span pair above, just mirrored."""
         self._untick(on, self.use_expiration, self.use_interburst)
         self._sync_mode_ui()

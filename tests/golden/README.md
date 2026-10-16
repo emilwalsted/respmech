@@ -164,7 +164,7 @@ newer ECG-removal algorithm than `master`).
 | `resampling_volume_sep` | volume-based breath separation + EMG/ECG/noise | yes |
 | `emg_h5_ecg_noise_outlier` | ECG removal + noise reduction + RMS outlier processing + EMG RMS | yes |
 | `emg_h6_ecg_noise_outlier` | ECG removal + noise reduction + RMS outlier processing + EMG RMS | yes |
-| `typed_ic_h5` | typed IC reference (`RIU_H5_IC.txt`) + cross-file operating-lung-volume derivation on the `RIU_H5_*W.txt` workload recordings (M-41) | **no — v2-only** |
+| `typed_ic_h5` | typed IC reference (`RIU_H5_IC.txt`) + cross-file operating-lung-volume derivation on the `RIU_H5_*W.txt` workload recordings | **no — v2-only** |
 
 The first five are `SCENARIO_CFG` entries in `regen_production_emg_golden.py`: their
 settings come from an existing legacy-style `settings.py` (`build_production_golden.py`'s

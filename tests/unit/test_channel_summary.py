@@ -274,7 +274,7 @@ def test_close_plots_never_raises_with_nothing_assigned(qapp):
     ChannelSummary().close_plots()
 
 
-# -- M-11: 'Analyses: …' and the Flow-conditional Volume row -------------------
+# -- the channel summary: 'Analyses: …' and the Flow-conditional Volume row -------------------
 def _capabilities(**kw):
     """A bare Capabilities, built directly rather than via from_settings — these tests are
     about the summary's OWN reaction to a given shape, not about deriving one."""
@@ -341,7 +341,7 @@ def test_volume_trailing_note_also_gated_on_flow_with_a_readable_file(qapp):
 
 
 def test_a_genuine_volume_assignment_is_never_hidden_even_without_flow(qapp):
-    """Self-review (M-11): the show_volume gate must only suppress D02's PLACEHOLDER
+    """Self-review: the show_volume gate must only suppress D02's PLACEHOLDER
     narration ('not assigned'/'derived from flow') — never a real, non-derived column
     assignment. A stale ch.volume left over from switching to an EMG-only signal set is
     exactly the case that would otherwise vanish silently from the no-matrix fallback
@@ -365,14 +365,14 @@ def test_a_derived_volume_is_still_hidden_without_flow_despite_a_real_column(qap
 
 
 # --------------------------------------------------------------------------- #
-# M-12: channel_summary's rows read the SAME source as the dialog's dropdown
+# channel_summary's rows read the SAME source as the dialog's dropdown
 # filtering (whatever is actually assigned) — no separate "required roles per
 # set" gate of its own to drift out of sync with channel_setup_dialog's
 # ---------------------------------------------------------------------------- #
 def test_a_role_outside_the_declared_set_is_still_shown_if_somehow_assigned(qapp):
     """ChannelSummary never re-derives "what's required" itself (that lives in
-    ChannelSetupDialog/Capabilities.required_roles(), M-12) — it is a pure readout of
-    ``channels``, so a stray Poes column left over from a signal-set change (M-10's
+    ChannelSetupDialog/Capabilities.required_roles()) — it is a pure readout of
+    ``channels``, so a stray Poes column left over from a signal-set change (the signal-set work's
     apply_signal_set normally clears this, but a hand-edited TOML can still carry it)
     is shown exactly like any other assigned role, not hidden because the CURRENT
     declared set no longer names it."""
@@ -384,7 +384,7 @@ def test_a_role_outside_the_declared_set_is_still_shown_if_somehow_assigned(qapp
 
 def test_declared_required_roles_govern_the_dialog_dropdown_not_the_summary(qapp):
     """The two surfaces are deliberately asymmetric: the DIALOG's dropdown is filtered to
-    the declared set (so a role outside it can never be freshly assigned, M-12), but the
+    the declared set (so a role outside it can never be freshly assigned), but the
     SUMMARY has no such gate of its own — it just reflects whatever ``channels`` already
     holds, which is why the test above can even construct that state directly."""
     from respmech.ui.channel_setup_dialog import ChannelSetupDialog

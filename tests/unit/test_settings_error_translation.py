@@ -183,7 +183,7 @@ _CASES = [
      lambda s: (setattr(s.processing.volume, "correct_trend", True),
                setattr(s.processing.volume, "trend_peak_min_distance_s", 0.0001)),
      ["trend"]),
-    # M-19: BreathTypeEntry's own form/conflict checks.
+    # BreathTypeEntry's own form/conflict checks.
     ("breath type entry is not even a table (malformed hand-edited TOML)",
      lambda s: s.processing.breath_types.append(1),
      ["breath type", "right-click"]),
@@ -352,7 +352,7 @@ def test_save_blocker_never_shows_a_raw_dotted_key(qapp):
 
 
 # --------------------------------------------------------------------------- #
-# ui.validation.channel_collision — M-12: scoped to the DECLARED signal set
+# ui.validation.channel_collision — the channel setup: scoped to the DECLARED signal set
 # --------------------------------------------------------------------------- #
 def test_channel_collision_never_names_an_undeclared_pressure(qapp):
     """The bug this ticket fixes: a "Flow + Poes" analysis (Pdi/Pgas not declared) must

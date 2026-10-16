@@ -1,4 +1,4 @@
-"""M-20: the breath-typing click primitive.
+"""The breath-typing click primitive.
 
 ``BreathSpansItem``'s right-click/Ctrl+left-click handling is exercised directly with
 lightweight fake pyqtgraph-style events (same style as
@@ -217,7 +217,7 @@ def test_set_breath_type_is_a_no_op_for_a_breath_the_current_render_does_not_kno
 
 
 def test_typing_a_breath_removes_any_existing_exclusion_and_stores_onset(qapp, tmp_path):
-    """M-19's model: a typed breath is excluded from the tidal average via
+    """the model: a typed breath is excluded from the tidal average via
     processing.breath_types, never processing.exclude_breaths — typing must therefore
     remove any prior manual exclusion of the SAME breath in the same write."""
     from respmech.ui.main_window import MainWindow
@@ -244,7 +244,7 @@ def test_typing_a_breath_removes_any_existing_exclusion_and_stores_onset(qapp, t
 
 
 def test_typing_a_breath_updates_the_rails_typed_badge(qapp, tmp_path):
-    """M-32: _set_breath_type calls the wide _sync_rail_breath_state (replacing the old,
+    """ _set_breath_type calls the wide _sync_rail_breath_state (replacing the old,
     narrower _sync_excluded_badge) — this is the funnel's own regression test for that
     wiring, would fail if a future edit routed the write back through a narrower,
     exclusion-only sync that never touches typed_counts."""
@@ -323,7 +323,7 @@ def test_a_breath_is_never_both_typed_and_excluded_across_every_transition(qapp,
 
 
 def test_toggle_breath_still_returns_the_same_bool_none_contract(qapp, tmp_path):
-    """_toggle_breath is reimplemented on top of _set_breath_type (M-20) but must keep
+    """_toggle_breath is reimplemented on top of _set_breath_type but must keep
     its exact external contract: True/False/None, unaffected by the new three-way
     model — this is a regression guard, not new behaviour."""
     from respmech.ui.main_window import MainWindow
@@ -339,7 +339,7 @@ def test_toggle_breath_still_returns_the_same_bool_none_contract(qapp, tmp_path)
 
 
 # --------------------------------------------------------------------------- #
-# The minimal type menu (Tidal / Excluded / Rest) — M-20's own scope
+# The minimal type menu (Tidal / Excluded / Rest) — the scope
 # --------------------------------------------------------------------------- #
 def test_build_type_menu_has_the_minimal_labels_and_no_lone_ampersand(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
@@ -352,7 +352,7 @@ def test_build_type_menu_has_the_minimal_labels_and_no_lone_ampersand(qapp, tmp_
 
     from PySide6.QtWidgets import QMenu
     menu = pv._build_type_menu(a_breath, ("tidal", "excluded", "rest"))
-    # M-31/M-37: the caller's kinds are still exactly Tidal/Excluded/Rest, but the menu
+    # the caller's kinds are still exactly Tidal/Excluded/Rest, but the menu
     # now always appends the reference actions behind a separator (text() == '').
     # 'Use as IC reference for' is a real submenu now (Qt draws its own arrow, so the
     # action's own text carries no manual '▸').
@@ -385,8 +385,8 @@ def test_choosing_rest_from_the_menu_sets_the_type_and_status(qapp, tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# M-31: the full manoeuvre menu — IC/FVC/max/sniff kinds, the Suggested-FVC hint,
-# the M-37 placeholders, and 'Rest' restricted to an EMG-only file.
+# the full manoeuvre menu — IC/FVC/max/sniff kinds, the Suggested-FVC hint,
+# the cross-file references placeholders, and 'Rest' restricted to an EMG-only file.
 # --------------------------------------------------------------------------- #
 def test_build_type_menu_offers_the_full_manoeuvre_set_with_no_lone_ampersand(qapp, tmp_path):
     from respmech.ui.main_window import MainWindow
@@ -410,7 +410,7 @@ def test_build_type_menu_offers_the_full_manoeuvre_set_with_no_lone_ampersand(qa
 
 
 def test_the_reference_submenu_is_disabled_until_the_breath_is_typed_ic(qapp, tmp_path):
-    """M-37: 'Use as IC reference for' only makes sense once THIS breath is already
+    """ 'Use as IC reference for' only makes sense once THIS breath is already
     typed 'ic'/'ic_fvc' -- an untyped (or excluded/tidal) breath leaves it disabled,
     with a statusTip saying so. 'Reference manoeuvres…' (the full cross-file picker)
     has no such precondition and stays enabled regardless."""
@@ -429,7 +429,7 @@ def test_the_reference_submenu_is_disabled_until_the_breath_is_typed_ic(qapp, tm
 
 
 def test_the_reference_submenu_enables_once_typed_ic_and_sets_the_reference(qapp, tmp_path):
-    """M-37 round trip (the ticket's own acceptance criterion): type a breath IC, then
+    """Round trip (the ticket's own acceptance criterion): type a breath IC, then
     'Use as IC reference for ▸ This file' links THIS file to its own breath via
     processing.references, with folder stamped on the brand-new entry."""
     from respmech.ui.main_window import MainWindow
@@ -470,7 +470,7 @@ def test_choosing_ic_from_the_menu_sets_the_type_and_status(qapp, tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# M-37: _set_reference's three scopes, the run lock, and the reference chip
+# _set_reference's three scopes, the run lock, and the reference chip
 # --------------------------------------------------------------------------- #
 def test_set_reference_group_scope_writes_a_group_reference_default(qapp, tmp_path):
     from respmech.core.summary import group_key
@@ -655,7 +655,7 @@ def test_the_mech_window_chip_full_text_survives_under_windows_font_metrics(
 
 
 def test_file_rails_references_requested_opens_the_picker_for_that_row(qapp, tmp_path, monkeypatch):
-    """FileRail's own context-menu action (M-32, unconnected until this ticket) must
+    """FileRail's own context-menu action (unconnected until this ticket) must
     reach PreviewScreen._open_reference_picker with the ROW's filename."""
     from respmech.ui.main_window import MainWindow
     s = synth_settings(str(tmp_path))
@@ -765,7 +765,7 @@ def test_suggested_fvc_hint_survives_typing_a_DIFFERENT_breath(qapp, tmp_path):
 
 def test_handle_type_requested_offers_the_manoeuvre_kinds_for_a_flow_bearing_set(
         qapp, tmp_path, monkeypatch):
-    """M-31: 'Rest' names a noise-reference SEGMENT — offering it on a flow-bearing file
+    """ 'Rest' names a noise-reference SEGMENT — offering it on a flow-bearing file
     (where breaths, not segments, are the unit) would type a real tidal breath as a
     reference no resolver for that shape ever reads."""
     from respmech.ui.main_window import MainWindow
@@ -789,7 +789,7 @@ def test_handle_type_requested_offers_the_manoeuvre_kinds_for_a_flow_bearing_set
 
 def test_handle_type_requested_offers_only_rest_and_other_for_an_emg_only_signal_set(
         qapp, tmp_path, monkeypatch):
-    """M-31 self-review finding: an EMG-only segment has no inspiration/expiration split
+    """the full breath-type menu self-review finding: an EMG-only segment has no inspiration/expiration split
     for `core.analysis.manoeuvres.extract` to read (`core.pipeline.run_batch` skips
     manoeuvre extraction entirely for `caps.mode == 'emg_only'`) — offering IC/FVC/max/
     sniff there would type a segment as, say, 'ic' with no Manoeuvres row ever appearing

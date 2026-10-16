@@ -498,7 +498,7 @@ class BreathingPatternSettings:
 
 @dataclass
 class IcSettings:
-    """Inspiratory-capacity manoeuvre extraction (M-29, ``core.analysis.manoeuvres``).
+    """Inspiratory-capacity manoeuvre extraction (``core.analysis.manoeuvres``).
 
     ``preceding_breaths``/``min_preceding_breaths`` govern how ``ic_eelv_pre`` (the
     end-expiratory-lung-volume baseline an IC's own volume swing is measured against)
@@ -568,8 +568,7 @@ class LungVolumeSettings:
 
 @dataclass
 class MfvlSettings:
-    """FVC/MFVL/EFL/VEcap and ventilatory-capacity extraction (M-42,
-    ``core.analysis.mfvl``).
+    """FVC/MFVL/EFL/VEcap and ventilatory-capacity extraction (``core.analysis.mfvl``).
 
     ``source``: how the maximal expiratory flow-volume (MEFV) envelope a tidal
     breath is placed against is built from a file's resolved ``fvc`` reference
@@ -629,11 +628,11 @@ class BreathCountEntry:
     folder: str | None = None
 
 
-#: the closed set of manoeuvre labels a single breath can be typed as (M-19). ``ic``/
-#: ``fvc``/``ic_fvc`` are inspiratory-capacity/forced-vital-capacity manoeuvres (M-29
+#: the closed set of manoeuvre labels a single breath can be typed as. ``ic``/
+#: ``fvc``/``ic_fvc`` are inspiratory-capacity/forced-vital-capacity manoeuvres (manoeuvre extraction
 #: extracts their values); ``max_insp``/``sniff`` are maximal-effort references (read by
 #: ``core.analysis.normalisation``); ``rest`` marks a quiet SEGMENT usable as an EMG-only noise reference
-#: (M-22's ``resolve_noise_reference_mode``/``rest_segments`` -- only reachable for a
+#: (the ``resolve_noise_reference_mode``/``rest_segments`` -- only reachable for a
 #: signal set with no flow channel at all, since a flow-bearing set already has a
 #: well-defined quiet period in every breath's own expiration). On a flow-bearing file,
 #: typing a BREATH ``rest`` does not make it INTO the reference either: like every other
@@ -659,7 +658,7 @@ class BreathTypeEntry:
     here re-resolves it; it exists only so a future notice can flag a mismatch.
     ``folder`` is the same carried-over-state provenance tag as ``ExcludeEntry.folder``
     -- see ``_CARRIED_KINDS`` below, which is what actually wires rebase/relativize/
-    carried/clear for this field; adding the row there was the whole point of M-07.
+    carried/clear for this field; adding the row there was the whole point of the carried-over table.
     """
     file: str
     breath: int
@@ -1079,7 +1078,7 @@ class Settings:
                 "only valid for an EMG-only signal set")
 
         # EMG-only noise reduction now HAS a reference-resolution rule
-        # (resolve_noise_reference_mode, M-22) -- replacing the old blanket "not yet
+        # (resolve_noise_reference_mode) -- replacing the old blanket "not yet
         # supported" guard below with two narrower ones for what still is not built:
         #  1. no usable reference at all ('unresolved') -- the same "fail before a
         #     single file is processed" guarantee the old guard gave, just narrower
@@ -1145,7 +1144,7 @@ class Settings:
                     "processing.volume.trend_peak_min_distance_s must be at least one "
                     f"sample at the analysis rate ({fs_eff} Hz)")
 
-        # M-19: a typed breath is a per-breath override, so it needs the same kind of
+        # a typed breath is a per-breath override, so it needs the same kind of
         # form/conflict checks exclude_breaths/breath_counts never got (nothing else in
         # this method touches either of those today). Form first (kind/breath shape),
         # THEN cross-entry conflicts, so a malformed entry is reported on its own terms
@@ -1190,7 +1189,7 @@ class Settings:
                     f"processing.breath_types: breath {bt.breath} of {bt.file} is both "
                     "typed and excluded")
 
-        # whole_file segmentation (M-21, EMG-only) produces exactly one segment, always
+        # whole_file segmentation (EMG-only) produces exactly one segment, always
         # numbered 1 -- a typed breath number above that can never correspond to
         # anything, regardless of which file it names.
         if seg.method == "whole_file":
@@ -1200,7 +1199,7 @@ class Settings:
                         f"processing.breath_types: breath {bt.breath} > 1 is impossible "
                         "under whole_file segmentation")
 
-        # M-29 IcSettings: self-review finding -- `min_preceding_breaths < 1` would let
+        # manoeuvre extraction IcSettings: self-review finding -- `min_preceding_breaths < 1` would let
         # `_ic_eelv_pre`'s mean-branch run over ZERO preceding breaths (an empty-array
         # mean is NaN, silently poisoning `vol_ic`), and an `aggregate` typo (e.g. a
         # hand-edited "medain") would silently fall through to the "mean" branch in
@@ -1225,7 +1224,7 @@ class Settings:
             raise SettingsError(
                 'processing.lung_volume.ic.eelv_tracking must be "none" or "within_file"')
 
-        # M-42 MfvlSettings: same front-line-failure-mode reasoning as IcSettings
+        # the FVC/MFVL analysis MfvlSettings: same front-line-failure-mode reasoning as IcSettings
         # above (a hand-edited TOML with no UI writing this table yet).
         mfvl = self.processing.mfvl
         if mfvl.source not in ("single", "envelope"):
@@ -1385,7 +1384,7 @@ def resolve_noise_reference_mode(settings: "Settings") -> str:
 def resolve_noise_reference_mode_or_none(settings: "Settings") -> str | None:
     """``resolve_noise_reference_mode``, tolerant of a malformed ``analysis.signals`` --
     the same defensive pairing as :meth:`respmech.core.analysis.signals.Capabilities.
-    from_settings_or_none`, for the identical reason (M-24): several UI render paths call
+    from_settings_or_none`, for the identical reason: several UI render paths call
     the resolver on every edit/open -- including ``MainWindow``'s own construction on the
     command-line/drag-drop open path, which has no surrounding try/except at all -- so
     letting a hand-edited bare-string ``signals = "flow"`` raise there (via
@@ -1468,7 +1467,7 @@ def _clear_normalization_reference(emg: "EmgSettings") -> None:
 # six hand-spread call sites (CarriedOverState, carried_over_state, clear_carried_over,
 # toml_io._rebase_folders, toml_io.save_toml, plus the Setup banner/rail/overlay reading
 # their result) into one table those call sites all iterate — a future tagged kind
-# (M-19 breath_types, M-21 separators, M-34 references/reference_defaults/subjects) adds
+# (typed breaths, manual separators, reference resolution) adds
 # ONE row here instead of touching all six again (the exact B06 recurrence this ticket
 # closes off).
 #
@@ -1509,7 +1508,7 @@ _CARRIED_KINDS: tuple[tuple[str, str, Callable[[Any], Any], Callable[[Any], None
      lambda emg: emg.ecg_reference_file, _clear_ecg_reference),
     ("processing.emg.normalization_reference_folder", "normalization_reference",
      lambda emg: emg.normalization_reference_file, _clear_normalization_reference),
-    # M-19: a typed breath always names a kind once the entry exists at all (kind is a
+    # a typed breath always names a kind once the entry exists at all (kind is a
     # required field, never optional the way ExcludeEntry.breaths can be empty), so
     # unlike exclude_files' `if e.breaths` guard, every entry here is worth reporting.
     ("processing.breath_types", "breath_type_files",

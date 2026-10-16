@@ -1,7 +1,7 @@
-"""PreviewScreen's 'EMG – segments' sub-tab (M-26): the dedicated stack + action band +
+"""PreviewScreen's 'EMG – segments' sub-tab: the dedicated stack + action band +
 per-segment result table for an EMG-only signal set, replacing Mechanics as the first
 sub-tab for that shape (see ``_emg_noise.py``'s ``subtab_plan``). The renderer here is
-the real, interactive follow-up to M-25's provisional one (``_render_emg_segments_
+the real, interactive follow-up to the provisional one (``_render_emg_segments_
 preview``, which drew into the ECG-reduction/noise-reduction tabs' shared raw EMG stack
 with no click surface at all — see that method's own docstring, since replaced by
 :meth:`_SegmentsMixin._render_segments_preview`)."""
@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover
 
 from ._plot_helpers import SeparatorLinesItem, _pen, _plot_pal
 
-#: M-27's own tooltip while placement is unavailable, worded exactly as the ticket
+#: the tooltip while placement is unavailable, worded exactly as the ticket
 #: requires — whole-file mode has no boundaries to place (one segment, always).
 _WHOLE_FILE_TOOLTIP = (
     "Whole-file mode has one segment — choose Manual separators in Setup ▸ "
@@ -82,7 +82,7 @@ class _SegmentsMixin:
         self.segments_plots.scene().sigMouseClicked.connect(self._on_segments_clicked)
         self._segments_subplots = []
         self._segments_label_y = None
-        # M-27: whether 'Place separators' is currently armed (read by the shared
+        # whether 'Place separators' is currently armed (read by the shared
         # _toggle_from_emg_click funnel in _emg_noise.py, checked before it does
         # anything else) + the SeparatorLinesItem drawn on each segments subplot.
         self._separators_armed = False
@@ -94,7 +94,7 @@ class _SegmentsMixin:
         ``_MechanicsMixin._build_mech_action_band`` exactly (same pinned-outside-the-
         scrolling-page placement, same reason: on a short screen the verdict must not be
         the one thing scrolled out of view). Three elements now sit in this row: the QC
-        label, M-27's own 'Place separators' toggle, and the process button —
+        label, the 'Place separators' toggle, and the process button —
         ``test_the_segments_action_band_fits_on_windows_metrics`` covers all three.
 
         ``segments_qc_overview`` (not a spacer) carries the row's stretch factor, same
@@ -114,8 +114,8 @@ class _SegmentsMixin:
         self.segments_qc_overview.setToolTip(
             "Quality overview of the CURRENTLY PREVIEWED file's most recent test run — "
             "not a batch summary. See the file rail for every file's exclusion count.")
-        bar.addWidget(self.segments_qc_overview, 1)   # M-27's button lands beside this
-        # M-27: checkable, so its own pressed state IS the "armed" flag the shared click
+        bar.addWidget(self.segments_qc_overview, 1)   # the button lands beside this
+        # checkable, so its own pressed state IS the "armed" flag the shared click
         # funnel reads (_toggle_from_emg_click) — toggled() keeps _separators_armed and
         # the checked visual in lockstep with no separate bookkeeping to drift.
         # the parameters of the two AUTOMATIC methods (fixed_windows / emg_burst) live
@@ -137,7 +137,7 @@ class _SegmentsMixin:
         return band
 
     def _update_segments_stack_floor(self):
-        """The segments tab's own eftergivende-floor update (M-26), bound via its own
+        """The segments tab's own eftergivende-floor update, bound via its own
         ``_MechStackFloorFitter`` instance — see that class's docstring on why it now
         takes an ``update_fn`` instead of always calling ``_update_mech_stack_floor``."""
         if _theme is None:
@@ -163,7 +163,7 @@ class _SegmentsMixin:
         Mechanics channel stack does for a flow-bearing set — safe because the two are
         mutually exclusive (see ``_draw_breath_overlays``'s own docstring).
 
-        ``filename`` (M-27) is the file THIS render is for — never read from
+        ``filename`` is the file THIS render is for — never read from
         ``self._previewed_file``, which the caller (``_render_segments_preview``) only
         updates AFTER this call returns, so it would still name the PREVIOUS file on a
         file switch. Drives which file's ``processing.segmentation.separators`` entry
@@ -200,7 +200,7 @@ class _SegmentsMixin:
                                    plots=self._segments_subplots)
 
     def _update_separator_lines(self, filename):
-        """(Re)draw M-27's separator markers on every current segments subplot from
+        """(Re)draw the separator markers on every current segments subplot from
         ``processing.segmentation.separators`` — called from ``_render_segments_stack``
         after every (re)render, the same reactive path any other settings edit already
         follows, so a placement/removal shows the instant its recompute comes back."""
@@ -216,10 +216,10 @@ class _SegmentsMixin:
             self._separator_items.append(item)
 
     def _render_segments_preview(self, data):
-        """The 'segments' job's render entry point (EMG-only signal sets, M-26): draws
+        """The 'segments' job's render entry point (EMG-only signal sets): draws
         the segments tab's own dedicated, interactive stack (``_render_segments_stack``)
         AND keeps the ECG-reduction/noise-reduction tabs' raw EMG stack current
-        (``_render_raw_stack``, as M-25's provisional renderer already did) — those tabs
+        (``_render_raw_stack``, as the provisional renderer already did) — those tabs
         remain visible for an EMG-only set (``subtab_plan``, ``caps.emg`` is always true
         for that mode) and show the same physical channels; ``_toggle_from_emg_click``'s
         hit-testing there reads the SAME ``_breath_spans`` this method now populates, so
@@ -242,7 +242,7 @@ class _SegmentsMixin:
             (num, t0, t1, kind if kind else ("excluded" if ignored else None))
             for (num, t0, t1, ignored, kind) in data["spans"]
         ]
-        # M-31: a segment has no inspiration/expiration split for manoeuvres.suggest_fvc
+        # a segment has no inspiration/expiration split for manoeuvres.suggest_fvc
         # to read (has_phases=False, see core.analysis.segments) — never suggested here,
         # and explicitly cleared so a suggestion from a PREVIOUSLY viewed flow-bearing
         # file cannot survive a switch to an EMG-only one (this render path never goes
@@ -283,7 +283,7 @@ class _SegmentsMixin:
         self._segtable_model.set_dataframe(df)
         resize_result_table(self.segtable)
 
-    # -- M-27: manual separators (placement, removal, renumbering) ----------
+    # -- manual separators: manual separators (placement, removal, renumbering) ----------
 
     def _update_separators_button(self):
         """Enable/disable + tooltip 'Place separators' for the CURRENT segmentation
@@ -409,7 +409,7 @@ class _SegmentsMixin:
         ``ExcludeEntry``/``BreathTypeEntry`` for it in lockstep, so a segment's own
         exclusion/typing follows it through an insertion or removal instead of
         silently re-attaching to whatever segment happens to carry its OLD number
-        afterwards — M-27's whole reason for existing: without this, excluding
+        afterwards — the whole reason for existing: without this, excluding
         segment 3 and then inserting a separator earlier in the file would silently
         turn into excluding a DIFFERENT segment 3.
 
@@ -517,11 +517,11 @@ class _SegmentsMixin:
             at = t
         self._set_separators(name, new_times)
         self.settings_edited.emit()
-        # The wide, all-files _sync_rail_breath_state() (M-32; formerly the
+        # The wide, all-files _sync_rail_breath_state() (the file rail; formerly the
         # exclusion-only _sync_rail_exclusions()): unlike an ordinary exclude/type
         # toggle, _set_separators can change the EXCLUSION COUNT for this file by
         # renumbering/merging entries (see its own docstring) AND always changes this
-        # file's own segment COUNT — and since M-32, this is the one funnel that already
+        # file's own segment COUNT — and since the file rail, this is the one funnel that already
         # recomputes every file's exclusion/typed/segment badges correctly; a narrower,
         # single-file version of that recompute does not exist today.
         self._sync_rail_breath_state()

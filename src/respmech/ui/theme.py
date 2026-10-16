@@ -81,7 +81,7 @@ _PLOT_LIGHT = {
                   (125, 91, 166), (14, 124, 123), (180, 80, 122), (92, 107, 122)],
     "breath_incl_brush": (44, 110, 155, 32), "breath_excl_brush": (180, 50, 42, 70),
     "breath_incl_label": (90, 107, 122), "breath_excl_label": (180, 50, 42),
-    # M-20: one brush/label pair per breath-type kind the type-menu can set (see the
+    # one brush/label pair per breath-type kind the type-menu can set (see the
     # matching comment in _plot_helpers.py's _FALLBACK_PAL for the full reasoning).
     # Self-review: an earlier draft reused the "channels"/"emg_cycle" hues verbatim
     # (ic=volume's green, fvc=pgas's amber, rest=pdi's purple) — a typed breath then
@@ -122,7 +122,7 @@ _PLOT_DARK = {
                   (180, 152, 226), (74, 200, 198), (230, 140, 182), (150, 166, 182)],
     "breath_incl_brush": (110, 172, 224, 42), "breath_excl_brush": (214, 92, 82, 62),
     "breath_incl_label": (150, 166, 182), "breath_excl_label": (234, 122, 112),
-    # M-20: dark-theme brightened equivalents of the light table's breath-kind keys —
+    # dark-theme brightened equivalents of the light table's breath-kind keys —
     # olive/plum/slate-blue, chosen (see _PLOT_LIGHT) to stay distinct from every
     # channel/emg_cycle colour rather than reuse them.
     "breath_ic_brush": (178, 190, 90, 62), "breath_ic_label": (178, 190, 90),
@@ -730,7 +730,7 @@ QLabel[status="warn"] {
 QLabel[status="error"] {
     color: $st_error_fg; background-color: $st_error_bg; border-color: $st_error_bd;
 }
-/* M-11: the Setup Signals row's chips (Flow/Poes/Pgas/Pdi/EMG) — a small, permanent pill,
+/* the channel summary: the Setup Signals row's chips (Flow/Poes/Pgas/Pdi/EMG) — a small, permanent pill,
    never a 'status' colour (nothing here is a caution), so it gets its own property rather
    than reusing 'banner' (whose box only applies on first polish, see the banner comment
    above — a chip is always built fresh with the property already set, so that pitfall does

@@ -1,4 +1,4 @@
-"""``core.analysis.lungvol`` (M-36): the pure per-breath operating-lung-volume
+"""``core.analysis.lungvol``: the pure per-breath operating-lung-volume
 formula, and ``attach()`` on hand-built ``FileResult``/``BatchResult`` objects — the
 same no-file-I/O pattern ``test_reference_resolution.py``'s own ``attach()`` section
 uses, since this module's ``attach`` only ever consumes what ``references.attach``
@@ -365,7 +365,7 @@ def test_attach_baseline_pattern_notices_an_ambiguous_multiple_match():
 
 
 def test_resolve_vc_returns_none_gracefully_when_fvc_key_is_absent():
-    """The linked-FVC fallback (pre-M-42, manoeuvres.extract never sets 'fvc') must
+    """The linked-FVC fallback (previous, manoeuvres.extract never sets 'fvc') must
     degrade to None, not raise, so vol_eelv/vol_eilv/etc. simply stay NaN."""
     from respmech.core.settings import BreathRef, GroupReferenceEntry
     from respmech.core.analysis.lungvol import _resolve_vc

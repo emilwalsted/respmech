@@ -968,13 +968,13 @@ def test_wob_table_note_clears_on_a_soft_precondition_error(qapp, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# M-30 — a reference-only test-run file (every breath typed, none tidal) previews
+# reference-only files — a reference-only test-run file (every breath typed, none tidal) previews
 # without an error, showing the Manoeuvres table instead
 # ---------------------------------------------------------------------------
 def test_reference_only_test_run_shows_manoeuvres_not_not_processed(qapp, tmp_path):
     """A file where EVERY breath is typed used to reach the results layer's
     NoBreathsError, which the Preview & QC error path (_SOFT_FILE_ERRORS) rendered as
-    'Not processed'. M-30 makes it a normal, non-error outcome instead: no error card,
+    'Not processed'. reference-only files makes it a normal, non-error outcome instead: no error card,
     no 'Not processed' overlay, the Manoeuvres table shown, and a plain status line
     naming how many typed breaths were found."""
     from respmech.ui.main_window import MainWindow
@@ -991,7 +991,7 @@ def test_reference_only_test_run_shows_manoeuvres_not_not_processed(qapp, tmp_pa
 
     result = run_batch(s, only_files=["synth_case_B.csv"])
     fr = result.ok_files["synth_case_B.csv"]
-    assert fr.error is None and fr.role == "reference"      # the fixture actually exercises M-30
+    assert fr.error is None and fr.role == "reference"      # the fixture actually exercises reference-only files
 
     pv._on_batch_result(result)
 
@@ -1004,7 +1004,7 @@ def test_reference_only_test_run_shows_manoeuvres_not_not_processed(qapp, tmp_pa
     assert pv._table_panel._title_label.fullText() == "Manoeuvres (reference-only file)"
     assert "excluded" not in pv.qc_overview.text().lower()   # not a QC dropout — every breath was typed
     assert "6 typed manoeuvre" in pv.qc_overview.text()
-    # M-32: fr.role rides through mark_result into the rail's own badge/tooltip state —
+    # fr.role rides through mark_result into the rail's own badge/tooltip state —
     # not just re-derived from the bare FileResult this test already checked above.
     assert pv.file_rail.entry("synth_case_B.csv").role == "reference"
     win.close()
@@ -1515,7 +1515,7 @@ def test_batch_snapshot_drops_ecg_auto_detect_with_the_rest_of_emg(qapp, monkeyp
 
 
 # --------------------------------------------------------------------------- #
-# M-31: the Manoeuvres table under the per-breath table, same panel
+# the Manoeuvres table under the per-breath table, same panel
 # --------------------------------------------------------------------------- #
 def _shown(qapp, win, pv):
     """QWidget.isVisible() ANDs a widget's own shown state with its whole ancestor
@@ -1548,8 +1548,8 @@ def test_manoeuvres_section_is_hidden_until_a_run_types_a_breath(qapp, tmp_path)
 
 def test_manoeuvres_section_shows_below_the_per_breath_table_for_a_mixed_file(qapp, tmp_path):
     """synth_case_A.csv has 8 breaths; type ONE of them 'ic' and leave the rest tidal —
-    this is the M-31 shape the ticket exists for (mixed in one file), distinct from
-    M-30's reference-only (every breath typed, no tidal table at all)."""
+    this is the full breath-type menu shape the ticket exists for (mixed in one file), distinct from
+    the reference-only (every breath typed, no tidal table at all)."""
     from respmech.core.settings import BreathTypeEntry
     from respmech.ui.main_window import MainWindow
     from respmech.core.pipeline import run_batch
@@ -1576,7 +1576,7 @@ def test_manoeuvres_section_shows_below_the_per_breath_table_for_a_mixed_file(qa
 
 
 def test_manoeuvres_section_is_hidden_for_a_reference_only_file(qapp, tmp_path):
-    """M-30's reference-only file already shows its manoeuvres AS the primary table
+    """the reference-only file already shows its manoeuvres AS the primary table
     (retitled 'Manoeuvres (reference-only file)') — the separate stacked section must
     stay hidden, or the same rows would appear twice."""
     from respmech.core.settings import BreathTypeEntry

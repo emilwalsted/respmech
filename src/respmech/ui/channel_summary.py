@@ -189,7 +189,7 @@ class ChannelSummary(QWidget):
             lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
             self._box.addWidget(lab)
             self.rows.append(lab)
-        # M-11: Volume is only ever relevant when Flow is actually part of the declared
+        # Volume is only ever relevant when Flow is actually part of the declared
         # signal set — with no ``capabilities`` given (every pre-existing caller/test),
         # this stays True, i.e. unchanged behaviour.
         show_volume = capabilities is None or capabilities.flow
@@ -206,7 +206,7 @@ class ChannelSummary(QWidget):
             # the moment it exists rather than only once a file can be loaded.
             for role in ORDER:
                 if role == "volume" and not show_volume:
-                    # M-11 self-review: Flow isn't even declared, so Volume loses D02's
+                    # the channel summary self-review: Flow isn't even declared, so Volume loses D02's
                     # special "always narrate, even when absent/derived" treatment and
                     # falls back to the ordinary "only show if actually assigned" rule
                     # every other role already has here — a REAL, non-derived assignment
@@ -262,7 +262,7 @@ class ChannelSummary(QWidget):
         # ticket D02: Volume has no column of its own to draw here whenever it is either
         # unassigned or being derived from flow — a trailing label names it either way,
         # matching describe()'s no-matrix listing above instead of silently omitting the
-        # one role the graphs cannot represent. M-11: never shown at all when Flow itself
+        # one role the graphs cannot represent. the channel summary: never shown at all when Flow itself
         # is not part of the declared signal set (show_volume, see above).
         if show_volume and (integrate_from_flow or not getattr(channels, "volume", None)):
             text = describe(channels, "volume", integrate_from_flow)

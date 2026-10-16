@@ -105,7 +105,7 @@ def reference_values_for_batch(result, settings) -> "dict | None":
 
 
 def resolve_emg_reference(result, settings) -> "tuple[dict | None, str | None]":
-    """M-30: wraps :func:`reference_values_for_batch` (contract UNCHANGED) with a
+    """Wraps :func:`reference_values_for_batch` (contract UNCHANGED) with a
     notice for the one case that function itself cannot distinguish from "not
     configured at all" -- a reference file that IS named and IS present in the batch,
     but has no breath table to read a reference from (a reference-only file has no
