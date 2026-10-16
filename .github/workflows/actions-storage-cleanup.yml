@@ -12,13 +12,16 @@
 # Uses only the runner's own gh CLI and GITHUB_TOKEN: no third-party actions,
 # so it passes every repo's permitted-actions policy.
 #
-# Runs once whenever this file changes (so introducing it cleans up at once),
-# weekly, and on demand (dry_run available).
+# Runs once whenever this file changes on a branch (so introducing it cleans up
+# at once), weekly, and on demand (dry_run available). The push trigger carries
+# a branches filter: GitHub ignores the paths filter for tag pushes, so without
+# it every deploy tag would start a run and cost an Actions minute.
 
 name: Ryd Actions-lager
 
 on:
   push:
+    branches: ['**']
     paths:
       - .github/workflows/actions-storage-cleanup.yml
   schedule:
