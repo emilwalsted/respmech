@@ -589,11 +589,23 @@ def _noise_tab_shares(win, pv):
     }
 
 
+def _line_height():
+    from PySide6.QtGui import QFontMetrics
+    from PySide6.QtWidgets import QApplication
+    return QFontMetrics(QApplication.font()).height()
+
+
+def _font_name():
+    from PySide6.QtWidgets import QApplication
+    return QApplication.font().family()
+
+
 def _assert_roughly_thirds(shares):
     for name, share in shares.items():
         assert 0.25 <= share <= 0.42, (
             f"{name} takes {share:.0%} of the window, not roughly a third "
-            f"(all three: { {k: f'{v:.0%}' for k, v in shares.items()} })")
+            f"(all three: { {k: f'{v:.0%}' for k, v in shares.items()} }; "
+            f"line height {_line_height()} px, font {_font_name()!r})")
 
 
 def _app_default_height():
@@ -619,6 +631,9 @@ def test_the_noise_tab_divides_into_thirds(qapp, tmp_path):
     win.close()
 
 
+_WINDOWS_LIKE_LINE_HEIGHT = 20     # px: 13% on the Linux basis (17 px), see the test below
+
+
 def test_the_noise_tab_divides_into_thirds_with_taller_rows(qapp, tmp_path):
     """The same budget when every row of text is taller, as it is on Windows.
 
@@ -627,16 +642,35 @@ def test_the_noise_tab_divides_into_thirds_with_taller_rows(qapp, tmp_path):
     against a 42% budget. ``windows_metrics`` widens advances only and leaves heights alone, so
     it cannot reproduce this; here the application font is made 13% taller instead (the ratio
     between that Windows measurement and the Linux one), set BEFORE the window is built, and
-    the budget is asserted as a share, in the same run, not as a pixel figure."""
+    the budget is asserted as a share, in the same run, not as a pixel figure.
+
+    The 25%-42% limits are unchanged (Emil's "each roughly a third"). Only the model was wrong:
+    on the Windows CI runners the application font is already taller than on Linux, so 13%
+    on top of it produced a window no real machine has and the reference row got 24%."""
+    from PySide6.QtGui import QFontMetrics
     orig = qapp.font()
+    base_h = QFontMetrics(orig).height()
     f = qapp.font()
     f.setPointSizeF(orig.pointSizeF() * 1.13)
+    # The 13% is a model of Windows ON a platform whose rows are shorter. A platform whose own
+    # rows are already that tall (the Windows runners) must not get 13% on top: that models a
+    # window no machine has (CI, 16-10-2026: the reference row fell to 24% there). So the
+    # modelled line height is capped at what 13% gives on the Linux basis (17 px -> 20 px),
+    # and a font already at or above the cap is left as it is.
+    cap_h = _WINDOWS_LIKE_LINE_HEIGHT
+    if base_h >= cap_h:
+        f = orig
+    else:
+        while QFontMetrics(f).height() > cap_h and f.pointSizeF() > orig.pointSizeF():
+            f.setPointSizeF(f.pointSizeF() - 0.25)
     qapp.setFont(f)
     try:
         win, pv = _noise_tab(qapp, tmp_path, _app_default_height())
         from PySide6.QtGui import QFontMetrics
         grown = QFontMetrics(qapp.font()).height()
-        assert grown > QFontMetrics(orig).height(), "the font did not get taller — nothing modelled"
+        assert grown >= base_h and (grown > base_h or base_h >= cap_h), (
+            f"the font did not get taller — nothing modelled (line height {base_h} -> {grown}, "
+            f"cap {cap_h}, family {qapp.font().family()!r})")
         _assert_roughly_thirds(_noise_tab_shares(win, pv))
         win.close()
     finally:
