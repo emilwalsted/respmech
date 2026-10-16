@@ -573,48 +573,74 @@ def test_the_campbell_labels_shorten_and_come_back(qapp, tmp_path):
     win.close()
 
 
-def test_the_noise_tab_divides_into_thirds(qapp, tmp_path):
-    """What Emil actually asked for: chrome+settings / the two working views / the three
-    reference panels, each roughly a third of the window at the default size.
-
-    Window height raised from 800 to 850 (C01, UI-overhaul): a real QMenuBar adds a fixed
-    ~22 px row of chrome (offscreen/Windows/Linux — on a real macOS run Qt merges it into
-    the system menu bar and it costs the window nothing), which at 800 px pushed
-    chrome+settings to 43% — a fixed cost is a smaller SHARE of a taller window, so this
-    raises the total rather than loosening the "roughly a third" invariant itself. The
-    same rule applies the other way round for a permanent addition eating into this
-    same budget.
-
-    NOT raised again for the Windows overage reported 10-08-2026 (43.06% vs 0.42 at this
-    same 850 px): unlike the 800->850 move, bumping the height further would not be testing
-    a taller REAL window, it would be testing a window the app never actually opens.
-    ``MainWindow._fit_to_screen``'s own defaults are ``desired_h=820`` — BELOW even this
-    test's current 850 px — so the chrome+settings share on a real Windows machine at the
-    app's actual default size is worse than the 43.06% already measured here, not better.
-    Padding this test's window taller would make the assertion pass while leaving the real,
-    smaller window exactly as cramped. This needs the chrome itself compressed (or its
-    budget re-derived from font height) in the noise tab's own product code — a product
-    decision, not a test-fixture number — and is tracked as an open follow-up
-    (10-08-2026) rather than guessed at here."""
+def _noise_tab_shares(win, pv):
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QSplitter
-    win, pv = _noise_tab(qapp, tmp_path, 850)
     page = pv.subtabs.currentWidget().widget()
     splits = [w for w in page.findChildren(QSplitter) if w.orientation() == Qt.Vertical]
     assert splits, "no vertical splitter on the noise page — nothing to measure"
     sizes = splits[0].sizes()
     assert len(sizes) == 3, f"expected three stacked regions, got {len(sizes)}"
     total = win.height()
-    shares = {
+    return {
         "chrome+settings": (total - sum(sizes)) / total,
         "working views": (sizes[0] + sizes[1]) / total,
         "reference row": sizes[2] / total,
     }
+
+
+def _assert_roughly_thirds(shares):
     for name, share in shares.items():
         assert 0.25 <= share <= 0.42, (
             f"{name} takes {share:.0%} of the window, not roughly a third "
             f"(all three: { {k: f'{v:.0%}' for k, v in shares.items()} })")
+
+
+def _app_default_height():
+    """The height the app really opens at, read from ``MainWindow._fit_to_screen`` itself so
+    this test can never drift to a window the app does not open (it once measured 850 px while
+    the app opens at 820, which understated how cramped the real window is)."""
+    import inspect
+    from respmech.ui.main_window import MainWindow
+    return inspect.signature(MainWindow._fit_to_screen).parameters["desired_h"].default
+
+
+def test_the_noise_tab_divides_into_thirds(qapp, tmp_path):
+    """What Emil actually asked for: chrome+settings / the two working views / the three
+    reference panels, each roughly a third of the window — measured at the height the app
+    opens at (``MainWindow._fit_to_screen``'s ``desired_h``), not at a padded test height.
+
+    Measured 16-10-2026 at that height, before and after compressing the page's own chrome
+    (the controls strip: tighter page margins, and its two buttons on a dense variant of the
+    compact style so they no longer set the strip's height): chrome+settings 39.5% -> 37.8%
+    with the default font, and 42.2% -> 40.5% with 13% taller rows (see the next test)."""
+    win, pv = _noise_tab(qapp, tmp_path, _app_default_height())
+    _assert_roughly_thirds(_noise_tab_shares(win, pv))
     win.close()
+
+
+def test_the_noise_tab_divides_into_thirds_with_taller_rows(qapp, tmp_path):
+    """The same budget when every row of text is taller, as it is on Windows.
+
+    Chrome is made of rows, so its height grows with the font's line height while the window
+    stays 820 px: on a real Windows machine the share was measured at 43.06% (10-08-2026)
+    against a 42% budget. ``windows_metrics`` widens advances only and leaves heights alone, so
+    it cannot reproduce this; here the application font is made 13% taller instead (the ratio
+    between that Windows measurement and the Linux one), set BEFORE the window is built, and
+    the budget is asserted as a share, in the same run, not as a pixel figure."""
+    orig = qapp.font()
+    f = qapp.font()
+    f.setPointSizeF(orig.pointSizeF() * 1.13)
+    qapp.setFont(f)
+    try:
+        win, pv = _noise_tab(qapp, tmp_path, _app_default_height())
+        from PySide6.QtGui import QFontMetrics
+        grown = QFontMetrics(qapp.font()).height()
+        assert grown > QFontMetrics(orig).height(), "the font did not get taller — nothing modelled"
+        _assert_roughly_thirds(_noise_tab_shares(win, pv))
+        win.close()
+    finally:
+        qapp.setFont(orig)
 
 
 # -- D04 (UI-overhaul): the fidelity frontier draws its data and explains itself -----
