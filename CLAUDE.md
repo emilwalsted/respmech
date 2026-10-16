@@ -488,9 +488,12 @@ instrument.
 
 Pushing `vX.Y.Z` (must point at `master`) triggers both `release.yml` (signed dmg +
 MSI, GitHub release marked Latest) and `publish-pypi.yml` (PyPI via Trusted
-Publishing/OIDC, no tokens, behind a test gate that runs the whole suite on a
-release runner with a wide, unmeasured timeout margin — treat it as noticeably
-slower than `ci.yml`, and watch for race-sensitive asserts failing there first).
+Publishing/OIDC, no tokens, behind a macOS test gate that runs the unit suite file
+by file exactly like `ci.yml`'s macOS job; the one-process run it used before ran
+out of time at 67 % on v2.5.0. Race-sensitive asserts still tend to fail there
+first). If a tag's PyPI run does not finish, a manual run of `publish-pypi.yml`
+from master with the `tag` input publishes that same tag; never cut a new version
+just to get an unpublished one onto PyPI (`docs/RELEASING.md`).
 Full runbook: `docs/RELEASING.md`
 and `docs/SIGNING.md`; the release skill (`.claude/skills/release/SKILL.md`) walks
 through it step by step. In short: add the `CHANGELOG.md` entry (folding in

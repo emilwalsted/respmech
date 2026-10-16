@@ -24,8 +24,9 @@ name: Release request (server-side tag)
 # publish-pypi.yml are both `on: push: tags`, so such a tag would be created and
 # then nothing at all would happen, silently. It could not be repaired from here
 # either: a repeated request finds the tag "already present" and pushes nothing.
-# workflow_dispatch is not a way around it: publish-pypi.yml deliberately sends a
-# manual run to TestPyPI, never to real PyPI. So the tag is pushed with a separate
+# workflow_dispatch is not a way around it: nothing would build the installers, and
+# publish-pypi.yml's manual tag publish is a repair for a tag whose own run did not
+# finish, not a second way to release. So the tag is pushed with a separate
 # credential, the secret RELEASE_TAG_TOKEN (a fine-grained personal access token
 # limited to THIS repository, "Contents: Read and write" and nothing else), and
 # WITHOUT that secret this workflow refuses before it creates anything. There is

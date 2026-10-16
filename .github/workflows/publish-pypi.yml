@@ -10,8 +10,15 @@ name: Publish to PyPI
 # GitHub release AND the PyPI package. The two workflows write to different targets and
 # never conflict.
 #
-# A manual run (Actions ▸ Publish to PyPI ▸ Run workflow) publishes to **TestPyPI** instead
-# — a safe dry-run that never touches real PyPI.
+# A manual run (Actions ▸ Publish to PyPI ▸ Run workflow) with the `tag` field EMPTY publishes
+# to **TestPyPI** instead — a safe dry-run that never touches real PyPI.
+#
+# A manual run from `master` with `tag` set to an existing `vX.Y.Z` publishes THAT tag's code
+# to real PyPI. It exists for one situation: the tag-triggered run did not finish (2.5.0's
+# test gate ran out of time on 16-10-2026, after the GitHub release and the installers were
+# already out), and a PyPI version cannot be re-pushed under the same tag. The run checks the
+# tag out, runs the same test gate and changelog check on it, builds it and refuses unless the
+# built version equals the tag, exactly as on a tag push. Nothing else differs.
 #
 # ── One-time maintainer setup on PyPI (no secrets involved) ───────────────────────────
 #   PyPI ▸ your account ▸ Publishing ▸ "Add a pending publisher":
@@ -26,16 +33,85 @@ name: Publish to PyPI
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch: {}          # manual → TestPyPI dry-run
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Empty: TestPyPI dry-run of this branch. vX.Y.Z (run from master): publish that existing tag to PyPI."
+        required: false
+        default: ""
+        type: string
 
 # Least privilege: no permissions by default; each job opts into exactly what it needs.
 permissions: {}
 
 concurrency:
-  group: publish-pypi-${{ github.ref }}
+  # A manual publish of a tag shares the group of that tag's own push run, so the two can
+  # never publish the same version side by side.
+  group: publish-pypi-${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
   cancel-in-progress: false      # never cancel an in-flight publish
 
 jobs:
+  # ── 0. What is being published ────────────────────────────────────────────────────────
+  # Decides, once, which commit every later job checks out and whether this run publishes
+  # for real. A tag push publishes its own tag. A manual run publishes the tag it names, and
+  # only from master and only for an existing plain-semver tag on master's history, so a
+  # typo or a stray branch cannot reach real PyPI. The input reaches the shell only through
+  # an environment variable, never interpolated into the script.
+  target:
+    name: Resolve what to publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      ref: ${{ steps.resolve.outputs.ref }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      real: ${{ steps.resolve.outputs.real }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Resolve the tag
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "push" ]; then
+            case "$REF" in
+              refs/tags/v*) ;;
+              *) echo "::error::a push run must be a v* tag, got $REF"; exit 1 ;;
+            esac
+            tag="$REF_NAME"; ref="$REF"; real=true
+          elif [ -z "$INPUT_TAG" ]; then
+            tag=""; ref="$REF"; real=false
+            echo "Manual run without a tag: TestPyPI dry-run of $REF."
+          else
+            if [ "$REF" != "refs/heads/master" ]; then
+              echo "::error::publishing a tag to PyPI is only done from master (this run is on $REF)"; exit 1
+            fi
+            # [[ =~ ]] matches the WHOLE string; grep would match any one line of it.
+            if ! [[ "$INPUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::tag must be plain semver vX.Y.Z, got '$INPUT_TAG'"; exit 1
+            fi
+            if ! git rev-parse -q --verify "refs/tags/$INPUT_TAG^{commit}" >/dev/null; then
+              echo "::error::tag $INPUT_TAG does not exist"; exit 1
+            fi
+            if ! git merge-base --is-ancestor "refs/tags/$INPUT_TAG^{commit}" origin/master; then
+              echo "::error::tag $INPUT_TAG does not point at master's history"; exit 1
+            fi
+            tag="$INPUT_TAG"; ref="refs/tags/$INPUT_TAG"; real=true
+            echo "Manual publish of $tag ($(git rev-parse --short "refs/tags/$tag^{commit}")) to PyPI."
+          fi
+          {
+            echo "ref=$ref"
+            echo "tag=$tag"
+            echo "real=$real"
+          } >> "$GITHUB_OUTPUT"
+
   # ── 1. Test gate ──────────────────────────────────────────────────────────────────────
   # Runs on macOS because that is a platform the CI already proves the full (GUI-inclusive)
   # unit suite green on; the project deliberately does not run the Qt GUI tests on Linux.
@@ -43,27 +119,26 @@ jobs:
   # gate. If you ever want to trim runner cost, narrow this to the numerical golden only.
   test:
     name: Test gate (unit + numerical golden)
+    needs: target
     runs-on: macos-latest
-    # Runs the FULL suite on macOS as a SINGLE pytest invocation (below) — the same shape
-    # ci.yml's own history describes growing from ~47 min to over 4 h from per-test Qt
-    # teardown/widget accumulation, which is why ci.yml switched macOS to a file-by-file
-    # loop and still keeps 240 min there as a pure hang guard. This job was NOT changed to
-    # that file-by-file form (out of scope for this change), so 120 min is a real risk of a
-    # FALSE-POSITIVE timeout on a legitimately slow-but-healthy release, not just a hang
-    # guard — flagged to Emil separately. Chosen anyway as an explicit fallback number for
-    # when Actions history cannot be read (the REST API can return 403 in some automated
-    # environments); watch the next real release and raise this (or
-    # switch to file-by-file like ci.yml) if it times out on a healthy run. Without ANY
-    # ceiling here, a hung test-gate blocks every later release/publish indefinitely:
-    # concurrency.cancel-in-progress is false by design, and GitHub's own default is 6 h.
+    # The unit suite runs FILE BY FILE, exactly like ci.yml's macOS job. The one-process run
+    # this gate used before grew with the suite, because each test's Qt teardown costs more
+    # the more widgets the session has accumulated: 65 min for 2.4.0 (21-08-2026), and for
+    # 2.5.0 (16-10-2026) it hit the 120 min ceiling at 67 %, every test green so far, while
+    # ci.yml's file-by-file macOS jobs on the same commit took 23-28 min. 120 min is
+    # now a pure hang guard far above the file-by-file runtime. Without ANY ceiling a hung
+    # gate would block every later publish: concurrency.cancel-in-progress is false by
+    # design, and GitHub's own default is 6 h.
     timeout-minutes: 120
     permissions:
       contents: read
     env:
       QT_QPA_PLATFORM: offscreen
+      PYQTGRAPH_QT_LIB: PySide6    # never let pyqtgraph bind PyQt6 (two Qt bindings in one process crash)
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ needs.target.outputs.ref }}
           # Full history AND tags: tools/check_changelog.py measures a
           # commit interval between two tags, and the default depth (1) gives
           # neither tags nor history. Measured: without this, the check
@@ -77,8 +152,43 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[gui,dev]"
-      - name: Run tests
-        run: python -m pytest tests/unit tests/golden/test_golden.py -q
+      # Same loop and same verdict rules as ci.yml's "Unit suite (headless, offscreen Qt,
+      # file by file)": pass/fail comes from each file's pytest summary, because PySide6 can
+      # crash at interpreter shutdown after every test has passed; a file with a failure, an
+      # error or no summary at all fails the gate, and so does a suite that mostly skipped
+      # itself. Keep the two loops alike when either changes.
+      - name: Unit suite (file by file)
+        run: |
+          fails=0; total_passed=0; total_skipped=0
+          for f in tests/unit/test_*.py; do
+            set +e
+            python -m pytest "$f" -q --durations=5 > /tmp/one-file.log 2>&1
+            rc=$?
+            set -e
+            summary=$(grep -E "[0-9]+ (passed|failed|error|skipped)|no tests ran" /tmp/one-file.log | tail -1)
+            echo "== ${f} :: ${summary:-NO SUMMARY} (exit ${rc})"
+            if grep -qE "[0-9]+ (failed|error)" /tmp/one-file.log; then
+              echo "::error::real test failures or errors in ${f}"; fails=1
+              echo "--- failure details from ${f} ---"
+              sed -nE '/^=+ (FAILURES|ERRORS)/,$p' /tmp/one-file.log | head -120
+            elif ! grep -qE "[0-9]+ (passed|skipped)" /tmp/one-file.log; then
+              echo "::error::${f} produced no pytest summary (crashed mid-run?)"; fails=1
+              echo "--- last 40 lines of ${f}'s output ---"
+              tail -40 /tmp/one-file.log
+            fi
+            p=$(grep -oE "[0-9]+ passed" /tmp/one-file.log | tail -1 | grep -oE "^[0-9]+" || true)
+            s=$(grep -oE "[0-9]+ skipped" /tmp/one-file.log | tail -1 | grep -oE "^[0-9]+" || true)
+            total_passed=$((total_passed + ${p:-0}))
+            total_skipped=$((total_skipped + ${s:-0}))
+          done
+          echo "TOTAL: ${total_passed} passed, ${total_skipped} skipped across all files."
+          if [ "$total_skipped" -gt $((total_passed / 10)) ]; then
+            echo "::error::${total_skipped} tests SKIPPED against ${total_passed} passed — the suite did not really run (fixture data not found?)"; fails=1
+          fi
+          if [ "$fails" -ne 0 ]; then exit 1; fi
+          echo "Unit suite passed file by file."
+      - name: Numerical golden
+        run: python -m pytest tests/golden/test_golden.py -q
 
       # CHANGELOG.md's entry is what the release tells anyone: RELEASING.md folds it
       # into the dated section, respmech.dk's changelog page is the reader-facing
@@ -89,13 +199,15 @@ jobs:
       # be certain of; weaker matches are printed as a worksheet, not a verdict
       # (tools/check_changelog.py explains why, at length).
       - name: The changelog entry must cover the tagged range
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: python3 tools/check_changelog.py --version "${GITHUB_REF_NAME}"
+        if: needs.target.outputs.real == 'true'
+        env:
+          TAG: ${{ needs.target.outputs.tag }}
+        run: python3 tools/check_changelog.py --version "$TAG"
 
   # ── 2. Build + verify the distributions ──────────────────────────────────────────────
   build:
     name: Build sdist + wheel
-    needs: test
+    needs: [target, test]
     runs-on: ubuntu-latest
     # Same rationale as the test job's timeout: no reliable measured runtime available
     # (Actions history unreadable, 403), so 60 min is a 2x-margin guess pending Emil
@@ -106,6 +218,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ needs.target.outputs.ref }}
           # Full history AND tags: tools/check_changelog.py measures a
           # commit interval between two tags, and the default depth (1) gives
           # neither tags nor history. Measured: without this, the check
@@ -120,11 +233,13 @@ jobs:
           python -m pip install --upgrade pip build twine
           python -m build
       - name: Built version must match the tag
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: needs.target.outputs.real == 'true'
+        env:
+          RELEASE_TAG: ${{ needs.target.outputs.tag }}
         run: |
           WHL=$(ls dist/respmech-*.whl)
           VER=$(basename "$WHL" | sed -E 's/^respmech-([^-]+)-.*/\1/')
-          TAG="${GITHUB_REF_NAME#v}"
+          TAG="${RELEASE_TAG#v}"
           echo "built=$VER  tag=$TAG"
           if [ "$VER" != "$TAG" ]; then
             echo "::error::built version $VER != tag $TAG — bump src/respmech/__init__.py __version__ (and [tool.briefcase] version) to match the tag."
@@ -139,11 +254,11 @@ jobs:
           if-no-files-found: error
           retention-days: 5
 
-  # ── 3a. Publish to PyPI (real releases: on a v* tag only) ────────────────────────────
+  # ── 3a. Publish to PyPI (a v* tag push, or a manual run from master naming a tag) ─────
   publish-pypi:
     name: Publish to PyPI
-    needs: build
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [target, build]
+    if: needs.target.outputs.real == 'true'
     runs-on: ubuntu-latest
     # See build job's comment: no measured runtime available, 2x-margin guess.
     timeout-minutes: 60
@@ -171,11 +286,11 @@ jobs:
         # sdist in a venv built to those exact versions — both PASSED.
         uses: pypa/gh-action-pypi-publish@v1.14.2
 
-  # ── 3b. Publish to TestPyPI (manual dry-run: workflow_dispatch only) ──────────────────
+  # ── 3b. Publish to TestPyPI (manual dry-run: workflow_dispatch without a tag) ─────────
   publish-testpypi:
     name: Publish to TestPyPI (dry-run)
-    needs: build
-    if: github.event_name == 'workflow_dispatch'
+    needs: [target, build]
+    if: github.event_name == 'workflow_dispatch' && needs.target.outputs.real == 'false'
     runs-on: ubuntu-latest
     # See build job's comment: no measured runtime available, 2x-margin guess.
     timeout-minutes: 60
