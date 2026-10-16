@@ -89,7 +89,12 @@ _FIDELITY_TOOLTIP_SUFFIX = (
 class _EmgNoiseMixin:
 
     def _build_emg_tab(self):
-        w = QWidget(); v = QVBoxLayout(w); v.setContentsMargins(0, 6, 0, 0)
+        w = QWidget(); v = QVBoxLayout(w)
+        # Tight above and between: the controls strip is the only chrome this page owns, and
+        # every pixel of it comes out of the two working views (each row of text costs more on
+        # Windows, whose fonts are taller than the ones the app was laid out on).
+        v.setContentsMargins(0, 2, 0, 0)
+        v.setSpacing(2)
 
         # detail-channel dropdown (pinned into the Detail panel title, top-right) and the
         # result-channel picker (pinned into the Conditioned-result panel title, top-right)
@@ -107,6 +112,8 @@ class _EmgNoiseMixin:
         # the 'Set noise profile' button + the noise-reduction params (in a subtle
         # rounded chip) on a single row, instead of two full-width rows.
         self.btn_set_noise = QPushButton("Set noise profile")
+        self.btn_set_noise.setProperty("compact", True)
+        self.btn_set_noise.setProperty("dense", True)
         self.btn_set_noise.setToolTip("Open a picker to mark a rest span across the raw EMG "
                                       "channels as the shared rest reference for this test.")
         self.btn_set_noise.clicked.connect(self._open_noise_profile_dialog)
@@ -166,6 +173,7 @@ class _EmgNoiseMixin:
 
         self.btn_emg_advanced = QPushButton("Advanced…")
         self.btn_emg_advanced.setProperty("compact", True)
+        self.btn_emg_advanced.setProperty("dense", True)
         # D10 (UI-overhaul): leads with the RMS window, because that is what a user most
         # often opens this modal looking for and neither this tooltip nor the modal's own
         # intro used to mention it — see _open_emg_advanced's intro= below. Careful with the

@@ -780,6 +780,12 @@ QPushButton[compact="true"] {
     font-weight: 600;
 }
 
+/* A compact button on a controls strip that shares a row with checkboxes and a chip: the
+   full 6px of vertical padding made the buttons, not the chip, set the strip's height. */
+QPushButton[compact="true"][dense="true"] {
+    padding: 3px 12px;
+}
+
 /* ---- glyph-only stepper buttons (◀ ▶): the default 16px side padding is
        wider than the glyph, which clips the arrow away entirely; 6px keeps the
        button compact while giving the arrow air. min-width:0 means the rendered
