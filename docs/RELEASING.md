@@ -217,8 +217,8 @@ release and the installers are a separate workflow and are unaffected), publish 
 tag** instead of cutting a new version: GitHub ▸ Actions ▸ **Publish to PyPI** ▸ *Run
 workflow*, branch **master**, **tag** `vX.Y.Z`. The run refuses unless it runs from master
 and the tag is plain semver, exists and lies on master's history. It then checks the tag
-out and runs the same test gate, changelog check, build and version-equals-tag check as the
-tag push, and publishes to PyPI in the `pypi` environment. It shares the tag push's
+out and runs the same test gate, numerical golden, changelog check, build and
+version-equals-tag check as the tag push, and publishes to PyPI in the `pypi` environment. It shares the tag push's
 concurrency group, so the two can never upload side by side. One thing is left out on
 purpose: no PEP 740 attestation is uploaded, because a run on master would attest master's
 tip as the source commit, not the tag's. A tag push still uploads one.
