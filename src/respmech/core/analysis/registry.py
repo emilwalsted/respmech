@@ -181,7 +181,7 @@ _SEGMENT_EMG = (
     ColumnSpec(name="emg_seg_contrast", requires=frozenset({"emg"}), module="segment_emg", unit="—"),
 )
 
-# Manoeuvre extraction (M-29, core.analysis.manoeuvres): the Manoeuvres-sheet columns
+# Manoeuvre extraction (core.analysis.manoeuvres): the Manoeuvres-sheet columns
 # `core.quantities._RULES`' generic prefix/suffix conventions cannot already classify
 # on their own. `vol_ic` (`vol_` prefix -> L), `ic_peak_in_flow` (contains "flow" -> a
 # rate), and every `poes_ic_*`/`pdi_ic_*`/`pgas_ic_*`/`poes_max_ref`/`pdi_max_ref`
@@ -225,7 +225,7 @@ _REFERENCE_MANOEUVRES = (
     ColumnSpec(name="ic_ref_source", requires=_TIMING, module="references", unit=""),
 )
 
-# Operating lung volumes (M-36, core.analysis.lungvol, wired into core.pipeline.
+# Operating lung volumes (core.analysis.lungvol, wired into core.pipeline.
 # run_batch right after references.attach): `d_eelv`, `delta_ic`, `delta_eelv`, `tlc`,
 # `vc`, `ic_op` are the six new columns `core.quantities._RULES`' generic `vol_`/`vt`
 # convention does NOT already classify (none starts with `vol_` and none is `vt`) --
@@ -258,7 +258,7 @@ _LUNG_VOLUMES = (
     ColumnSpec(name="irv_pct_tlc", requires=_TIMING, module="lungvol", unit="%"),
 )
 
-# FVC/MFVL/EFL/VEcap (M-42, core.analysis.mfvl). Manoeuvres-sheet fields
+# FVC/MFVL/EFL/VEcap (core.analysis.mfvl). Manoeuvres-sheet fields
 # (fvc/fev1/fvc_bev/fvc_fet/mfvl_tlc_consistency) and mfvl_ext fields
 # (te_min_mfvl/ve_cap/mvv_est) that _RULES' generic conventions do not already
 # classify -- their unit= here IS the resolving path. `mfvl_peak_ex_flow`,

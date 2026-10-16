@@ -709,10 +709,10 @@ def test_group_readout_truncates_the_straggler_list_separately_from_the_group_li
 
 
 # --------------------------------------------------------------------------- #
-# group_readout: reference-only files (M-38)
+# group_readout: reference-only files
 # --------------------------------------------------------------------------- #
 def test_group_readout_excludes_a_predicted_reference_only_file_from_the_count():
-    """A reference-only file's average_row is always None (M-30), so it never appears
+    """A reference-only file's average_row is always None, so it never appears
     in core.summary.build_cohort_summary's own grouping either -- the read-out must
     match that, not just report every matched filename."""
     s = Settings()
@@ -758,14 +758,14 @@ def test_group_readout_handles_more_than_one_reference_only_file():
 
 def test_group_readout_omits_the_reference_only_note_when_none_predicted():
     """Acceptance criterion: grouping is UNCHANGED for a batch with no typed files at
-    all -- byte-identical to the pre-M-38 text, no stray '(0 reference-only)'."""
+    all -- byte-identical to the previous text, no stray '(0 reference-only)'."""
     status, text = group_readout(_GROUP_FILES, Settings())
     assert "reference-only" not in text
     assert "3 files" in text and "2 groups" in text
 
 
 # --------------------------------------------------------------------------- #
-# peek_header_warning's floor (M-12): scales with the DECLARED single-column
+# peek_header_warning's floor: scales with the DECLARED single-column
 # signal roles instead of a fixed 3
 # --------------------------------------------------------------------------- #
 def test_header_floor_still_flags_a_preamble_with_nothing_declared_yet(tmp_path):
@@ -837,7 +837,7 @@ def test_header_floor_does_not_crash_on_a_malformed_signal_set(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# Manifest.reference_only / .outlier_reference_sources (M-38)
+# Manifest.reference_only / .outlier_reference_sources
 # --------------------------------------------------------------------------- #
 def test_manifest_reference_only_matches_predicted_reference_only(tmp_path):
     _write_delim(tmp_path / "P01_120W.csv", 9)
@@ -850,7 +850,7 @@ def test_manifest_reference_only_matches_predicted_reference_only(tmp_path):
     m = build_manifest(str(tmp_path), "*.csv", s)
     assert {f.filename for f in m.reference_only} == {"P01_IC.csv"}
     # the reference-only file has the SAME (majority) column count, so it is still an
-    # ordinary included file for the column-count vote -- M-38 predicts it from typed
+    # ordinary included file for the column-count vote -- outlier detection predicts it from typed
     # breaths, entirely independent of layout.
     assert "P01_IC.csv" in {f.filename for f in m.included_files}
 
@@ -915,7 +915,7 @@ def test_manifest_outlier_reference_sources_flags_a_differently_shaped_source(tm
 def test_manifest_outlier_reference_sources_excludes_a_plain_column_outlier(tmp_path):
     """A column-count outlier that is NOT named as a reference source anywhere stays
     out of outlier_reference_sources -- it is an ordinary (likely-to-fail) outlier, not
-    the M-38 "differently-shaped reference recording" scenario."""
+    the outlier detection "differently-shaped reference recording" scenario."""
     _write_delim(tmp_path / "a.csv", 9)
     _write_delim(tmp_path / "b.csv", 9)
     _write_delim(tmp_path / "notes.csv", 3)

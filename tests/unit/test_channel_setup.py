@@ -485,7 +485,7 @@ def test_dialog_shows_source_column_names(qapp):
 
 
 def test_dialog_ok_is_gated_on_the_required_roles(qapp):
-    """``declared=None`` (every pre-M-12 caller): OK-gating stays exactly the old hardcoded
+    """``declared=None`` (every previous caller): OK-gating stays exactly the old hardcoded
     full pressure family — Pdi is still forced, EMG is still not."""
     dlg = _dialog()
     assert not dlg._ok_btn.isEnabled()               # nothing assigned yet
@@ -499,7 +499,7 @@ def test_dialog_ok_is_gated_on_the_required_roles(qapp):
 
 
 # --------------------------------------------------------------------------- #
-# M-12: OK-gating and the role dropdown follow the DECLARED signal set, not a
+# OK-gating and the role dropdown follow the DECLARED signal set, not a
 # hardcoded full pressure family
 # --------------------------------------------------------------------------- #
 def _dialog_declared(declared, initial=None, suggest_from_names=False):
@@ -600,9 +600,9 @@ def test_volume_checkbox_is_not_suggested_when_a_column_already_carries_it(qapp)
 
 
 def test_volume_checkbox_stays_visible_with_declared_none_even_once_assigned(qapp):
-    """Self-review fix: ``declared=None`` (every caller before M-12) must behave
-    BYTE-IDENTICALLY to the pre-M-12 dialog, which never called ``setVisible`` on this
-    checkbox at all — an earlier draft of M-12's visibility rule applied unconditionally
+    """Self-review fix: ``declared=None`` (every caller before the channel setup) must behave
+    BYTE-IDENTICALLY to the previous dialog, which never called ``setVisible`` on this
+    checkbox at all — an earlier draft of the visibility rule applied unconditionally
     and silently hid the checkbox once a Volume column was assigned, even for this legacy
     path, contradicting that promise."""
     dlg = _dialog()

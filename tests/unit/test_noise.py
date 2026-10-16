@@ -186,7 +186,7 @@ def test_emg_segmented_masks_unchanged_by_time_length_fix():
     agree breath for breath, and the function's own masks must be byte-identical to what
     the old poes-based computation would have produced. synth_settings() uses flow-method
     segmentation with no trend correction, so this is also one of the (method='flow',
-    correct_trend=False) scenarios M-23 documents as byte-identical to before."""
+    correct_trend=False) scenarios the configurable segmentation documents as byte-identical to before."""
     from respmech.core import compute, pipeline
     from respmech.core._legacy_ns import to_legacy_ns
 
@@ -227,7 +227,7 @@ def test_emg_segmented_mask_length_actually_comes_from_time_not_poes(monkeypatch
     'time' and 'poes' always have equal length, so that test alone cannot tell 'reads
     time' apart from 'reads poes'. Here the two are made to genuinely differ (a fake
     ``segment_file`` stands in for the real trim/zero/drift/trend/segment sequence, since
-    M-23 routes _emg_segmented through it), so only a real read of ['time'] gives the
+    the configurable segmentation routes _emg_segmented through it), so only a real read of ['time'] gives the
     expected mask."""
     from respmech.core import pipeline
 
@@ -273,11 +273,11 @@ def test_emg_segmented_mask_length_actually_comes_from_time_not_poes(monkeypatch
 @requires_synth()
 @pytest.mark.parametrize("method,correct_trend", [
     ("flow", False),      # every existing golden scenario -- must stay byte-identical
-    ("volume", False),    # M-23: the segmentation method now genuinely changes the mask
-    ("flow", True),       # M-23: trend correction is now genuinely applied
+    ("volume", False),    # the segmentation method now genuinely changes the mask
+    ("flow", True),       # trend correction is now genuinely applied
 ])
 def test_emg_segmented_mask_equals_main_loop_mask(method, correct_trend):
-    """M-23 acceptance criterion: _emg_segmented's inspiration/expiration mask must
+    """the configurable segmentation acceptance criterion: _emg_segmented's inspiration/expiration mask must
     equal the mask a direct segment_file() call -- exactly what run_batch's own main
     loop uses -- implies for the SAME settings, for every segmentation method and with
     trend correction on, not just the (flow, no-trend) case every golden scenario

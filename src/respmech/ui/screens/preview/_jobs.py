@@ -54,7 +54,7 @@ _TAB_NOISE = "› EMG – noise reduction"
 _PANELS = {"mech": ["channels", "raw"], "batch": ["table", "campbell"],
            "ecg": ["ecg_capture", "ecg_stack"],
            "emg_all": ["result"], "emg_detail": ["detail", "detail_psd"], "noise": ["fidelity"],
-           # M-26: the segments tab's own stack — no longer shared with 'mech's 'raw'
+           # the segments tab's own stack — no longer shared with 'mech's 'raw'
            # panel (which lives on the ECG-reduction/noise-reduction tabs and has nothing
            # to do with an EMG-only set, which never shows those raw channels there).
            "segments": ["segstack"]}
@@ -79,7 +79,7 @@ _FILE_KINDS = ("mech", "batch", "ecg", "emg_all", "emg_detail", "segments")
 
 def panels_for(kind, caps=None):
     """Which ``BusyOverlay`` panel keys ``kind``'s CURRENT dispatch owns, given the
-    shape's capabilities (M-26). Every kind's panel list is fixed except 'batch': an
+    shape's capabilities. Every kind's panel list is fixed except 'batch': an
     EMG-only set renders its test run into the segments tab's own per-segment table
     (``'segtable'``) rather than the Mechanics tab's table + Campbell diagram, which is
     not even shown for that shape (``subtab_plan``) — the SAME test-run job
@@ -106,11 +106,11 @@ def _kinds_for_settings_path(path, caps=None):
     stage_* function; the coarse buckets here stay on the safe (wide) side of them.
 
     ``caps`` (a :class:`respmech.core.analysis.signals.Capabilities`, or ``None``) makes
-    the EMG buckets capability-aware (M-24). ``caps=None`` — every call site that predates
+    the EMG buckets capability-aware. ``caps=None`` — every call site that predates
     this ticket, and the default — reproduces the old, flow-only rule byte-for-byte: 'the
     mechanics test run strips EMG' is true for a flow-bearing signal set, where the test run
     computes from flow/pressure and never touches EMG at all. It is FALSE for an EMG-only
-    set (``caps.mode == 'emg_only'``): there ``run_batch``'s own S2 branch (M-21) builds the
+    set (``caps.mode == 'emg_only'``): there ``run_batch``'s own S2 branch builds the
     test run's mechanics FROM the EMG channels via ``core.analysis.segments``, so an
     EMG-channel-set or ``processing.emg.*`` edit there must also re-dispatch 'batch' — and
     the 'segments' preview job too (its own EMG-only counterpart of 'mech'; ``_schedule``
@@ -144,7 +144,7 @@ def _kinds_for_settings_path(path, caps=None):
         # EMG conditioning (remove_ecg / detect_channel / ecg_* / rms_window_s / remove_noise) +
         # noise.* params: the ECG-reduction tab + the EMG/noise panels. For a flow-bearing set
         # the mechanics test run forces EMG + ECG + noise off, so it is unaffected; for an
-        # EMG-only set this settles the test run's OWN mechanics (M-24), so 'batch'/'segments'
+        # EMG-only set this settles the test run's OWN mechanics, so 'batch'/'segments'
         # join too.
         kinds = {"ecg", "emg_all", "emg_detail", "noise"}
         if emg_only:
@@ -159,7 +159,7 @@ def _kinds_for_settings_path(path, caps=None):
     # panels (which build NoiseProfile.from_clip on a buffer-dependent clip). So a
     # segmentation edit must recompute all five, or the EMG traces go stale when auto_prop
     # is off (nothing else re-dispatches them). The ECG cache keeps the extra work cheap.
-    # processing.segmentation.separators (M-21's EMG-only manual boundaries) falls through
+    # processing.segmentation.separators (the EMG-only manual boundaries) falls through
     # to this same wide rule, deliberately: it feeds `segment_file`/the noise reference clip's
     # `rest_segments` branch exactly like `buffer` does.
     if path.startswith("processing.segmentation"):
@@ -170,7 +170,7 @@ def _kinds_for_settings_path(path, caps=None):
     if (path.startswith("processing.volume.correct") or path.startswith("processing.volume.trend")
             or path.startswith("processing.exclude_breaths")):
         return frozenset(("mech", "batch", "noise"))
-    # M-37: reference manoeuvres / operating lung volumes / subject spirometry never
+    # reference manoeuvres / operating lung volumes / subject spirometry never
     # touch a preview PANEL directly -- core.analysis.references.attach and
     # core.analysis.lungvol both run inside the test run's own post-loop pass and only
     # ever change the Average-breathdata table/Campbell numbers, never the raw channel
@@ -190,7 +190,7 @@ def _kinds_for_settings_path(path, caps=None):
         return frozenset(("batch",))
     # channels core / format / volume inverse+integrate (all applied inside load()),
     # channels.entropy (validated in every load path), input.folder/files,
-    # processing.breath_types (M-19 typed breaths change the noise reference mask itself —
+    # processing.breath_types (typed breaths typed breaths change the noise reference mask itself —
     # decision 11 — so they get the WIDE default here rather than the narrower
     # exclude_breaths rule above), and anything else not matched above -> recompute
     # everything (safe default; never leaves a panel stale)
@@ -232,7 +232,7 @@ class _Job:
 
     def __post_init__(self):
         # A caller that hand-constructs a _Job without ``panels=`` (every call site that
-        # predates M-26, incl. several tests) gets the OLD, static default for its kind —
+        # predates the segments tab, incl. several tests) gets the OLD, static default for its kind —
         # ``_launch`` is the only caller that ever needs the capability-aware list, and it
         # always passes ``panels=`` explicitly (see ``panels_for``). Without this, such a
         # job's frozen panels would be an empty tuple, and _on_job_done's `for p in

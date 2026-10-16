@@ -1,6 +1,6 @@
-"""core.analysis.manoeuvres (M-29): pure extraction of IC/FVC/max_insp/sniff values
+"""core.analysis.manoeuvres: pure extraction of IC/FVC/max_insp/sniff values
 from raw breath dicts — never from ``calculatemechanics`` output, which a typed breath
-never reaches (M-19 unions every typed kind into ``excludebreaths`` on a flow-bearing
+never reaches (typed breaths unions every typed kind into ``excludebreaths`` on a flow-bearing
 signal set)."""
 from collections import OrderedDict
 
@@ -314,7 +314,7 @@ def test_apply_repeatability_ignores_non_ic_entries():
 
 
 # --------------------------------------------------------------------------------- #
-# Measured threshold cases (M-41) — PLACEHOLDERS, not yet calibrated
+# Measured threshold cases — PLACEHOLDERS, not yet calibrated
 # --------------------------------------------------------------------------------- #
 #
 # IcSettings' †-marked fields (eelv_tolerance_frac, repeatability_frac, among others)

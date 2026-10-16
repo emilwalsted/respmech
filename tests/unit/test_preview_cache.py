@@ -94,7 +94,7 @@ def _emg_only_settings(tmp_path):
 
 
 def test_ref_clip_key_expiration_branch_tracks_segmentation_method(tmp_path):
-    """The expiration branch carries segmentation.method: since M-23, _emg_segmented's
+    """The expiration branch carries segmentation.method: since the configurable segmentation, _emg_segmented's
     mask actually follows the configured method (it hardcoded 'flow' before), so a
     settings change here must miss."""
     s = _s(tmp_path)
@@ -107,7 +107,7 @@ def test_ref_clip_key_expiration_branch_tracks_segmentation_method(tmp_path):
 
 
 def test_ref_clip_key_expiration_branch_tracks_volume_trend(tmp_path):
-    """M-23: _emg_segmented's mask now also follows processing.volume.correct_trend (it
+    """ _emg_segmented's mask now also follows processing.volume.correct_trend (it
     never trend-corrected before), so toggling it -- or, once enabled, changing HOW it
     corrects -- must miss instead of serving a preview cached under the old trend."""
     s = _s(tmp_path)
@@ -123,7 +123,7 @@ def test_ref_clip_key_expiration_branch_tracks_volume_trend(tmp_path):
 
 
 def test_ref_clip_key_expiration_branch_tracks_volume_drift_under_volume_method(tmp_path):
-    """M-23: with segmentation.method == 'volume', _emg_segmented's mask is built by
+    """ with segmentation.method == 'volume', _emg_segmented's mask is built by
     separateintobreathsbyvolume's peak search against the DRIFT-corrected volume (an
     absolute-height threshold), so drift correction can change which samples are
     detected as inspiratory/expiratory peaks even with trend correction untouched --
@@ -144,7 +144,7 @@ def test_ref_clip_key_expiration_branch_tracks_volume_drift_under_volume_method(
 
 
 def test_noise_report_key_auto_prop_tracks_volume_trend_and_drift_in_intervals_mode(tmp_path):
-    """M-23: _build_noise_set's auto_prop gather segments EVERY batch file through
+    """ _build_noise_set's auto_prop gather segments EVERY batch file through
     segment_file with the globally configured method/drift/trend/peak settings,
     regardless of which mode the single reference CLIP resolves to. A test whose
     reference resolves to 'intervals' (the schema default noise=True gives) must still
@@ -165,7 +165,7 @@ def test_noise_report_key_auto_prop_tracks_volume_trend_and_drift_in_intervals_m
 
 
 def test_ref_clip_key_rest_segments_branch_tracks_separators_and_a_rest_kind(tmp_path):
-    """M-24's own acceptance criterion: two settings differing only in a rest-kind or one
+    """the acceptance criterion: two settings differing only in a rest-kind or one
     separator time give different ref_clip_keys in the rest_segments state."""
     from respmech.core.settings import BreathTypeEntry, SeparatorEntry
     s = _emg_only_settings(tmp_path)

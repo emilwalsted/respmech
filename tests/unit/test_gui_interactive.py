@@ -60,7 +60,7 @@ def test_breath_overlays_and_toggle(qapp, tmp_path):
 
 
 def test_toggling_a_second_breath_in_an_existing_carried_entry_still_reports_carried(qapp, tmp_path):
-    """M-20 carried-fix (B06): _toggle_breath/_set_breath_type must compute the rail
+    """the breath-type menu carried-fix (B06): _toggle_breath/_set_breath_type must compute the rail
     badge's carried flag fresh each time via is_carried_folder, never hardcode False.
     An EXISTING entry's folder is never restamped by a plain toggle (see
     _set_breath_type's own comment on why), so before this fix a click that merely
@@ -263,7 +263,7 @@ def test_emg_subtab_visibility_tracks_channels(qapp, tmp_path):
     assert titles == ["Mechanics"]
     # the widgets still exist (just not shown), so nothing referencing them breaks
     assert pv.emg_channel.count() == 0
-    # M-17: rebuilding the sub-tab bar (subtab_plan) never recreates a tab widget — the
+    # rebuilding the sub-tab bar (subtab_plan) never recreates a tab widget — the
     # same three objects back every plan, only inserted/removed (emg_channel/cleanup-
     # contract tests rely on this).
     assert (pv._mech_tab, pv._ecg_tab, pv._emg_tab) == (mech_tab, ecg_tab, emg_tab)
@@ -273,7 +273,7 @@ def test_emg_subtab_visibility_tracks_channels(qapp, tmp_path):
     titles = [pv.subtabs.tabText(i) for i in range(pv.subtabs.count())]
     assert titles == ["Mechanics", "› EMG – ECG reduction", "› EMG – noise reduction"]
     assert (pv._mech_tab, pv._ecg_tab, pv._emg_tab) == (mech_tab, ecg_tab, emg_tab)
-    # M-17: a genuine Flow-only signal set (Poes/Pgas/Pdi never assigned, not merely
+    # a genuine Flow-only signal set (Poes/Pgas/Pdi never assigned, not merely
     # cleared after the fact) reaches the same result through Capabilities rather than the
     # old bare has-EMG-channels boolean.
     flow_only = synth_settings(str(tmp_path), remove_ecg=True, data_out=_DATA_OUT,
@@ -306,7 +306,7 @@ def test_malformed_signals_degrades_preview_subtabs_and_campbell_title(qapp, tmp
 
 
 def test_malformed_signals_with_a_noise_reference_set_does_not_crash_the_noise_readout(qapp):
-    """M-24 self-review finding: the sibling regression the test above does NOT cover.
+    """the rest-segment noise option self-review finding: the sibling regression the test above does NOT cover.
     _refresh_noise_readout/_refresh_noise_reference_band (_emg_noise.py) now call
     resolve_noise_reference_mode on every construction/sync, same unprotected path as
     Capabilities.from_settings above -- but ONLY once noise.reference_file is actually set
@@ -330,7 +330,7 @@ def test_malformed_signals_with_a_noise_reference_set_does_not_crash_the_noise_r
 
 def test_subtab_plan_per_preset(qapp, tmp_path):
     """subtab_plan(caps) itself, independent of any rebuild — the ordered (widget, title)
-    pairs a Capabilities shape maps to, for the two presets M-17 activates plus the default
+    pairs a Capabilities shape maps to, for the two presets the Poes-less Campbell panel activates plus the default
     full family. Widget IDENTITY is asserted too: the same three tab objects back every
     plan, never rebuilt (the whole point of building the bar from a plan instead of
     recreating widgets)."""

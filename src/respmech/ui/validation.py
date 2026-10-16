@@ -151,13 +151,13 @@ _FRIENDLY_REGEXES = (
     # the automatic EMG-only segmentation's own parameters (window/step, burst thresholds)
     (re.compile(r"^processing\.segmentation\.emg\.\w+ must be "),
      "A segmentation parameter is not valid (Preview & QC ▸ EMG – segments ▸ Advanced…)"),
-    # M-22: reference_mode's explicit, EMG-only-only alternatives, chosen while a flow
+    # reference_mode's explicit, EMG-only-only alternatives, chosen while a flow
     # channel is still declared — same location as the noise-reduction messages above.
     (re.compile(r"^processing\.emg\.noise\.reference_mode='[^']*' is only valid for an "
                 r"EMG-only signal set$"),
      f"Noise reference source needs an EMG-only signal set ({_SIGNAL_SET_CHANGE_LOCATION})"),
 )
-#: M-19: three "malformed entry" messages (kind not in the closed enum, breath not a
+#: three "malformed entry" messages (kind not in the closed enum, breath not a
 #: positive integer, or the whole entry not even a table -- a hand-edited settings.toml
 #: self-review finding) share one translation -- all point at the same fix,
 #: right-clicking a breath in Preview & QC, regardless of which specific field was wrong.
@@ -378,7 +378,7 @@ def blockers(settings, matches: list | None = None) -> list:
 
 def channel_collision(settings) -> str | None:
     """A HARD channel-mapping error (message, else None): a single-column signal role this
-    analysis's DECLARED signal set requires (M-12: ``Capabilities.required_roles()``, no
+    analysis's DECLARED signal set requires (the channel setup: ``Capabilities.required_roles()``, no
     longer a hardcoded flow/poes/pgas/pdi) not assigned at all, one pointing at column 1 —
     the time axis — or two of them sharing a column.
 
@@ -412,7 +412,7 @@ def channel_collision(settings) -> str | None:
                 "click 'Assign channels from data…'")
     # The time-axis/duplicate checks run over every ASSIGNED single role, not just the
     # required ones: an analysis can carry a role's column value left over from a signal
-    # set it no longer declares (M-10's apply_signal_set clears these on an in-app change,
+    # set it no longer declares (the apply_signal_set clears these on an in-app change,
     # but a hand-edited TOML can still do it), and such a stray value pointing at the time
     # axis or colliding with another column is still worth catching here.
     assigned = [(n, getattr(ch, n)) for n in SINGLE_SIGNALS if getattr(ch, n) is not None]

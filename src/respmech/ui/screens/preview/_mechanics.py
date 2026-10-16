@@ -58,12 +58,12 @@ from ._plot_helpers import (BreathSpansItem, SciAxis, SeparatorLinesItem, _CHANN
 #: _breath_label_color reads (``breath_<suffix>_brush``/``_label``). 'excluded' is a
 #: UI-only pseudo-kind (processing.exclude_breaths, never a BREATH_KINDS member); any
 #: real BREATH_KINDS member without its own dedicated entry here (ic_fvc/max_insp/sniff/
-#: other — M-20's minimal menu never offered them, and M-31's fuller one deliberately
+#: other — the minimal menu never offered them, and the fuller one deliberately
 #: keeps them visually grouped with 'other' rather than growing the palette further)
 #: falls back to 'other' rather than raising on an unknown kind.
 _KIND_PALETTE_SUFFIX = {"excluded": "excl", "ic": "ic", "fvc": "fvc", "rest": "rest"}
 
-#: The full type menu (M-31): every respmech.core.settings.BREATH_KINDS member, plus
+#: The full type menu: every respmech.core.settings.BREATH_KINDS member, plus
 #: the two pseudo-kinds 'tidal'/'excluded' _set_breath_type also accepts. 'rest' is
 #: filtered out by _handle_type_requested for a flow-bearing (non-EMG-only) file —
 #: it names a noise-reference segment, which only makes sense on the EMG-only
@@ -83,7 +83,7 @@ _TYPE_MENU_LABELS = {
     "other": "Other…",
 }
 
-#: statusTip shown while hovering each type-menu action (M-31) — the same
+#: statusTip shown while hovering each type-menu action — the same
 #: bold-path/description shape ui.help_text.tooltip() uses for settings controls,
 #: but plain text (QAction.statusTip is not rich text) since there is no settings
 #: path to show for a menu choice.
@@ -123,7 +123,7 @@ _KIND_ICON = {
 _LABEL_FIT_PAD_PX = 4.0
 
 #: slot -> the BreathTypeEntry.kind values that count as "this breath is already typed
-#: as slot" for the quick 'Use as IC reference for' submenu (M-37) -- mirrors
+#: as slot" for the quick 'Use as IC reference for' submenu -- mirrors
 #: core.analysis.references._OWN_TYPED_KINDS['ic'] exactly (only that one slot has a
 #: one-click shortcut here; the other three slots are only reachable through the full
 #: 'Reference manoeuvres…' picker).
@@ -132,11 +132,11 @@ _IC_REFERENCE_KINDS = frozenset({"ic", "ic_fvc"})
 
 def _set_chip_text(chip, text, *, fixed_tooltip=None):
     """``QLabel.setText``, but routed through ``ElidingLabel.setFullText`` when ``chip``
-    is one (``qc_overview``, M-37) so the FULL text -- not just whatever happens to be
+    is one (``qc_overview``) so the FULL text -- not just whatever happens to be
     displayed right now -- survives into the tooltip and can be re-elided on resize.
     ``_update_qc_overview``/``_qc_overview_not_assessed``/``_reset_qc_overview`` share
     this so a caller never has to know which chip type it was handed (``chip`` can also
-    be ``segments_qc_overview``, still a plain QLabel -- M-26, where ``fixed_tooltip`` is
+    be ``segments_qc_overview``, still a plain QLabel -- the segments tab, where ``fixed_tooltip`` is
     silently ignored).
 
     ``fixed_tooltip``: ``ElidingLabel.setFullText`` always overwrites the tooltip with
@@ -260,7 +260,7 @@ _CAMPBELL_XLABEL_VARIANTS = ("Lung volume above end-expiration (L)",
                             "Volume above EELV (L)", "V−EELV (L)")
 _CAMPBELL_YLABEL_VARIANTS = ("Oesophageal pressure  Poes (cmH₂O)", "Poes (cmH₂O)", "Poes")
 
-#: M-17 (R7): the Campbell panel's stand-in for a Poes-less (Flow only) signal set — a
+#: the Poes-less Campbell panel (R7): the Campbell panel's stand-in for a Poes-less (Flow only) signal set — a
 #: tidal flow-volume loop, same axis-label ladder mechanics as the Campbell diagram above.
 _FV_XLABEL_VARIANTS = ("Lung volume (L)", "Volume (L)", "V (L)")
 _FV_YLABEL_VARIANTS = ("Flow (L/s)", "Flow")
@@ -269,7 +269,7 @@ _MFVL_XLABEL_VARIANTS = ("Volume below TLC (L)", "Below TLC (L)", "V (L)")
 
 
 def _mech_channel_count(settings) -> int:
-    """How many rows the Mechanics stack draws for this signal set (M-17, R7).
+    """How many rows the Mechanics stack draws for this signal set (R7).
 
     ``_render_preview_stage1`` filters ``_CHANNELS`` (flow, volume, poes, pgas, pdi) down to
     whichever keys ``series`` actually carries for the file just previewed — a crash guard
@@ -331,7 +331,7 @@ class _MechStackFloorFitter(QObject):
         self._screen = screen
         self._viewport = viewport
         self._pending = False
-        # M-26: bound per stack — the segments tab's own GraphicsLayoutWidget reuses this
+        # bound per stack — the segments tab's own GraphicsLayoutWidget reuses this
         # exact eftergivende-floor mechanism via its own update_fn (_update_segments_stack_
         # floor) instead of the Mechanics-specific _update_mech_stack_floor every prior
         # instance defaulted to.
@@ -406,7 +406,7 @@ class _MechanicsMixin:
         configure_result_table(self.table)
         # a table squeezed to one visible row is as useless as a flattened graph
         _theme.set_plot_floor(self.table)
-        # M-31: the Manoeuvres sheet, stacked BELOW the per-breath table in the SAME
+        # the Manoeuvres sheet, stacked BELOW the per-breath table in the SAME
         # panel (no third action-band row — _build_mech_action_band stays a single fixed
         # row) — its own small ResultTableModel, hidden until a test run reports at least
         # one typed breath (_fill_manoeuvres_table), so an untyped file's Mechanics panel
@@ -458,7 +458,7 @@ class _MechanicsMixin:
         # figure's own title is deliberately screen-only, see above) — see
         # titled_panel()'s docstring for why it must not be allowed to collapse to a
         # bare ellipsis the way the general-purpose default floor allows.
-        # Stored (not just added) so its header text can follow the signal set (M-17): a
+        # Stored (not just added) so its header text can follow the signal set: a
         # Poes-less analysis draws a flow-volume loop here instead of a Campbell diagram —
         # see _update_campbell_panel_title/_draw_campbell_or_loop.
         self._campbell_panel = self._titled("Campbell diagram", self.campbell,
@@ -537,7 +537,7 @@ class _MechanicsMixin:
         ``self.subtabs`` actually holds (see the comment in ``PreviewScreen._build`` on
         why the wrapper is the tab item).
 
-        M-26: now toggles the segments tab's own band too — 'accepts both tabs' rather
+        now toggles the segments tab's own band too — 'accepts both tabs' rather
         than being Mechanics-only, since Mechanics and the segments tab are mutually
         exclusive (never both present in the same ``subtab_plan``, see ``_schedule``'s
         'mech'/'segments' gate), so exactly one of the two bands, or neither (ECG/noise),
@@ -568,7 +568,7 @@ class _MechanicsMixin:
         band.setMaximumHeight(40)
         bar = QHBoxLayout(band)
         bar.setContentsMargins(6, 0, 6, 0)
-        # ElidingLabel (M-37, not a plain QLabel): the QC verdict text grows with the
+        # ElidingLabel (not a plain QLabel): the QC verdict text grows with the
         # number of flags found (_update_qc_overview's "⚠ ..." suffix), and this chip
         # sits in a fixed-height action band next to mech_window_label, which already
         # needed the same fix for the same reason (see its own comment below).
@@ -639,7 +639,7 @@ class _MechanicsMixin:
         the mechanics render (``_render_preview``) is what re-enables the button for a
         file that actually loaded.
 
-        M-26: resets BOTH the Mechanics chip and the segments tab's own chip
+        resets BOTH the Mechanics chip and the segments tab's own chip
         unconditionally — this runs on every file switch regardless of which shape/tab
         is currently active, so the one that is not showing must not be left stale
         either (it becomes visible again the moment the signal set changes back)."""
@@ -657,7 +657,7 @@ class _MechanicsMixin:
         self.btn_process_file.setEnabled(False)
         if hasattr(self, "btn_process_segments_file"):
             self.btn_process_segments_file.setEnabled(False)
-        # Same discipline for 'Place separators' (M-27): unarm and disable it here too,
+        # Same discipline for 'Place separators': unarm and disable it here too,
         # not just re-sync it later on a SUCCESSFUL 'segments' render
         # (_render_segments_preview's own _update_separators_button call). Without this,
         # a file switch whose 'segments' job then fails (a bad separator, a crashed
@@ -683,7 +683,7 @@ class _MechanicsMixin:
         """The chip's honest state while the test run itself failed or was skipped —
         called from ``_on_batch_result``'s error branches and from ``_on_job_done``'s
         'batch' failure branch. Purely presentational: no computed value changes.
-        ``chip`` (M-26): the segments tab's own QC chip for an EMG-only 'batch' run,
+        ``chip``: the segments tab's own QC chip for an EMG-only 'batch' run,
         defaulting to the Mechanics chip unchanged."""
         chip = chip if chip is not None else self.qc_overview
         _set_chip_text(chip, f"QC:  not assessed — {short_error(str(detail))}",
@@ -696,10 +696,10 @@ class _MechanicsMixin:
         """P16: a persistent, at-a-glance quality summary of the current test run —
         breaths used/excluded plus a conservative flag for any non-physiological
         per-breath value (so a suspect run is obvious without reading the table).
-        ``chip`` (M-26): see ``_qc_overview_not_assessed``."""
+        ``chip``: see ``_qc_overview_not_assessed``."""
         chip = chip if chip is not None else self.qc_overview
         if getattr(fr, "role", "tidal") == "reference":
-            # M-30: every breath here was deliberately TYPED as a manoeuvre, not
+            # every breath here was deliberately TYPED as a manoeuvre, not
             # excluded — self-review finding: the ordinary "N used, M excluded" framing
             # below would misreport a fully successful reference-only file as if QC had
             # quietly dropped every breath, directly contradicting the success status
@@ -754,7 +754,7 @@ class _MechanicsMixin:
         length is the file's total duration regardless of whether trimming succeeded.
         Purely presentational: no computed value is read or changed here.
 
-        M-37: the trim-window sentence is only HALF of what this label now shows —
+        the trim-window sentence is only HALF of what this label now shows —
         ``_refresh_reference_chip`` appends the file's own resolved IC reference (if
         any) inside the SAME eliding slot, so ``_mech_window_base_text`` (this method's
         own half) is stashed for that method to read rather than recomputed there."""
@@ -783,10 +783,10 @@ class _MechanicsMixin:
         self._refresh_reference_chip()
 
     def _reference_chip_text(self, name):
-        """The short 'IC ref: …' fragment appended to ``mech_window_label`` (M-37), or
+        """The short 'IC ref: …' fragment appended to ``mech_window_label``, or
         ``''`` when ``name`` has no resolved IC reference at all — a file that simply
         does not use one shows no chip, rather than an unconditional 'IC ref: none'
-        cluttering every ordinary analysis. Reads ``resolve_reference`` (M-34), so this
+        cluttering every ordinary analysis. Reads ``resolve_reference``, so this
         already reports a group-default or the file's own typed breath, not only an
         explicit ``processing.references`` entry — exactly like the chip's job
         ('viser den') requires after ANY of the three ways a reference can resolve."""
@@ -843,7 +843,7 @@ class _MechanicsMixin:
 
     def _export_campbell(self):
         from PySide6.QtWidgets import QFileDialog       # noqa: PLC0415
-        # M-17 (R7): the export follows whichever diagram the panel is actually showing —
+        # the Poes-less Campbell panel (R7): the export follows whichever diagram the panel is actually showing —
         # "Campbell" with Poes declared, "Flow-volume loop" without it.
         is_campbell = Capabilities.from_settings(self.state.settings).poes
         panel_title = "Campbell diagram" if is_campbell else "Flow-volume loop"
@@ -1027,7 +1027,7 @@ class _MechanicsMixin:
                           note=("The pre-flow area of the PEEPi deflection (int_oes_preflow) is "
                                 "reported in its own column and is never added to PTP."
                                 if s.processing.pressure.peepi.enabled else None))),
-            # M-37: only the four fields the ticket names -- the rest of LungVolumeSettings/
+            # only the four fields the ticket names -- the rest of LungVolumeSettings/
             # IcSettings (baseline_pattern, the EELV_UNSTABLE/NOT_REPEATABLE/LOW_EFFORT
             # thresholds, reject_flags) stay TOML-only for now, same "surface the most-used
             # fields, preserve the rest on round-trip" rule the whole dialog already follows.
@@ -1086,8 +1086,8 @@ class _MechanicsMixin:
                         "the included breaths, and the number of breaths, to each file's "
                         "average row (needs at least 3 breaths).")),
         ]
-        # M-17 (R7): "Work of breathing" and "Pressure–time product" are meaningless without
-        # a Poes trace — WOB/PTP are never computed for a Poes-less analysis (M-14's
+        # the Poes-less Campbell panel (R7): "Work of breathing" and "Pressure–time product" are meaningless without
+        # a Poes trace — WOB/PTP are never computed for a Poes-less analysis (the Poes-less analysis's
         # compute-guards). Filtering the FLAT fields list here, rather than the sections
         # table below, drops both cards automatically (their keys leave `remaining` empty,
         # so the "if picked" check skips them — see below) instead of dumping their fields
@@ -1374,7 +1374,7 @@ class _MechanicsMixin:
         self._update_overrides_button()   # re-sync for the CURRENT method/run state
         self._set_analysis_window(data)                      # D23: persistent trim-window label
         self._breaths = list(data["spans"])
-        # M-31: the type menu's 'Suggested: FVC' hint — .get() so a stale suggestion from
+        # the type menu's 'Suggested: FVC' hint — .get() so a stale suggestion from
         # the previously-viewed file/tab can never survive (stage_emg_segments_preview's
         # own dict carries no such key, since a segment has no expiration to judge).
         self._suggested_fvc = data.get("suggested_fvc")
@@ -1555,9 +1555,9 @@ class _MechanicsMixin:
         self._raw_label_y = self._safe_top(emg[:, 0])
         self._repaint_view_breaths("raw")
 
-    # M-25's provisional 'segments' renderer (_render_emg_segments_preview) lived here —
+    # the provisional 'segments' renderer (_render_emg_segments_preview) lived here —
     # drawing into the raw EMG stack with no click surface at all, since no dedicated tab
-    # existed yet. M-26 replaces it with the real, interactive one:
+    # existed yet. the segments tab replaces it with the real, interactive one:
     # _segments.py::_SegmentsMixin._render_segments_preview.
 
     # -- feature A: breath overlays + include/exclude/type ------------------
@@ -1565,7 +1565,7 @@ class _MechanicsMixin:
     def _breath_brush(kind, carried=False):
         """``kind``: ``None``/falsy for plain tidal breathing, the pseudo-kind
         ``'excluded'`` for a manual exclusion, or a ``respmech.core.settings.
-        BREATH_KINDS`` member for a typed breath (M-20) — see ``_KIND_PALETTE_SUFFIX``.
+        BREATH_KINDS`` member for a typed breath — see ``_KIND_PALETTE_SUFFIX``.
         ``carried``: this entry was recorded against a different (or unrecorded)
         recordings folder than the one now loaded — see ``_exclusion_carried_for``. Drawn
         HATCHED instead of solid, so an inherited exclusion reads differently from one made
@@ -1761,7 +1761,7 @@ class _MechanicsMixin:
         only the label stays a per-breath TextItem, same as before. ``spans``:
         ``(n, t0, t1, kind)`` — see ``_breath_brush``'s docstring for what ``kind`` may be.
 
-        ``plots`` (M-26): the segments tab's own stack passes its subplot list here
+        ``plots``: the segments tab's own stack passes its subplot list here
         instead, reusing this exact click/type-menu-bearing overlay machinery — safe
         because it writes into the SAME shared ``_breath_spans``/``_breath_regions``/
         ``_breath_texts``/``_mech_unpin`` state ``_toggle_breath``/``_set_breath_type``
@@ -1815,7 +1815,7 @@ class _MechanicsMixin:
         if self._overrides_armed:
             self._place_or_remove_override(ev, self._channel_plots)
             return
-        # M-20: a right-click/Ctrl+left-click that landed on a breath is handled at
+        # a right-click/Ctrl+left-click that landed on a breath is handled at
         # item level (BreathSpansItem.mouseClickEvent -> typeRequested) and accepted
         # there — this scene-level handler is for the plain left-click toggle only, and
         # must ignore anything already accepted (including a right-click ViewBox itself
@@ -1925,7 +1925,7 @@ class _MechanicsMixin:
         - ``'tidal'`` — clear both exclusion and typing (plain tidal breathing);
         - ``'excluded'`` — manually excluded, ``processing.exclude_breaths``;
         - a ``respmech.core.settings.BREATH_KINDS`` member — typed,
-          ``processing.breath_types`` (M-19), storing ``t_onset_s``.
+          ``processing.breath_types``, storing ``t_onset_s``.
 
         A breath is at all times in exactly one of these three states: setting one
         clears whichever of the other two it may have carried, so the settings.
@@ -2022,7 +2022,7 @@ class _MechanicsMixin:
             paint_kind = kind
 
         self.settings_edited.emit()      # exclude_breaths/breath_types land in the .toml
-        # M-31: manoeuvres.suggest_fvc's own contract is "untyped, non-ignored" — the
+        # manoeuvres.suggest_fvc's own contract is "untyped, non-ignored" — the
         # instant THIS write types/excludes the breath the hint was pointing at, that
         # contract is broken until the next full re-stage (self._suggested_fvc is only
         # ever recomputed there). Rather than showing a now-wrong hint on an already-
@@ -2031,7 +2031,7 @@ class _MechanicsMixin:
         if breath_no == self._suggested_fvc:
             self._suggested_fvc = None
         self._repaint_breath(breath_no, paint_kind)
-        # M-32: the wide, all-files sync (exclusion + typed + segment badges) — a
+        # the wide, all-files sync (exclusion + typed + segment badges) — a
         # narrower single-file version (the old _sync_excluded_badge) no longer exists,
         # same reasoning _toggle_separator_at (_segments.py) already had for using this
         # one directly.
@@ -2104,7 +2104,7 @@ class _MechanicsMixin:
         # rewrite exclude_breaths without ever touching the batch that is already reading
         # a frozen deepcopy of the settings taken at _start() (run_screen.py) — the click
         # LOOKED like it worked (the overlay recoloured immediately) while the running
-        # batch, and the results it was about to write, never saw it. (M-20: reimplemented
+        # batch, and the results it was about to write, never saw it. (the breath-type menu: reimplemented
         # on top of the shared _set_breath_type funnel; the include/exclude toggle is a
         # two-state special case of the three-state kind model, plain 'excluded' vs
         # 'tidal', with its own status wording preserved exactly.)
@@ -2350,8 +2350,8 @@ class _MechanicsMixin:
                 return
 
     def _build_type_menu(self, breath_no, kinds):
-        """The breath-type context menu (M-20's minimal Tidal/Excluded/Rest, extended by
-        M-31 to the full manoeuvre set). Parented to ``self.plots`` so
+        """The breath-type context menu (the minimal Tidal/Excluded/Rest, extended by
+        the full breath-type menu to the full manoeuvre set). Parented to ``self.plots`` so
         ``_lone_ampersands``'s QMenu scan (``tests/unit/_helpers.py``) reaches it like
         every other menu in the window — a menu with no such parent is invisible to that
         scan — and set to delete itself on close so a right-click doesn't leak one QMenu
@@ -2359,14 +2359,14 @@ class _MechanicsMixin:
 
         ``kinds`` is the caller's choice of which real kinds to OFFER (``_handle_type_
         requested`` filters ``'rest'`` in/out by capability) — the disabled hint and the
-        M-37 reference actions below are unconditional, since they name a property of
+        cross-file references reference actions below are unconditional, since they name a property of
         the BREATH's current type (already decided, not something ``kinds`` should ever
         need to suppress)."""
         from respmech.core.summary import group_key  # noqa: PLC0415
 
         menu = QMenu(self.plots)
         menu.setAttribute(Qt.WA_DeleteOnClose)
-        # M-31: a plain, deterministic hint (manoeuvres.suggest_fvc) — the untyped
+        # a plain, deterministic hint (manoeuvres.suggest_fvc) — the untyped
         # breath with the longest expiration in the file is the most plausible untyped
         # FVC candidate. Purely advisory: shown disabled, next to whichever breath it
         # names, so it never competes with (or is mistaken for) an actual menu choice.
@@ -2381,7 +2381,7 @@ class _MechanicsMixin:
                 action.setStatusTip(tip)
             action.triggered.connect(
                 lambda _checked=False, k=kind: self._apply_breath_type_choice(breath_no, k))
-        # M-37: reference actions. 'Use as IC reference for' is a real submenu (Qt draws
+        # reference actions. 'Use as IC reference for' is a real submenu (Qt draws
         # its own arrow — no manual '▸' needed), enabled only once THIS breath is already
         # typed 'ic'/'ic_fvc' (_IC_REFERENCE_KINDS): pointing another file's reference at
         # a breath that is not itself an IC manoeuvre would silently create a reference
@@ -2427,7 +2427,7 @@ class _MechanicsMixin:
         return entry.kind if entry is not None else None
 
     def _set_reference(self, file, breath_no, scope):
-        """M-37 funnel for the quick 'Use as IC reference for' submenu: point ``scope``
+        """cross-file references funnel for the quick 'Use as IC reference for' submenu: point ``scope``
         (``'file'`` | ``'group'`` | ``'all'``) at ``file``'s ``breath_no`` — already
         typed ``'ic'``/``'ic_fvc'``, see ``_IC_REFERENCE_KINDS`` — as its IC reference.
         Same run-lock / folder-stamp-only-on-creation / one ``settings_edited`` contract
@@ -2490,7 +2490,7 @@ class _MechanicsMixin:
         return scope
 
     def _open_reference_picker(self, filename=None):
-        """M-37: the full picker (``ReferencePickerDialog``) for all four reference
+        """ the full picker (``ReferencePickerDialog``) for all four reference
         slots at once, opened from the type menu's 'Reference manoeuvres…' (the
         currently previewed file) or from the file rail's row context menu
         (``FileRail.referencesRequested``, a specific ``filename``). Same run-lock
@@ -2542,7 +2542,7 @@ class _MechanicsMixin:
             return
         name = self._selected_filename()
         # .get(), mirroring _build_type_menu's own fallback: a future menu offering a
-        # kind not in _TYPE_MENU_LABELS (M-31) must not KeyError here AFTER the
+        # kind not in _TYPE_MENU_LABELS must not KeyError here AFTER the
         # settings write above has already happened (self-review finding).
         label = _TYPE_MENU_LABELS.get(kind, kind.capitalize())
         self._set_status(f"{name}: breath {breath_no} set to {label.lower()}.")
@@ -2553,7 +2553,7 @@ class _MechanicsMixin:
         not know which widget it is embedded in — it can be any plot on the mechanics
         stack or any EMG view) and pop the type menu up there.
 
-        M-31: the offered kinds differ by signal set — this one slot serves BOTH the
+        the offered kinds differ by signal set — this one slot serves BOTH the
         flow-bearing Mechanics stack and the EMG-only 'EMG – segments' tab (see
         ``_draw_breath_overlays``'s own docstring on why the two share this machinery),
         and the two shapes support genuinely different manoeuvre kinds:
@@ -2731,7 +2731,7 @@ class _MechanicsMixin:
     def _breath_kind_now(self, breath_no):
         """Live 3-way kind for one breath of the CURRENT file — the single source of
         truth for the EMG views' overlay colour (mirrors ``core.compute``'s own
-        ignorebreaths+breathkinds union, see M-19's ``compute.breathkinds`` docstring).
+        ignorebreaths+breathkinds union, see the ``compute.breathkinds`` docstring).
         A BREATH_KINDS member if typed (``processing.breath_types``), the pseudo-kind
         ``'excluded'`` if only manually excluded (``processing.exclude_breaths``), else
         ``None`` (plain tidal breathing). Used by ``_paint_breaths``, which redraws
@@ -2916,7 +2916,7 @@ class _MechanicsMixin:
 
     def _on_batch_result(self, result):
         """Render the automatic test run. For a flow-bearing set: the per-breath table +
-        Campbell (mechanics-only, so no EMG/fidelity here). For an EMG-only set (M-26):
+        Campbell (mechanics-only, so no EMG/fidelity here). For an EMG-only set:
         the segments tab's own per-segment table instead — there is no flow/volume/
         pressure to draw a Campbell diagram against, and the Mechanics tab holding
         ``self.table``/``self.campbell`` is not even shown for that shape (see
@@ -2970,13 +2970,13 @@ class _MechanicsMixin:
             raise _FileRunError(err)
         if cur:
             n_breaths = 0 if fr.breaths_table is None else len(fr.breaths_table)
-            # M-32: role rides along with the same successful result breaths/verdict
+            # role rides along with the same successful result breaths/verdict
             # already come from — see FileRailEntry.role's own docstring.
             self.file_rail.mark_result(cur, ok=True, breaths=n_breaths,
                                        role=getattr(fr, "role", None))
         is_reference_only = getattr(fr, "role", "tidal") == "reference"
         if is_reference_only:
-            # M-30: no tidal breaths at all in this file — nothing for the Campbell
+            # no tidal breaths at all in this file — nothing for the Campbell
             # diagram/breath table to draw, but the Manoeuvres table (this file's whole
             # reason for being typed) has real content, so show that instead of an
             # empty or error-looking mechanics view. Falls through to the noise-report
@@ -2996,7 +2996,7 @@ class _MechanicsMixin:
             self._update_qc_overview(fr)
         elif emg_only:
             self._fill_segtable(fr.breaths_table)
-            self._fill_manoeuvres_table(None, None)   # M-31 scope is the Mechanics tab only
+            self._fill_manoeuvres_table(None, None)   # the full breath-type menu scope is the Mechanics tab only
             self._update_qc_overview(fr, chip=self.segments_qc_overview)
         else:
             self._fill_table(fr.breaths_table)
@@ -3036,7 +3036,7 @@ class _MechanicsMixin:
         self._set_wob_table_note(df)
 
     def _fill_manoeuvres_table(self, df, manoeuvres):
-        """Show the Manoeuvres sheet below the per-breath table (M-31), visible only
+        """Show the Manoeuvres sheet below the per-breath table, visible only
         once the previewed file's most recent test run actually typed at least one
         breath — ``manoeuvres`` (``FileResult.manoeuvres``, a ``{breath_no: ...}`` dict)
         decides visibility rather than ``df`` alone, matching ``build_manoeuvre_table``'s
@@ -3092,7 +3092,7 @@ class _MechanicsMixin:
 
     def _update_campbell_panel_title(self):
         """Name the Campbell panel — and its export button — for the current signal set
-        (M-17, R7): "Campbell diagram" with Poes declared, "Flow-volume loop" without it.
+        (R7): "Campbell diagram" with Poes declared, "Flow-volume loop" without it.
         Cheap and idempotent, so it is safe to call on every settings sync as well as every
         draw — see ``_draw_campbell_or_loop`` and ``sync_from_settings``.
 
@@ -3125,7 +3125,7 @@ class _MechanicsMixin:
 
     def _draw_campbell_or_loop(self, breaths, pal=None):
         """Dispatch the Campbell panel to whichever diagram this signal set can actually
-        show (M-17, R7): the Campbell (volume-vs-Poes) diagram when Poes is declared, or a
+        show (R7): the Campbell (volume-vs-Poes) diagram when Poes is declared, or a
         tidal flow-volume loop when it is not — a Poes-less analysis has no pressure trace
         to plot work of breathing against. Same cached-breaths/export plumbing either way
         (``_campbell_breaths``, ``btn_export_fig``), because both draw functions set it.
@@ -3227,7 +3227,7 @@ class _MechanicsMixin:
         self.btn_export_fig.setEnabled(True)         # a diagram now exists to export
 
     def _draw_flow_volume_loop(self, breaths, pal=None):
-        """The Campbell panel's stand-in for a Poes-less (Flow only) signal set (M-17, R7):
+        """The Campbell panel's stand-in for a Poes-less (Flow only) signal set (R7):
         a tidal flow-volume loop per breath, plotted from the SAME breath dicts
         ``_draw_campbell`` reads (``b["volume"]``/``b["flow"]`` are computed whenever flow
         is declared, unaffected by whether Poes is — see ``core.compute._make_breath``).

@@ -167,7 +167,7 @@ class ChannelSetupDialog(QDialog):
     (:meth:`_build_header`) until the user edits that row, so a guess can never look like a
     confirmed choice.
 
-    ``declared`` (ticket M-12, R7): the analysis's DECLARED signal set — a frozenset drawn
+    ``declared`` (R7): the analysis's DECLARED signal set — a frozenset drawn
     from ``core.analysis.signals.SINGLE_SIGNALS`` plus ``"emg"`` (e.g. the ``declared``
     field of a ``Capabilities`` a caller with a real ``Settings`` builds via
     ``Capabilities.from_settings(settings)``). It does two things: filters the per-column
@@ -207,7 +207,7 @@ class ChannelSetupDialog(QDialog):
         # describing the majority subset this dialog itself was handed.
         self._excluded = list(excluded or [])
 
-        # M-12: see the class docstring's ``declared`` paragraph. ``None`` (every caller
+        # see the class docstring's ``declared`` paragraph. ``None`` (every caller
         # before this ticket) means "no signal-set concept in play"; an explicitly EMPTY
         # set means "nothing declared yet" (a signal set was never chosen). BOTH leave the
         # dropdown UNFILTERED (every role, EMG included — EMG has always been offered
@@ -582,7 +582,7 @@ class ChannelSetupDialog(QDialog):
 
     def _index_of_role(self, role):
         """The filtered dropdown's index for ``role`` — instance method, not the module's
-        full ``_ROLES``, since M-12 filters the per-column dropdown to the declared roles
+        full ``_ROLES``, since the channel setup filters the per-column dropdown to the declared roles
         (``self._roles``). A role not offered in this analysis's dropdown (e.g. a stale
         mapping predating a signal-set change) falls back to "(unused)" at index 0 — see
         the class docstring's ``declared`` paragraph for why that mismatch should not
@@ -684,7 +684,7 @@ class ChannelSetupDialog(QDialog):
         a required channel at a stale/wrong column, and OK can never be reached with
         neither volume source chosen.
 
-        M-12: when this analysis has declared NOTHING at all (``self._required_roles`` is
+        when this analysis has declared NOTHING at all (``self._required_roles`` is
         empty — a signal set was never chosen, e.g. a brand-new, still-blank analysis),
         there is no declared-required list to check assignment against. Rather than read
         that as "nothing missing, so OK is ready" (which would enable OK with literally
@@ -693,7 +693,7 @@ class ChannelSetupDialog(QDialog):
         for that shape."""
         if self._declared is None:
             # Legacy: no signal-set concept in play. This checkbox must stay visible
-            # exactly as it always was (the pre-M-12 code never called ``setVisible`` on
+            # exactly as it always was (the previous code never called ``setVisible`` on
             # it at all, so hiding it here — even conditionally — would be a real
             # behaviour change for every caller/test this ticket promises stays
             # unchanged; self-review finding: an earlier draft applied the new visibility
@@ -709,7 +709,7 @@ class ChannelSetupDialog(QDialog):
             # to it — this branch's own ``"flow" in self._declared`` already reads False
             # for an empty set without needing a special case.
             flow_declared = "flow" in self._declared
-            # M-12: the checkbox only makes sense once Flow is part of the signal set,
+            # the checkbox only makes sense once Flow is part of the signal set,
             # and once some column HASN'T already claimed Volume (a real column already
             # satisfies it, so showing an unticked, moot checkbox beside it would only
             # look like an open question).

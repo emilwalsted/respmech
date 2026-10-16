@@ -273,8 +273,8 @@ _FALLBACK_PAL = {
     "emg_cycle": list(_EMG_PENS),
     "breath_incl_brush": (44, 110, 155, 32), "breath_excl_brush": (180, 50, 42, 70),
     "breath_incl_label": (90, 107, 122), "breath_excl_label": (180, 50, 42),
-    # M-20: one brush/label pair per breath-type kind this ticket's minimal type menu
-    # (and M-31's fuller one) can set. 'other' is the fallback for any BREATH_KINDS
+    # one brush/label pair per breath-type kind this ticket's minimal type menu
+    # (and the fuller one) can set. 'other' is the fallback for any BREATH_KINDS
     # member without a dedicated entry here (ic_fvc/max_insp/sniff — not reachable
     # from the UI until the full type menu lands). Deliberately DISTINCT hues from every channel/
     # emg_cycle colour (an earlier draft reused volume/pgas/pdi's own greens/ambers/
@@ -292,7 +292,7 @@ _FALLBACK_PAL = {
     "mpl_accent": "#2C6E9B", "mpl_ok": "#1F7A4D", "mpl_warn": "#B7791F",
     "mpl_error": "#B4322A", "mpl_muted": "0.6",
     "mpl_loop": "0.55", "mpl_zeroline": "0.85", "mpl_target": "0.35",
-    # M-20 self-review: these three (edge/grid/tick) + mpl_cycle exist in theme.py's
+    # the breath-type menu self-review: these three (edge/grid/tick) + mpl_cycle exist in theme.py's
     # _PLOT_LIGHT/_PLOT_DARK but were missing here — a real, pre-existing key-set drift
     # test_the_three_plot_palettes_share_one_key_set caught. Values match _PLOT_LIGHT's
     # verbatim (same "light behaviour unchanged" contract as every other key here).
@@ -333,7 +333,7 @@ class BreathSpansItem(pg.GraphicsObject):
     has it: the item's y-extent is DERIVED from the view, so it must never feed
     back into that view's own y-autorange calculation.
 
-    Also the item-level entry point for the breath-typing click primitive (M-20): a
+    Also the item-level entry point for the breath-typing click primitive: a
     right-click or a Ctrl+left-click landing on an actual span emits ``typeRequested``
     instead of painting anything differently — the type menu it drives lives on the
     owning screen (``_mechanics.py``'s ``_set_breath_type``/``_build_type_menu``), never
@@ -492,8 +492,7 @@ class BreathSpansItem(pg.GraphicsObject):
 
 
 class SeparatorLinesItem(pg.GraphicsObject):
-    """One aggregate item per plot that paints every manual EMG-segmentation separator
-    (M-27) as a thin dashed vertical line spanning the current view's full height —
+    """One aggregate item per plot that paints every manual EMG-segmentation separator as a thin dashed vertical line spanning the current view's full height —
     the same one-item-per-plot design ``BreathSpansItem`` uses above and for the same
     reason (a recording with many separators must not cost one QGraphicsItem apiece).
 

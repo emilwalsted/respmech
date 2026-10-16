@@ -204,7 +204,7 @@ def test_mechanics_channel_stack_labels_fit_or_hide_for_cause_in_windows_metrics
                     reason="synthetic input absent")
 def test_mechanics_channel_stack_with_two_rows_does_not_overlap_in_windows_metrics(
         windows_metrics):
-    """M-17 (R7): a Flow-only signal set (Poes/Pgas/Pdi never assigned) draws just two
+    """the Poes-less Campbell panel (R7): a Flow-only signal set (Poes/Pgas/Pdi never assigned) draws just two
     channel rows (flow, volume) instead of the usual five, and this pins that the SAME
     windows_metrics label-fit/no-overlap contracts the 5-row sibling test above guards
     also hold for a 2-row stack — a shape that reduced-signal-set rendering had never

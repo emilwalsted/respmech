@@ -551,18 +551,18 @@ class _EmgNoiseMixin:
     # -- sub-tab visibility / channels -------------------------------------
     def subtab_plan(self, caps):
         """Ordered ``(widget, title)`` pairs for the sub-tab bar, given a
-        :class:`~respmech.core.analysis.signals.Capabilities` shape (M-17, R7).
+        :class:`~respmech.core.analysis.signals.Capabilities` shape (R7).
 
         The FIRST tab is the shape's own preview: Mechanics for every
         flow-bearing shape (Flow only, Flow + Poes, the full family), or the
-        dedicated "EMG – segments" tab (M-26) for an EMG-only signal set — the
+        dedicated "EMG – segments" tab for an EMG-only signal set — the
         two are each other's counterpart, mirroring ``_schedule``'s 'mech'/
         'segments' job gate exactly (``caps.flow`` vs. ``caps.mode ==
         'emg_only'``), so this plan and that dispatch can never disagree about
         which shape gets which preview. ``SignalSetDialog``'s EMG-only preset
-        stays disabled in the UI until M-28 activates it; this function is
+        stays disabled in the UI until the EMG-only gate activates it; this function is
         already correct for it (exercised today via hand-built ``Settings``
-        in tests, same as M-25's worker/job-dispatch tests). EMG channels
+        in tests, same as the worker/job-dispatch tests). EMG channels
         being assigned is the sole trigger for the ECG-reduction/noise-
         reduction tabs — independent of the flow/pressure family, since a
         "Flow only"/"Flow + Poes" preset can carry EMG too (the "Also EMG"
@@ -583,7 +583,7 @@ class _EmgNoiseMixin:
     def _update_subtabs(self):
         """Build the sub-tab bar from :meth:`subtab_plan`, preserving each tab
         widget's identity across a rebuild (renamed from
-        ``_update_emg_tab_visibility``, M-17): the has-EMG-channels boolean it
+        ``_update_emg_tab_visibility``): the has-EMG-channels boolean it
         used to read directly now comes from ``Capabilities.from_settings``,
         the one function every other relevance decision in the program also
         consults, though today it can only ever agree with the old boolean —
@@ -593,7 +593,7 @@ class _EmgNoiseMixin:
         this runs on every settings sync AND on ``PreviewScreen`` construction,
         which sits directly on ``MainWindow.__init__``'s no-try/except path.
 
-        M-26: the FIRST tab is now itself part of the plan (Mechanics XOR the
+        the FIRST tab is now itself part of the plan (Mechanics XOR the
         segments tab), not a fixed, always-present tab — rebuilt generically
         from ``subtab_plan`` instead of hardcoding index 0 to Mechanics, so a
         signal-set change that flips flow-bearing <-> EMG-only swaps it too.
@@ -604,7 +604,7 @@ class _EmgNoiseMixin:
         either side of the flip) — not "whatever will replace it". A user
         parked on Mechanics/segments at the moment a loaded analysis flips
         shape (File ▸ Open of a different signal set, drag-and-drop — both
-        reachable today, independent of the M-28 UI gate on the EMG-only
+        reachable today, independent of the EMG-only gate on the EMG-only
         preset) would be silently dropped onto ECG-reduction with no
         indication anything moved. Fixed by remembering whether the user was
         on THAT slot before the rebuild and, if so, explicitly restoring
@@ -727,7 +727,7 @@ class _EmgNoiseMixin:
         if not n.reference_file:
             self.noise_ref_readout.setFullText("Rest reference: not set")
             return
-        # M-24: read the RESOLVED mode (M-22), not the raw use_expiration/reference_intervals
+        # read the RESOLVED mode, not the raw use_expiration/reference_intervals
         # pair directly — an EMG-only set ignores use_expiration entirely (it may still sit
         # at its True default), so the old bare predicate could describe a reference this
         # test will never actually build that way.
@@ -798,13 +798,13 @@ class _EmgNoiseMixin:
             self.btn_set_noise.setMinimumHeight(h)
 
     def _toggle_from_emg_click(self, ev, plot_items, offset):
-        # M-20: a right-click/Ctrl+left-click on a breath is handled at item level
+        # a right-click/Ctrl+left-click on a breath is handled at item level
         # (BreathSpansItem.mouseClickEvent -> typeRequested) and accepted there — this
         # scene-level handler is for the plain left-click toggle only. The button
         # check is best-effort (getattr, not ev.button() directly): a fake event used
         # by test_legend_click_does_not_toggle_breath has no .button() at all, and the
         # ORIGINAL guard here never required one either.
-        # M-27: while 'Place separators' is armed, EVERY click this shared funnel sees
+        # while 'Place separators' is armed, EVERY click this shared funnel sees
         # (segments tab, raw/detail/result EMG stacks alike — they all draw the SAME
         # channels for an EMG-only set) places or removes a separator instead of
         # toggling a breath, checked FIRST — before the legend/noise-band checks below,
@@ -931,7 +931,7 @@ class _EmgNoiseMixin:
         n = self.state.settings.processing.emg.noise
         shown = self._selected_filename()
         ivals = n.reference_intervals
-        # M-24: gate on the RESOLVED mode, not the raw use_expiration flag — for an EMG-only
+        # gate on the RESOLVED mode, not the raw use_expiration flag — for an EMG-only
         # set that flag is never touched by this screen and stays at its True default, which
         # used to hide a genuinely-set explicit interval (the flag reads as 'expiration' even
         # though EMG-only ignores it and the interval IS what the resolver will use).
@@ -1017,7 +1017,7 @@ class _EmgNoiseMixin:
         return (t0, t1)
 
     def _apply_noise_rest_segments(self):
-        """Define the shared noise reference as this file's rest-typed segment(s) (M-22's
+        """Define the shared noise reference as this file's rest-typed segment(s) (noise-reference modes's
         ``rest_segments`` mode) — the EMG-only alternative to marking a span by hand, offered
         only when the file already carries a segment typed 'rest' in ``processing.
         breath_types`` (see ``modes_available`` in ``_open_noise_profile_dialog``).
@@ -1107,7 +1107,7 @@ class _EmgNoiseMixin:
         # reappearing on the error path _ecg.py already guards against — see its own
         # ecg_error handling for the same reasoning).
         ecg_applied = bool(data.get("ecg_applied")) and not data.get("ecg_error")
-        # M-24: which WHOLE modes this picker can offer for THIS signal set/file. 'intervals'
+        # which WHOLE modes this picker can offer for THIS signal set/file. 'intervals'
         # (dragging a span) is always available. 'expiration' only means anything with a flow
         # channel declared (an EMG-only set has no inspiration/expiration phases at all —
         # resolve_noise_reference_mode ignores use_expiration entirely once there is no flow).

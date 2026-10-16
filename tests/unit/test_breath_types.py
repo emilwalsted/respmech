@@ -1,4 +1,4 @@
-"""BreathTypeEntry (M-19): a typed breath behaves exactly like an excluded one for
+"""BreathTypeEntry: a typed breath behaves exactly like an excluded one for
 every existing consumer (check_breaths/calculateaveragebreaths/build_breath_table/
 plots._breaths all filter on ``ignored`` alone, unchanged by this ticket), plus carries
 a ``kind`` and, in ``results.build_processed_data``, an opt-in ``Breathkind`` column.
@@ -283,7 +283,7 @@ def test_build_processed_data_omits_breathkind_when_the_only_typed_breath_is_nev
 
 
 def test_build_processed_data_includes_breathkind_for_an_emg_only_typed_breath_kept_visible():
-    """The EMG-only union rule leaves a non-`rest` typed breath `ignored=False` (M-19's
+    """The EMG-only union rule leaves a non-`rest` typed breath `ignored=False` (typed breaths's
     own asymmetric rule), so it IS emitted even under the default settings, and the
     column must reflect that."""
     ns = to_legacy_ns(_base_settings())
@@ -318,7 +318,7 @@ def test_build_processed_data_breathkind_is_blank_not_nan_for_an_untyped_breath_
     assert not result["Breathkind"].isna().any()
 
 
-# -- M-27: BreathTypeEntry renumbering when manual separators are edited --------------
+# -- manual separators: BreathTypeEntry renumbering when manual separators are edited --------------
 # (the Qt screen-level "_set_separators actually rewrites the entry" behaviour is
 # covered end to end in test_separators.py; this is the pure, Qt-free half — the same
 # remap_segment_number rule applied by hand to a BreathTypeEntry, matching how
@@ -339,12 +339,12 @@ def test_a_typed_breath_is_renumbered_by_remap_segment_number_like_any_other_seg
 
 
 # --------------------------------------------------------------------------------- #
-# M-30 — reference-only files (every breath in a file is typed, none tidal)
+# reference-only files — reference-only files (every breath in a file is typed, none tidal)
 # --------------------------------------------------------------------------------- #
 
 @requires_synth()
 def test_a_file_with_every_breath_typed_runs_as_reference_only(tmp_path):
-    """M-30's own acceptance criterion: a batch with a file where ALL breaths are
+    """the acceptance criterion: a batch with a file where ALL breaths are
     typed IC runs without error, and the rest of the batch (a normal tidal file) is
     unaffected — its average table gets no row (and no NaN row) from the
     reference-only file."""
@@ -406,7 +406,7 @@ def test_reference_only_file_gets_no_spurious_cardiac_gated_nan_notice(tmp_path)
 
 @requires_synth()
 def test_reference_only_file_writes_a_workbook_with_the_manoeuvres_table_as_data(tmp_path):
-    """write_batch (M-30): a reference-only file's breathdata workbook has no tidal
+    """write_batch: a reference-only file's breathdata workbook has no tidal
     Data sheet to write, so the Manoeuvres table takes its place, with a Provenance
     row explaining why -- rather than crashing on a None DataFrame or writing an
     empty one with no explanation."""
@@ -445,7 +445,7 @@ def test_reference_only_file_writes_a_workbook_with_the_manoeuvres_table_as_data
 
 @requires_synth()
 def test_cli_dry_run_reports_reference_manoeuvres_not_zero_breaths(tmp_path, capsys):
-    """CLI dry run (M-30): a reference-only file must not read as a bare, misleading
+    """CLI dry run: a reference-only file must not read as a bare, misleading
     '0 breaths' -- it says how many reference manoeuvres it actually has."""
     from respmech.cli.__main__ import main as cli_main
     from respmech.settingsio.toml_io import save_toml

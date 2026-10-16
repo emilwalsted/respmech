@@ -225,7 +225,7 @@ def test_an_excluded_segment_shows_in_the_status_line_count(tmp_path):
     win.close()
 
 
-# -- M-26: the dedicated tab, its action band, click-to-exclude/type and the batch table --
+# -- the segments tab: the dedicated tab, its action band, click-to-exclude/type and the batch table --
 
 def test_emg_only_subtab_titles_are_segments_ecg_noise_in_order(tmp_path):
     """The ticket's own literal acceptance criterion."""
@@ -288,9 +288,9 @@ def test_a_mid_session_shape_flip_keeps_the_user_on_the_replacement_first_tab(tm
 
 
 def test_clicking_a_segment_toggles_exclusion_via_the_shared_toggle_breath_funnel(tmp_path):
-    """Acceptance criterion: 'left-click toggles exclusion via _toggle_breath' — M-25's
+    """Acceptance criterion: 'left-click toggles exclusion via _toggle_breath' — the EMG-only preview's
     provisional renderer left ``_breath_spans`` empty for exactly this reason (no click
-    surface existed yet); this is what M-26 fixes."""
+    surface existed yet); this is what the segments tab fixes."""
     from respmech.ui.main_window import MainWindow
     from respmech.ui.state import AppState
 
@@ -376,7 +376,7 @@ def test_a_real_click_on_the_segments_stack_marks_the_segment(tmp_path):
 
 
 def test_typerequested_signal_from_a_real_segment_item_reaches_the_shared_handler(tmp_path):
-    """Acceptance criterion: 'højreklik typer via M-20's primitiv (rest tilbudt)'.
+    """Acceptance criterion: 'højreklik typer via the primitiv (rest tilbudt)'.
     ``_draw_breath_overlays`` wires ``BreathSpansItem.typeRequested ->
     _handle_type_requested`` identically regardless of which ``plots`` list it was
     given — but until this test, nothing rendered the segments stack and then actually
@@ -413,7 +413,7 @@ def test_typerequested_signal_from_a_real_segment_item_reaches_the_shared_handle
 
 def test_segments_action_band_shows_only_on_the_segments_tab(qapp, tmp_path):
     """Mirrors test_mech_short_screen.py's own Mechanics-band test, for the segments
-    tab's twin band (M-26 generalised _update_mech_action_band_visibility to cover both,
+    tab's twin band (the segments tab generalised _update_mech_action_band_visibility to cover both,
     mutually exclusively). ``win.show()`` is required: a widget's own ``isVisible()``
     stays False regardless of ``setVisible(True)`` until its top-level window is shown
     (same reason test_mech_short_screen.py's ``_window()`` helper calls it)."""
@@ -460,19 +460,19 @@ def test_process_segments_button_label_has_a_literal_double_ampersand(tmp_path):
 
 def test_the_batch_test_run_computes_from_emg_and_fills_the_segments_table_for_an_emg_only_set(
         qapp, tmp_path):
-    """Found in self-review (M-25), not a literal acceptance criterion: 'batch' (the
+    """Found in self-review, not a literal acceptance criterion: 'batch' (the
     auto-run 'Test run' job) has always been dispatched for every signal set, EMG-only
-    included — but until M-25's fix its dispatch unconditionally stripped
+    included — but until the fix its dispatch unconditionally stripped
     input.channels.emg (meant only for a flow-bearing set, where the EMG work is shown
     separately). For an EMG-only set that left NO channel assigned at all, so
     Settings.validate() refused the snapshot and BatchWorker's fatal-exception path
     painted a raw 'Test run failed' card.
 
-    M-26 strengthening (self-review): this test now goes all the way through the REAL
+    the segments tab strengthening (self-review): this test now goes all the way through the REAL
     dispatch path (``_schedule`` -> ``_launch`` -> a real worker thread -> ``_on_job_done``
     -> ``_RENDER['batch']``) and checks ``segtable``/its rowcount, not just that
     ``table``/``campbell`` show no error. Those two panels are never touched by an
-    EMG-only 'batch' result any more (M-26 routes it to the segments tab's own table
+    EMG-only 'batch' result any more (the segments tab routes it to the segments tab's own table
     instead), so asserting only `panel_error("table"/"campbell") is None` would pass
     vacuously regardless of whether the run — or the segtable render — actually works;
     a manual, ``_schedule``-bypassing call to ``BatchWorker``/``_on_batch_result`` would
@@ -518,10 +518,10 @@ def test_the_batch_test_run_computes_from_emg_and_fills_the_segments_table_for_a
     win.close()
 
 
-# NOTE (M-26): a prior ticket added
+# NOTE: a prior ticket added
 # test_a_stale_job_of_one_kind_does_not_stop_the_other_kind_s_live_spinner_on_raw here,
 # for a scenario that existed only because 'segments' provisionally shared the 'raw'
-# panel with 'mech' (see _jobs.py's old _PANELS['segments'] comment). M-26 gives the
+# panel with 'mech' (see _jobs.py's old _PANELS['segments'] comment). the segments tab gives the
 # segments tab its own dedicated panel ('segstack'), so no two _AUTO_KINDS entries share
 # a panel any more and that specific scenario can no longer arise — removed rather than
 # force-fit onto an unrelated pairing. The general defensive check it exercised

@@ -1,4 +1,4 @@
-"""core.analysis.mfvl (M-42): FVC/FEV1/PEF from one typed FVC breath, the MEFV
+"""core.analysis.mfvl: FVC/FEV1/PEF from one typed FVC breath, the MEFV
 envelope it defines, and the per-tidal-breath expiratory-flow-limitation/VEcap/MVV
 placement against it. Pure numpy, no file I/O -- same no-I/O style as
 test_manoeuvres.py/test_lungvol.py."""

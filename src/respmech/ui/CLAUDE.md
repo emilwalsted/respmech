@@ -356,7 +356,7 @@ mechanism: a shown label is never wider than its axis, and a hidden one is hidde
 because the name at the smallest allowed font (`SciAxis._label_sizes()`) is wider still.
 Never a pixel literal in either.
 
-### Item-level click vs scene-signal click: two different pyqtgraph mechanisms for two different buttons (M-20)
+### Item-level click vs scene-signal click: two different pyqtgraph mechanisms for two different buttons
 
 `BreathSpansItem`'s right-click/Ctrl+left-click "request a breath-type menu" primitive
 and the plain-left-click primitive (`_on_plot_clicked`/`_toggle_from_emg_click`, wired to
@@ -406,7 +406,7 @@ order, which a zValue change never can.
 
 ### A transient popup `QMenu` needs `Qt.WA_DeleteOnClose` or it never gets cleaned up
 
-`_MechanicsMixin._build_type_menu` (M-20) constructs a brand-new `QMenu` on every
+`_MechanicsMixin._build_type_menu` constructs a brand-new `QMenu` on every
 right-click/Ctrl+left-click (parented to `self.plots`, so `_lone_ampersands`'s
 `findChildren(QMenu)` scan reaches it — an unparented menu is invisible to that scan).
 Popped up with `.popup()`, not `.exec()`, matching pyqtgraph's own `ViewBox.
@@ -418,12 +418,12 @@ session accumulates one dead `QMenu` QObject per right-click, forever. The same
 `WA_DeleteOnClose` gotcha this file already documents for a one-shot `QDialog` applies
 identically here.
 
-### One click-menu-building code path serves two mutually-exclusive tabs — state it caches must be reset in BOTH renderers (M-31)
+### One click-menu-building code path serves two mutually-exclusive tabs — state it caches must be reset in BOTH renderers
 
 `_build_type_menu`/`_handle_type_requested` are shared between the flow-bearing
-Mechanics stack and the EMG-only 'EMG – segments' tab (M-26's own docstring on
+Mechanics stack and the EMG-only 'EMG – segments' tab (the docstring on
 `_draw_breath_overlays` explains why: the two never render breaths at once, so sharing
-the overlay/click machinery is safe). M-31 added `self._suggested_fvc` — the breath
+the overlay/click machinery is safe). the full breath-type menu added `self._suggested_fvc` — the breath
 number `core.analysis.manoeuvres.suggest_fvc()` points at, read by the menu's disabled
 "Suggested: FVC" hint — as more such shared, cached state, and it has the SAME trap
 `_breath_spans`/`_breath_regions`/etc. already had before this ticket touched them: it

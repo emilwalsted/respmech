@@ -26,7 +26,7 @@ from respmech.core.settings import Settings
 from respmech.core._cancel import Cancelled
 from respmech.core.analysis.signals import SINGLE_SIGNALS, effective_signals
 
-#: M-12's ``peek_header_warning`` floor -- see that function's own docstring.
+#: the ``peek_header_warning`` floor -- see that function's own docstring.
 _SINGLE_SIGNAL_SET = frozenset(SINGLE_SIGNALS)
 
 
@@ -728,7 +728,7 @@ def peek_header_warning(settings: Settings, file_path: str):
     """Cheap two-line consistency probe for the manifest scanner (ticket D01): flags a file
     whose FIRST non-blank line looks like it belongs to an instrument export's preamble
     rather than real channel data — either because that line's own field count is under
-    the analysis's own floor (M-12: ``1 + `` the number of single-column signal roles
+    the analysis's own floor (the channel setup: ``1 + `` the number of single-column signal roles
     (flow/poes/pgas/pdi) actually DECLARED, e.g. 5 for a full analysis, 2 for flow-only —
     a real recording needs at least a time column plus one field per declared role).
     EMG never LOWERS this floor below the historical baseline of 3 (self-review finding:
@@ -1034,7 +1034,7 @@ def stage_noise_fidelity(settings: Settings, cancel_check=None) -> dict:
         # common cause is a misassigned or inverted flow channel, so the reference has no
         # segmentable breaths for the quiet-expiration clip -- 'use expiration' and reference
         # intervals both mean something there. An EMG-only set has neither a flow channel nor
-        # an expiration phase; its own two buildable sources (M-22) are a rest-typed segment
+        # an expiration phase; its own two buildable sources are a rest-typed segment
         # or an explicit interval, so the hint points at those instead.
         if "flow" in effective_signals(settings):
             hint = ("Check the flow channel and inverse-flow assignment, or turn off "
@@ -1125,7 +1125,7 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
         # An absent pressure channel (caps.poes/pgas/pdi False) is omitted entirely rather
         # than kept as an empty array, matching the trimmed path below and R1's "documented
         # absence, not a hidden NaN/empty" principle — a consumer not yet updated for a
-        # reduced signal set (ui/screens/preview/_mechanics.py, M-17) is unreachable today,
+        # reduced signal set (ui/screens/preview/_mechanics.py) is unreachable today,
         # since nothing in the UI can select such a signal set until that ticket lands.
         series = {"flow": np.asarray(flow, float), "volume": np.asarray(volume, float)}
         if caps.poes:
@@ -1163,7 +1163,7 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
     # K-035: the boundary breath trim KEEPS is never verified as complete — surface it
     # here too, so the warning is visible while tuning, before a batch is ever run.
     boundary_notices = compute.trim_boundary_notices(breaths, s)
-    # M-31: the type menu's disabled 'Suggested: FVC' hint reads this directly, so the
+    # the type menu's disabled 'Suggested: FVC' hint reads this directly, so the
     # suggestion is computed once here (a pure function of the SAME raw breath dicts the
     # menu itself is about to be popped up for) rather than re-derived in the UI from
     # spans that never carry the expiration data suggest_fvc needs.
@@ -1181,8 +1181,8 @@ def stage_mechanics_preview(settings: Settings, file_path: str) -> dict:
     spans, cum = [], 0
     for bno, b in breaths.items():
         length = len(np.atleast_1d(b["time"]))
-        # M-20: kind is one of None (plain tidal), the pseudo-kind 'excluded' (manually
-        # excluded, no BREATH_KINDS entry), or a BREATH_KINDS member (typed, M-19) —
+        # kind is one of None (plain tidal), the pseudo-kind 'excluded' (manually
+        # excluded, no BREATH_KINDS entry), or a BREATH_KINDS member (typed) —
         # b['kind'] is only ever set by compute._make_breath for the latter, so a merely
         # excluded breath falls through to the 'excluded' pseudo-kind here.
         kind = b["kind"] if b["kind"] else ("excluded" if b["ignored"] else None)

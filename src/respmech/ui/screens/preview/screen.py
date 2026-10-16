@@ -179,7 +179,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         self.result_checks = []          # list of (col:int, QCheckBox)
         # breath overlays in the EMG views (Mechanics keeps its own _breath_* state)
         self._breaths = []               # last mech spans [(num, t0, t1, ignored), ...] (TRIMMED s)
-        self._suggested_fvc = None       # M-31: manoeuvres.suggest_fvc's breath number, or None
+        self._suggested_fvc = None       # manoeuvres.suggest_fvc's breath number, or None
         self._trim_offset_s = 0.0        # startix/fs — maps a trimmed span to absolute EMG time
         # whether Mechanics' own 'Place separators' (manual segmentation
         # repair) is currently armed, and the SeparatorLinesItem drawn on each
@@ -270,12 +270,12 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         self._mech_page = self._build_mech_tab()
         self._ecg_page = self._build_ecg_tab()     # inserted between Mechanics + noise when EMG cols exist
         self._emg_page = self._build_emg_tab()
-        self._segments_page = self._build_segments_tab()   # M-26: EMG-only's own first tab
+        self._segments_page = self._build_segments_tab()   # EMG-only's own first tab
         self._mech_tab = self._scrollable(self._mech_page)
         self._ecg_tab = self._scrollable(self._ecg_page)
         self._emg_tab = self._scrollable(self._emg_page)
         self._segments_tab = self._scrollable(self._segments_page)
-        # M-26: NOT self.subtabs.addTab(...) here any more — the first tab is now itself
+        # NOT self.subtabs.addTab(...) here any more — the first tab is now itself
         # part of subtab_plan's decision (Mechanics XOR the segments tab), so
         # _update_subtabs() below (which already builds the whole bar from the plan)
         # inserts it too, instead of one caller hardcoding tab 0 and another managing
@@ -338,8 +338,8 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         # D14: fixed under the workspace, same as settings_screen.py pins its own QC strip
         # (self.qc) below its scrolling form — see _build_mech_action_band's docstring.
         root.addWidget(self._mech_action_band)
-        root.addWidget(self._segments_action_band)   # M-26: same placement, EMG-only's own band
-        # M-26: NOT called here yet — self.subtabs has no tabs at all until
+        root.addWidget(self._segments_action_band)   # same placement, EMG-only's own band
+        # NOT called here yet — self.subtabs has no tabs at all until
         # _update_subtabs() below inserts the first one (tab 0 is now part of its own
         # plan, see subtab_plan), so currentWidget() would still be None here and hide
         # both bands. Called once _update_subtabs() has actually populated the bar.
@@ -396,7 +396,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
             "detail": BusyOverlay(self.emg_plots),
             "detail_psd": BusyOverlay(self.emg_psd_canvas),   # the detail job also renders the PSD
             "fidelity": BusyOverlay(self.fidelity_canvas),
-            # M-26: the segments tab's own dedicated stack/table — the VIEWPORT for the
+            # the segments tab's own dedicated stack/table — the VIEWPORT for the
             # stack, same reason 'raw' above uses one (it scrolls inside its panel).
             "segstack": BusyOverlay(self._segments_scroll.viewport()),
             "segtable": BusyOverlay(self.segtable),
@@ -407,10 +407,10 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         self._load_noise_params()            # this already refreshes the band (D07) — no
         self._load_ecg_params()               # file is selected yet here, so it stays hidden;
         self._update_subtabs()     # the OLD unconditional _ensure_noise_region()
-        # M-26: now that _update_subtabs() has actually inserted the first tab (Mechanics
+        # now that _update_subtabs() has actually inserted the first tab (Mechanics
         # or the segments tab), currentWidget() resolves to it and this shows the right band.
         self._update_mech_action_band_visibility()
-        # M-17 (R7): name the Campbell/flow-volume panel and its export button for the
+        # the Poes-less Campbell panel (R7): name the Campbell/flow-volume panel and its export button for the
         # signal set this analysis actually opened with, not the construction-time default.
         self._update_campbell_panel_title()
         # call that used to sit here bypassed that and always showed reference_intervals[0]
@@ -425,7 +425,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
             QTimer.singleShot(0, self._announce_noise_repair)
 
         self.file_rail.selectionChanged.connect(self._on_file_selected)
-        # M-37: the rail's own "Reference manoeuvres…" row action (M-32, unconnected
+        # the rail's own "Reference manoeuvres…" row action (unconnected
         # until this ticket) opens the same full picker the Mechanics type menu does,
         # for the ROW's file rather than the currently previewed one.
         self.file_rail.referencesRequested.connect(self._open_reference_picker)
@@ -618,13 +618,13 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         self.btn_process_file.setToolTip(
             "Locked while a run is in progress." if active
             else "Run and write output for the previewed file only.")
-        # M-26: the segments tab's own twin button, same gate/wording — _process_ready is
+        # the segments tab's own twin button, same gate/wording — _process_ready is
         # shared on purpose (Mechanics and the segments tab are mutually exclusive).
         self.btn_process_segments_file.setEnabled(self._process_ready and not active)
         self.btn_process_segments_file.setToolTip(
             "Locked while a run is in progress." if active
             else "Run and write output for the previewed file only.")
-        # M-27: 'Place separators' locks the same way while a run is active — routed
+        # 'Place separators' locks the same way while a run is active — routed
         # through _update_separators_button so 'whole_file' (already disabled, its own
         # reason) is never overridden by a run ending.
         self._update_separators_button()
@@ -708,9 +708,9 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         analysis over the same folder/mask, with no exclusion/typing for a file the
         FIRST analysis had, must not leave that first analysis's stale badge on screen.
 
-        M-32: replaces the exclusion-only ``_sync_rail_exclusions`` — called from the
+        replaces the exclusion-only ``_sync_rail_exclusions`` — called from the
         same three places that one was (``refresh_files``, ``sync_from_settings``) PLUS
-        every breath-classification write funnel (M-20's ``_set_breath_type``, M-27's
+        every breath-classification write funnel (the ``_set_breath_type``, manual separators's
         ``_toggle_separator_at``), which used to call a file-rail sync of their own
         (``_sync_excluded_badge``/this same wide function respectively) — now unified on
         one function so a type/exclude/separator edit can never leave any of the THREE
@@ -739,7 +739,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         # same as core.settings' own _CARRIED_KINDS row for this field).
         override_counts = {e.file: len(e.cut_s) + len(e.join_s)
                            for e in seg.overrides if e.cut_s or e.join_s}
-        # M-37: the 'reference' badge FileRailEntry has carried since M-32 (comment there:
+        # the 'reference' badge FileRailEntry has carried since the file rail (comment there:
         # "stays None until a later ticket starts calling set_reference()") — this is that
         # ticket. ``matched`` is the batch's OWN glob (ui.validation.matching_files), never
         # the manifest's majority-column-count subset (check_links' own doctrine: a
@@ -790,9 +790,9 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         if self._noise_repaired:
             QTimer.singleShot(0, self._announce_noise_repair)
         self._update_subtabs()
-        self._update_campbell_panel_title()   # M-17 (R7): follows a signal-set change too
-        self._update_mech_stack_floor()       # M-17 (R7): follows a channel-count change too
-        self._update_separators_button()      # M-27: follows a segmentation.method change too
+        self._update_campbell_panel_title()   # the Poes-less Campbell panel (R7): follows a signal-set change too
+        self._update_mech_stack_floor()       # the Poes-less Campbell panel (R7): follows a channel-count change too
+        self._update_separators_button()      # follows a segmentation.method change too
         self._sync_rail_breath_state()   # a loaded analysis file can bring its own exclusions/typing
         self._update_actions()
         # Dependency-scoped invalidation: diff the settings against the last-synced snapshot
@@ -805,7 +805,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
             kinds = set(_AUTO_KINDS)
         else:
             kinds = set()
-            # M-24: capability-aware so an EMG-only edit re-dispatches 'batch' too (its own
+            # capability-aware so an EMG-only edit re-dispatches 'batch' too (its own
             # test-run mechanics come from EMG there — see _kinds_for_settings_path's
             # docstring); from_settings_or_none degrades to caps=None (today's flow-only
             # rule) rather than crash a settings edit over a malformed analysis.signals.
@@ -978,14 +978,14 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         compute is being scheduled)."""
         self.plots.clear(); self._channel_plots = []
         self._table_model.set_dataframe(None)
-        self._fill_manoeuvres_table(None, None)   # M-31: never leave the PREVIOUS file's rows up
+        self._fill_manoeuvres_table(None, None)   # never leave the PREVIOUS file's rows up
         self.campbell.figure.clear(); self.campbell.draw()
         self._forget_campbell()      # the export must not resurrect a cleared diagram
-        # M-27: segments_plots.clear() above already destroys every SeparatorLinesItem
+        # segments_plots.clear() above already destroys every SeparatorLinesItem
         # (children of the plots it just tore down) — reset the Python-side list too,
         # matching the _segments_subplots reset right beside it (never READ stale today,
         # but a dangling reference to a torn-down C++ object should not linger regardless).
-        self.segments_plots.clear(); self._segments_subplots = []; self._separator_items = []   # M-26
+        self.segments_plots.clear(); self._segments_subplots = []; self._separator_items = []
         self._segtable_model.set_dataframe(None)
         self.segments_caption.setFullText("")
         self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []
@@ -1007,8 +1007,8 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         # _ensure_noise_region() call here could repaint a stale/mismatched band in the
         # window before the async detail render corrects it).
         self._refresh_noise_reference_band()
-        self._reset_qc_overview()    # neutral chip(s) + disabled 'Process & write' (B02, M-26)
-        # M-26: _panels_for, not the static _PANELS — 'batch' owns 'segtable' for the
+        self._reset_qc_overview()    # neutral chip(s) + disabled 'Process & write' (B02)
+        # _panels_for, not the static _PANELS — 'batch' owns 'segtable' for the
         # CURRENT (about to be re-dispatched) signal set, not necessarily 'table'/'campbell'.
         panels = [p for k in _FILE_KINDS for p in self._panels_for(k)]
         if include_noise:
@@ -1030,14 +1030,14 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         _reset_breath_state additionally drops breath overlays + staged EMG."""
         self.plots.clear(); self._channel_plots = []
         self._table_model.set_dataframe(None)
-        self._fill_manoeuvres_table(None, None)   # M-31: never leave the PREVIOUS file's rows up
+        self._fill_manoeuvres_table(None, None)   # never leave the PREVIOUS file's rows up
         self.campbell.figure.clear(); self.campbell.draw()
         self._forget_campbell()      # the export must not resurrect a cleared diagram
-        # M-27: segments_plots.clear() above already destroys every SeparatorLinesItem
+        # segments_plots.clear() above already destroys every SeparatorLinesItem
         # (children of the plots it just tore down) — reset the Python-side list too,
         # matching the _segments_subplots reset right beside it (never READ stale today,
         # but a dangling reference to a torn-down C++ object should not linger regardless).
-        self.segments_plots.clear(); self._segments_subplots = []; self._separator_items = []   # M-26
+        self.segments_plots.clear(); self._segments_subplots = []; self._separator_items = []
         self._segtable_model.set_dataframe(None)
         self.segments_caption.setFullText("")
         self.ecg_capture_plot.clear(); self.ecg_processed_plots.clear(); self._ecg_capture_subplots = []
@@ -1053,7 +1053,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         self._noise_has_result = False
         self._reset_breath_state()   # clears _bov/_breaths/_emg_all/result plot/_previewed_file
         self._refresh_noise_reference_band()   # re-attach + recompute (see _clear_file_panels, D07)
-        self._reset_qc_overview()    # neutral chip(s) + disabled 'Process & write' (B02, M-26)
+        self._reset_qc_overview()    # neutral chip(s) + disabled 'Process & write' (B02)
         self._clear_panel_overlays(*self._overlays)   # dismiss stale spinners / error cards
 
     def _on_file_selected(self, name):
@@ -1213,7 +1213,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
 
     def _panels_for(self, kind):
         """The panel keys ``kind``'s dispatch right now would own, given the CURRENT
-        settings (M-26) — see ``_jobs.panels_for``'s own docstring for why a caller that
+        settings — see ``_jobs.panels_for``'s own docstring for why a caller that
         already has a dispatched ``_Job`` should read ``job.panels`` instead of calling
         this again."""
         return panels_for(kind, Capabilities.from_settings_or_none(self.state.settings))
@@ -1233,7 +1233,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
                         pass
                 self._draining.add(old)            # still running -> keep referenced until it self-cleans
         # frozen NOW, at dispatch time — never re-derived later from settings that may
-        # have since changed (M-26; see panels_for's own docstring)
+        # have since changed (the segments tab; see panels_for's own docstring)
         panels = self._panels_for(kind)
         for p in panels:
             self._overlays[p].start(_SPIN_TEXT[kind])
@@ -1312,7 +1312,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         # never wipe an error card the current owner already painted (a stale
         # draining job finishing late must not erase the live job's error). A panel
         # CAN be listed by more than one currently-active job's own frozen `job.panels`
-        # (no two _AUTO_KINDS entries share one today, post-M-26 — 'segments' got its
+        # (no two _AUTO_KINDS entries share one today, post-the segments tab — 'segments' got its
         # own dedicated panel — but 'batch's OWN panels can differ between two of ITS
         # OWN in-flight/draining dispatches if the signal set changed mid-flight, see
         # panels_for) — a stale stop() must not hide a genuinely live spinner some
@@ -1346,7 +1346,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
                 if cur:
                     self.file_rail.mark_result(cur, ok=False, error=detail)
                 self._qc_overview_not_assessed(detail, chip=seg_chip)
-                # M-31: the "table" overlay above is parented to self.table alone, not
+                # the "table" overlay above is parented to self.table alone, not
                 # the whole panel — a PREVIOUS successful run's Manoeuvres section would
                 # otherwise stay visible, uncovered, right below this error card.
                 self._fill_manoeuvres_table(None, None)
@@ -1360,7 +1360,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
             for p in job.panels:
                 self._overlays[p].show_error(f"{label} failed — {short_error(detail)}", detail)
             if job.kind == "batch":
-                self._fill_manoeuvres_table(None, None)   # M-31: see the note above
+                self._fill_manoeuvres_table(None, None)   # see the note above
             self._update_actions(status=False)
             return
         except Exception:                              # noqa: BLE001 — a rendering bug
@@ -1374,7 +1374,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
                 # error, which _FileRunError above already covers) — the chip must not
                 # keep showing a stale prior verdict over a display-error card
                 self._qc_overview_not_assessed(detail, chip=seg_chip)
-                self._fill_manoeuvres_table(None, None)   # M-31: see the note above
+                self._fill_manoeuvres_table(None, None)   # see the note above
             self._update_actions(status=False)
             return
         # 'mech' is deliberately excluded: _render_preview_async only just returned from

@@ -1,4 +1,4 @@
-"""ReferencePickerDialog (M-37): browsing/linking cross-file reference manoeuvres.
+"""ReferencePickerDialog: browsing/linking cross-file reference manoeuvres.
 
 Settings-only, like the dialog itself (see its own module docstring) -- these tests
 build a Settings object with ``BreathTypeEntry`` rows already typed, never rendering a

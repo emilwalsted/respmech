@@ -1096,7 +1096,7 @@ def test_commitment_sheet_names_file_and_output_counts_matching_plan_outputs(qap
 
 def test_commitment_sheet_omits_the_analyses_line_instead_of_crashing_on_malformed_signals(
         qapp, tmp_path):
-    """M-13: `_update_commitment` runs on every settings-changed tick, unconditionally
+    """ `_update_commitment` runs on every settings-changed tick, unconditionally
     and with no surrounding try/except (that is the whole point of an always-visible
     commitment sheet) -- so it must use `Capabilities.from_settings_or_none`, never the
     raising `from_settings`, exactly like every other frequent-tick caller in this
@@ -1113,8 +1113,8 @@ def test_commitment_sheet_omits_the_analyses_line_instead_of_crashing_on_malform
 
 
 def test_commitment_sheet_adds_a_references_line_only_when_references_are_configured(qapp, tmp_path):
-    """M-37: an ordinary analysis (no references/reference_defaults/subjects at all) gets
-    NO extra line beyond M-13's own always-present Analyses line -- the commitment
+    """ an ordinary analysis (no references/reference_defaults/subjects at all) gets
+    NO extra line beyond the always-present Analyses line -- the commitment
     sheet's three-line shape (head, Analyses, ready/blocker) is unchanged for the common
     case. Configuring one IC reference inserts exactly one MORE line, BETWEEN Analyses
     and the blocker/ready line (never after it, so ``.split("\\n")[-1]`` still means the
@@ -1146,12 +1146,12 @@ def test_commitment_sheet_adds_a_references_line_only_when_references_are_config
 
 def test_commitment_sheet_analyses_line_costs_at_most_one_text_line_on_windows_metrics(
         qapp, tmp_path, windows_metrics):
-    """M-13 acceptance, verbatim: 'Kommitment-sheetets minimumSizeHint().height() vokser
+    """the init/validate output acceptance, verbatim: 'Kommitment-sheetets minimumSizeHint().height() vokser
     højst én tekstlinje (windows_metrics)'. Same heightForWidth-at-a-fixed-width
     technique as the References windows_metrics test above (a bare sizeHint() does not
     track height monotonically on an unshown/unconstrained word-wrap QLabel) -- measured
     here by comparing the real, always-present Analyses line against the same text with
-    that one line removed, rather than against a hypothetical pre-M-13 sheet. A short,
+    that one line removed, rather than against a hypothetical previous sheet. A short,
     two-analysis signal set (flow + poes only, no pgas/pdi/emg/entropy) is used so the
     Analyses line itself does not ALSO wrap across several visual lines under the wider
     Windows-modelled font -- a separate concern from the one this test measures."""
@@ -1233,7 +1233,7 @@ def test_commitment_sheet_names_a_channel_collision_before_a_path_problem(qapp, 
     just the collision alone) — otherwise the test cannot tell "collision wins over a
     path problem" from "collision is reported because nothing else is wrong".
 
-    M-12: ``analysis.signals`` is pinned explicitly to the full pressure family FIRST —
+    ``analysis.signals`` is pinned explicitly to the full pressure family FIRST —
     ``synth_settings``'s default settings carry an EMPTY, DERIVED signal set (no explicit
     list), so simply unassigning the Flow channel would also make the declared set stop
     naming Flow (derivation follows the live channel assignment), turning this into a
@@ -1570,7 +1570,7 @@ def test_end_to_end_real_write_reports_a_complete_finished_status(qapp, tmp_path
 
 def test_commitment_sheet_analyses_line_for_a_full_signal_set_wraps_past_one_line(
         qapp, tmp_path, windows_metrics):
-    """KNOWN, DOCUMENTED LIMITATION (self-review finding, M-13): the acceptance
+    """KNOWN, DOCUMENTED LIMITATION (self-review finding): the acceptance
     criterion 'grows by at most one text line' does NOT hold for a full-capability
     (flow+poes+pgas+pdi+emg+entropy) analysis -- `synth_settings`' own default, the
     same one every OTHER test in this file uses via `_win`. Measured directly: at the
@@ -1586,7 +1586,7 @@ def test_commitment_sheet_analyses_line_for_a_full_signal_set_wraps_past_one_lin
     an artificially narrow test width. This test pins the CURRENT, over-budget
     behaviour so a future change to it is a deliberate decision, not an accident --
     same 'document the quirk, do not silently paper over it' convention this
-    codebase already uses elsewhere (see e.g. M-14's golden-locked quirks)."""
+    codebase already uses elsewhere (see e.g. the golden-locked quirks)."""
     win = _win(tmp_path); rn = win.run_screen
     win.resize(1100, 760)
     win.show()

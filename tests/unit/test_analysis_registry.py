@@ -43,9 +43,9 @@ _GOLDEN_UNIT_SNAPSHOT = {
     'ptp_pdiinsp_peepi': 'cmH₂O·s·min⁻¹',
     'bf': 'min⁻¹',
     'breath_no': '',
-    # M-36: operating lung volumes (core.analysis.lungvol.attach), added to
+    # operating lung volumes (core.analysis.lungvol.attach), added to
     # golden_reference.json's typed_ic_fvc_same_file scenario once the SAME
-    # own-typed IC reference M-35 already resolves is consumed (no new settings
+    # own-typed IC reference the IC reference already resolves is consumed (no new settings
     # entry needed; d_eelv itself is NOT in this scenario -- default
     # eelv_tracking='none'). ic_op/delta_ic/delta_eelv/tlc/vc resolve via the
     # registry (unit='L', none matches the generic vol_/vt rule); every
@@ -63,7 +63,7 @@ _GOLDEN_UNIT_SNAPSHOT = {
     'file': '',
     'flow_midvolexp': 'L·s⁻¹',
     'flow_midvolinsp': 'L·s⁻¹',
-    # M-35: cross-file IC references (core.analysis.references.attach), added to
+    # cross-file IC references (core.analysis.references.attach), added to
     # golden_reference.json's typed_ic_fvc_same_file scenario when its own typed
     # breath resolves as its own reference (the own-typed fallback, no new settings
     # entry needed). ic_ref_n/ic_ref_source resolve via the registry (unit=""), not
@@ -95,7 +95,7 @@ _GOLDEN_UNIT_SNAPSHOT = {
     'integralemg_mean': 'a.u.·s',
     'max_ex_flow': 'L·s⁻¹',
     'max_in_flow': 'L·s⁻¹',
-    # M-42: placement of a tidal breath against the file's own resolved MEFV
+    # placement of a tidal breath against the file's own resolved MEFV
     # envelope (core.analysis.mfvl.attach/tidal_mfvl_ext), added to
     # golden_reference.json's typed_ic_fvc_same_file scenario once the SAME
     # own-typed FVC reference (already resolved for lungvol's VC fallback) gives

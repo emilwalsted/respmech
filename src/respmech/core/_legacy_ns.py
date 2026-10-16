@@ -19,7 +19,7 @@ from respmech.core.settings import Settings
 
 
 def _merged_exclude_breaths(s: Settings, flow_bearing: bool) -> list:
-    """M-19: a typed breath is excluded from the tidal average exactly like a manually
+    """ a typed breath is excluded from the tidal average exactly like a manually
     excluded one -- union the two per file into the ONE list the legacy segmenterers
     read (``compute.ignorebreaths``), so two separate entries for the same file never
     silently lose one (the last-writer-wins failure a naive "append both lists" would
@@ -27,10 +27,10 @@ def _merged_exclude_breaths(s: Settings, flow_bearing: bool) -> list:
 
     For a flow-bearing signal set every typed kind counts (an IC/FVC/etc. breath is a
     manoeuvre, never tidal breathing, regardless of which kind it is typed as). For an
-    EMG-only set (M-21's ``separators`` segmentation -- not yet dispatched here, but
+    EMG-only set (the ``separators`` segmentation -- not yet dispatched here, but
     ``breath_types`` is shared state the same union rule must already hold for) only
     ``rest``-typed segments are folded in: the OTHER kinds there name a manoeuvre effort
-    itself (M-29 extracts its value), not a segment to discard, so excluding it here
+    itself (manoeuvre extraction extracts its value), not a segment to discard, so excluding it here
     would silently throw the manoeuvre away before it is ever read.
     """
     merged: dict[str, set[int]] = defaultdict(set)

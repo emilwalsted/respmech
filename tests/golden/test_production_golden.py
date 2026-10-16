@@ -3,7 +3,7 @@
 """Production golden — non-EMG scenarios (Zeros, Trimming) reproduced by the NEW
 canonical core (window-baseline PTP included). EMG-carrying scenarios (Resampling,
 H5, H6) are locked by test_production_emg_golden.py. The v2-only typed_ic_h5 scenario
-(M-41 — typed IC + cross-file operating lung volumes, no legacy-dict shape at all) has
+(references — typed IC + cross-file operating lung volumes, no legacy-dict shape at all) has
 its own, independently-skipped test at the bottom of this file.
 
 Raw data is gitignored (public repo); this SKIPS when it is absent.
@@ -67,7 +67,7 @@ def test_scenario_reproduces_golden(scenario, golden):
 
 
 # --------------------------------------------------------------------------------- #
-# typed_ic_h5 (M-41) — v2-only, no legacy-dict shape; skipped independently of the
+# typed_ic_h5 — v2-only, no legacy-dict shape; skipped independently of the
 # module-level SCENARIOS above (whose own skip is what fires in this sandbox, since
 # no production data of any kind is present here at all; this scenario gets its own
 # reason so a machine that HAS the Zeros/Trimming data but not yet RIU_H5_typed_ic.toml

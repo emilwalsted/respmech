@@ -55,7 +55,7 @@ def build_breath_table(file, breaths, settings):
         if "wob" in breath:
             dfwob = pd.DataFrame(breath["wob"], index=[0])
             dfmech = dfmech.join(dfwob, how="outer", sort=False)
-        # M-42: core.analysis.mfvl.attach stamps this dict on every tidal breath of a
+        # core.analysis.mfvl.attach stamps this dict on every tidal breath of a
         # file with a resolved (same-file) fvc reference — same join shape as wob.
         if "mfvl_ext" in breath:
             dfmfvl = pd.DataFrame(breath["mfvl_ext"], index=[0])
@@ -144,7 +144,7 @@ def build_manoeuvre_table(manoeuvres: dict):
     """The 'Manoeuvres' sheet: one row per typed breath, from
     ``core.pipeline.FileResult.manoeuvres`` (``{breath_no: core.analysis.manoeuvres
     .extract(...) result}``). Returns ``None`` when ``manoeuvres`` is empty -- "the
-    Manoeuvres sheet exists only when a typed breath is present" (M-29's own
+    Manoeuvres sheet exists only when a typed breath is present" (the own
     acceptance criterion) -- so a caller can join it in exactly like ``EMG
     normalised`` (``if df is not None and len(df):``).
 
@@ -170,7 +170,7 @@ def build_processed_data(breaths, settings):
     following the actual channel count (fixes bug #3, which hardcoded EMG1..EMG5)."""
     emgcols = settings.input.data.columns_emg
     fs = settings.input.format.samplingfrequency
-    # M-19: a "Breathkind" column is only ever ADDED when at least one breath ACTUALLY
+    # a "Breathkind" column is only ever ADDED when at least one breath ACTUALLY
     # WRITTEN to this table is typed -- an unconditional column (even one filled with ""
     # for every row) would be a new column present on EVERY analysis, including the
     # thousands that never use breath types, which is exactly the kind of always-present

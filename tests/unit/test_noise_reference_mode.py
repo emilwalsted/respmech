@@ -213,7 +213,7 @@ def test_validate_ignores_reference_mode_shape_checks_when_noise_disabled_but_no
 # --------------------------------------------------------------------------------- #
 
 def _old_style_clip(settings, s):
-    """The exact pre-M-22 algorithm, reimplemented here (not imported) so a change to
+    """The exact previous algorithm, reimplemented here (not imported) so a change to
     the production function cannot silently make this comparison meaningless."""
     ns_cfg = settings.processing.emg.noise
     ref = ns_cfg.reference_file
@@ -430,7 +430,7 @@ def test_rest_segments_clip_names_the_file_when_no_rest_segment_survives_at_runt
 
 
 # --------------------------------------------------------------------------------- #
-# resolve_noise_reference_mode_or_none (M-24) -- the UI-render-safe pairing, exactly
+# resolve_noise_reference_mode_or_none -- the UI-render-safe pairing, exactly
 # like Capabilities.from_settings_or_none, for the same malformed-analysis.signals hazard.
 # --------------------------------------------------------------------------------- #
 
@@ -445,7 +445,7 @@ def test_or_none_matches_the_raw_resolver_on_every_ordinary_settings_shape():
 
 
 def test_or_none_degrades_to_none_instead_of_raising_on_a_malformed_signals_field():
-    """The actual bug this function was written to fix (found in self-review of M-24):
+    """The actual bug this function was written to fix (found in self-review of the rest-segment noise option):
     a hand-edited bare-string analysis.signals crashed PreviewScreen's construction path
     (_refresh_noise_readout/_refresh_noise_reference_band call the raw resolver on every
     open, before Settings.validate() ever runs). Confirm both that the raw function still

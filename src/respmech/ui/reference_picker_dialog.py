@@ -1,7 +1,7 @@
-"""ReferencePickerDialog -- browse and link cross-file reference manoeuvres (M-37).
+"""ReferencePickerDialog -- browse and link cross-file reference manoeuvres.
 
 An analysed file's IC/FVC/baseline-IC/maximal-effort reference values do not have to
-come from itself (``core.analysis.references``, M-34/M-35/M-36): another file's
+come from itself (``core.analysis.references``): another file's
 already-typed manoeuvre breath can serve instead, either per file
 (``processing.references``) or per participant group (``processing.reference_defaults``,
 not exposed here -- see ``_MechanicsMixin._set_reference``'s "Use as IC reference for"
@@ -11,7 +11,7 @@ can be reviewed and edited together, from any file's typed breaths.
 
 Settings-only, no recording is read: the breath list for a chosen source file/slot comes
 straight from ``processing.breath_types`` (whatever has already been typed via the
-Mechanics type menu, M-31) -- exactly like ``core.analysis.references.resolve_reference``
+Mechanics type menu) -- exactly like ``core.analysis.references.resolve_reference``
 itself only ever reasons about ``Settings``, never a file's actual samples.
 """
 from __future__ import annotations

@@ -80,7 +80,7 @@ def cmd_run(args) -> int:
         print(f"  Total: {total_cap}{plan.total_count} file(s) in {settings.output.folder}")
         from respmech.core.analysis.signals import Capabilities
         caps = Capabilities.from_settings(settings)
-        # M-13: same line the GUI's commitment sheet prints -- what this signal set
+        # same line the GUI's commitment sheet prints -- what this signal set
         # actually computes, right where the output plan already answers "what/where".
         print(f"  Analyses: {', '.join(caps.analyses())}")
         print()
@@ -100,7 +100,7 @@ def cmd_run(args) -> int:
             from respmech.core.analysis.references import resolve_reference
         for fname, fr in result.ok_files.items():
             if getattr(fr, "role", "tidal") == "reference":
-                # M-30: no tidal table for this file at all — say so plainly instead
+                # no tidal table for this file at all — say so plainly instead
                 # of a bare, misleading "0 breaths".
                 n_ref = len(fr.manoeuvres or {})
                 print(f"  {fname}: 0 tidal breaths, {n_ref} reference manoeuvre"
@@ -212,7 +212,7 @@ def cmd_breaths(args) -> int:
 
 
 def _toml_string(value: str) -> str:
-    """A syntactically valid TOML string literal for an arbitrary ``value`` (M-13's
+    """A syntactically valid TOML string literal for an arbitrary ``value`` (the init/validate output's
     ``_init_template`` uses this for ``folder``/``files``, hand-built text rather than
     routed through ``tomli_w`` -- see that function's own docstring for why).
 
@@ -257,7 +257,7 @@ def _ref_label(filename: str, source: str, breaths) -> str:
 
 
 def _init_template(signals: list, *, folder, files, fs: "int | None") -> str:
-    """The commented, signal-set-filtered starting point ``respmech init`` writes (M-13).
+    """The commented, signal-set-filtered starting point ``respmech init`` writes.
 
     Only the ``[input.channels]`` entries the CHOSEN signals actually need are written
     (no Pgas/Pdi keys for a poes-only set); ``folder``/``files``/``sampling_frequency``
@@ -403,7 +403,7 @@ def cmd_validate(args) -> int:
     # what `respmech run` will process (case-insensitive; safe against folder metacharacters).
     files = match_input_files(settings.input.folder, settings.input.files)
     print(f"Settings valid. Input pattern '{pattern}' matches {len(files)} file(s).")
-    # M-13: which signals govern this analysis and what they compute, so `validate`
+    # which signals govern this analysis and what they compute, so `validate`
     # alone answers "what will this run actually produce" without a dry run.
     caps = Capabilities.from_settings(settings)
     n_entropy = len(settings.input.channels.entropy or [])

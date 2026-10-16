@@ -517,7 +517,7 @@ def separators(filename: str, times_s, timecol, emgcolumns, entropycolumns, fs: 
 
 def remap_segment_number(old_bounds_s, new_bounds_s, old_number: int) -> int:
     """Map a segment NUMBER under an OLD set of segment boundaries to its equivalent
-    number under a NEW set (M-27's manual-separator edit: placing or removing one
+    number under a NEW set (the manual-separator edit: placing or removing one
     boundary at a time), by finding where the OLD segment's own START TIME now falls
     among the NEW boundaries — the containing segment (the largest new boundary at or
     before that instant) is "the same segment, renumbered". See

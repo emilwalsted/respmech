@@ -280,7 +280,7 @@ def test_mechanics_stack_renders_without_crashing_on_a_reduced_signal_set(qapp, 
 
 @requires_synth()
 def test_mech_stack_floor_uses_the_actual_channel_count_not_a_fixed_five(qapp, tmp_path):
-    """M-17 (R7): ``_update_mech_stack_floor`` used to floor the channel stack for
+    """the Poes-less Campbell panel (R7): ``_update_mech_stack_floor`` used to floor the channel stack for
     ``len(_CHANNELS)`` == 5 rows regardless of how many the settings object actually
     draws (a cosmetic oversize the comment above ``_mech_channel_count`` describes as
     "a later ticket['s]" own job — this is that ticket). Proven directly, without a
@@ -327,7 +327,7 @@ def test_mech_channel_count_degrades_instead_of_raising_on_malformed_signals(tmp
 
 @requires_synth()
 def test_campbell_panel_draws_a_flow_volume_loop_without_poes(qapp, tmp_path):
-    """M-17 (R7): the Campbell panel itself (not the written PDF, which is M-16's own
+    """the Poes-less Campbell panel (R7): the Campbell panel itself (not the written PDF, which is the own
     scope) draws a tidal flow-volume loop for a Flow-only signal set instead of the
     Campbell (volume-vs-Poes) diagram, and its header/export button follow the same
     switch. ``_draw_campbell_or_loop`` is the dispatcher; this pins WHICH of the two

@@ -1,4 +1,4 @@
-"""M-27: manual separators in Preview (placement, removal, renumbering, the run-lock
+""" manual separators in Preview (placement, removal, renumbering, the run-lock
 and the removal tolerance) — the EMG-only 'EMG – segments' tab's own new action, and
 its shared click routing through ``_toggle_from_emg_click`` (``_emg_noise.py``).
 
@@ -144,7 +144,7 @@ def test_a_click_away_from_any_existing_separator_places_a_new_one(qapp, tmp_pat
 
 
 def test_placing_a_separator_updates_the_rails_segment_count(qapp, tmp_path):
-    """M-32: _toggle_separator_at calls the wide _sync_rail_breath_state, which is the
+    """ _toggle_separator_at calls the wide _sync_rail_breath_state, which is the
     only place FileRailEntry.segments gets computed — 1 separator makes 2 segments."""
     from respmech.ui.main_window import MainWindow
 
@@ -543,7 +543,7 @@ def test_a_file_switch_unarms_and_disables_the_button_synchronously(tmp_path):
 
 
 def test_an_already_accepted_click_is_ignored_even_while_armed(qapp, tmp_path):
-    """The Ctrl+left-click/right-click breath-typing primitive (M-20) accepts its click
+    """The Ctrl+left-click/right-click breath-typing primitive accepts its click
     at ITEM level (BreathSpansItem.mouseClickEvent), before the scene-level funnel this
     ticket's own armed check lives in ever runs — so a right-click landing on an
     existing breath still opens the type menu while armed, never places a separator.

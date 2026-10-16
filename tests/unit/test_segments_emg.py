@@ -192,7 +192,7 @@ def test_one_sample_segment_keeps_a_length_one_time_array_not_a_scalar():
     assert one_sample["time"].shape == (1,)
 
 
-# -- remap_segment_number (M-27's renumbering rule for a placed/removed separator) ----
+# -- remap_segment_number (the renumbering rule for a placed/removed separator) ----
 
 def test_remap_is_the_identity_when_the_boundaries_do_not_change():
     from respmech.core.analysis.segments import remap_segment_number

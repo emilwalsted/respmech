@@ -1,4 +1,4 @@
-"""FVC/MFVL/EFL/VEcap and ventilatory capacity (M-42).
+"""FVC/MFVL/EFL/VEcap and ventilatory capacity.
 
 Two independent pieces, from a single file's already-resolved ``fvc`` reference
 (``core.analysis.references.resolve_reference``, the SAME slot ic/max_insp/
@@ -6,14 +6,14 @@ baseline_ic already share):
 
 * :func:`fvc_metrics` -- a REN function of ONE typed ``fvc``/``ic_fvc`` breath dict
   (never of ``calculatemechanics`` output -- a typed breath never reaches that loop,
-  M-19's exclude-union): ``V_TLC = insp['volume'][-1]``, the maximal expiratory
+  the exclude-union): ``V_TLC = insp['volume'][-1]``, the maximal expiratory
   flow-volume (MEFV) envelope ``v = V_TLC - exp['volume']`` (forced non-decreasing,
   ``np.maximum.accumulate``), PEF (over a >=10 ms window, so a single-sample spike
   never wins), back-extrapolated ``t0``/BEV (ATS/ERS 2019), FEV1/FEV1%FVC, the
   end-of-forced-expiration criterion, and (from the file's OWN following breath, if
   its excursion is near-maximal) a peak inspiratory-flow reference. This is
   ``core.analysis.manoeuvres.extract``'s own explicitly-deferred arithmetic
-  ("M-42's scope, not this one" -- see that module's docstring): kept in a SEPARATE
+  ("the scope, not this one" -- see that module's docstring): kept in a SEPARATE
   module rather than folded into ``manoeuvres.py`` so that boundary stays real, not
   just a comment -- ``core.pipeline`` merges this function's output into a typed
   FVC/IC+FVC breath's Manoeuvres-sheet row itself (:func:`apply_to_row`), and

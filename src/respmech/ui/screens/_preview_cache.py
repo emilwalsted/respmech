@@ -130,7 +130,7 @@ def _exclude_key(settings):
     # (a click that only confirms, never edits, the current selection) would not. Include
     # it so a cache hit can never silently outlive either kind of change.
     #
-    # M-20: processing.breath_types is unioned into core's own ignored-breath set exactly
+    # processing.breath_types is unioned into core's own ignored-breath set exactly
     # like exclude_breaths is (core._legacy_ns.to_legacy_ns), so a typed breath changes the
     # SAME cached mechanics/EMG output a manual exclusion would — a cache key that only
     # watched exclude_breaths would silently serve a stale preview after typing a breath.
@@ -148,7 +148,7 @@ def ecg_matrix_key(settings, file_path):
 
 
 def _separators_for(settings, filename):
-    """``filename``'s manual segment-boundary times (M-21's ``SeparatorEntry``,
+    """``filename``'s manual segment-boundary times (the ``SeparatorEntry``,
     ``processing.segmentation.separators``) -- part of :func:`ref_clip_key`'s
     ``rest_segments`` branch: the file's rest-typed segments are numbered relative to
     THESE boundaries (``core.pipeline.segment_file``), so a boundary edit changes which
@@ -160,7 +160,7 @@ def _separators_for(settings, filename):
 
 
 def _kinds_for(settings, filename):
-    """``filename``'s typed-breath (here: typed-SEGMENT) kinds (M-19's ``BreathTypeEntry``,
+    """``filename``'s typed-breath (here: typed-SEGMENT) kinds (the ``BreathTypeEntry``,
     ``processing.breath_types``) -- part of :func:`ref_clip_key`'s ``rest_segments`` branch:
     which segment numbers are 'rest' (and so feed the clip) can change independently of the
     separator times above."""
@@ -182,7 +182,7 @@ def _emg_seg_key(settings):
 def _method_sensitive_key(settings):
     """Every setting ``core.pipeline.segment_file``'s trim/zero/drift/trend/segment
     sequence can read, beyond ``segmentation.method``/``buffer`` themselves (already
-    carried separately by every branch below that needs ``seg.method``). M-23:
+    carried separately by every branch below that needs ``seg.method``). the configurable segmentation:
     ``_emg_segmented`` builds its mask through ``segment_file``, so ANY cache key that
     already depends on ``seg.method`` must also depend on these, or an edit to one of
     them can be served a stale hit.
@@ -211,8 +211,8 @@ def _method_sensitive_key(settings):
 
 
 def ref_clip_key(settings, ref_path):
-    """Key for the reference noise clip. Branch-split on the RESOLVED mode (M-22's
-    ``resolve_noise_reference_mode`` -- M-24), not the raw ``use_expiration``/
+    """Key for the reference noise clip. Branch-split on the RESOLVED mode (noise-reference modes's
+    ``resolve_noise_reference_mode`` -- the rest-segment noise option), not the raw ``use_expiration``/
     ``reference_intervals`` pair directly: an EMG-only set ignores ``use_expiration``
     entirely (see the resolver's own docstring), so keying on it directly could hand out a
     stale hit across two settings the resolver treats identically, or (worse) two settings
@@ -248,12 +248,12 @@ def ref_clip_key(settings, ref_path):
     base = ("refclip", tok, _load_key(settings), _ecg_key(settings), mode)
     seg = settings.processing.segmentation
     if mode == "expiration":
-        # M-23: `_emg_segmented` now builds its mask through `segment_file`, which
+        # `_emg_segmented` now builds its mask through `segment_file`, which
         # applies the configured segmentation method, volume drift AND trend
-        # correction -- before M-23 it hardcoded flow-method segmentation and never
+        # correction -- before the configurable segmentation it hardcoded flow-method segmentation and never
         # trend-corrected, so none of those inputs (beyond drift, which the old code
         # already applied per-settings) could ever change this branch's mask.
-        # `seg.method` was already included pre-emptively (a no-op until M-23
+        # `seg.method` was already included pre-emptively (a no-op until the configurable segmentation
         # landed); `_method_sensitive_key` is the other half of that same fix, added
         # now that these settings can actually change the mask -- without them, a
         # preview cached before one of these edits could be served stale forever.
@@ -291,7 +291,7 @@ def noise_report_key(settings, ref_path, files):
            (None if n.auto_prop else n.prop_decrease), seg.method)
     if n.auto_prop:
         # the auto_prop gather (pipeline._build_noise_set) segments EVERY file through
-        # segment_file (M-23: with the configured method/drift/trend/peak settings, not
+        # segment_file (the configurable segmentation: with the configured method/drift/trend/peak settings, not
         # hardcoded flow) to pick prop_decrease, which reads segmentation.buffer — and
         # ref_clip_key only carries seg.buffer/_method_sensitive_key in the expiration
         # branch. Add them here UNCONDITIONALLY (not just when mode == 'expiration') so
@@ -300,7 +300,7 @@ def noise_report_key(settings, ref_path, files):
         # frontier is shown) — the gather loop runs on every batch file regardless of
         # which mode the single reference CLIP happens to resolve to.
         #
-        # M-24: also carry each gathered file's OWN separators/typed-kinds. auto_prop is
+        # also carry each gathered file's OWN separators/typed-kinds. auto_prop is
         # rejected by Settings.validate() for an EMG-only signal set today, so this is inert
         # in practice (no set that can carry separators/breath_types can also reach here with
         # auto_prop=True) -- included for completeness (KEY COMPLETENESS above) rather than

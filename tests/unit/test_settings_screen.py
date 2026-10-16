@@ -373,7 +373,7 @@ def test_subjects_table_fits_under_windows_font_metrics(qapp, tmp_path, windows_
 
 
 def test_science_notes_include_check_links_cautions(qapp, tmp_path):
-    """M-37: Setup's own science-caution list (_science_notes) surfaces check_links'
+    """ Setup's own science-caution list (_science_notes) surfaces check_links'
     cautions -- here, a reference_defaults group key that matches no analysed file."""
     from respmech.core.settings import GroupReferenceEntry
     from respmech.ui.main_window import MainWindow
@@ -1579,10 +1579,10 @@ def _entry_folder(s, filename):
 
 
 def test_carried_phrases_covers_every_carried_kind():
-    """M-07 self-review finding: `_update_carried_banner` silently drops any kind whose
+    """the carried-over table self-review finding: `_update_carried_banner` silently drops any kind whose
     name isn't a key in `_CARRIED_PHRASES` (`if kind in _CARRIED_PHRASES`), and if it were
     the ONLY carried kind the banner would show with an empty phrase list. A future row
-    added to `_CARRIED_KINDS` (M-19/M-21/M-34's own tagged state) without a matching
+    added to `_CARRIED_KINDS` (typed breaths/manual separators/the tagged state) without a matching
     `_CARRIED_PHRASES` entry would fail SILENTLY at runtime — pin the parity here so it
     fails a test instead."""
     from respmech.core.settings import _CARRIED_KINDS
@@ -1886,7 +1886,7 @@ def test_duplicate_for_another_folder_derives_output_preserves_ecg_reference_and
     suggested (sibling-derived) output folder, and land on Save as… pre-filled with the
     SAME analysis filename inside the NEW folder — never overwriting the template. The
     file-keyed exclude_breaths/breath_counts/noise-reference are left to B06's own
-    Behold/Ryd banner (already exercised by the tests above this section). Since M-07,
+    Behold/Ryd banner (already exercised by the tests above this section). Since the carried-over table,
     ecg_reference_file carries its own folder tag too, so it now goes through the SAME
     banner instead of being force-cleared here: it survives the duplicate, and the
     banner (asserted separately below) names it as carried."""
@@ -2346,7 +2346,7 @@ def test_apply_signal_set_no_prompt_when_reapplying_the_same_emg_only_method(
 
 
 # ---------------------------------------------------------------------------
-# M-11: Setup Signals row, ChannelSummary's use of it, _channel_view_signature,
+# Setup Signals row, ChannelSummary's use of it, _channel_view_signature,
 # and the 'settings.unknown' notice
 # ---------------------------------------------------------------------------
 def _chip_texts(sc):
@@ -2543,7 +2543,7 @@ def test_signals_row_wraps_under_windows_font_metrics(qapp, tmp_path, windows_me
 
 
 def test_unknown_settings_note_shown_once_on_open_and_not_after_save(qapp, tmp_path, monkeypatch):
-    """M-11: a key ``Settings.from_dict`` could not place anywhere gets ONE information box
+    """ a key ``Settings.from_dict`` could not place anywhere gets ONE information box
     at open time, naming the key, and is never repeated by a save — ``save_toml`` clears
     ``notices`` (the schema-upgrade list) but deliberately never touches ``unknown``, so the
     key survives the round-trip unchanged, exactly as the note promises."""

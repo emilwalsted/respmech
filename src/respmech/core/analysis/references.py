@@ -171,7 +171,7 @@ def check_links(settings: Settings, filenames: list[str], *,
     a column-count vote would exclude from the "main" batch display while ``run_batch``
     still processes it.
 
-    ``outlier_reference_names`` (M-38, optional): basenames the CALLER already knows are
+    ``outlier_reference_names`` (optional): basenames the CALLER already knows are
     both a column-count outlier (``ui.manifest.Manifest.outliers``) and a named
     reference source (``reference_source_names``) -- this function stays Qt-free and
     does no column probing of its own, so it never builds this set itself; pass
@@ -188,7 +188,7 @@ def check_links(settings: Settings, filenames: list[str], *,
     * a linked breath that is excluded (``processing.exclude_breaths``);
     * a ``reference_defaults``/``input.subjects`` group key matching no analysed file
       (via ``core.summary.group_key``);
-    * (M-38) a reference source whose column count disagrees with the batch's majority
+    * a reference source whose column count disagrees with the batch's majority
       layout -- informational, never a reason to doubt the link: ``run_batch`` has no
       column-count filter, and a reference source is loaded and segmented on its own
       (in-batch main loop, or the out-of-batch forepass) regardless of how its column
@@ -275,7 +275,7 @@ def external_reference_sources(settings: Settings, files: list[str]) -> list[str
     subset this particular run is actually processing (``only_files``-restricted or
     not), never ``allfiles`` (the full matched set): a source already IN this run's own
     file list gets its manoeuvres from the ordinary main loop, exactly like an in-batch
-    reference-only file already does (M-30); only a source OUTSIDE this run's own list
+    reference-only file already does; only a source OUTSIDE this run's own list
     -- whether because it sits outside ``only_files`` this particular run, or because it
     is a dedicated reference recording ``input.files`` never matches at all -- needs the
     batch's forepass to load and segment it separately.
@@ -286,9 +286,9 @@ def external_reference_sources(settings: Settings, files: list[str]) -> list[str
 
 def predicted_reference_only(filenames: list[str], settings: Settings) -> frozenset[str]:
     """Basenames among ``filenames`` that LOOK reference-only (``core.pipeline.
-    FileResult.role == "reference"``, M-30 -- a file with typed manoeuvre breaths but
+    FileResult.role == "reference"``, reference-only files -- a file with typed manoeuvre breaths but
     no tidal breaths at all) from ``settings`` ALONE, before a single sample has been
-    loaded or segmented (M-38).
+    loaded or segmented.
 
     Settings holds no total breath count for a file -- ``processing.breath_types``
     only ever records the breaths someone has EXPLICITLY typed -- so this can never be
@@ -334,7 +334,7 @@ def predicted_reference_only(filenames: list[str], settings: Settings) -> frozen
     Used by :func:`respmech.ui.manifest.group_readout` (Setup's live cohort read-out,
     so its "N files -> M groups" prediction stays truthful to what
     ``core.summary.build_cohort_summary`` will actually write -- a reference-only
-    file's ``average_row`` is always ``None``, M-30, so it never contributes a row to
+    file's ``average_row`` is always ``None``, so it never contributes a row to
     the written cohort summary either) and by ``ui.manifest.Manifest.reference_only``.
     NEVER by ``core.pipeline.run_batch`` itself, which always knows the real answer
     (``FileResult.role``) from the actual segmented breaths and must never defer to a
@@ -350,14 +350,14 @@ def predicted_reference_only(filenames: list[str], settings: Settings) -> frozen
 def lookup_manoeuvre(result, filename: str, breath_no: int) -> dict | None:
     """The ``core.analysis.manoeuvres.extract()`` result dict for ``(filename,
     breath_no)``, from wherever the batch actually put it -- an in-batch
-    ``FileResult.manoeuvres`` (the ordinary main loop, or M-30's reference-only-file
+    ``FileResult.manoeuvres`` (the ordinary main loop, or the reference-only-file
     handling; either way the SAME dict shape) or the forepass's out-of-batch
     ``BatchResult.references``. ``None`` when neither has it: the source file itself
     failed (forepass or main-loop error), the breath was never typed at all, or the
     breath number simply does not exist in that file -- all three look identical from
     here, and all three are the same "could not be resolved" outcome to a caller.
 
-    Public (M-36): ``core.analysis.lungvol`` reuses this exact lookup for its own
+    Public: ``core.analysis.lungvol`` reuses this exact lookup for its own
     ``ic_eelv_pre``/``baseline_ic``/``fvc`` aggregation, and by the time it needs to
     it already imports :func:`resolve_reference` from this module too -- duplicating
     this one alongside that import would only risk the two module's lookup logic
@@ -449,7 +449,7 @@ def attach(result, settings: Settings, allfiles: list[str]) -> None:
     failure already is.
 
     A file with no ``breaths_table``/``average_row`` at all (``fr.role != "tidal"`` --
-    a reference-only file, M-30) is skipped: there is no per-breath table to add a
+    a reference-only file) is skipped: there is no per-breath table to add a
     column to. Such a file can still itself be a reference SOURCE for others (that is
     exactly what ``FileResult.manoeuvres``/the forepass are for) -- it just never gets
     a ``vol_ic_ref`` column of its own.
