@@ -96,6 +96,9 @@ this release.
   `.xlsx` is unchanged. The unused `seaborn` dependency was removed.
   <!-- site: 0 merged "`.xls` (the old binary Excel format)" the page lists it among its small corrections -->
 
+<!-- changelog-skip f4a0c86 comments and docstrings only: internal planning markers removed; no code or
+     behaviour changes. -->
+
 **Sample entropy on a volume column now uses the conditioned volume (numbers change for
 analyses with entropy on the volume column).** When the volume column is also ticked as an
 entropy column, its sample entropy is now computed on the volume RespMech itself analyses,
