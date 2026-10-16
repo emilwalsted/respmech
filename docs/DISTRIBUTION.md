@@ -25,8 +25,11 @@ publisher you configure once (owner `emilwalsted`, repo `respmech`, workflow
 
 `python -m twine upload dist/*` is **not** the path anymore — do not upload by hand (it
 would need a long-lived token, which we deliberately avoid on a public repo). For a safe
-dry-run, trigger the workflow manually (Actions ▸ Publish to PyPI ▸ Run workflow) to publish
-to **TestPyPI**.
+dry-run, trigger the workflow manually (Actions ▸ Publish to PyPI ▸ Run workflow) with the
+tag field empty to publish to **TestPyPI**. With the tag field set to an existing `vX.Y.Z`
+(run from master), the same manual run publishes that tag to real PyPI; it exists for a tag
+whose own publish run did not finish (RELEASING.md, "When the tag's PyPI publish did not
+finish").
 
 Keep the GitHub↔Zenodo integration enabled so each new release archives automatically
 and gets its own DOI under the project's concept DOI (`10.5281/zenodo.3270825`) — see

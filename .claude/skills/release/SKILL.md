@@ -18,6 +18,11 @@ What follows is the project memory that sits above both.
   `release-request` (`release-request.yml`). The run waits for the maintainer's approval
   in the `release-tag` environment and then creates the tag on `master`'s tip. See
   `docs/RELEASING.md`, "Requesting a release without pushing a tag".
+- PyPI (`publish-pypi.yml`) runs on the same tag behind a macOS test gate that runs the unit
+  suite file by file, like `ci.yml`. If that run does not finish, publish the SAME tag with a
+  manual run from master and the `tag` input (`docs/RELEASING.md`, "When the tag's PyPI publish
+  did not finish"); an empty `tag` is the TestPyPI dry-run. Do not cut a patch release just to
+  get an unpublished version onto PyPI.
 - macOS signing is **secret-gated** (Developer ID + notarisation when the Apple
   secrets are present, else ad-hoc). The Windows MSI is built unsigned and
   **Certum-signed locally** after release (`scripts/sign-msi-certum.sh`); see

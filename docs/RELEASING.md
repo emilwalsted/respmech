@@ -202,17 +202,39 @@ repository secret, and revoke the token if it may have leaked.
 
 ## Dry-run to TestPyPI
 
-Before a real release, GitHub ▸ Actions ▸ **Publish to PyPI** ▸ *Run workflow* publishes the
-current build to **TestPyPI** (environment `testpypi`), never to real PyPI. Verify with:
+Before a real release, GitHub ▸ Actions ▸ **Publish to PyPI** ▸ *Run workflow*, with the
+**tag** field left empty, publishes the current build to **TestPyPI** (environment
+`testpypi`), never to real PyPI. Verify with:
 
 ```bash
 pip install -i https://test.pypi.org/simple/ respmech
 ```
 
+## When the tag's PyPI publish did not finish
+
+If the tag-triggered *Publish to PyPI* run failed or timed out before uploading (the GitHub
+release and the installers are a separate workflow and are unaffected), publish **that same
+tag** instead of cutting a new version: GitHub ▸ Actions ▸ **Publish to PyPI** ▸ *Run
+workflow*, branch **master**, **tag** `vX.Y.Z`. The run refuses unless it runs from master
+and the tag is plain semver, exists and lies on master's history. It then checks the tag
+out and runs the same test gate, changelog check, build and version-equals-tag check as the
+tag push, and publishes to PyPI in the `pypi` environment. It shares the tag push's
+concurrency group, so the two can never upload side by side. One thing is left out on
+purpose: no PEP 740 attestation is uploaded, because a run on master would attest master's
+tip as the source commit, not the tag's. A tag push still uploads one.
+
+This is not a re-upload: a version PyPI already has is refused by PyPI, and the rule below
+stands. If the `pypi` environment has a deployment-branch rule that allows only tags, the
+publish job stops there; allow `master` in the environment for that run.
+
+First used for 2.5.0 (16-10-2026), whose tag-triggered gate ran out of time; see
+`docs/beslutninger.md`.
+
 ## Notes
 
 - **A PyPI version is immutable** — you cannot re-upload `X.Y.Z`. If a release is broken,
-  bump the patch (e.g. `2.3.1`) and tag again; never try to overwrite.
+  bump the patch (e.g. `2.3.1`) and tag again; never try to overwrite. (A version that never
+  reached PyPI is not broken, only unpublished: see the section above.)
 - **No tokens.** Trusted Publishing means there is nothing to rotate or leak. Do not add a
   `PYPI_API_TOKEN` secret or a `twine upload` step.
 - **Zenodo DOI** — with the GitHub↔Zenodo integration enabled (Zenodo ▸ Account ▸

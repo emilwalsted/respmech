@@ -6,6 +6,30 @@ decision <date>" — never an internal ticket reference; this repo is public).
 
 ---
 
+**16-10-2026 — An unpublished tag is published to PyPI as itself, and the PyPI gate runs
+file by file (author's decision, 16-10-2026).** 2.5.0's tag-triggered *Publish to PyPI* run
+ran out of its 120 min ceiling at 67 % of a one-process test run, every test green so far,
+after the GitHub release, the installers and respmech.dk were already out. The same suite
+took 23-28 min file by file in `ci.yml`'s macOS jobs on the same commit, and 2.4.0's
+one-process gate had taken 65 min. Two decisions:
+
+1. **2.5.0 stays 2.5.0 on PyPI.** It is the version announced everywhere else, and nothing
+   was ever uploaded under it, so "a PyPI version is immutable" does not apply. A manual run
+   of `publish-pypi.yml` from master with a `tag` input checks the tag out and runs the same
+   gate, build, version check and upload as the tag push. It refuses outside master, for a
+   non-semver or missing tag, and for a tag off master's history, and it shares the tag
+   push's concurrency group. It uploads no PEP 740 attestation, because the run's own
+   commit (master's tip) would be named as the source instead of the tag's. A patch release (2.5.1) and re-pushing the tag were both
+   rejected: the first costs a full release round for a version that differs only in
+   packaging, the second breaks the rule that a tag is never moved or re-pushed.
+2. **The gate runs the unit suite file by file, like `ci.yml`'s macOS job**, with the
+   numerical golden as its own step, the same per-file verdict rules (a file's pytest
+   summary decides; Qt's shutdown crash after a green summary is not a failure), and the
+   120 min ceiling kept as a hang guard. The one-process ordering coverage stays where it
+   already is, on `ci.yml`'s Windows jobs.
+
+---
+
 **04-10-2026 — The normal range in the maximal flow-volume figure: GLI 2022 for the size,
 ECCS 1993 for the shape (author's decision, 04-10-2026).** The figure draws a shaded
 normal range behind the participant's own maximal flow-volume loop, from the optional
