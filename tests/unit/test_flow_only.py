@@ -327,7 +327,7 @@ def test_mech_channel_count_degrades_instead_of_raising_on_malformed_signals(tmp
 
 @requires_synth()
 def test_campbell_panel_draws_a_flow_volume_loop_without_poes(qapp, tmp_path):
-    """the Poes-less Campbell panel (R7): the Campbell panel itself (not the written PDF, which is the own
+    """the Poes-less Campbell panel (R7): the Campbell panel itself (not the written PDF, which has its own
     scope) draws a tidal flow-volume loop for a Flow-only signal set instead of the
     Campbell (volume-vs-Poes) diagram, and its header/export button follow the same
     switch. ``_draw_campbell_or_loop`` is the dispatcher; this pins WHICH of the two

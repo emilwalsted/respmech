@@ -2543,7 +2543,7 @@ def test_signals_row_wraps_under_windows_font_metrics(qapp, tmp_path, windows_me
 
 
 def test_unknown_settings_note_shown_once_on_open_and_not_after_save(qapp, tmp_path, monkeypatch):
-    """ a key ``Settings.from_dict`` could not place anywhere gets ONE information box
+    """A key ``Settings.from_dict`` could not place anywhere gets ONE information box
     at open time, naming the key, and is never repeated by a save — ``save_toml`` clears
     ``notices`` (the schema-upgrade list) but deliberately never touches ``unknown``, so the
     key survives the round-trip unchanged, exactly as the note promises."""

@@ -52,7 +52,7 @@ _SIGNAL_CHIP_LABELS = {**_cs.REQUIRED_LABELS, "emg": _cs.ROLE_NAMES["emg"]}
 _SIGNAL_CHIP_TIPS = dict(_cs.ROLES)
 
 # The Setup Behold/Ryd banner's wording, one phrase per `core.settings.CarriedOverState`
-# kind (see its `kinds_present()`) — table-driven so a future kind (typed breaths/manual separators/the own
+# kind (see its `kinds_present()`) — table-driven so a future kind (typed breaths, manual separators, reference resolution
 # folder-tagged state) reaches the banner by adding an entry here, not by extending an
 # if/elif chain. ``SettingsScreen`` is referenced lazily inside each lambda, so its
 # position ahead of the class definition is fine — nothing here is called before the

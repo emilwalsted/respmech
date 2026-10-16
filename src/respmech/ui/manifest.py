@@ -299,7 +299,7 @@ def group_readout(filenames, settings, file_limit=3, group_limit=6):
     predicted_reference_only` guesses reference-only (settings alone -- see that
     function's own docstring for the two-condition heuristic) is EXCLUDED from ``n`` and
     from the grouping itself, exactly like ``core.summary.build_cohort_summary`` already
-    excludes it (a reference-only file's ``average_row`` is always ``None``, reference-only files, so it
+    excludes it (a reference-only file's ``average_row`` is always ``None``, so it
     never contributes a row to the written cohort/by-group sheet at all). Its count is
     still surfaced as a parenthetical, e.g. ``"4 files (1 reference-only) -> 2 groups ·
     …"``, so the reader can tell "the study has 5 matched files, 1 of which is a

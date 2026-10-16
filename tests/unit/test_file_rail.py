@@ -385,7 +385,7 @@ def test_role_is_set_by_mark_result_and_cleared_on_failure(qapp):
 
 
 def test_typed_reference_segments_role_default_to_empty_none(qapp):
-    """A plain, untouched row must not accidentally render any the file rail badge."""
+    """A plain, untouched row must not accidentally render any file-rail badge."""
     rail = FileRail()
     rail.set_manifest(_manifest(["a.csv"]))
     e = rail.entry("a.csv")

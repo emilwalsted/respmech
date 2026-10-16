@@ -719,7 +719,7 @@ def test_provenance_names_sample_entropy_only_when_it_is_computed(tmp_path):
 
 
 def test_provenance_names_signals_and_analyses(tmp_path):
-    """ the Provenance sheet gets 'Signals'/'Analyses' rows naming the signal set
+    """The Provenance sheet gets 'Signals'/'Analyses' rows naming the signal set
     an analysis actually uses and what it computes, ADDED (never replacing an existing
     row) alongside the other rows this file's siblings already test above. A reduced
     signal set (no Pgas/Pdi) also appends a note to the Signals row naming what is off
@@ -757,7 +757,7 @@ def test_provenance_names_the_wob_source(tmp_path):
 
 
 def test_provenance_names_the_ic_reference_when_resolved(tmp_path):
-    """ only present when a `reference_note` is actually passed (a file whose IC
+    """Only present when a `reference_note` is actually passed (a file whose IC
     reference resolved) -- write_batch derives it from FileResult.references_used;
     _provenance_rows itself is tested directly here, same convention as the WOB/
     entropy rows above."""
@@ -880,7 +880,7 @@ def test_run_report_input_block_names_signals_and_analyses(tmp_path):
 
 
 def test_run_report_files_line_distinguishes_typed_from_plainly_excluded_breaths(tmp_path):
-    """ the FILES line's accounting must tell a manually-excluded breath apart
+    """The FILES line's accounting must tell a manually-excluded breath apart
     from a TYPED manoeuvre breath (both are ``ignored`` for the tidal average, but
     only one names what it actually is) -- lightweight fakes again, no full batch."""
     from types import SimpleNamespace
@@ -977,7 +977,7 @@ def test_run_report_processing_block_lists_overrides_exclusions_and_grouping(tmp
 
 
 def test_run_report_processing_block_lists_breath_types(tmp_path):
-    """ which breaths are typed as a manoeuvre is a study-level setting like
+    """Which breaths are typed as a manoeuvre is a study-level setting like
     breath-count overrides/exclusions above -- 'rest' (an EMG-only background segment) is deliberately left out, since it names a segment to discard, not a
     manoeuvre a reader would want counted here."""
     from respmech.core.settings import BreathTypeEntry
@@ -997,7 +997,7 @@ def test_run_report_processing_block_lists_breath_types(tmp_path):
 
 
 def test_run_report_processing_block_lists_reference_manoeuvres(tmp_path):
-    """ what processing.references/reference_defaults CONFIGURE (never what
+    """What processing.references/reference_defaults CONFIGURE (never what
     actually resolved -- that is the REFERENCE MANOEUVRES block's own job), same
     study-level register as Breath-count overrides/Excluded breaths/Breath types."""
     from respmech.core.settings import BreathRef, GroupReferenceEntry, ReferenceEntry
@@ -1061,7 +1061,7 @@ def test_run_report_processing_block_segmentation_line(tmp_path):
 
 
 def test_run_report_processing_block_noise_reference_line(tmp_path):
-    """ a new 'Noise reference:' line names which of the resolved sources
+    """A new 'Noise reference:' line names which of the resolved sources
     (expiration/intervals/rest-typed segments) the shared profile was actually built
     from -- shown only once noise reduction is on, and the SAME text on the
     Provenance sheet's own row (_provenance_rows), so the two can never disagree."""
@@ -1188,7 +1188,7 @@ def test_diagnostics_carries_per_file_quality_notices(tmp_path):
 
 
 def test_run_report_omits_reference_manoeuvres_block_when_nothing_to_say(tmp_path):
-    """ the block is left out entirely when the IC family is absent from this
+    """The block is left out entirely when the IC family is absent from this
     analysis and no external source was loaded or failed -- the overwhelming common
     case today, same convention DIAGNOSTICS already follows above."""
     from respmech.core.io.writers import _write_run_report
@@ -1202,7 +1202,7 @@ def test_run_report_omits_reference_manoeuvres_block_when_nothing_to_say(tmp_pat
 
 
 def test_run_report_reference_manoeuvres_block(tmp_path):
-    """ per-RUN outcomes (never study-wide settings, see the PROCESSING-block
+    """Per-RUN outcomes (never study-wide settings, see the PROCESSING-block
     test above) -- external sources loaded, resolved/unresolved files, and forepass
     errors, hand-built the same way test_diagnostics_carries_per_file_quality_notices
     above builds a fake result rather than running the real pipeline."""

@@ -13,7 +13,7 @@ batch run compute an identical value for the same file (the acceptance criterion
 module is built to satisfy: "LOW_EFFORT-flaget udregnes identisk fra en
 delmængdekørsel og en fuld kørsel").
 
-FVC/MFVL numerics (the actual FVC/FEV1/PEF/flow-volume curve) are the scope, not
+FVC/MFVL numerics (the actual FVC/FEV1/PEF/flow-volume curve) are the FVC/MFVL analysis's scope, not
 this one — ``validate_fvc_manoeuvre``/``suggest_fvc`` here are quality/UI helpers
 only, deliberately empty of any spirometric arithmetic.
 

@@ -710,7 +710,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
 
         replaces the exclusion-only ``_sync_rail_exclusions`` — called from the
         same three places that one was (``refresh_files``, ``sync_from_settings``) PLUS
-        every breath-classification write funnel (the ``_set_breath_type``, manual separators's
+        every breath-classification write funnel (``_set_breath_type``, the separator-edit funnel's
         ``_toggle_separator_at``), which used to call a file-rail sync of their own
         (``_sync_excluded_badge``/this same wide function respectively) — now unified on
         one function so a type/exclude/separator edit can never leave any of the THREE
@@ -1312,7 +1312,7 @@ class PreviewScreen(_MechanicsMixin, _EcgMixin, _EmgNoiseMixin, _SegmentsMixin, 
         # never wipe an error card the current owner already painted (a stale
         # draining job finishing late must not erase the live job's error). A panel
         # CAN be listed by more than one currently-active job's own frozen `job.panels`
-        # (no two _AUTO_KINDS entries share one today, post-the segments tab — 'segments' got its
+        # (no two _AUTO_KINDS entries share one today, now that the segments tab exists — 'segments' got its
         # own dedicated panel — but 'batch's OWN panels can differ between two of ITS
         # OWN in-flight/draining dispatches if the signal set changed mid-flight, see
         # panels_for) — a stale stop() must not hide a genuinely live spinner some

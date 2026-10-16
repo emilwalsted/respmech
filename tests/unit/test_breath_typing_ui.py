@@ -1,4 +1,4 @@
-""" the breath-typing click primitive.
+"""The breath-typing click primitive.
 
 ``BreathSpansItem``'s right-click/Ctrl+left-click handling is exercised directly with
 lightweight fake pyqtgraph-style events (same style as
@@ -429,7 +429,7 @@ def test_the_reference_submenu_is_disabled_until_the_breath_is_typed_ic(qapp, tm
 
 
 def test_the_reference_submenu_enables_once_typed_ic_and_sets_the_reference(qapp, tmp_path):
-    """cross-file references round trip (the ticket's own acceptance criterion): type a breath IC, then
+    """Round trip (the ticket's own acceptance criterion): type a breath IC, then
     'Use as IC reference for ▸ This file' links THIS file to its own breath via
     processing.references, with folder stamped on the brand-new entry."""
     from respmech.ui.main_window import MainWindow

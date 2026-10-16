@@ -16,8 +16,8 @@ Two EELV DATA are reported side by side, never merged into one column family
   volume at end-expiration, i.e. ERV by definition (there is no separate ``vol_erv``
   column). ``vc_src`` is ``input.subjects``' own ``vc_l`` for this file's group, else
   the linked FVC reference's own ``fvc`` value (not yet ever populated --
-  ``core.analysis.manoeuvres.extract`` computes no numeric FVC value until the FVC/MFVL analysis's
-  ``mfvl.py`` lands; this module already reads whichever key is there, so the moment
+  ``core.analysis.manoeuvres.extract`` computes no numeric FVC value until the FVC/MFVL analysis
+  (``mfvl.py``) lands; this module already reads whichever key is there, so the moment
   the FVC/MFVL analysis adds it, the fallback starts working with no change here). This is the primary
   family because it needs no plethysmography (a spirometry-derived VC is far more often
   available than a measured TLC) -- a deliberate, PRACTICAL reason, not merely

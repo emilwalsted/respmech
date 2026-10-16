@@ -339,7 +339,7 @@ def test_a_typed_breath_is_renumbered_by_remap_segment_number_like_any_other_seg
 
 
 # --------------------------------------------------------------------------------- #
-# reference-only files — reference-only files (every breath in a file is typed, none tidal)
+# Reference-only files (every breath in a file is typed, none tidal)
 # --------------------------------------------------------------------------------- #
 
 @requires_synth()

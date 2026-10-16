@@ -13,7 +13,7 @@ baseline_ic already share):
   end-of-forced-expiration criterion, and (from the file's OWN following breath, if
   its excursion is near-maximal) a peak inspiratory-flow reference. This is
   ``core.analysis.manoeuvres.extract``'s own explicitly-deferred arithmetic
-  ("the scope, not this one" -- see that module's docstring): kept in a SEPARATE
+  ("the FVC/MFVL analysis's scope, not this one" -- see that module's docstring): kept in a SEPARATE
   module rather than folded into ``manoeuvres.py`` so that boundary stays real, not
   just a comment -- ``core.pipeline`` merges this function's output into a typed
   FVC/IC+FVC breath's Manoeuvres-sheet row itself (:func:`apply_to_row`), and

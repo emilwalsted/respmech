@@ -144,7 +144,7 @@ def build_manoeuvre_table(manoeuvres: dict):
     """The 'Manoeuvres' sheet: one row per typed breath, from
     ``core.pipeline.FileResult.manoeuvres`` (``{breath_no: core.analysis.manoeuvres
     .extract(...) result}``). Returns ``None`` when ``manoeuvres`` is empty -- "the
-    Manoeuvres sheet exists only when a typed breath is present" (the own
+    Manoeuvres sheet exists only when a typed breath is present" (its own
     acceptance criterion) -- so a caller can join it in exactly like ``EMG
     normalised`` (``if df is not None and len(df):``).
 

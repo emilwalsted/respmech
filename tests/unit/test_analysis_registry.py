@@ -65,7 +65,7 @@ _GOLDEN_UNIT_SNAPSHOT = {
     'flow_midvolinsp': 'L·s⁻¹',
     # cross-file IC references (core.analysis.references.attach), added to
     # golden_reference.json's typed_ic_fvc_same_file scenario when its own typed
-    # breath resolves as its own reference (the own-typed fallback, no new settings
+    # breath resolves as its own reference (its own-typed fallback, no new settings
     # entry needed). ic_ref_n/ic_ref_source resolve via the registry (unit=""), not
     # _RULES; vol_ic_ref via the pre-existing vol_ prefix rule.
     'ic_op': 'L',

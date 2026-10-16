@@ -246,7 +246,7 @@ def test_check_links_full_path_filenames_resolve_group_keys_correctly():
 
 
 def test_check_links_flags_an_outlier_reference_source_when_given_the_name():
-    """ an informational caution, distinct from every other check_links kind --
+    """An informational caution, distinct from every other check_links kind --
     it never depends on resolve_reference/breath typing at all, just the (caller-
     supplied) set of names that are both a column-count outlier and a named source."""
     s = _settings()

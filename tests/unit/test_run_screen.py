@@ -1113,7 +1113,7 @@ def test_commitment_sheet_omits_the_analyses_line_instead_of_crashing_on_malform
 
 
 def test_commitment_sheet_adds_a_references_line_only_when_references_are_configured(qapp, tmp_path):
-    """ an ordinary analysis (no references/reference_defaults/subjects at all) gets
+    """An ordinary analysis (no references/reference_defaults/subjects at all) gets
     NO extra line beyond the always-present Analyses line -- the commitment
     sheet's three-line shape (head, Analyses, ready/blocker) is unchanged for the common
     case. Configuring one IC reference inserts exactly one MORE line, BETWEEN Analyses

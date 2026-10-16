@@ -376,7 +376,7 @@ def test_a_real_click_on_the_segments_stack_marks_the_segment(tmp_path):
 
 
 def test_typerequested_signal_from_a_real_segment_item_reaches_the_shared_handler(tmp_path):
-    """Acceptance criterion: 'højreklik typer via the primitiv (rest tilbudt)'.
+    """Acceptance criterion: 'højreklik typer via primitivet (rest tilbudt)'.
     ``_draw_breath_overlays`` wires ``BreathSpansItem.typeRequested ->
     _handle_type_requested`` identically regardless of which ``plots`` list it was
     given — but until this test, nothing rendered the segments stack and then actually

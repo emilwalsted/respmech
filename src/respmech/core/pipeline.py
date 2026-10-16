@@ -1167,7 +1167,7 @@ def run_batch(settings: Settings, progress: Optional[ProgressCallback] = None,
             # to gate on. An undetected beat is neither subtracted nor blanked, so gating a
             # file with missed beats reports a heartbeat with extra confidence — hence the
             # guard, evaluated once here rather than per breath.
-            # reference-only files self-review finding: skipped for a reference-only file too -- the ONLY
+            # Self-review finding: skipped for a reference-only file too -- the ONLY
             # consumers of gate_peaks/gate_ok/gate_reason are the per-breath mechanics loop
             # (already skipped below, `if not reference_only:`) and compute_segment_emg,
             # neither of which a reference-only file ever reaches. Without this guard, a

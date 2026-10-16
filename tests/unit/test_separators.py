@@ -1,4 +1,4 @@
-""" manual separators in Preview (placement, removal, renumbering, the run-lock
+"""Manual separators in Preview (placement, removal, renumbering, the run-lock
 and the removal tolerance) — the EMG-only 'EMG – segments' tab's own new action, and
 its shared click routing through ``_toggle_from_emg_click`` (``_emg_noise.py``).
 

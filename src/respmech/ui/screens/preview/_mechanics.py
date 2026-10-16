@@ -1087,7 +1087,7 @@ class _MechanicsMixin:
                         "average row (needs at least 3 breaths).")),
         ]
         # the Poes-less Campbell panel (R7): "Work of breathing" and "Pressure–time product" are meaningless without
-        # a Poes trace — WOB/PTP are never computed for a Poes-less analysis (the Poes-less analysis's
+        # a Poes trace — WOB/PTP are never computed for a Poes-less analysis (
         # compute-guards). Filtering the FLAT fields list here, rather than the sections
         # table below, drops both cards automatically (their keys leave `remaining` empty,
         # so the "if picked" check skips them — see below) instead of dumping their fields
@@ -2359,7 +2359,7 @@ class _MechanicsMixin:
 
         ``kinds`` is the caller's choice of which real kinds to OFFER (``_handle_type_
         requested`` filters ``'rest'`` in/out by capability) — the disabled hint and the
-        cross-file references reference actions below are unconditional, since they name a property of
+        The reference actions below are unconditional, since they name a property of
         the BREATH's current type (already decided, not something ``kinds`` should ever
         need to suppress)."""
         from respmech.core.summary import group_key  # noqa: PLC0415
@@ -2427,7 +2427,7 @@ class _MechanicsMixin:
         return entry.kind if entry is not None else None
 
     def _set_reference(self, file, breath_no, scope):
-        """cross-file references funnel for the quick 'Use as IC reference for' submenu: point ``scope``
+        """Funnel for the quick 'Use as IC reference for' submenu: point ``scope``
         (``'file'`` | ``'group'`` | ``'all'``) at ``file``'s ``breath_no`` — already
         typed ``'ic'``/``'ic_fvc'``, see ``_IC_REFERENCE_KINDS`` — as its IC reference.
         Same run-lock / folder-stamp-only-on-creation / one ``settings_edited`` contract
@@ -2490,7 +2490,7 @@ class _MechanicsMixin:
         return scope
 
     def _open_reference_picker(self, filename=None):
-        """ the full picker (``ReferencePickerDialog``) for all four reference
+        """The full picker (``ReferencePickerDialog``) for all four reference
         slots at once, opened from the type menu's 'Reference manoeuvres…' (the
         currently previewed file) or from the file rail's row context menu
         (``FileRail.referencesRequested``, a specific ``filename``). Same run-lock

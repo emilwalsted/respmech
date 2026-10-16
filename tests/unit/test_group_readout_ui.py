@@ -125,7 +125,7 @@ def test_dry_run_plan_repeats_the_same_grouping_line_setup_shows(qapp, tmp_path)
 
 
 def test_setup_shows_a_reference_only_count_in_the_group_readout(qapp, tmp_path):
-    """ a file settings predicts reference-only (typed, and named as a reference
+    """A file settings predicts reference-only (typed, and named as a reference
     source) is excluded from the readout's own count/grouping, with its own count
     surfaced as a parenthetical -- exercised end to end against a real SettingsScreen,
     not just group_readout's own pure unit tests in test_manifest.py."""

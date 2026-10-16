@@ -190,7 +190,7 @@ def _kinds_for_settings_path(path, caps=None):
         return frozenset(("batch",))
     # channels core / format / volume inverse+integrate (all applied inside load()),
     # channels.entropy (validated in every load path), input.folder/files,
-    # processing.breath_types (typed breaths typed breaths change the noise reference mask itself —
+    # processing.breath_types (typed breaths change the noise reference mask itself —
     # decision 11 — so they get the WIDE default here rather than the narrower
     # exclude_breaths rule above), and anything else not matched above -> recompute
     # everything (safe default; never leaves a panel stale)

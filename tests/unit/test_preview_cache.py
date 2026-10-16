@@ -123,7 +123,7 @@ def test_ref_clip_key_expiration_branch_tracks_volume_trend(tmp_path):
 
 
 def test_ref_clip_key_expiration_branch_tracks_volume_drift_under_volume_method(tmp_path):
-    """ with segmentation.method == 'volume', _emg_segmented's mask is built by
+    """With segmentation.method == 'volume', _emg_segmented's mask is built by
     separateintobreathsbyvolume's peak search against the DRIFT-corrected volume (an
     absolute-height threshold), so drift correction can change which samples are
     detected as inspiratory/expiratory peaks even with trend correction untouched --

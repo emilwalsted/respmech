@@ -1467,7 +1467,7 @@ def _clear_normalization_reference(emg: "EmgSettings") -> None:
 # six hand-spread call sites (CarriedOverState, carried_over_state, clear_carried_over,
 # toml_io._rebase_folders, toml_io.save_toml, plus the Setup banner/rail/overlay reading
 # their result) into one table those call sites all iterate — a future tagged kind
-# (typed breaths breath_types, manual separators separators, reference resolution references/reference_defaults/subjects) adds
+# (typed breaths, manual separators, reference resolution) adds
 # ONE row here instead of touching all six again (the exact B06 recurrence this ticket
 # closes off).
 #

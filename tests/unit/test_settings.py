@@ -912,7 +912,7 @@ def test_clear_carried_over_resets_ecg_and_normalization_references_independentl
     assert s.processing.emg.normalization_reference_folder == "/data/S02"
 
 
-# -- ticket the carried-over table: _CARRIED_KINDS/_FOLDER_TAG_PATHS is ONE generalized table --------------
+# -- the carried-over table: _CARRIED_KINDS/_FOLDER_TAG_PATHS is ONE generalized table --------------
 # Every row gets the identical treatment (rebase at load, relativize at save, carried/
 # clear against the live input folder) — this proves the table-driven machinery itself
 # generalizes, not just the two kinds (exclude_breaths, noise) it originally shipped with.
