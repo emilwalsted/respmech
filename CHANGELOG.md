@@ -5,7 +5,11 @@ Dates are the release (tag) date. See [Releasing](docs/RELEASING.md) for how a
 release is cut, and the [GitHub releases](https://github.com/emilwalsted/respmech/releases)
 for the installers themselves.
 
-## Unreleased
+## v2.5.0 — 2026-10-16
+
+RespMech 2.5 analyses what you recorded, and a companion app, Adichtion, gets LabChart recordings out faster, without LabChart. Until now RespMech would not run without flow and all three pressures, and treated every breath as tidal. An analysis now starts from a signal set, from flow alone to the complete set, or EMG alone, and RespMech knows what a manoeuvre is: any breath can be typed as IC, FVC, maximal inspiratory effort or sniff. A typed FVC gives FVC, FEV1 and PEF, and an IC reference, even from another file, gives operating lung volumes once a VC or TLC is known. Adichtion is a free, open-source viewer and reader for macOS, Windows and Linux: it opens .adicht files, exports CSV that RespMech reads, and one command cuts an interval between two comments. Its Python library, on PyPI, reads a channel into numpy. Every new analysis feature is off until asked for, and the release notes name the few defaults and numbers that change.
+
+**Meet Adichtion.** Getting a LabChart recording into RespMech has meant opening LabChart and exporting by hand. Adichtion is a viewer and reader for `.adicht` files built to get that data out faster and smarter: it reads the file itself, so no LabChart installation or licence is needed. The viewer shows every channel on one time axis with the blocks, comments and any video clips; drag to select an interval, and write the whole file, a block or the interval as LabChart-style text, CSV or Excel. The traces are drawn from the file's own min/max index first and refined in the background, so a 300 MB recording pans and zooms without waiting. Raw and calculated channels are decoded sample-exact, verified against LabChart's own text and MATLAB exports, and nothing is recomputed. RespMech reads the CSV export, with the default point decimal, as it is. Adichtion is free and open source (GPL-3.0-or-later, like RespMech) and platform-independent: pure Python with numpy as the library's only dependency, installers for macOS (Apple Silicon), Windows and Debian/Ubuntu, and a release on PyPI. `pip install adichtion` gives the library and the command line; `pip install "adichtion[ui]"` adds the viewer. On the command line, `adichtion export FILE -o out.csv --record 2 --between "start" "stop"` cuts block 2 between two of the comments typed during the experiment, `--all-records` writes every block, and `adichtion check FILE` checks every block against LabChart's stored min/max. In Python, `AdichtFile` opens a recording, and each block's `read()` returns a channel as a numpy array, without exporting. Adichtion is not affiliated with ADInstruments.
 
 **A modular analysis: signal sets, typed breaths, reference manoeuvres, EMG-only
 recordings and operating lung volumes.** This release stops assuming that every
@@ -91,6 +95,9 @@ this release.
   not be read without a dependency RespMech does not have and failed with an import error;
   `.xlsx` is unchanged. The unused `seaborn` dependency was removed.
   <!-- site: 0 merged "`.xls` (the old binary Excel format)" the page lists it among its small corrections -->
+
+<!-- changelog-skip f4a0c86 comments and docstrings only: internal planning markers removed; no code or
+     behaviour changes. -->
 
 **Sample entropy on a volume column now uses the conditioned volume (numbers change for
 analyses with entropy on the volume column).** When the volume column is also ticked as an
