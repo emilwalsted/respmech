@@ -23,10 +23,16 @@ one-process gate had taken 65 min. Two decisions:
    rejected: the first costs a full release round for a version that differs only in
    packaging, the second breaks the rule that a tag is never moved or re-pushed.
 2. **The gate runs the unit suite file by file, like `ci.yml`'s macOS job**, with the
-   numerical golden as its own step, the same per-file verdict rules (a file's pytest
-   summary decides; Qt's shutdown crash after a green summary is not a failure), and the
-   120 min ceiling kept as a hang guard. The one-process ordering coverage stays where it
-   already is, on `ci.yml`'s Windows jobs.
+   same per-file verdict rules (a file's pytest summary decides; Qt's shutdown crash after
+   a green summary is not a failure), and the 120 min ceiling kept as a hang guard. The
+   one-process ordering coverage stays where it already is, on `ci.yml`'s Windows jobs.
+3. **The numerical golden moved out of the macOS gate into a Linux job on `ubuntu-24.04`,
+   the same job and image as `ci.yml`'s `golden`.** The reference is baked and proven
+   bit-identical on Linux, and a review found that 2.5.0's `typed_ic_fvc_same_file`
+   scenario rests on an exact tie (an argmax over thousands of equal smoothed flow values)
+   that macOS's Accelerate BLAS could break with a one-ulp summation difference, moving
+   FEV1 and FVC for a platform reason, not an engine one. Until 2.5.0 the gate ran the
+   golden on macOS, with legacy scenarios only.
 
 ---
 

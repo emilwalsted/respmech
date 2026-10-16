@@ -124,10 +124,11 @@ jobs:
   # Tag pushes do NOT trigger ci.yml (it is branch/PR-scoped), so this is the release-time
   # gate. If you ever want to trim runner cost, narrow this to the numerical golden only.
   test:
-    name: Test gate (unit + numerical golden)
+    name: Test gate (unit, file by file)
     needs: target
     runs-on: macos-latest
-    # The unit suite runs FILE BY FILE, exactly like ci.yml's macOS job. The one-process run
+    # The unit suite runs FILE BY FILE, exactly like ci.yml's macOS job; the numerical golden
+    # is its own Linux job below, like ci.yml's. The one-process run
     # this gate used before grew with the suite, because each test's Qt teardown costs more
     # the more widgets the session has accumulated: 65 min for 2.4.0 (21-08-2026), and for
     # 2.5.0 (16-10-2026) it hit the 120 min ceiling at 67 %, every test green so far, while
@@ -193,9 +194,6 @@ jobs:
           fi
           if [ "$fails" -ne 0 ]; then exit 1; fi
           echo "Unit suite passed file by file."
-      - name: Numerical golden
-        run: python -m pytest tests/golden/test_golden.py -q
-
       # CHANGELOG.md's entry is what the release tells anyone: RELEASING.md folds it
       # into the dated section, respmech.dk's changelog page is the reader-facing
       # rewrite of the same list, and the mailing-list notification is built from
@@ -210,10 +208,39 @@ jobs:
           TAG: ${{ needs.target.outputs.tag }}
         run: python3 tools/check_changelog.py --version "$TAG"
 
+  # ── 1b. Numerical golden ──────────────────────────────────────────────────────────────
+  # Same job as ci.yml's `golden`, on the same pinned image, because the reference is baked
+  # and proven bit-identical on Linux. On macOS (where this gate ran it until 2.5.0) BLAS is
+  # Accelerate, and at least one 2.5.0 scenario rests on an exact tie: typed_ic_fvc_same_file's
+  # smoothed FVC flow is thousands of equal values, so argmax picks the first, and any
+  # alignment-dependent summation would pick another and move fev1/fvc. That would be a
+  # platform artefact of synthetic data, not an engine change, and a red gate over it would
+  # stop a release for nothing.
+  golden:
+    name: Numerical golden (synthetic, rtol 1e-9)
+    needs: target
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.target.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install (dev extras — no GUI needed for the core golden)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Synthetic golden reproduces the reference
+        run: python -m pytest tests/golden/test_golden.py -q
+
   # ── 2. Build + verify the distributions ──────────────────────────────────────────────
   build:
     name: Build sdist + wheel
-    needs: [target, test]
+    needs: [target, test, golden]
     runs-on: ubuntu-latest
     # A pure hang guard: for 2.4.0 this job took 14 s and the publish job 18 s.
     timeout-minutes: 60
