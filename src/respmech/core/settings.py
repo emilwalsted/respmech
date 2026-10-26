@@ -766,7 +766,7 @@ class DataOutput:
     save_average: bool = True
     save_breath_by_breath: bool = True
     save_processed: bool = False
-    # The averaged Campbell / flow-volume loop as numbers: ``<file> – Campbell (average).csv``
+    # The averaged Campbell loop as numbers (without Poes: the averaged volume only): ``<file> – Campbell (average).csv``
     # per file and, for two or more files, ``All files – Campbell (average).csv``
     # (core.io.loop_csv). Off by default, so an existing analysis writes nothing new.
     save_pv_average_csv: bool = False

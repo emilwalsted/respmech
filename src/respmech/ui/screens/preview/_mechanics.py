@@ -3255,7 +3255,8 @@ class _MechanicsMixin:
         Deliberately without the WOB/elastic-recoil overlay ``_overlay_campbell_work``
         draws for the Campbell diagram: every one of that overlay's own inputs
         (``wobtotal``, ``volumeavg``/``poesavg``, ``eelvavg``/``eilvavg``) comes from the
-        pressures family and is never computed for a Poes-less analysis."""
+        pressures family and is never computed for a Poes-less analysis (``volumeavg`` alone
+        is, and the CSV export reads it)."""
         self._campbell_breaths = breaths        # kept so the export can re-render it light
         pal = _plot_pal() if pal is None else pal
         fig = self.campbell.figure

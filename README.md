@@ -336,7 +336,7 @@ file)** in Setup (`output.data.save_pv_average_csv`, off by default). Each file 
 (1 to the number of resampling points, within each phase), `Volume` (L) and, when Poes is part of the
 analysis, `Poes` (cmH₂O); a batch of two or more files also gets `data/All files – Campbell
 (average).csv` with a leading `File` column. Preview & QC can save the same table for the file on
-screen (*Export Campbell…*, CSV).
+screen (*Export Campbell…*, CSV). Without Poes the table holds the averaged volume only.
 
 ## Diaphragm EMG
 

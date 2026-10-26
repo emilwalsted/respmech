@@ -450,7 +450,7 @@ class SettingsScreen(QWidget):
                 (self.save_processed, "output.data.save_processed", "The processed signal as a CSV per file."),
                 (self.save_pv_csv, "output.data.save_pv_average_csv",
                  "The average breath's volume (and Poes) points, the ones the averaged Campbell "
-                 "diagram is drawn from, as a CSV per file, plus one for all files."),
+                 "diagram is drawn from, as a CSV per file, plus one for all files when there is more than one."),
                 (self.include_ignored, "output.data.include_ignored_breaths",
                  "Include the breaths you've excluded in the per-file processed-signal CSV only. "
                  "Excluded breaths are always left out of the averages and workbooks; this does not change them.")):
@@ -1144,7 +1144,7 @@ class SettingsScreen(QWidget):
         if self.save_processed.isChecked():
             got.append("Processed-signal CSV, one per recording")
         if self.save_pv_csv.isChecked():
-            got.append("average Campbell loop CSV, one per recording (plus one for all files)")
+            got.append("average Campbell loop CSV, one per recording (plus one for all files when there is more than one)")
         figs = diagnostic_figure_type_count(self.state.settings)
         if figs:
             got.append(f"{figs} diagnostic-figure type{'s' if figs != 1 else ''} per recording")

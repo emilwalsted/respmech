@@ -51,6 +51,7 @@ def test_csv_matches_the_averaged_arrays_at_full_precision(tmp_path):
     assert list(df.columns) == ["Phase", "Point", "Volume", "Poes"]
     b = next(b for b in result.ok_files["synth_case_A.csv"].breaths.values() if not b["ignored"])
     n_in, n_ex = len(b["inspiration"]["volumeavg"]), len(b["expiration"]["volumeavg"])
+    assert n_in == n_ex == s.processing.wob.avg_resampling_obs
     assert (df["Phase"] == "inspiration").sum() == n_in
     assert (df["Phase"] == "expiration").sum() == n_ex
     # Point counts 1..N within each phase
@@ -173,4 +174,59 @@ def test_preview_export_writes_the_same_table(qapp, tmp_path, monkeypatch):
     from respmech.core.io.writers import write_batch
     write_batch(result, s, str(tmp_path / "run"), when=datetime(2026, 10, 26))
     pd.testing.assert_frame_equal(pv_df, _read(tmp_path / "run" / "data" / LOOP))
+    win.close()
+
+
+@requires_synth()
+def test_row_count_follows_avg_resampling_obs(tmp_path):
+    s = synth_settings(tmp_path, avgresamplingobs=50)
+    s.output.data.save_pv_average_csv = True
+    _run_and_write(tmp_path, s, only_files=["synth_case_A.csv"])
+    df = _read(tmp_path / "data" / LOOP)
+    assert df.groupby("Phase").size().to_dict() == {"expiration": 50, "inspiration": 50}
+
+
+def test_cohort_needs_two_recordings_with_an_average_breath():
+    from respmech.core.io.loop_csv import average_loop_table, cohort_loop_table
+    ins = np.array([0.1, 0.2])
+    breath = {"ignored": False, "inspiration": {"volumeavg": ins}, "expiration": {"volumeavg": ins}}
+    t = average_loop_table([breath])
+    assert list(t.columns) == ["Phase", "Point", "Volume"]
+    assert cohort_loop_table({"a": t, "b": None}).shape[0] == t.shape[0]
+    assert cohort_loop_table({"a": None}) is None
+
+
+@requires_synth()
+def test_preview_export_branches(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    from respmech.core.pipeline import run_batch
+    from respmech.ui.main_window import MainWindow
+    from respmech.ui.state import AppState
+    s = synth_settings(str(tmp_path), channels={"poes": None, "pgas": None, "pdi": None,
+                                                "emg": [], "entropy": []})
+    breaths = run_batch(s, only_files=["synth_case_A.csv"]).ok_files["synth_case_A.csv"].breaths
+    win = MainWindow(AppState(s))
+    pv = win.preview_screen
+    pv._draw_campbell_or_loop(breaths)
+
+    # CSV filter chosen but no extension typed: ".csv" is appended; no Poes column
+    typed = tmp_path / "noext"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: (str(typed), "CSV table (*.csv)")))
+    pv._export_campbell()
+    assert list(_read(str(typed) + ".csv").columns) == ["Phase", "Point", "Volume"]
+
+    # extension typed, filter left on PNG: the extension decides
+    ext = tmp_path / "x.csv"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: (str(ext), "PNG image (*.png)")))
+    pv._export_campbell()
+    assert ext.is_file()
+
+    # nothing to export once the cache is forgotten: no file, a status line instead
+    pv._forget_campbell()
+    none = tmp_path / "none.csv"
+    pv._export_campbell_csv(str(none), "Flow-volume loop")
+    assert not none.exists()
     win.close()

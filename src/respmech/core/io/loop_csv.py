@@ -1,4 +1,4 @@
-"""The averaged Campbell / flow-volume loop as a table (opt-in ``output.data.save_pv_average_csv``).
+"""The averaged Campbell loop as a table (without Poes: the averaged volume trace) (opt-in ``output.data.save_pv_average_csv``).
 
 The average breath is computed by ``core.compute.calculateaveragebreaths`` (every kept
 breath's inspiration and expiration resampled to the same number of points and averaged

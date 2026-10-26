@@ -7,18 +7,20 @@ for the installers themselves.
 
 ## Unreleased
 
-- **The average Campbell loop as numbers.** The averaged Campbell loop (or, without Poes, the
-  averaged flow-volume loop) used to exist only as a figure. Tick *Average Campbell loop CSV
+- **The average Campbell loop as numbers.** The averaged Campbell loop used to exist only
+  as a figure. Tick *Average Campbell loop CSV
   (per file)* in Setup (`output.data.save_pv_average_csv`, off by default) and a run writes
   `<file> – Campbell (average).csv` to `data/`: one row per point of the average breath, with
   the columns `Phase` (`inspiration` or `expiration`), `Point` (1 to the number of resampling
   points, counted within each phase), `Volume` (L) and, when Poes is part of the analysis, `Poes`
-  (cmH₂O). The values are the average breath the workbooks and the figure are built from, not a
-  copy of the drawing. With two or more files, `All files – Campbell (average).csv` puts every
+  (cmH₂O). Without Poes the file holds the averaged volume trace only. The values are the
+  average breath the figure is drawn from (and, with work of breathing taken from the average
+  breath, the workbooks), not a copy of the drawing. With two or more files, `All files – Campbell (average).csv` puts every
   recording in one table with a leading `File` column, so conditions can be compared directly.
   *Export Campbell…* (*Export flow-volume…* without Poes) in Preview & QC can now save the same
-  table as a CSV for the file on screen. An analysis that does not tick the box writes exactly
-  what it wrote before
+  table as a CSV for the file on screen (without Poes the panel draws no average breath, but the
+  table is still the file's averaged volume). An analysis that does not tick the box writes exactly
+  what it wrote before.
 
 ## v2.5.0 — 2026-10-16
 
