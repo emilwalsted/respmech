@@ -1,5 +1,16 @@
 # tools/
 
+## Zenodo DOIs for releases the integration missed
+
+`zenodo_backfill.py` compares the GitHub releases with the versions under the
+project's Zenodo concept record and adds the missing ones through Zenodo's REST
+API, oldest first, each with its original release date and GitHub's own source
+archive of the tag (`plan` shows the list without touching anything; `backfill
+--sandbox` rehearses the whole sequence on sandbox.zenodo.org; `fix-metadata`
+brings the records the integration made in line with `.zenodo.json`). The
+docstring has the procedure and the token setup; `docs/RELEASING.md`'s Zenodo note
+says when to reach for it and how to wake the integration up again.
+
 ## Refreshing the manual's screenshots
 
 `capture_screens.py` renders every screen and dialog with the bundled sample

@@ -9,8 +9,8 @@ authors:
     given-names: Emil Ingerslev
     orcid: "https://orcid.org/0000-0002-6640-7175"
     affiliation: "Bispebjerg Hospital, Copenhagen, Denmark"
-version: "2.4.0"
-date-released: "2026-08-21"
+version: "2.5.0"
+date-released: "2026-10-16"
 license: GPL-3.0-or-later
 repository-code: "https://github.com/emilwalsted/respmech"
 url: "https://www.respmech.dk/"
