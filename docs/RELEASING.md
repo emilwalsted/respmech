@@ -54,6 +54,8 @@ environment (e.g. required reviewer, or restrict to tags) for a manual gate befo
    Also update the example citation in [`README.md`](../README.md) ("RespMech vX.Y.Z,
    YEAR") to the new version — unlike the About dialog, it is a hand-written string,
    not derived from `__version__`, so it goes stale silently if this step is skipped.
+   The same goes for [`CITATION.cff`](../CITATION.cff)'s `version` and `date-released`
+   (GitHub's "Cite this repository" box reads them): bump both in the same commit.
 
 3. **Check the entry actually covers the release:**
 
@@ -241,8 +243,25 @@ First used for 2.5.0 (16-10-2026), whose tag-triggered gate ran out of time; see
   GitHub), each new tagged release is archived automatically as a new version of the
   same record, and the concept DOI `10.5281/zenodo.3270825` keeps resolving to the
   newest one; that concept DOI, not a version-specific one, is what the README and the
-  site's citation reference. The integration has silently stopped archiving before (it
-  went dark after v1.0.1 in 2023, and no v2.x release was archived until it was
-  re-enabled and backfilled by hand) — after tagging, check the project's Zenodo page
-  to confirm the new version actually landed, rather than assuming the automation is
-  still working.
+  site's citation reference. The integration has silently stopped archiving before: it
+  went dark after v1.0.1 in 2023 because Zenodo's stored GitHub authorisation had
+  expired. Every release event it received after that failed (visible only as "Failed"
+  rows on Zenodo's GitHub settings page, while the webhook on GitHub kept answering
+  202), and no v2.x release was archived until `tools/zenodo_backfill.py` added them
+  through Zenodo's REST API in October 2026, with their original release dates. So,
+  after tagging, check the project's Zenodo page to confirm the new version actually
+  landed, rather than assuming the automation is still working. If it did not land:
+  on zenodo.org ▸ Account ▸ Linked accounts disconnect and reconnect GitHub, then
+  Account ▸ GitHub ▸ **Sync now** (a "request failed (400)" there is the
+  expired-authorisation symptom), toggle the repository off and on, and run
+  `python3 tools/zenodo_backfill.py plan` followed by `backfill` (sandbox first; the
+  tool's docstring has the whole procedure) to add the missed release. The tool needs a
+  personal access token with the scopes `deposit:write` and `deposit:actions` in
+  `~/.config/zenodo.env` (`ZENODO_TOKEN=…`, mode 600; `ZENODO_SANDBOX_TOKEN` for the
+  sandbox); nothing in the repository or in CI holds it.
+- **`.zenodo.json`** sets the licence, creator, keywords and description of every
+  archived version, and deliberately sets NO `title` and NO `related_identifiers`: a
+  key in that file replaces the integration's default outright, and the defaults
+  (title `emilwalsted/respmech: RespMech vX.Y.Z`, a related identifier pointing at the
+  tag's tree) are what every existing record uses. `CITATION.cff` is read by GitHub's
+  "Cite this repository" box, not by Zenodo while `.zenodo.json` exists.

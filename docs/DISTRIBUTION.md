@@ -34,7 +34,8 @@ finish").
 Keep the GitHub↔Zenodo integration enabled so each new release archives automatically
 and gets its own DOI under the project's concept DOI (`10.5281/zenodo.3270825`) — see
 [RELEASING.md](RELEASING.md)'s Zenodo DOI note for what to check after tagging; the
-integration has gone quiet before without any error surfacing.
+integration has gone quiet before without any error surfacing on the GitHub side, and
+`tools/zenodo_backfill.py` is how a missed release gets its DOI afterwards.
 
 ## 3. Homebrew tap
 The tap is a separate repo `emilwalsted/homebrew-respmech` with
