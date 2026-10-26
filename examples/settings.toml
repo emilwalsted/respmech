@@ -182,6 +182,7 @@ folder = "output"                # workbooks land in <folder>/data
 save_average          = true
 save_breath_by_breath = true
 save_processed        = false   # large per-file processed-signal CSV; off by default
+save_pv_average_csv   = false   # the average Campbell / flow-volume loop as numbers (CSV per file, + one for all files)
 
 [output.diagnostics]
 save_pv_average = true          # averaged Campbell diagram; needs the [plots] extra

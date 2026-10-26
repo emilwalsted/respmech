@@ -766,6 +766,10 @@ class DataOutput:
     save_average: bool = True
     save_breath_by_breath: bool = True
     save_processed: bool = False
+    # The averaged Campbell / flow-volume loop as numbers: ``<file> – Campbell (average).csv``
+    # per file and, for two or more files, ``All files – Campbell (average).csv``
+    # (core.io.loop_csv). Off by default, so an existing analysis writes nothing new.
+    save_pv_average_csv: bool = False
     # Only affects the per-file processed-signal CSV (results.py); excluded breaths are
     # ALWAYS left out of the averages/workbooks. Legacy default was off.
     include_ignored_breaths: bool = False

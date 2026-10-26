@@ -31,6 +31,7 @@ from respmech.core import quantities as _units
 from respmech.core.analysis import pressure as pressurelib
 from respmech.core.analysis import references as referenceslib
 from respmech.core.analysis.signals import Capabilities, off_signals_text, signals_text
+from respmech.core.io.loop_csv import COHORT_CSV_NAME, average_loop_table, cohort_loop_table, loop_csv_name
 from respmech.core.settings import resolve_noise_reference_mode
 from respmech.core.summary import build_cohort_summary, normalize_emg_table, resolve_emg_reference
 
@@ -440,6 +441,24 @@ def write_batch(result, settings, outputfolder: str, when: datetime | None = Non
                 p = os.path.join(datadir, f"{fname} – Processed data.csv")
                 fr.processed.to_csv(p, index=False)
                 written.append(p)
+
+    if settings.output.data.save_pv_average_csv:
+        loops = {}
+        for fname, fr in result.ok_files.items():
+            t = average_loop_table((fr.breaths or {}).values())
+            if t is None:
+                continue
+            _emit(f"writing average loop — {fname}", file=fname)
+            p = os.path.join(datadir, loop_csv_name(fname))
+            t.to_csv(p, index=False)
+            written.append(p)
+            loops[fname] = t
+        # the cohort file is cohort-level like the "All files" figure: never built from a
+        # subset re-run, and only worth writing when it holds more than one recording
+        if cohort_outputs and len(loops) > 1:
+            p = os.path.join(datadir, COHORT_CSV_NAME)
+            cohort_loop_table(loops).to_csv(p, index=False)
+            written.append(p)
 
     if settings.output.data.save_average and result.average_table is not None and cohort_outputs:
         _emit("writing average + cohort summary")

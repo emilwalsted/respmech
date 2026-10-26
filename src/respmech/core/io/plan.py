@@ -118,6 +118,15 @@ def plan_outputs(settings, filenames, cohort_outputs: bool = True) -> Plan:
         groups.append(OutputGroup(
             "Processed-signal CSV, one per recording", n, n > 0, "data/",
             [f"data/{nm} – Processed data.csv" for nm in names]))
+    if d.save_pv_average_csv and caps.volume:
+        # a ceiling: a recording with no kept breath writes no table
+        groups.append(OutputGroup(
+            "Average Campbell loop CSV, one per recording", n, n > 0, "data/",
+            [f"data/{nm} – Campbell (average).csv" for nm in names]))
+        if cohort_outputs and n > 1:
+            groups.append(OutputGroup(
+                "Average Campbell loop CSV, all recordings", 1, True, "data/",
+                ["data/All files – Campbell (average).csv"]))
     if d.save_average and cohort_outputs:
         groups.append(OutputGroup(
             "Average breath-data workbook", 1 if n else 0, n > 0, "data/",
