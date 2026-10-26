@@ -224,6 +224,13 @@ def test_preview_export_branches(qapp, tmp_path, monkeypatch):
     pv._export_campbell()
     assert ext.is_file()
 
+    # CSV filter chosen but the suggested .png name kept: never CSV bytes in a .png
+    kept_png = tmp_path / "suggested.png"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: (str(kept_png), "CSV table (*.csv)")))
+    pv._export_campbell()
+    assert (tmp_path / "suggested.csv").is_file() and not kept_png.exists()
+
     # nothing to export once the cache is forgotten: no file, a status line instead
     pv._forget_campbell()
     none = tmp_path / "none.csv"

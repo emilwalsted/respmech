@@ -854,8 +854,11 @@ class _MechanicsMixin:
         if not path:
             return
         if path.lower().endswith(".csv") or (_chosen or "").startswith("CSV"):
-            if "." not in os.path.basename(path):
-                path += ".csv"
+            root, ext = os.path.splitext(path)
+            if ext.lower() != ".csv":
+                # the CSV filter was chosen but the suggested .png name was kept (or no
+                # extension typed): never write CSV bytes into a .png/.pdf
+                path = (root if ext.lower() in (".png", ".pdf") else path) + ".csv"
             self._export_campbell_csv(path, panel_title)
             return
         # Export LIGHT, whatever the app is wearing. The on-screen figure follows the theme,
@@ -905,8 +908,9 @@ class _MechanicsMixin:
                     pass
 
     def _export_campbell_csv(self, path, panel_title):
-        """The average breath's points as a CSV: the arrays the drawn average breath is
-        plotted from (``core.io.loop_csv``, the same table a batch run writes with
+        """The average breath's points as a CSV: the arrays the averaged Campbell loop is
+        plotted from (with Poes; without Poes the averaged volume trace, which the panel
+        does not draw, and not the mean loop placed in the maximal flow-volume curve) (``core.io.loop_csv``, the same table a batch run writes with
         ``output.data.save_pv_average_csv``), so nothing is recomputed or redrawn."""
         from respmech.core.io.loop_csv import average_loop_table      # noqa: PLC0415
         breaths = getattr(self, "_campbell_breaths", None)

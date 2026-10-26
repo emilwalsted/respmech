@@ -18,8 +18,8 @@ for the installers themselves.
   breath, the workbooks), not a copy of the drawing. With two or more files, `All files – Campbell (average).csv` puts every
   recording in one table with a leading `File` column, so conditions can be compared directly.
   *Export Campbell…* (*Export flow-volume…* without Poes) in Preview & QC can now save the same
-  table as a CSV for the file on screen (without Poes the panel draws no average breath, but the
-  table is still the file's averaged volume). An analysis that does not tick the box writes exactly
+  table as a CSV for the file on screen (without Poes the table is the file's averaged volume
+  trace, which the panel does not draw as such). An analysis that does not tick the box writes exactly
   what it wrote before.
 
 ## v2.5.0 — 2026-10-16
