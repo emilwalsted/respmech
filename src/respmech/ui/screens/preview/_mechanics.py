@@ -592,7 +592,7 @@ class _MechanicsMixin:
         self.mech_window_label.setToolTip(self._MECH_WINDOW_TOOLTIP)
         self.btn_export_fig = QPushButton("Export Campbell…")
         self.btn_export_fig.setEnabled(False)          # enabled once a diagram is drawn
-        self.btn_export_fig.setToolTip("Save the Campbell diagram as a PNG or PDF.")
+        self.btn_export_fig.setToolTip("Save the Campbell diagram as a PNG or PDF, or its average breath as a CSV table.")
         self.btn_export_fig.clicked.connect(self._export_campbell)
         # Mechanics' own 'Place separators' — repairs the AUTOMATIC flow-/
         # volume-based segmentation (processing.segmentation.overrides) by cut/join,
@@ -848,10 +848,18 @@ class _MechanicsMixin:
         is_campbell = Capabilities.from_settings(self.state.settings).poes
         panel_title = "Campbell diagram" if is_campbell else "Flow-volume loop"
         base = (self._previewed_file or "campbell").rsplit(".", 1)[0]
-        path, _ = QFileDialog.getSaveFileName(
+        path, _chosen = QFileDialog.getSaveFileName(
             self, f"Export {panel_title}", f"{base} – {panel_title}.png",
-            "PNG image (*.png);;PDF document (*.pdf)")
+            "PNG image (*.png);;PDF document (*.pdf);;CSV table (*.csv)")
         if not path:
+            return
+        if path.lower().endswith(".csv") or (_chosen or "").startswith("CSV"):
+            root, ext = os.path.splitext(path)
+            if ext.lower() != ".csv":
+                # the CSV filter was chosen but the suggested .png name was kept (or no
+                # extension typed): never write CSV bytes into a .png/.pdf
+                path = (root if ext.lower() in (".png", ".pdf") else path) + ".csv"
+            self._export_campbell_csv(path, panel_title)
             return
         # Export LIGHT, whatever the app is wearing. The on-screen figure follows the theme,
         # so in dark mode saving the live facecolor produced a near-black PNG/PDF — which is
@@ -898,6 +906,23 @@ class _MechanicsMixin:
                     self._draw_campbell_or_loop(breaths)
                 except Exception:                       # pragma: no cover - defensive
                     pass
+
+    def _export_campbell_csv(self, path, panel_title):
+        """The average breath's points as a CSV: the arrays the averaged Campbell loop is
+        plotted from (with Poes; without Poes the averaged volume trace, which the panel
+        does not draw, and not the mean loop placed in the maximal flow-volume curve) (``core.io.loop_csv``, the same table a batch run writes with
+        ``output.data.save_pv_average_csv``), so nothing is recomputed or redrawn."""
+        from respmech.core.io.loop_csv import average_loop_table      # noqa: PLC0415
+        breaths = getattr(self, "_campbell_breaths", None)
+        table = average_loop_table((breaths or {}).values())
+        if table is None:
+            self._set_status(f"No average breath to export for this file ({panel_title}).")
+            return
+        try:
+            table.to_csv(path, index=False)
+            self._set_status(f"Saved the average breath ({len(table)} points) → {path}")
+        except Exception as e:                          # noqa: BLE001
+            self._set_status(f"Could not save table: {short_error(str(e))}")
 
     def _open_mech_advanced(self):
         """Every mechanics setting: breath segmentation, work-of-breathing source, the volume
@@ -3121,7 +3146,7 @@ class _MechanicsMixin:
             # Not title.lower(): "Campbell" is a proper noun (E.J.M. Campbell), so a bare
             # lower() would misspell it mid-sentence.
             tooltip_noun = "Campbell diagram" if poes else "flow-volume loop"
-            btn.setToolTip(f"Save the {tooltip_noun} as a PNG or PDF.")
+            btn.setToolTip(f"Save the {tooltip_noun} as a PNG or PDF, or its average breath as a CSV table.")
 
     def _draw_campbell_or_loop(self, breaths, pal=None):
         """Dispatch the Campbell panel to whichever diagram this signal set can actually
@@ -3234,7 +3259,8 @@ class _MechanicsMixin:
         Deliberately without the WOB/elastic-recoil overlay ``_overlay_campbell_work``
         draws for the Campbell diagram: every one of that overlay's own inputs
         (``wobtotal``, ``volumeavg``/``poesavg``, ``eelvavg``/``eilvavg``) comes from the
-        pressures family and is never computed for a Poes-less analysis."""
+        pressures family and is never computed for a Poes-less analysis (``volumeavg`` alone
+        is, and the CSV export reads it)."""
         self._campbell_breaths = breaths        # kept so the export can re-render it light
         pal = _plot_pal() if pal is None else pal
         fig = self.campbell.figure

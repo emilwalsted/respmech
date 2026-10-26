@@ -434,6 +434,7 @@ class SettingsScreen(QWidget):
         self.save_average = QCheckBox("Average breath-data workbook")
         self.save_bbb = QCheckBox("Breath-by-breath workbook (per file)")
         self.save_processed = QCheckBox("Processed-signal CSV (per file)")
+        self.save_pv_csv = QCheckBox("Average Campbell loop CSV (per file)")
         self.include_ignored = QCheckBox("Include excluded breaths in the processed CSV")
         self.save_pv_avg = QCheckBox("Campbell / PV diagram — averaged")
         self.save_pv_ind = QCheckBox("Campbell / PV diagram — individual breaths")
@@ -447,6 +448,9 @@ class SettingsScreen(QWidget):
                 (self.save_average, "output.data.save_average", "The across-breath average workbook."),
                 (self.save_bbb, "output.data.save_breath_by_breath", "A per-file breath-by-breath workbook."),
                 (self.save_processed, "output.data.save_processed", "The processed signal as a CSV per file."),
+                (self.save_pv_csv, "output.data.save_pv_average_csv",
+                 "The average breath's volume (and Poes) points, the ones the averaged Campbell "
+                 "diagram is drawn from, as a CSV per file, plus one for all files when there is more than one."),
                 (self.include_ignored, "output.data.include_ignored_breaths",
                  "Include the breaths you've excluded in the per-file processed-signal CSV only. "
                  "Excluded breaths are always left out of the averages and workbooks; this does not change them.")):
@@ -794,6 +798,7 @@ class SettingsScreen(QWidget):
             self.save_average.setChecked(d.save_average)
             self.save_bbb.setChecked(d.save_breath_by_breath)
             self.save_processed.setChecked(d.save_processed)
+            self.save_pv_csv.setChecked(d.save_pv_average_csv)
             self.include_ignored.setChecked(d.include_ignored_breaths)
             self.save_pv_avg.setChecked(dg.save_pv_average)
             self.save_pv_ind.setChecked(dg.save_pv_individual)
@@ -853,6 +858,7 @@ class SettingsScreen(QWidget):
         d.save_average = self.save_average.isChecked()
         d.save_breath_by_breath = self.save_bbb.isChecked()
         d.save_processed = self.save_processed.isChecked()
+        d.save_pv_average_csv = self.save_pv_csv.isChecked()
         d.include_ignored_breaths = self.include_ignored.isChecked()
         dg.save_pv_average = self.save_pv_avg.isChecked()
         dg.save_pv_individual = self.save_pv_ind.isChecked()
@@ -1137,6 +1143,8 @@ class SettingsScreen(QWidget):
                 got.append("normalised-EMG sheet")     # only when EMG channels are configured
         if self.save_processed.isChecked():
             got.append("Processed-signal CSV, one per recording")
+        if self.save_pv_csv.isChecked():
+            got.append("average Campbell loop CSV, one per recording (plus one for all files when there is more than one)")
         figs = diagnostic_figure_type_count(self.state.settings)
         if figs:
             got.append(f"{figs} diagnostic-figure type{'s' if figs != 1 else ''} per recording")
@@ -1182,7 +1190,7 @@ class SettingsScreen(QWidget):
         self.peepi_enabled.toggled.connect(self._on_field_changed)
         self.matlab_variant.currentIndexChanged.connect(self._on_field_changed)
         self.decimal_sep.currentIndexChanged.connect(self._on_field_changed)
-        for chk in (self.save_average, self.save_bbb, self.save_processed,
+        for chk in (self.save_average, self.save_bbb, self.save_processed, self.save_pv_csv,
                     self.include_ignored, self.save_pv_avg, self.save_pv_ind, self.save_raw_fig,
                     self.save_trimmed_fig, self.save_drift_fig, self.save_emg_fig):
             chk.toggled.connect(self._on_field_changed)

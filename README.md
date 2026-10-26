@@ -330,6 +330,14 @@ breaths, the bold one their average, the diagonal the elastic-recoil line joinin
 end-inspiration, and the shaded triangle the elastic component; the resistive component is the
 bulge of the trace away from that line. The loop's own enclosed area is not the work of breathing.
 
+To compare the average loop between conditions as numbers, tick **Average Campbell loop CSV (per
+file)** in Setup (`output.data.save_pv_average_csv`, off by default). Each file then gets
+`data/<file> – Campbell (average).csv`, with the columns `Phase` (`inspiration`/`expiration`), `Point`
+(1 to the number of resampling points, within each phase), `Volume` (L) and, when Poes is part of the
+analysis, `Poes` (cmH₂O); a batch of two or more files also gets `data/All files – Campbell
+(average).csv` with a leading `File` column. Preview & QC can save the same table for the file on
+screen (*Export Campbell…*, CSV). Without Poes the table holds the averaged volume only.
+
 ## Diaphragm EMG
 
 When EMG channels are present, each is conditioned in steps before its RMS envelope and (optionally)
@@ -383,7 +391,8 @@ Everything lands in the output folder you choose:
 
 * **`data/`** — Excel workbooks: the across-file averages, and (optionally) breath-by-breath
   values per file, plus a cohort summary. Each workbook carries its own Units and Provenance
-  sheets.
+  sheets. Optional CSVs: the processed signal per file, and the average Campbell loop (per file
+  and for all files).
 * **`diagnostics/`** — vector **PDF** figures per file: Campbell/PV loops (averaged and
   per breath), the analysed and raw signals, the staged volume correction, and per-channel
   EMG overviews at each conditioning stage (raw → ECG-removed → noise-reduced). Optionally the

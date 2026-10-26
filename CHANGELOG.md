@@ -5,6 +5,23 @@ Dates are the release (tag) date. See [Releasing](docs/RELEASING.md) for how a
 release is cut, and the [GitHub releases](https://github.com/emilwalsted/respmech/releases)
 for the installers themselves.
 
+## Unreleased
+
+- **The average Campbell loop as numbers.** The averaged Campbell loop used to exist only
+  as a figure. Tick *Average Campbell loop CSV
+  (per file)* in Setup (`output.data.save_pv_average_csv`, off by default) and a run writes
+  `<file> – Campbell (average).csv` to `data/`: one row per point of the average breath, with
+  the columns `Phase` (`inspiration` or `expiration`), `Point` (1 to the number of resampling
+  points, counted within each phase), `Volume` (L) and, when Poes is part of the analysis, `Poes`
+  (cmH₂O). Without Poes the file holds the averaged volume trace only. The values are the
+  average breath the figure is drawn from (and, with work of breathing taken from the average
+  breath, the workbooks), not a copy of the drawing. With two or more files, `All files – Campbell (average).csv` puts every
+  recording in one table with a leading `File` column, so conditions can be compared directly.
+  *Export Campbell…* (*Export flow-volume…* without Poes) in Preview & QC can now save the same
+  table as a CSV for the file on screen (without Poes the table is the file's averaged volume
+  trace, which the panel does not draw as such). An analysis that does not tick the box writes exactly
+  what it wrote before.
+
 ## v2.5.0 — 2026-10-16
 
 RespMech 2.5 analyses what you recorded, and a companion app, Adichtion, gets LabChart recordings out faster, without LabChart. Until now RespMech would not run without flow and all three pressures, and treated every breath as tidal. An analysis now starts from a signal set, from flow alone to the complete set, or EMG alone, and RespMech knows what a manoeuvre is: any breath can be typed as IC, FVC, maximal inspiratory effort or sniff. A typed FVC gives FVC, FEV1 and PEF, and an IC reference, even from another file, gives operating lung volumes once a VC or TLC is known. Adichtion is a free, open-source viewer and reader for macOS, Windows and Linux: it opens .adicht files, exports CSV that RespMech reads, and one command cuts an interval between two comments. Its Python library, on PyPI, reads a channel into numpy. Every new analysis feature is off until asked for, and the release notes name the few defaults and numbers that change.

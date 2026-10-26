@@ -1425,7 +1425,8 @@ def test_output_checkbox_groups_wrap_with_the_grouping_intact(qapp):
     tables = {sc._tables_flow.itemAt(i).widget() for i in range(sc._tables_flow.count())}
     diagnostics = {sc._diagnostics_flow.itemAt(i).widget()
                   for i in range(sc._diagnostics_flow.count())}
-    assert tables == {sc.save_average, sc.save_bbb, sc.save_processed, sc.include_ignored}
+    assert tables == {sc.save_average, sc.save_bbb, sc.save_processed, sc.save_pv_csv,
+                      sc.include_ignored}
     assert diagnostics == {sc.save_pv_avg, sc.save_pv_ind, sc.save_raw_fig,
                            sc.save_trimmed_fig, sc.save_drift_fig, sc.save_emg_fig}
     assert tables.isdisjoint(diagnostics)
