@@ -743,6 +743,10 @@ comment (like this one) so it stays invisible until asked for again:
 (nothing pending — ask for an update to populate this section)
 -->
 
+<!-- changelog-skip b860392 maintainer tooling and citation metadata only (tools/zenodo_backfill.py, its
+test, docs, .zenodo.json without title/related identifiers, CITATION.cff bumped to 2.5.0); nothing
+in the app or its output changes -->
+
 ## v2.4.0 — 2026-08-21
 
 The desktop app's workspace has been rebuilt around two tabs instead of three: Setup and
