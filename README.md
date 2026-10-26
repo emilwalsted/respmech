@@ -2,7 +2,7 @@
 
 _(c) Copyright 2019–2026 Emil Ingerslev Walsted (emilwalsted@gmail.com), ORCID [0000-0002-6640-7175](https://orcid.org/0000-0002-6640-7175)_
 
-[![DOI](https://zenodo.org/badge/191052676.svg)](https://zenodo.org/badge/latestdoi/191052676)
+[![DOI](https://zenodo.org/badge/doi/10.5281/zenodo.3270825.svg)](https://doi.org/10.5281/zenodo.3270825)
 
 RespMech analyses a time series of respiratory physiological recordings (e.g. exported from
 LabChart) breath by breath, and calculates:
@@ -440,7 +440,7 @@ I would appreciate a mention. This will also make readers of your papers aware t
 exists – if you found it useful, perhaps they will too.
 
 Every released version has its own DOI. Reference the latest via
-[![DOI](https://zenodo.org/badge/191052676.svg)](https://zenodo.org/badge/latestdoi/191052676),
+[![DOI](https://zenodo.org/badge/doi/10.5281/zenodo.3270825.svg)](https://doi.org/10.5281/zenodo.3270825),
 or cite a specific version using that version's DOI (click the badge for the list). See
 [CHANGELOG.md](CHANGELOG.md) for what changed between versions.
 
