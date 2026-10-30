@@ -70,9 +70,9 @@ respmech = "respmech.cli.__main__:main"
 respmech-gui = "respmech.ui.app:main"
 
 [project.urls]
-Homepage = "https://github.com/emilwalsted/respmech"
+Homepage = "https://www.respmech.dk/"
 Repository = "https://github.com/emilwalsted/respmech"
-Documentation = "https://github.com/emilwalsted/respmech/tree/master/docs"
+Documentation = "https://www.respmech.dk/documentation.html"
 Issues = "https://github.com/emilwalsted/respmech/issues"
 "Release notes" = "https://github.com/emilwalsted/respmech/releases"
 

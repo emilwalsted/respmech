@@ -4,6 +4,8 @@ _(c) Copyright 2019–2026 Emil Ingerslev Walsted (emilwalsted@gmail.com), ORCID
 
 [![DOI](https://zenodo.org/badge/doi/10.5281/zenodo.3270825.svg)](https://doi.org/10.5281/zenodo.3270825)
 
+Website and documentation: [www.respmech.dk](https://www.respmech.dk/)
+
 RespMech analyses a time series of respiratory physiological recordings (e.g. exported from
 LabChart) breath by breath, and calculates:
 
