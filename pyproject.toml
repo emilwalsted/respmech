@@ -138,6 +138,8 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_mfvl.py",
     "tests/unit/test_volume_segmentation_pairing.py",
     "tests/unit/test_no_breaths.py",
+    "tests/unit/test_emg_suggest.py",
+    "tests/unit/test_emg_characterisation.py",
 ]
 
 
