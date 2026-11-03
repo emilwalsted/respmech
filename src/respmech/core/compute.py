@@ -56,11 +56,18 @@ def zero(indata: Arr) -> Arr:
 def correctdrift(volume: Arr, settings: SimpleNamespace) -> Arr:
     xno = len(volume) - 1
     a = ((volume[xno]) - volume[0]) / xno
-    val = a
     corvol = np.zeros(len(volume))
-    for i in range(0, xno):
-        corvol[i] = volume[i] + val
-        val = val - a
+    if xno > 0:
+        # Vectorised form of the original per-sample loop
+        #     val = a; for i in range(xno): corvol[i] = volume[i] + val; val = val - a
+        # ufunc.accumulate adds strictly in sequence (no pairwise reordering), and
+        # x + (-a) is exactly x - a in IEEE arithmetic, so the offsets are the SAME
+        # running sums the loop built, in a's own dtype, and volume[:xno] + offsets is
+        # the same elementwise addition. Bit-identical, pinned by
+        # tests/unit/test_correctdrift_reference.py. The last sample stays 0, as before.
+        steps = np.full(xno, -a)
+        steps[0] = a
+        corvol[:xno] = volume[:xno] + np.add.accumulate(steps)
     return corvol
 
 
