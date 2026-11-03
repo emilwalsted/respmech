@@ -49,8 +49,8 @@ golden tests were never run against a mutant they would have caught (a sign flip
 | --- | ---: | ---: | ---: | ---: | --- |
 | `core/entropy.py` | 364 | 302 | 62 | 83.0 % | `sample_entropy` alone: 182 of 214 (85.0 %); one timeout counted as killed |
 | `core/noise.py` | 527 | 440 | 87 | 83.5 % | after `test_noise_characterisation.py` |
-| `core/compute.py` | | | | | not run yet |
-| `core/emg.py` | | | | | not run yet |
+| `core/compute.py` | 2552 | 1934 | 618 | 75.8 % | 31 of the survivors have no covering test; two timeouts counted as killed; survivors not yet classified |
+| `core/emg.py` | 1677 | 1298 | 379 | 77.4 % | after `test_emg_characterisation.py` and adding `test_emg_suggest.py` (42.4 % before) |
 | `analysis/segments.py` | 1049 | 939 | 110 | 89.5 % | after `test_segments_characterisation.py` (83.6 % before) |
 | `analysis/manoeuvres.py` | 570 | 550 | 20 | 96.5 % | after `test_manoeuvres_characterisation.py` (79.8 % before) |
 
@@ -88,6 +88,27 @@ EMG-like signal (rtol 1e-9). What survives:
   fidelity target), which a real recording does not hit;
 - not covered, left on purpose: the wording and threshold of the "too few STFT frames"
   warning and the exact boundary of the "reference too short" error.
+
+### `core/emg.py`
+
+The golden suite only reaches the default RMS window and the ECG subtraction it uses, so
+the first run killed 711 of 1677 mutants (42.4 %). 647 of the holes were in
+`suggest_ecg_settings`, whose own tests (`test_emg_suggest.py`) were not in the
+selection; the rest were the fields, messages and boundaries of `detection_quality` and
+`gated_peak_rms`, single-channel input to the gate, the short-input guards of
+`rolling_rms` and `peak_window_rms`, `timeshift` at its edges, and the degenerate and
+clipped-tail windows of `calculate_rms`. `tests/unit/test_emg_characterisation.py`
+covers those from the docstrings (the exact 40 % survival and 0.4 s island, the 2 %
+long-interval limit, the 10 % ceiling margin, the gate of `round(gate * fs)` samples on
+both sides of a peak) and pins the auto-suggested settings on four fixed signals. With
+both files in the selection 1298 of 1677 are killed (77.4 %).
+
+The 379 survivors are not classified one by one yet. Most sit in `suggest_ecg_settings`
+(167) and in the candidate narrowing of the two ECG template fits (`_shift_candidates`,
+`_amplitude_candidates`, `_ssd_band` and the two sweeps, about 120): those helpers only
+narrow the candidate list and the original loop still picks the winner, so a mutant
+that widens the list is equivalent by design, while one that narrows it wrongly is a real
+hole. Telling the two apart is the next step.
 
 ### `analysis/segments.py`
 
