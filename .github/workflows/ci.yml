@@ -399,6 +399,9 @@ jobs:
       # the step red on its own.
       - name: Type check the engine modules (mypy --strict, non-blocking)
         continue-on-error: true
+        # Its own limit, well inside the job's 15 minutes: continue-on-error does not
+        # cover a job timeout, so a hung install must end the step, not the job.
+        timeout-minutes: 5
         run: |
           pip install "mypy==2.4.1"
           python -m mypy --strict --follow-imports=silent --ignore-missing-imports \
