@@ -292,3 +292,20 @@ def test_repeatability_exactly_at_the_tolerance_is_not_flagged_and_never_twice()
     m.apply_repeatability(rows, IcSettings())
     m.apply_repeatability(rows, IcSettings())
     assert rows[1]["quality"] == ["NOT_REPEATABLE"]
+
+
+def test_a_single_preceding_breath_reports_no_spread():
+    ns = _legacy_settings(ic=IcSettings(preceding_breaths=1, min_preceding_breaths=1))
+    out = m.extract(_ic_breath(3, eelv=2.0), "ic", [_tidal_breath(2, eelv=0.6)],
+                    CAPS_FLOW_ONLY, ns)
+    assert out["ic_eelv_pre_sd"] == 0.0
+
+
+@pytest.mark.parametrize("first,second,expected", [
+    ([0.0, 0.1, 3.0], [0.0, 2.0, 2.5], 1),    # last minus first, not the second-to-last
+    ([0.0, 2.9, 3.0], [0.0, 0.1, 2.5], 1),    # and not from the second sample
+])
+def test_suggest_fvc_duration_spans_first_to_last_sample(first, second, expected):
+    breaths = {1: {"expiration": _exp_with_times(first)},
+               2: {"expiration": _exp_with_times(second)}}
+    assert m.suggest_fvc(breaths) == expected

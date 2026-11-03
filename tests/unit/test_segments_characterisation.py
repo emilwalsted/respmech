@@ -314,3 +314,48 @@ def test_emg_burst_segments_carry_the_file_and_the_lookups():
         _check_segment(seg, number, onsets[number - 1], ends[number - 1], timecol, emg, ent,
                        "e.csv", number == 2, {4: "rest"}.get(number))
         assert seg["emg_seg_qc"]["emg_seg_n_bursts"] == 6.0
+
+
+def _crowded():
+    """Bursts of 0.6 s in pairs 0.15 s apart, a burst from the very first sample, an
+    augmenting (ramp) burst and a 50 ms spike, on a negative offset with a slow drift."""
+    rng = np.random.default_rng(11)
+    n = 14 * FS
+    t = np.arange(n) / FS
+    amp = np.full(n, 0.04)
+    spans = [(0.0, 0.8), (2.0, 2.6), (2.75, 3.35), (5.0, 5.6), (5.7, 6.3), (8.0, 8.05),
+             (9.0, 10.2), (12.0, 12.9)]
+    for k, (a, b) in enumerate(spans):
+        idx = (t >= a) & (t < b)
+        amp[idx] = 0.04 + (t[idx] - a) / (b - a) if k == 6 else 1.0
+    x = amp * np.sin(2 * np.pi * 70 * t) - 0.2 + 0.03 * np.sin(2 * np.pi * 0.05 * t)
+    return x + 0.01 * rng.normal(size=n)
+
+
+@pytest.mark.parametrize("min_s,onsets,offsets,coarse_on,coarse_off", [
+    # the 50 ms spike is exactly min_s long at 0.1 s and is kept; at 0.2 s it is dropped
+    (0.1, [0, 1002, 2500, 3988, 4749, 6002], [400, 1677, 3150, 4038, 5117, 6452],
+     [0, 978, 2478, 3978, 4589, 5978], [424, 1699, 3174, 4049, 5124, 6474]),
+    (0.2, [0, 1002, 2500, 4749, 6002], [400, 1677, 3150, 5117, 6452],
+     [0, 978, 2478, 4589, 5978], [424, 1699, 3174, 5124, 6474]),
+])
+def test_detect_bursts_pinned_on_crowded_bursts(min_s, onsets, offsets, coarse_on, coarse_off):
+    det = sg.detect_bursts(_crowded(), FS, threshold_frac=0.3, min_s=min_s, smooth_s=0.1,
+                           min_contrast=3.0)
+    assert det.onsets.tolist() == onsets
+    assert det.offsets.tolist() == offsets
+    assert det.coarse_onsets.tolist() == coarse_on
+    assert det.coarse_offsets.tolist() == coarse_off
+    assert det.contrast == pytest.approx(23.879218848356423, rel=1e-9)
+
+
+def test_no_contrast_message_in_full():
+    noise = np.random.default_rng(2).normal(size=(4 * FS, 1))
+    with pytest.raises(EmgSegmentationError) as err:
+        sg.detect_bursts(noise, FS, threshold_frac=0.3, min_s=0.2, smooth_s=0.1,
+                         min_contrast=3.0, filename="n.csv")
+    assert str(err.value) == (
+        "No EMG bursts found in n.csv: the envelope of no channel rises to 3 times its "
+        "resting level, or that resting level cannot be separated from the bursts, so "
+        "there is nothing to segment (lower processing.segmentation.emg.burst_min_contrast "
+        "only if the bursts are real, or use whole_file/separators/fixed_windows instead).")
