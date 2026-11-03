@@ -142,11 +142,6 @@ pytest_add_cli_args_test_selection = [
     "tests/unit/test_emg_characterisation.py",
     "tests/unit/test_compute_characterisation.py",
     "tests/unit/test_volume_trend.py",
-    "tests/unit/test_breath_types.py",
-    "tests/unit/test_poes_only.py",
-    "tests/unit/test_pipeline_bad_files.py",
-    "tests/unit/test_single_column_channels.py",
-    "tests/unit/test_reference_resolution.py",
 ]
 
 
