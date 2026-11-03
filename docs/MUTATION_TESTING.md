@@ -49,7 +49,7 @@ golden tests were never run against a mutant they would have caught (a sign flip
 | --- | ---: | ---: | ---: | ---: | --- |
 | `core/entropy.py` | 364 | 302 | 62 | 83.0 % | `sample_entropy` alone: 182 of 214 (85.0 %); one timeout counted as killed |
 | `core/noise.py` | 527 | 440 | 87 | 83.5 % | after `test_noise_characterisation.py` |
-| `core/compute.py` | 2552 | 1934 | 618 | 75.8 % | 31 of the survivors have no covering test; two timeouts counted as killed; survivors not yet classified |
+| `core/compute.py` | 2552 | 2132 | 420 | 83.5 % | after `test_compute_characterisation.py` and adding `test_volume_trend.py` (75.8 % before); 12 of the survivors have no covering test; two timeouts counted as killed; partly classified |
 | `core/emg.py` | 1677 | 1298 | 379 | 77.4 % | after `test_emg_characterisation.py` and adding `test_emg_suggest.py` (42.4 % before) |
 | `analysis/segments.py` | 1049 | 939 | 110 | 89.5 % | after `test_segments_characterisation.py` (83.6 % before) |
 | `analysis/manoeuvres.py` | 570 | 550 | 20 | 96.5 % | after `test_manoeuvres_characterisation.py` (79.8 % before) |
@@ -88,6 +88,41 @@ EMG-like signal (rtol 1e-9). What survives:
   fidelity target), which a real recording does not hit;
 - not covered, left on purpose: the wording and threshold of the "too few STFT frames"
   warning and the exact boundary of the "reference too short" error.
+
+### `core/compute.py`
+
+The first run killed 1934 of 2552 mutants (75.8 %). Two groups of survivors were real
+holes, and a third was false:
+
+- `_add_gated_peaks` (88 survivors): no test ran the cardiac-gated peak EMG with real
+  R-peaks, only its NaN branches, so the phase-local peak positions, the per-phase quality
+  flags and the reason that names the failing phase were unchecked;
+- `calculatemechanics` (59): nothing checked the breath fields the plots, the loop export
+  and the preview read (`eilv`, `eelv`, `eilvavg`, `eelvavg`, `volumeavg`, `poesavg`), the
+  sample taken when a phase passes exactly through its mid-volume level, a Poes swing of
+  exactly 1 in the VMR division, a PTP baseline window shorter than one sample, the default
+  capabilities of a hand-built settings object, or that the cancel check reaches the EMG
+  features;
+- false: the volume trend correction has its own tests (`test_volume_trend.py`), but they
+  were not in the selection, so even `volume + trend` instead of `volume - trend` survived.
+
+`tests/unit/test_compute_characterisation.py` covers the first two on small hand-built
+breaths whose values make each comparison decidable (the mid-volume samples sit exactly
+on the level, the end-inspiratory minus end-expiratory Poes is exactly 1, the R-peaks sit
+on an absolute clock that does not start at 0); the expected gated values come from
+calling `gated_peak_rms` directly with the phase-local positions. With that file and
+`test_volume_trend.py` in the selection, 2132 of 2552 are killed (83.5 %):
+`_add_gated_peaks` went from 88 survivors to 11, `calculatemechanics` from 59 to 8,
+`correcttrend` from 48 to 25 and `trend_anchors` from 36 to 16.
+
+Five more unit test files that call into `compute` (`test_breath_types.py`,
+`test_poes_only.py`, `test_pipeline_bad_files.py`, `test_single_column_channels.py` and
+`test_reference_resolution.py`) are green on the mutated copy, but with them in the
+selection mutmut's stats phase ended without an error and without running a single
+mutant; the cause is not found, so they are left out for now. `test_error_messages.py`
+cannot be in the selection at all: it reads the source files and fails on the mutants'
+own strings. The remaining survivors, most of them in the two breath separators,
+`trim_boundary_notices`, `apply_segmentation_overrides` and `trim`, are not classified yet.
 
 ### `core/emg.py`
 
