@@ -51,8 +51,8 @@ golden tests were never run against a mutant they would have caught (a sign flip
 | `core/noise.py` | 527 | 440 | 87 | 83.5 % | after `test_noise_characterisation.py` |
 | `core/compute.py` | | | | | not run yet |
 | `core/emg.py` | | | | | not run yet |
-| `analysis/segments.py` | | | | | not run yet |
-| `analysis/manoeuvres.py` | | | | | not run yet |
+| `analysis/segments.py` | 1049 | 939 | 110 | 89.5 % | after `test_segments_characterisation.py` (83.6 % before) |
+| `analysis/manoeuvres.py` | 570 | 550 | 20 | 96.5 % | after `test_manoeuvres_characterisation.py` (79.8 % before) |
 
 ### `core/entropy.py`
 
@@ -88,3 +88,61 @@ EMG-like signal (rtol 1e-9). What survives:
   fidelity target), which a real recording does not hit;
 - not covered, left on purpose: the wording and threshold of the "too few STFT frames"
   warning and the exact boundary of the "reference too short" error.
+
+### `analysis/segments.py`
+
+The existing segmentation tests check how many segments come out and how long they
+are. Before any new test, 877 of 1049 mutants were killed (83.6 %): nothing checked a
+segment's `name`, `breathcnt` or `filename`, the `ignored`/`kind` lookups for any segment
+but number 1, the slicing of the entropy columns, the treatment of non-finite samples in
+`rms_envelope` and `_detrend`, the boundaries of the fixed-window and separator rules,
+or the onsets and offsets of the burst detector.
+`tests/unit/test_segments_characterisation.py` compares `rms_envelope` and `_detrend`
+with a per-sample loop written from their docstrings (dropouts at both ends and inside,
+windows from 1 sample to longer than the signal), checks every field of the segments the
+four methods return, the window that exactly fills the recording, the separator on the
+last sample, and pins the burst detector on two synthetic recordings: separated bursts on
+four channels (one all NaN, one noise) and crowded bursts with a burst from the first
+sample, an augmenting burst and a spike exactly `burst_min_s` long.
+
+After these tests 939 of 1049 are killed (89.5 %). What survives is equivalent or left
+on purpose:
+
+- equivalent: `dtype` defaults on data that is already float or integer, `reshape(None)`
+  on data that is already 1-D, slicing a 2-D matrix with or without `, :`, `numpy.errstate`
+  arguments (they only silence warnings), an unused variable (`n` in `detect_bursts`), a
+  slice end of `None` instead of the recording length, the upper clip of a window index
+  that never exceeds it, the `max(1, ...)` floor of windows that are never shorter than
+  two samples at the engine's settings, the merge loop for a single burst, the scaling of
+  the power trace (the edge refinement uses a level relative to its own peak), defaults
+  of `dict.get` and keyword arguments that every caller passes, and the `nan`/`inf`
+  spellings `float()` accepts in any case;
+- not covered, left on purpose: exact float ties in the hysteresis, contrast, merge and
+  minimum-duration comparisons; the lower clip of the activation traces, which only
+  matters when one of several channels dips below its own resting level while another is
+  near the threshold; a 21st instead of 20th percentile for the power baseline; the
+  file name in the error raised when `emg_burst` finds no bursts; and those parts of the
+  edge refinement (`_refine_edges`) that only matter when two bursts are so close that
+  their search windows overlap. The refinement is pinned on the two recordings above, and
+  its constants are starting values the decisions log says will be measured on real tidal
+  EMG before they are frozen.
+
+### `analysis/manoeuvres.py`
+
+Before any new test, 455 of 570 mutants were killed (79.8 %). The holes were real: every
+IC test used an end-expiratory volume of 0 (so `max - eelv` and `max + eelv` agreed), the
+Poes limb of the low-effort check never fired, no sniff test had an expiration that went
+further than its inspiration, the per-channel EMG reference was only checked for being
+positive, no FVC expiration started after 0 s, and no repeatability test used the median
+or a centre of exactly 1. `tests/unit/test_manoeuvres_characterisation.py` covers each
+of these from the documented definitions, including the exact boundaries (half the tidal
+median, the EELV tolerance, the 1 s FVC minimum, the repeatability fraction).
+
+After these tests 550 of 570 are killed (96.5 %). What survives is equivalent: `dtype`
+defaults on data that is already float, defaults of
+`dict.get` for keys every breath dict carries, a typed breath that is never in its own
+tidal list (`<` against `<=` on the breath number), a tidal median of exactly 0, a
+`sd >= 0` guard whose ratio is then 0, and the starting value of the "longest so far" in
+`suggest_fvc`, which any duration beats. Left uncovered: whether a tidal breath whose
+inspiration has a single Poes sample (or none, which segmentation never produces) takes
+part in the Poes median of the low-effort check.
