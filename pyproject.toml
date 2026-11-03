@@ -120,6 +120,8 @@ pytest_add_cli_args = ["-p", "no:cacheprovider", "-q"]
 pytest_add_cli_args_test_selection = [
     "tests/golden/test_golden.py",
     "tests/unit/test_entropy_helpers.py",
+    "tests/unit/test_sample_entropy_reference.py",
+    "tests/unit/test_cancel.py",
     "tests/unit/test_noise.py",
     "tests/unit/test_ptp.py",
     "tests/unit/test_manoeuvres.py",
