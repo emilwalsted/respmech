@@ -214,3 +214,19 @@ def test_stage_ecg_reduction_reports_suppression_matching_the_pipeline(tmp_path)
     data_off = stage_ecg_reduction(s_off, str(path))
     assert data_off["ecg_applied"] is False
     assert data_off["suppression"] is None
+
+
+def test_remove_ecg_returns_one_c_ordered_array_matching_the_row_list():
+    # remove_ecg used to return a list of per-sample rows that every caller re-stacked
+    # with np.array; it now returns that stacked array itself. Pin that the values,
+    # dtype, shape and C memory layout are exactly what the old round trip produced.
+    emg, _tp, fs = _make_signal(seed=2)
+    kw = dict(samplingfrequency=fs, ecgminheight=0.2, ecgmindistance=0.5,
+              ecgminwidth=0.001, windowsize=0.4)
+    processed, _w, _p = E.remove_ecg(emg.copy(), emg[:, 0], **kw)
+    assert isinstance(processed, np.ndarray)
+    assert processed.shape == emg.shape
+    assert processed.flags["C_CONTIGUOUS"]
+    old_style = np.array(list(processed))
+    assert old_style.dtype == processed.dtype
+    assert old_style.tobytes() == np.array(processed).tobytes()

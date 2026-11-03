@@ -227,7 +227,7 @@ def amplitude_average(ecgdata: NDArray[Any], avgdata: NDArray[Any], rangefactor:
 
 def subtractecg(ch: ArrayLike, peaks: NDArray[np.intp], samplingfrequency: float,
                 windowsize: float, cancel_check: Callable[[], bool] | None = None,
-                ) -> tuple[list[NDArray[Any]], list[list[Any]]]:
+                ) -> tuple[NDArray[Any], list[list[Any]]]:
     from respmech.core._cancel import check as _ck
     emgecgchannels = list(np.array(ch).T)
     retch: list[NDArray[Any]] = []
@@ -278,7 +278,12 @@ def subtractecg(ch: ArrayLike, peaks: NDArray[np.intp], samplingfrequency: float
                 adjwindow = list(ecgwindow - fittedavg)
                 emgecgch[peak - ecgwindowstart:peak + ecgwindowend] = adjwindow
         retch += [emgecgch]
-    return list(np.array(retch).T), retwindows
+    # One C-ordered (samples, channels) array: the same values, dtype and memory layout
+    # that np.array() of the former list-of-rows return produced, without building
+    # (and making every caller re-stack) one tiny array per sample -- on a 60-minute
+    # 2 kHz recording that round trip alone was ~5 s. Every caller wraps the result
+    # in np.array/np.asarray already.
+    return np.ascontiguousarray(np.array(retch).T), retwindows
 
 
 def _merge_peaks_by_distance(pos: NDArray[Any], pos_h: NDArray[Any], neg: NDArray[Any],
@@ -309,7 +314,7 @@ def _merge_peaks_by_distance(pos: NDArray[Any], pos_h: NDArray[Any], neg: NDArra
 def remove_ecg(emgecgchannels: ArrayLike, peakch: NDArray[Any], samplingfrequency: float,
                ecgminheight: float, ecgmindistance: float, ecgminwidth: float,
                windowsize: float, cancel_check: Callable[[], bool] | None = None,
-               ) -> tuple[list[NDArray[Any]], list[list[Any]], NDArray[np.float64]]:
+               ) -> tuple[NDArray[Any], list[list[Any]], NDArray[np.float64]]:
     # DC-removed, matching suggest_ecg_settings's detector exactly:
     # previously this ran on the raw channel while Auto-suggest derived ecgminheight from
     # a median-subtracted copy, so a channel with a DC offset made the suggested height
