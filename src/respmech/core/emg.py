@@ -278,12 +278,23 @@ def subtractecg(ch: ArrayLike, peaks: NDArray[np.intp], samplingfrequency: float
                 adjwindow = list(ecgwindow - fittedavg)
                 emgecgch[peak - ecgwindowstart:peak + ecgwindowend] = adjwindow
         retch += [emgecgch]
-    # One C-ordered (samples, channels) array: the same values, dtype and memory layout
-    # that np.array() of the former list-of-rows return produced, without building
-    # (and making every caller re-stack) one tiny array per sample -- on a 60-minute
-    # 2 kHz recording that round trip alone was ~5 s. Every caller wraps the result
-    # in np.array/np.asarray already.
-    return np.ascontiguousarray(np.array(retch).T), retwindows
+    return _stack_channels(retch), retwindows
+
+
+def _stack_channels(retch: list[NDArray[Any]]) -> NDArray[Any]:
+    """Stack per-channel results into one C-ordered (samples, channels) array.
+
+    The same values, dtype, shape and memory layout that ``np.array()`` of the former
+    list-of-rows return (``list(np.array(retch).T)``) produced, without building (and
+    making every caller re-stack) one tiny array per sample: on a 60-minute 2 kHz
+    recording that round trip alone was ~5 s. Every caller wraps the result in
+    np.array/np.asarray already. A recording without samples keeps the old round
+    trip, whose shape (0,) differs from the stacked (0, channels).
+    """
+    stacked = np.array(retch).T
+    if stacked.shape[0] == 0:
+        return np.array(list(stacked))
+    return np.ascontiguousarray(stacked)
 
 
 def _merge_peaks_by_distance(pos: NDArray[Any], pos_h: NDArray[Any], neg: NDArray[Any],

@@ -227,6 +227,18 @@ def test_remove_ecg_returns_one_c_ordered_array_matching_the_row_list():
     assert isinstance(processed, np.ndarray)
     assert processed.shape == emg.shape
     assert processed.flags["C_CONTIGUOUS"]
-    old_style = np.array(list(processed))
-    assert old_style.dtype == processed.dtype
-    assert old_style.tobytes() == np.array(processed).tobytes()
+
+
+@pytest.mark.parametrize("dtype", [np.float64, np.float32, np.int64])
+@pytest.mark.parametrize("n_samples, n_channels", [(0, 1), (0, 3), (1, 1), (5, 1), (7, 3)])
+def test_stack_channels_matches_the_former_list_of_rows_round_trip(dtype, n_samples, n_channels):
+    # Reference: what remove_ecg returned before (a list of per-sample rows) after the
+    # np.array every caller applies. Values, dtype, shape and bytes must be identical,
+    # including the shape of a recording without samples.
+    rng = np.random.default_rng(n_samples * 10 + n_channels)
+    retch = [(rng.standard_normal(n_samples) * 100).astype(dtype) for _ in range(n_channels)]
+    old = np.array(list(np.array(retch).T))
+    new = np.array(E._stack_channels(retch))
+    assert new.dtype == old.dtype
+    assert new.shape == old.shape
+    assert new.tobytes() == old.tobytes()
