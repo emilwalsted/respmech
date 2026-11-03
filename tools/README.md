@@ -85,3 +85,12 @@ After copying the renamed files into `respmech-website`: run
 `python3 tools/generate-image-variants.py` (AVIF/WebP) and
 `python3 tools/version-assets.py` (cache-bust hashes) there, and update any
 `width`/`height` attribute that changed.
+
+## Profiling a large recording
+
+`profile_large_recording.py` scales the bundled synthetic sample to any length and
+sampling rate (for example `python tools/profile_large_recording.py 60 2000 /tmp/prof`
+for one hour at 2 kHz with every signal), runs the full batch and the writers under
+cProfile, and records a hash of every output table so a performance change can be
+proven bit-identical by diffing two runs' `hashes.txt`. The measured hot spots and
+the optimisations made or declined are in `docs/PROFILING.md`.

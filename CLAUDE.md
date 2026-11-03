@@ -494,6 +494,9 @@ instrument.
   `OrderedDict[str, Any]`, and the legacy settings namespace is `SimpleNamespace`. Keep
   new code in those modules annotated; a `# type: ignore[...]` must name its code and
   say why. Mutation testing of the same modules: `docs/MUTATION_TESTING.md`.
+  Profiling of a full one-hour 2 kHz analysis, and which optimisations were made or
+  declined and why: `docs/PROFILING.md` (`tools/profile_large_recording.py` proves a
+  speed-up bit-identical by diffing two runs' output hashes).
 
 ## Release (one tag triggers everything)
 
