@@ -45,6 +45,13 @@ golden tests were never run against a mutant they would have caught (a sign flip
 
 ## Status
 
+The numbers below were measured at commit `a319a59`, before the strict type annotations
+and the two optimisations in `correctdrift` and the ECG subtraction's return value
+(`docs/PROFILING.md`). The annotations add no statement that runs, but they and the two
+optimisations change the source mutmut mutates, so the mutant count and the exact score
+will differ slightly on a fresh run; rerun all six modules from an empty `mutants/`
+before quoting a number for a later commit.
+
 | Module | Mutants | Killed | Survived | Score | Notes |
 | --- | ---: | ---: | ---: | ---: | --- |
 | `core/entropy.py` | 364 | 302 | 62 | 83.0 % | `sample_entropy` alone: 182 of 214 (85.0 %); one timeout counted as killed |
