@@ -12,19 +12,28 @@ The spectral noise-reduction helpers below (adapted, with permission, from code 
 Tim Sainburg, https://timsainburg.com; require ``librosa``) are shared with the live
 shared-profile path in ``core.noise``.
 """
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING, Any, cast
+
 import numpy as np
 import scipy as sp
 from scipy import signal
 from numpy.lib.stride_tricks import sliding_window_view as _swv
 
+if TYPE_CHECKING:
+    from numpy.typing import ArrayLike, NDArray
+
 # librosa is only needed when noise reduction is used; the STFT helpers import it
 # lazily so ECG removal / RMS work without it.
-np.float = float  # compat shim for older third-party code paths
+np.float = float  # type: ignore[attr-defined]  # compat shim for older third-party code paths
 
 
-def calculate_rms(emgchannels, rms_s, samplingfrequency):
-    rms = []
-    intemg = []
+def calculate_rms(emgchannels: NDArray[Any], rms_s: float,
+                  samplingfrequency: float) -> tuple[list[Any], list[Any]]:
+    rms: list[Any] = []
+    intemg: list[float] | NDArray[np.float64] = []
     for emgch in emgchannels.T:
         # Root mean square (max sliding-window RMS over the breath)
         rollingwindowsize = int(rms_s * samplingfrequency)
@@ -82,7 +91,7 @@ def calculate_rms(emgchannels, rms_s, samplingfrequency):
     return rms + [np.max(rms), np.mean(rms)], list(intemg) + [np.max(intemg), np.mean(intemg)]
 
 
-def timeshift(inputarray, shift):
+def timeshift(inputarray: NDArray[Any], shift: int) -> NDArray[Any]:
     if (shift == 0) or (shift >= len(inputarray)):
         return inputarray
     ret = np.empty_like(inputarray)
@@ -115,7 +124,8 @@ def timeshift(inputarray, shift):
 #
 # Every helper falls back to the full candidate list whenever its bound cannot be trusted.
 
-def _ssd_band(approx, terms_scale, nterms, candidates):
+def _ssd_band(approx: NDArray[np.float64], terms_scale: float, nterms: int,
+              candidates: NDArray[Any]) -> NDArray[Any]:
     """Candidates whose exact SSD could still be the minimum, or all of them on doubt."""
     if not np.all(np.isfinite(approx)):
         # Non-finite data: hand the whole sweep back so the original loop reproduces its
@@ -128,7 +138,8 @@ def _ssd_band(approx, terms_scale, nterms, candidates):
     return candidates[keep]
 
 
-def _shift_candidates(ecg, avg, shifts):
+def _shift_candidates(ecg: NDArray[Any], avg: NDArray[Any],
+                      shifts: NDArray[np.int_]) -> NDArray[Any]:
     """Narrow the shift sweep using SSD(t) = <e,e> - 2*corr(t) + <s_t,s_t>."""
     L = avg.size
     if L == 0 or shifts.size == 0 or ecg.shape != avg.shape:
@@ -157,7 +168,8 @@ def _shift_candidates(ecg, avg, shifts):
     return _ssd_band(approx, scale, L, shifts)
 
 
-def _amplitude_candidates(ecg, avg, amps):
+def _amplitude_candidates(ecg: NDArray[Any], avg: NDArray[Any],
+                          amps: NDArray[np.float64]) -> NDArray[Any]:
     """Narrow the amplitude sweep using SSD(a) = <e,e> - 2a<e,v> + a^2<v,v>."""
     if amps.size == 0 or ecg.size == 0 or ecg.shape != avg.shape:
         return amps
@@ -172,7 +184,8 @@ def _amplitude_candidates(ecg, avg, amps):
     return _ssd_band(approx, scale, ecg.size, amps)
 
 
-def timeshift_average(ecgdata, avgdata, tmin, tmax):
+def timeshift_average(ecgdata: ArrayLike, avgdata: NDArray[Any], tmin: int,
+                      tmax: int) -> tuple[int, NDArray[Any] | None]:
     # Narrowing only -- the loop below is the original, unchanged.
     shifts = np.arange(tmin, tmax + 1)
     _e = ecgdata if type(ecgdata) is np.ndarray else np.array(ecgdata)
@@ -180,7 +193,7 @@ def timeshift_average(ecgdata, avgdata, tmin, tmax):
 
     lowest = np.inf
     tlowest = 0
-    tavg = None
+    tavg: NDArray[Any] | None = None
     for t in candidates:
         t = int(t)
         shiftedavg = timeshift(avgdata, t)
@@ -193,14 +206,15 @@ def timeshift_average(ecgdata, avgdata, tmin, tmax):
     return tlowest, tavg
 
 
-def amplitude_average(ecgdata, avgdata, rangefactor, steps):
+def amplitude_average(ecgdata: NDArray[Any], avgdata: NDArray[Any], rangefactor: float,
+                      steps: int) -> tuple[float, NDArray[Any] | None]:
     amplitudes = np.linspace(-1 * rangefactor, rangefactor, steps)
     # Narrowing only -- the loop below is the original, unchanged.
     candidates = _amplitude_candidates(np.asarray(ecgdata), np.asarray(avgdata), amplitudes)
 
     lowest = np.inf
-    alowest = 0
-    aavg = None
+    alowest: float = 0
+    aavg: NDArray[Any] | None = None
     for a in candidates:
         ampavg = avgdata * a
         newa = np.sum(np.square(ecgdata - ampavg))
@@ -211,15 +225,17 @@ def amplitude_average(ecgdata, avgdata, rangefactor, steps):
     return alowest, aavg
 
 
-def subtractecg(ch, peaks, samplingfrequency, windowsize, cancel_check=None):
+def subtractecg(ch: ArrayLike, peaks: NDArray[np.intp], samplingfrequency: float,
+                windowsize: float, cancel_check: Callable[[], bool] | None = None,
+                ) -> tuple[list[NDArray[Any]], list[list[Any]]]:
     from respmech.core._cancel import check as _ck
     emgecgchannels = list(np.array(ch).T)
-    retch = []
+    retch: list[NDArray[Any]] = []
     chno = 0
     for emgecgch in emgecgchannels:
         _ck(cancel_check)                 # abort a superseded preview job between channels
         chno += 1
-        ecgwindows = []
+        ecgwindows: list[NDArray[Any]] = []
         ecgwindowstart = int(windowsize * samplingfrequency / 2)
         ecgwindowend = int(windowsize * samplingfrequency / 2)
         shiftinterval = int(0.2 * samplingfrequency)
@@ -230,14 +246,16 @@ def subtractecg(ch, peaks, samplingfrequency, windowsize, cancel_check=None):
                 ecgwindow = np.array(emgecgch[peak - ecgwindowstart:peak + ecgwindowend])
                 if len(ecgwindows) > 0:
                     _, ecgavgtime = timeshift_average(ecgwindows[0], ecgwindow, -shiftinterval, shiftinterval)
-                    ecgwindows += [ecgavgtime]
+                    # None only for non-finite windows, which fail downstream as before;
+                    # cast() is a typing no-op and changes nothing at runtime.
+                    ecgwindows += [cast('NDArray[Any]', ecgavgtime)]
                 else:
                     ecgwindows += [ecgwindow]
 
         ecgavg = np.mean(ecgwindows, axis=0)
 
         # Subtract average ECG from EMG
-        retwindows = []
+        retwindows: list[list[Any]] = []
         for peak in peaks:
             _ck(cancel_check)             # the 1000-step amplitude sweep per peak is the hot spot
             partial = False
@@ -255,14 +273,16 @@ def subtractecg(ch, peaks, samplingfrequency, windowsize, cancel_check=None):
                 ecgwindow = np.array(emgecgch[peak - ecgwindowstart:peak + ecgwindowend])
                 retwindows += [[peak - ecgwindowstart, peak + ecgwindowend]]
                 _, ecgavgtime = timeshift_average(ecgwindow, ecgavg, -shiftinterval, shiftinterval)
-                _, fittedavg = amplitude_average(ecgwindow, ecgavgtime, 1.25, 1000)
+                _, fittedavg = amplitude_average(ecgwindow, cast('NDArray[Any]', ecgavgtime),
+                                                 1.25, 1000)
                 adjwindow = list(ecgwindow - fittedavg)
                 emgecgch[peak - ecgwindowstart:peak + ecgwindowend] = adjwindow
         retch += [emgecgch]
     return list(np.array(retch).T), retwindows
 
 
-def _merge_peaks_by_distance(pos, pos_h, neg, neg_h, min_distance):
+def _merge_peaks_by_distance(pos: NDArray[Any], pos_h: NDArray[Any], neg: NDArray[Any],
+                             neg_h: NDArray[Any], min_distance: float) -> NDArray[Any]:
     """Union two polarities' peak indices, keeping only the taller of any two peaks
     (one from each polarity) closer together than ``min_distance``: a single biphasic
     R-wave must count once, not once per lobe. Ties keep the positive-polarity peak,
@@ -286,7 +306,10 @@ def _merge_peaks_by_distance(pos, pos_h, neg, neg_h, min_distance):
     return np.sort(idx[keep])
 
 
-def remove_ecg(emgecgchannels, peakch, samplingfrequency, ecgminheight, ecgmindistance, ecgminwidth, windowsize, cancel_check=None):
+def remove_ecg(emgecgchannels: ArrayLike, peakch: NDArray[Any], samplingfrequency: float,
+               ecgminheight: float, ecgmindistance: float, ecgminwidth: float,
+               windowsize: float, cancel_check: Callable[[], bool] | None = None,
+               ) -> tuple[list[NDArray[Any]], list[list[Any]], NDArray[np.float64]]:
     # DC-removed, matching suggest_ecg_settings's detector exactly:
     # previously this ran on the raw channel while Auto-suggest derived ecgminheight from
     # a median-subtracted copy, so a channel with a DC offset made the suggested height
@@ -305,7 +328,8 @@ def remove_ecg(emgecgchannels, peakch, samplingfrequency, ecgminheight, ecgmindi
     return processedchannels, ecgwindows, peaks / samplingfrequency
 
 
-def peak_window_rms(channel, peaks_samples, samplingfrequency, halfwidth_s=0.04):
+def peak_window_rms(channel: ArrayLike, peaks_samples: Iterable[int], samplingfrequency: float,
+                    halfwidth_s: float = 0.04) -> float:
     """RMS of the signal within +/- halfwidth around each R-peak — a measure of ECG
     contamination. Comparing before vs after ECG removal gives the suppression."""
     channel = np.asarray(channel, dtype=float)
@@ -318,7 +342,8 @@ def peak_window_rms(channel, peaks_samples, samplingfrequency, halfwidth_s=0.04)
 
 # --- Cardiac-gated peak EMG (opt-in; default off -> golden-neutral) ---------
 
-def rolling_rms(channel, rms_s, samplingfrequency):
+def rolling_rms(channel: ArrayLike, rms_s: float,
+                samplingfrequency: float) -> tuple[NDArray[np.float64], NDArray[Any]]:
     """The rolling RMS that :func:`calculate_rms` maximises, as (values, start_indices).
 
     Deliberately reproduces calculate_rms's exact grid rather than an idealised one, so the
@@ -340,8 +365,9 @@ def rolling_rms(channel, rms_s, samplingfrequency):
     return np.sqrt((csum[ends] - csum[idx]) / np.maximum(ends - idx, 1)), idx
 
 
-def detection_quality(peaks_s, ecg_min_distance_s, *, long_rr_factor=1.6,
-                      max_long_rr_frac=0.02, hr_ceiling_margin=0.10):
+def detection_quality(peaks_s: ArrayLike, ecg_min_distance_s: float, *,
+                      long_rr_factor: float = 1.6, max_long_rr_frac: float = 0.02,
+                      hr_ceiling_margin: float = 0.10) -> dict[str, Any]:
     """Is this R-peak set complete enough to gate on? Returns a dict with ``ok`` + ``reason``.
 
     Two failure modes matter. A missed beat shows up as an RR interval near a multiple of the
@@ -351,7 +377,7 @@ def detection_quality(peaks_s, ecg_min_distance_s, *, long_rr_factor=1.6,
     """
     peaks = np.asarray(peaks_s, dtype=float)
     ceiling_bpm = 60.0 / ecg_min_distance_s if ecg_min_distance_s > 0 else float("inf")
-    out = {"n_peaks": int(peaks.size), "median_rr_s": float("nan"), "hr_bpm": float("nan"),
+    out: dict[str, Any] = {"n_peaks": int(peaks.size), "median_rr_s": float("nan"), "hr_bpm": float("nan"),
            "long_rr_frac": float("nan"), "ceiling_bpm": float(ceiling_bpm),
            "ok": False, "reason": ""}
     if peaks.size < 4:
@@ -375,7 +401,7 @@ def detection_quality(peaks_s, ecg_min_distance_s, *, long_rr_factor=1.6,
     return out
 
 
-def _longest_run(mask):
+def _longest_run(mask: ArrayLike) -> int:
     """Length of the longest contiguous True run — the cardiac-free 'island'."""
     m = np.asarray(mask, dtype=bool)
     if not m.any():
@@ -384,8 +410,10 @@ def _longest_run(mask):
     return int((np.flatnonzero(edges == -1) - np.flatnonzero(edges == 1)).max())
 
 
-def gated_peak_rms(emgchannels, peak_samples, rms_s, samplingfrequency, *,
-                   gate_half_width_s=0.120, min_survival=0.40, min_island_s=0.20):
+def gated_peak_rms(emgchannels: ArrayLike, peak_samples: ArrayLike, rms_s: float,
+                   samplingfrequency: float, *, gate_half_width_s: float = 0.120,
+                   min_survival: float = 0.40,
+                   min_island_s: float = 0.20) -> tuple[list[float], dict[str, Any]]:
     """Per-channel max of the rolling RMS, ignoring samples within +/- gate of an R-peak.
 
     ``peak_samples`` are R-peak positions in samples relative to the START of this segment
@@ -400,7 +428,7 @@ def gated_peak_rms(emgchannels, peak_samples, rms_s, samplingfrequency, *,
     nch = cols.shape[1]
     gate = int(round(gate_half_width_s * samplingfrequency))
     _, idx = rolling_rms(cols[:, 0], rms_s, samplingfrequency)
-    qc = {"survival": 0.0, "island_s": 0.0, "ok": False, "reason": ""}
+    qc: dict[str, Any] = {"survival": 0.0, "island_s": 0.0, "ok": False, "reason": ""}
     if idx.size == 0:
         qc["reason"] = "segment shorter than the RMS window"
         return [float("nan")] * (nch + 2), qc
@@ -426,7 +454,7 @@ def gated_peak_rms(emgchannels, peak_samples, rms_s, samplingfrequency, *,
         return [float("nan")] * (nch + 2), qc
 
     qc["ok"] = True
-    vals = []
+    vals: list[float] = []
     for ci in range(nch):
         env, _ = rolling_rms(cols[:, ci], rms_s, samplingfrequency)
         vals.append(float(np.max(env[keep])))
@@ -435,11 +463,11 @@ def gated_peak_rms(emgchannels, peak_samples, rms_s, samplingfrequency, *,
 
 # --- ECG auto-suggest (also used by run_batch when processing.emg.ecg_auto_detect is on;
 # that flag defaults to False, so the golden/default path is unaffected) ---
-_ECG_DEFAULTS = {"ecg_min_height": 0.0005, "ecg_min_distance_s": 0.5,
+_ECG_DEFAULTS: dict[str, float] = {"ecg_min_height": 0.0005, "ecg_min_distance_s": 0.5,
                  "ecg_min_width_s": 0.001, "ecg_window_s": 0.4}
 
 
-def _mad(x):
+def _mad(x: ArrayLike) -> float:
     """Median absolute deviation (robust scale, unnormalised)."""
     x = np.asarray(x, dtype=float)
     if x.size == 0:
@@ -447,7 +475,9 @@ def _mad(x):
     return float(np.median(np.abs(x - np.median(x))))
 
 
-def suggest_ecg_settings(emg_matrix, fs, *, hr_min_bpm=40.0, hr_max_bpm=180.0, max_hr_bpm=240.0):
+def suggest_ecg_settings(emg_matrix: ArrayLike, fs: float, *, hr_min_bpm: float = 40.0,
+                         hr_max_bpm: float = 180.0,
+                         max_hr_bpm: float = 240.0) -> dict[str, Any]:
     """Suggest ECG-capture settings from raw EMG channels — the analysis behind the
     "EMG – ECG reduction" tab's *Auto-suggest* button, and (since ``processing.emg.
     ecg_auto_detect``, off by default) also behind ``pipeline._auto_detect_ecg_settings``
@@ -478,8 +508,9 @@ def suggest_ecg_settings(emg_matrix, fs, *, hr_min_bpm=40.0, hr_max_bpm=180.0, m
     rr_min = 60.0 / hr_max_bpm            # fastest plausible (s)
     rr_floor = 60.0 / max_hr_bpm          # absolute refractory floor (s)
 
-    def _defaults(channel, conf="low", diag=None):
-        out = dict(_ECG_DEFAULTS)
+    def _defaults(channel: int, conf: str = "low",
+                  diag: dict[str, Any] | None = None) -> dict[str, Any]:
+        out: dict[str, Any] = dict(_ECG_DEFAULTS)
         out["detect_channel"] = int(channel)
         out["_diagnostics"] = {"confidence": conf, "scores": (diag or {}).get("scores", []),
                                "est_bpm": (diag or {}).get("est_bpm"), "n_peaks": (diag or {}).get("n_peaks", 0)}
@@ -544,7 +575,7 @@ def suggest_ecg_settings(emg_matrix, fs, *, hr_min_bpm=40.0, hr_max_bpm=180.0, m
         except Exception:                  # noqa: BLE001 — a bad channel just scores -inf
             continue
 
-    diag = {"scores": [None if not np.isfinite(v) else round(float(v), 4) for v in scores]}
+    diag: dict[str, Any] = {"scores": [None if not np.isfinite(v) else round(float(v), 4) for v in scores]}
     if not np.isfinite(scores).any():
         return _defaults(nch // 2, diag=diag)
 
@@ -612,24 +643,33 @@ def suggest_ecg_settings(emg_matrix, fs, *, hr_min_bpm=40.0, hr_max_bpm=180.0, m
 
 # --- spectral noise reduction (adapted from Tim Sainburg) -------------------
 
-def _stft(y, n_fft, hop_length, win_length):
+def _stft(y: NDArray[Any], n_fft: int, hop_length: int,
+          win_length: int) -> NDArray[np.complexfloating[Any, Any]]:
     import librosa
-    return librosa.stft(y=y, n_fft=n_fft, hop_length=hop_length, win_length=win_length)
+    out: NDArray[np.complexfloating[Any, Any]] = librosa.stft(
+        y=y, n_fft=n_fft, hop_length=hop_length, win_length=win_length)
+    return out
 
 
-def _istft(y, n_fft, hop_length, win_length):
+def _istft(y: NDArray[Any], n_fft: int, hop_length: int,
+           win_length: int) -> NDArray[np.floating[Any]]:
     import librosa
-    return librosa.istft(y, hop_length=hop_length, win_length=win_length)
+    out: NDArray[np.floating[Any]] = librosa.istft(y, hop_length=hop_length,
+                                                   win_length=win_length)
+    return out
 
 
-def _amp_to_db(x):
+def _amp_to_db(x: NDArray[Any]) -> NDArray[np.floating[Any]]:
     import librosa
-    return librosa.core.amplitude_to_db(x, ref=1.0, amin=1e-20, top_db=80.0)
+    out: NDArray[np.floating[Any]] = librosa.core.amplitude_to_db(x, ref=1.0, amin=1e-20,
+                                                                  top_db=80.0)
+    return out
 
 
-def _db_to_amp(x):
+def _db_to_amp(x: NDArray[Any]) -> NDArray[np.floating[Any]]:
     import librosa
-    return librosa.core.db_to_amplitude(x, ref=1.0)
+    out: NDArray[np.floating[Any]] = librosa.core.db_to_amplitude(x, ref=1.0)
+    return out
 
 
 # NOTE: the legacy per-call `removeNoise`/`reducenoise` spectral-gating pair (which tied
