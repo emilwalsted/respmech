@@ -23,7 +23,12 @@ to run these checks over a whole batch cheaply, before or independently of a rea
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
+
+if TYPE_CHECKING:
+    from numpy.typing import ArrayLike
 
 
 def detect_merged_time_blocks(time_seconds, *, min_duplicates=3, min_duplicate_fraction=0.02,
@@ -123,7 +128,7 @@ def detect_merged_time_blocks(time_seconds, *, min_duplicates=3, min_duplicate_f
         f"from sample to sample.")
 
 
-def detect_constant_channel(values, *, tol=1e-9):
+def detect_constant_channel(values: ArrayLike, *, tol: float = 1e-9) -> bool:
     """True when ``values`` (an assigned channel's samples) never varies.
 
     Ignores non-finite samples (NaN/inf) rather than letting them dominate the

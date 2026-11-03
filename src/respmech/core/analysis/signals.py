@@ -11,6 +11,7 @@ about the numbers themselves.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import ClassVar
 
 #: The four single-role pressure/flow signals a channel can be assigned to and
 #: that make up an explicit ``analysis.signals`` list. ``volume`` is not one of
@@ -99,6 +100,9 @@ class Capabilities:
     segmenterers from several call sites; nothing in compute/pipeline calls into
     this yet.
     """
+
+    #: every capability on; assigned below the class (not a dataclass field)
+    FULL: ClassVar[Capabilities]
 
     flow: bool
     volume: bool
