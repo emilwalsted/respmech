@@ -42,7 +42,9 @@ def main():
     sample.FS = fs
     sample.N_BREATHS = max(9, int(minutes * 60 / sample.PERIOD_S))
 
-    inp = os.path.join(work, "input")
+    # The recording is reused between runs, so its folder names its own length and rate:
+    # a rerun with other arguments must never profile a stale file under the new rate.
+    inp = os.path.join(work, f"input-{minutes:g}min-{fs}hz")
     out = os.path.join(work, "output")
     os.makedirs(out, exist_ok=True)
     t0 = time.perf_counter()
