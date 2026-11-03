@@ -14,6 +14,8 @@ Faithful port of the validated legacy ``respmech.py`` calculation functions
 Settings are read via the legacy attribute shape (see ``_legacy_ns``) to keep the
 numerics byte-identical to the golden reference.
 """
+from __future__ import annotations
+
 import warnings
 
 import numpy as np
@@ -22,6 +24,7 @@ import scipy.interpolate  # noqa: F401  (sp.interpolate)
 import scipy.integrate    # noqa: F401
 from collections import OrderedDict
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 from respmech.core import emg as emglib
 from respmech.core import entropy as entlib
@@ -30,21 +33,41 @@ from respmech.core.analysis.registry import LEGACY_MECHANICS_ORDER
 from respmech.core.analysis.signals import Capabilities
 from respmech.core.quality import detect_constant_channel
 
+if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping, Sequence
+    from types import SimpleNamespace
+
+    from numpy.typing import NDArray
+
+    #: a channel or column matrix as the loaders and segmenters pass it around
+    Arr = NDArray[Any]
+    #: one breath (or segment) dict, and a file's breaths keyed by number
+    Breath = OrderedDict[str, Any]
+    Breaths = OrderedDict[int, OrderedDict[str, Any]]
+
 
 # --- volume conditioning ---------------------------------------------------
 
-def zero(indata):
-    return indata - (indata[0])
+def zero(indata: Arr) -> Arr:
+    zeroed: Arr = indata - (indata[0])
+    return zeroed
 
 
-def correctdrift(volume, settings):
+def correctdrift(volume: Arr, settings: SimpleNamespace) -> Arr:
     xno = len(volume) - 1
     a = ((volume[xno]) - volume[0]) / xno
-    val = a
     corvol = np.zeros(len(volume))
-    for i in range(0, xno):
-        corvol[i] = volume[i] + val
-        val = val - a
+    if xno > 0:
+        # Vectorised form of the original per-sample loop
+        #     val = a; for i in range(xno): corvol[i] = volume[i] + val; val = val - a
+        # ufunc.accumulate adds strictly in sequence (no pairwise reordering), and
+        # x + (-a) is exactly x - a in IEEE arithmetic, so the offsets are the SAME
+        # running sums the loop built, in a's own dtype, and volume[:xno] + offsets is
+        # the same elementwise addition. Bit-identical, pinned by
+        # tests/unit/test_correctdrift_reference.py. The last sample stays 0, as before.
+        steps = np.full(xno, -a)
+        steps[0] = a
+        corvol[:xno] = volume[:xno] + np.add.accumulate(steps)
     return corvol
 
 
@@ -76,8 +99,9 @@ _TREND_MIN_ANCHORS = {"quadratic": 3, "cubic": 4}
 _END_ANCHOR_TOL_MULT = 3.0
 
 
-def trend_anchors(vol, fs, *, min_height=None,
-                  min_prominence_frac=TREND_MIN_PROMINENCE_FRAC, min_distance_s=0.4):
+def trend_anchors(vol: Arr, fs: float, *, min_height: float | None = None,
+                  min_prominence_frac: float = TREND_MIN_PROMINENCE_FRAC,
+                  min_distance_s: float = 0.4) -> Arr:
     """Indices of the end-expiratory troughs the trend envelope is fitted through.
 
     ``vol`` is the drift-corrected volume; troughs are the peaks of ``max(vol) - vol``.
@@ -113,11 +137,12 @@ def trend_anchors(vol, fs, *, min_height=None,
     distance = max(1.0, float(min_distance_s) * float(fs))
     inv = (vol * -1) + max(vol)
     if min_height is not None:
-        return signal.find_peaks(inv, height=min_height, distance=distance)[0]
+        legacy: Arr = signal.find_peaks(inv, height=min_height, distance=distance)[0]
+        return legacy
     span = float(np.ptp(inv))
     if span <= 0:
         return np.empty(0, dtype=int)
-    found = signal.find_peaks(inv, prominence=float(min_prominence_frac) * span,
+    found: Arr = signal.find_peaks(inv, prominence=float(min_prominence_frac) * span,
                               distance=distance)[0]
     if found.size == 0:
         # No breath-sized trough anywhere. The two record ends alone would still fit a
@@ -129,7 +154,7 @@ def trend_anchors(vol, fs, *, min_height=None,
     return np.unique(np.concatenate((ends, found))).astype(int)
 
 
-def _end_is_expiratory(vol, found, idx, tol):
+def _end_is_expiratory(vol: Arr, found: Arr, idx: int, tol: float) -> bool:
     """Is the recording's first/last sample at an end-expiratory level?
 
     Compared against the level the interior troughs themselves predict at that position
@@ -148,7 +173,8 @@ def _end_is_expiratory(vol, found, idx, tol):
     return bool(vol[idx] <= predicted + tol)
 
 
-def _trend_anchor_message(vol, found, need, kind, mech):
+def _trend_anchor_message(vol: Arr, found: int, need: int, kind: str,
+                          mech: SimpleNamespace) -> str:
     """One line — the GUI's short_error only shows the last one."""
     span = float(np.ptp(np.asarray(vol, float)))
     head = (f"Could not correct the end-expiratory trend: found {found} end-expiratory "
@@ -169,7 +195,7 @@ def _trend_anchor_message(vol, found, need, kind, mech):
             f"trend' off.")
 
 
-def correcttrend(volume, settings):
+def correcttrend(volume: Arr, settings: SimpleNamespace) -> Arr:
     """Compute-only volume trend correction (no plot). Returns the corrected
     volume; the diagnostic plot is produced separately by the plots layer."""
     m = settings.processing.mechanics
@@ -205,7 +231,8 @@ def correcttrend(volume, settings):
             f"end-expiratory trend: '{kind}' interpolation leaves {bad} of {vol.size} "
             f"samples undefined (outside the outermost detected trough); those samples "
             f"become NaN. Use 'Linear' to cover the whole recording.")
-    return volume - peaksresampled
+    detrended: Arr = volume - peaksresampled
+    return detrended
 
 
 # --- trimming --------------------------------------------------------------
@@ -216,7 +243,9 @@ class TrimError(ValueError):
     early inspiration."""
 
 
-def trim(timecol, flow, volume, poes, pgas, pdi, emgcolumns, settings):
+def trim(timecol: Arr, flow: Arr, volume: Arr, poes: Arr, pgas: Arr,
+         pdi: Arr, emgcolumns: Arr, settings: SimpleNamespace,
+         ) -> tuple[Arr, Arr, Arr, Arr, Arr, Arr, Arr, int, int]:
     below = np.argwhere(flow <= 0)
     above = np.argwhere(flow >= 0)
     if len(below) == 0 or len(above) == 0:
@@ -251,7 +280,7 @@ class NoBreathsError(ValueError):
     a bug): either segmentation detected none, or every detected breath is excluded."""
 
 
-def check_breaths(breaths, filename, settings):
+def check_breaths(breaths: Breaths, filename: str, settings: SimpleNamespace) -> None:
     """Fail early, and by name, when a file has nothing to analyse.
 
     Without this the empty set travels on and only surfaces further downstream as
@@ -276,12 +305,13 @@ def check_breaths(breaths, filename, settings):
         f"Mechanics — Advanced… (processing.segmentation).")
 
 
-def ignorebreaths(curfile, settings):
+def ignorebreaths(curfile: str, settings: SimpleNamespace) -> list[int]:
     d = dict(settings.processing.mechanics.excludebreaths)
-    return d[curfile] if curfile in d else []
+    ignored: list[int] = d[curfile] if curfile in d else []
+    return ignored
 
 
-def breathkinds(curfile, settings):
+def breathkinds(curfile: str, settings: SimpleNamespace) -> dict[int, str]:
     """Mirrors :func:`ignorebreaths`' file-keyed lookup, for the kind (not just the
     exclusion) a typed breath carries. Returns ``{breath_no: kind}`` for
     ``curfile`` -- read alongside ``ignorebreaths``' result in both segmenterers so a
@@ -325,7 +355,7 @@ class ConstantFlowError(ValueError):
     reached) instead of ever reaching either one."""
 
 
-def _breath_onset_time(insp, exp):
+def _breath_onset_time(insp: Mapping[str, Any], exp: Mapping[str, Any]) -> float | None:
     """The breath's own start time in the recording, read straight from its (already
     phase-sliced) time arrays -- used only for a degenerate-breath message (see
     ``_make_breath`` below), so it must work even when the six-way concatenation that
@@ -339,7 +369,10 @@ def _breath_onset_time(insp, exp):
     return None
 
 
-def _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols, filename, is_boundary, kind=None):
+def _make_breath(breathcnt: int, exp: dict[str, Any], insp: dict[str, Any], ignored: bool,
+                 entcols: Arr | list[Any], emgcols: Arr | list[Any], filename: str,
+                 is_boundary: bool,
+                 kind: str | None = None) -> Breath:
     # The try is scoped to only the six joins below (not the whole dict literal), so a
     # ValueError from an unrelated future addition here is never mislabeled as a
     # degenerate breath (self-review finding, D25).
@@ -391,7 +424,10 @@ def _make_breath(breathcnt, exp, insp, ignored, entcols, emgcols, filename, is_b
     ])
 
 
-def _phase_dicts(sl_in, sl_ex, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns):
+def _phase_dicts(sl_in: tuple[int, int], sl_ex: tuple[int, int], timecol: Arr, flow: Arr,
+                 volume: Arr, poes: Arr, pgas: Arr, pdi: Arr,
+                 entropycolumns: Arr, emgcolumns: Arr,
+                 ) -> tuple[dict[str, Any], dict[str, Any], Arr | list[Any], Arr | list[Any]]:
     (instart, inend) = sl_in
     (exstart, exend) = sl_ex
     exp = {'time': timecol[exstart:exend].squeeze(), 'flow': flow[exstart:exend].squeeze(),
@@ -414,6 +450,8 @@ def _phase_dicts(sl_in, sl_ex, timecol, flow, volume, poes, pgas, pdi, entropyco
         insp['emgcols'] = emgcolumns[instart:inend, :]
 
     entlen = exend - instart
+    entcols: Arr | list[Any]
+    emgcols: Arr | list[Any]
     if len(entropycolumns) > 0:
         entcols = np.zeros([entlen, entropycolumns.shape[1]])
         for ix in range(0, entropycolumns.shape[1]):
@@ -429,7 +467,10 @@ def _phase_dicts(sl_in, sl_ex, timecol, flow, volume, poes, pgas, pdi, entropyco
     return exp, insp, entcols, emgcols
 
 
-def separateintobreathsbyflow(filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings):
+def separateintobreathsbyflow(filename: str, timecol: Arr, flow: Arr, volume: Arr,
+                              poes: Arr, pgas: Arr, pdi: Arr,
+                              entropycolumns: Arr, emgcolumns: Arr,
+                              settings: SimpleNamespace) -> Breaths:
     # A flow constant at exactly zero satisfies neither `flow[i] < 0` nor `flow[i] > 0`
     # below, so `i` never advances past `instart` -- an infinite loop (or, with any
     # EMG/entropy column configured, a confusing "negative dimensions" crash instead;
@@ -497,7 +538,10 @@ class VolumeSegmentationError(ValueError):
     expiratory peak below the configured thresholds and leave too few to pair."""
 
 
-def separateintobreathsbyvolume(filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings):
+def separateintobreathsbyvolume(filename: str, timecol: Arr, flow: Arr, volume: Arr,
+                                poes: Arr, pgas: Arr, pdi: Arr,
+                                entropycolumns: Arr, emgcolumns: Arr,
+                                settings: SimpleNamespace) -> Breaths:
     from scipy import signal
     breaths = OrderedDict()
     ib = ignorebreaths(filename, settings)
@@ -564,7 +608,7 @@ class SegmentationOverrideNotice:
     message: str
 
 
-def _walk_insp_end(flow, start: int, end: int, bufferwidth: int) -> int:
+def _walk_insp_end(flow: Arr, start: int, end: int, bufferwidth: int) -> int:
     """The SAME criterion :func:`separateintobreathsbyflow`'s own inspiration
     while-loop uses (mean-buffered flow sign), bounded to ``[start, end)`` instead of
     the whole recording — used by :func:`apply_segmentation_overrides` to re-split
@@ -590,9 +634,13 @@ def _walk_insp_end(flow, start: int, end: int, bufferwidth: int) -> int:
     return i
 
 
-def apply_segmentation_overrides(filename, auto_breaths, cut_s, join_s, timecol, flow, volume,
-                                  poes, pgas, pdi, entropycolumns, emgcolumns, fs, bufferwidth,
-                                  *, ignored_breaths, kinds, tolerance_s=None):
+def apply_segmentation_overrides(filename: str, auto_breaths: Breaths, cut_s: Sequence[float],
+                                  join_s: Sequence[float], timecol: Arr, flow: Arr,
+                                  volume: Arr, poes: Arr, pgas: Arr, pdi: Arr,
+                                  entropycolumns: Arr, emgcolumns: Arr, fs: float,
+                                  bufferwidth: int, *, ignored_breaths: Sequence[int],
+                                  kinds: Mapping[int, str], tolerance_s: float | None = None,
+                                  ) -> tuple[Breaths, list[SegmentationOverrideNotice]]:
     """Repair the automatic flow-/volume-based breath segmentation using one file's
     manual ``cut_s``/``join_s`` (``SegmentationOverrideEntry``),
     applied AFTER the automatic segmentation (``auto_breaths`` — the un-overridden
@@ -740,18 +788,21 @@ def apply_segmentation_overrides(filename, auto_breaths, cut_s, join_s, timecol,
     return breaths, notices
 
 
-def _separator_times_for(curfile, settings):
+def _separator_times_for(curfile: str, settings: SimpleNamespace) -> list[float]:
     """Mirrors :func:`ignorebreaths`' file-keyed lookup, for the EMG-only ``separators``
     method's per-file boundary times (``settings.processing.mechanics.separators``, the
     ``[[file, [t…]], …]`` shape ``core._legacy_ns`` builds from ``SeparatorEntry``). A
     file with no entry has no separators -- the same, explicit "one segment" shape
     ``whole_file`` produces, just reached via this method instead."""
     d = dict(getattr(settings.processing.mechanics, "separators", []))
-    return d.get(curfile, [])
+    times: list[float] = d.get(curfile, [])
+    return times
 
 
-def separateintobreaths(method, filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings,
-                        detect_emg=None):
+def separateintobreaths(method: str, filename: str, timecol: Arr, flow: Arr, volume: Arr,
+                        poes: Arr, pgas: Arr, pdi: Arr, entropycolumns: Arr,
+                        emgcolumns: Arr, settings: SimpleNamespace,
+                        detect_emg: Arr | None = None) -> Breaths:
     """``detect_emg`` (``emg_burst`` only): the signal the bursts are found on, when that
     differs from ``emgcolumns`` -- the ECG-removed EMG before noise reduction. ``None``
     (every other caller) detects on ``emgcolumns`` itself."""
@@ -786,7 +837,9 @@ def separateintobreaths(method, filename, timecol, flow, volume, poes, pgas, pdi
     return separateintobreathsbyflow(filename, timecol, flow, volume, poes, pgas, pdi, entropycolumns, emgcolumns, settings)
 
 
-def trim_boundary_notices(breaths, settings, *, min_relative_duration=None, min_other_breaths=None):
+def trim_boundary_notices(breaths: Breaths, settings: SimpleNamespace, *,
+                          min_relative_duration: float | None = None,
+                          min_other_breaths: int | None = None) -> list[str]:
     """Per-file quality notice for a boundary breath likely truncated by ``trim`` (K-035).
 
     ``trim`` (above) discards only a leading partial expiration and a trailing partial
@@ -906,12 +959,13 @@ def trim_boundary_notices(breaths, settings, *, min_relative_duration=None, min_
         return []
     fs = float(settings.input.format.samplingfrequency)
 
-    def _phase_seconds(bno, phase):
+    def _phase_seconds(bno: int, phase: str) -> float:
         return len(np.atleast_1d(breaths[bno][phase]["time"])) / fs
 
     drift_on = bool(settings.processing.mechanics.correctvolumedrift)
 
-    def _notice(edge, phase, cur, median, ignored, direction, likely):
+    def _notice(edge: str, phase: str, cur: float, median: float, ignored: bool,
+                direction: str, likely: str) -> str | None:
         if ignored:
             if not drift_on:
                 return None
@@ -962,7 +1016,8 @@ def trim_boundary_notices(breaths, settings, *, min_relative_duration=None, min_
 
 # --- pressure-time product & integration -----------------------------------
 
-def calcptp(pressure, bcnt, vefactor, samplingfreq, baseline_samples=1):
+def calcptp(pressure: Arr, bcnt: float, vefactor: float, samplingfreq: float,
+            baseline_samples: int = 1) -> tuple[Any, Any]:
     # Pressure-time product: integrate the pressure relative to its end-expiratory
     # baseline (see docs/PTP_INVESTIGATION.md). The baseline is the mean over a short
     # window at the phase start (``baseline_samples``), which is robust to boundary
@@ -979,7 +1034,8 @@ def calcptp(pressure, bcnt, vefactor, samplingfreq, baseline_samples=1):
 
 # --- work of breathing (Campbell diagram) ----------------------------------
 
-def calculatewob(breath, bcnt, vefactor, settings):
+def calculatewob(breath: Mapping[str, Any], bcnt: float, vefactor: float,
+                 settings: SimpleNamespace) -> OrderedDict[str, Any]:
     WOBUNITCHANGEFACTOR = 98.0638 / 1000  # cmH2O -> Joule; Pa = J / m3
     if settings.processing.wob.calcwobfrom == "average":
         volin = breath["inspiration"]["volumeavg"]
@@ -1025,14 +1081,16 @@ def calculatewob(breath, bcnt, vefactor, settings):
 
 # --- averaging -------------------------------------------------------------
 
-def resample(x, settings, kind='linear'):
+def resample(x: Arr, settings: SimpleNamespace, kind: str = 'linear') -> Arr:
     x = x.squeeze()
     n = settings.processing.wob.avgresamplingobs
     f = sp.interpolate.interp1d(np.linspace(0, 1, x.size), x, kind)
-    return f(np.linspace(0, 1, n))
+    resampled: Arr = f(np.linspace(0, 1, n))
+    return resampled
 
 
-def calculateaveragebreaths(breaths, settings):
+def calculateaveragebreaths(breaths: Breaths, settings: SimpleNamespace,
+                            ) -> tuple[Arr, Arr, Arr | None, Arr | None]:
     # boundarynotice-idiom (compute.py's own trim_boundary_notices): a hand-built
     # SimpleNamespace test double need not carry `capabilities` at all -> treat it as FULL.
     caps = getattr(settings, "capabilities", Capabilities.FULL)
@@ -1050,22 +1108,25 @@ def calculateaveragebreaths(breaths, settings):
                 volumein[:, nobreaths] = resample(breath["inspiration"]["volume"], settings)
                 volumeex[:, nobreaths] = resample(breath["expiration"]["volume"], settings)
                 if caps.poes:
-                    poesin[:, nobreaths] = resample(breath["inspiration"]["poes"], settings)
-                    poesex[:, nobreaths] = resample(breath["expiration"]["poes"], settings)
+                    # poesin/poesex are arrays whenever caps.poes holds (built above under
+                    # the same test); mypy cannot follow that, hence the targeted ignores.
+                    poesin[:, nobreaths] = resample(breath["inspiration"]["poes"], settings)  # type: ignore[index]
+                    poesex[:, nobreaths] = resample(breath["expiration"]["poes"], settings)  # type: ignore[index]
             except Exception as e:
                 raise ValueError(
                     "Could not resample breath #" + str(breath["number"]) +
                     ": it is too short to average. Check Preview & QC ▸ Mechanics ▸ "
                     "Advanced… ▸ Breath detection (peak thresholds / breath-separation "
                     "buffer), or exclude this breath in Preview & QC.") from e
-    avgpoesin = np.mean(poesin, axis=1) if caps.poes else None
-    avgpoesex = np.mean(poesex, axis=1) if caps.poes else None
+    avgpoesin = np.mean(poesin, axis=1) if caps.poes else None  # type: ignore[arg-type]
+    avgpoesex = np.mean(poesex, axis=1) if caps.poes else None  # type: ignore[arg-type]
     return (np.mean(volumein, axis=1), np.mean(volumeex, axis=1), avgpoesin, avgpoesex)
 
 
 # --- entropy ---------------------------------------------------------------
 
-def conditioned_entropy_columns(entropycolumns, volume, settings):
+def conditioned_entropy_columns(entropycolumns: Arr, volume: Arr,
+                                settings: SimpleNamespace) -> Arr:
     """The entropy input matrix with the conditioned volume worked in (run before breath
     segmentation, so the whole-breath, inspiration and expiration windows all slice it).
 
@@ -1098,7 +1159,8 @@ def conditioned_entropy_columns(entropycolumns, volume, settings):
     return out
 
 
-def calculateentropy(breath, settings, phase=None, cancel_check=None):
+def calculateentropy(breath: Mapping[str, Any], settings: SimpleNamespace, phase: str | None = None,
+                     cancel_check: Callable[[], bool] | None = None) -> NDArray[np.float64]:
     if phase is None:
         columns = breath["entcols"]
     else:
@@ -1128,7 +1190,9 @@ def calculateentropy(breath, settings, phase=None, cancel_check=None):
 
 # --- per-breath mechanics (the big one) ------------------------------------
 
-def _add_gated_peaks(retbreath, breath, settings, peaks_s, detection_ok, detection_reason, phases=True):
+def _add_gated_peaks(retbreath: Breath, breath: Mapping[str, Any], settings: SimpleNamespace,
+                     peaks_s: Arr | None, detection_ok: bool, detection_reason: str,
+                     phases: bool = True) -> None:
     """Attach the opt-in cardiac-gated peak RMS for whole breath / inspiration / expiration.
 
     Does nothing at all unless processing.emg.robust_peak.enabled, so with the feature off no
@@ -1180,8 +1244,9 @@ def _add_gated_peaks(retbreath, breath, settings, peaks_s, detection_ok, detecti
     retbreath["rms_gated_qc"] = qc_all
 
 
-def compute_segment_emg(retbreath, breath, settings, cancel_check, peaks_s, detection_ok, detection_reason,
-                        phases=True):
+def compute_segment_emg(retbreath: Breath, breath: Mapping[str, Any], settings: SimpleNamespace,
+                        cancel_check: Callable[[], bool] | None, peaks_s: Arr | None, detection_ok: bool,
+                        detection_reason: str, phases: bool = True) -> None:
     """EMG (RMS/integral/gated-peak) and sample-entropy features for one breath or segment.
 
     A verbatim extraction of what ``calculatemechanics`` used to compute inline, so it can
@@ -1206,7 +1271,7 @@ def compute_segment_emg(retbreath, breath, settings, cancel_check, peaks_s, dete
         # ``entcols`` carries the file columns first, then the derived signals
         # (``conditioned_entropy_columns``). Derived entropy is reported per column but kept
         # out of sample_entropy_max/min/mean, which stay a summary of the file columns only.
-        def _split(entropy):
+        def _split(entropy: Arr) -> tuple[Arr, Arr]:
             entropy = np.asarray(entropy, dtype=float)
             return entropy[:n_file], entropy[n_file:]
 
@@ -1226,8 +1291,12 @@ def compute_segment_emg(retbreath, breath, settings, cancel_check, peaks_s, dete
         retbreath["entropy"] = []
 
 
-def calculatemechanics(breath, bcnt, vefactor, avgvolumein, avgvolumeex, avgpoesin, avgpoesex, settings,
-                       cancel_check=None, peaks_s=None, detection_ok=True, detection_reason=""):
+def calculatemechanics(breath: Breath, bcnt: float, vefactor: float, avgvolumein: Arr,
+                       avgvolumeex: Arr, avgpoesin: Arr | None,
+                       avgpoesex: Arr | None, settings: SimpleNamespace,
+                       cancel_check: Callable[[], bool] | None = None, peaks_s: Arr | None = None,
+                       detection_ok: bool = True,
+                       detection_reason: str = "") -> Breath:
     """Optional Poes/Pgas/Pdi (v2-only, docs/REVERSE_ENGINEERING.md §5.11): every value that
     reads one of those three channels is computed only when ``caps`` (from
     ``settings.capabilities``, defaulting to :data:`Capabilities.FULL` for a hand-built

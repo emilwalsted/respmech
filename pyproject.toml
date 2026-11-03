@@ -101,6 +101,49 @@ exclude = ["**/CLAUDE.md"]
 pythonpath = ["src"]
 addopts = "--import-mode=importlib"
 
+# Mutation testing of the calculation core (developer tool, never run in CI): `mutmut run`,
+# then `mutmut results`. Only the engine modules are mutated, and the test command is the
+# golden suite plus the unit tests that exercise those modules; the full tests/unit is
+# deliberately not used (it is slow and mostly GUI). The working copy lives in mutants/
+# (gitignored). Classification of the surviving mutants: docs/MUTATION_TESTING.md.
+[tool.mutmut]
+source_paths = ["src/"]
+only_mutate = [
+    "src/respmech/core/compute.py",
+    "src/respmech/core/emg.py",
+    "src/respmech/core/entropy.py",
+    "src/respmech/core/noise.py",
+    "src/respmech/core/analysis/segments.py",
+    "src/respmech/core/analysis/manoeuvres.py",
+]
+pytest_add_cli_args = ["-p", "no:cacheprovider", "-q"]
+pytest_add_cli_args_test_selection = [
+    "tests/golden/test_golden.py",
+    "tests/unit/test_entropy_helpers.py",
+    "tests/unit/test_sample_entropy_reference.py",
+    "tests/unit/test_cancel.py",
+    "tests/unit/test_noise.py",
+    "tests/unit/test_noise_characterisation.py",
+    "tests/unit/test_ptp.py",
+    "tests/unit/test_manoeuvres.py",
+    "tests/unit/test_manoeuvres_characterisation.py",
+    "tests/unit/test_segments_emg.py",
+    "tests/unit/test_segments_characterisation.py",
+    "tests/unit/test_segmentation_overrides.py",
+    "tests/unit/test_trim_boundary_notices.py",
+    "tests/unit/test_stft_frames.py",
+    "tests/unit/test_robust_peak.py",
+    "tests/unit/test_ecg.py",
+    "tests/unit/test_peepi.py",
+    "tests/unit/test_mfvl.py",
+    "tests/unit/test_volume_segmentation_pairing.py",
+    "tests/unit/test_no_breaths.py",
+    "tests/unit/test_emg_suggest.py",
+    "tests/unit/test_emg_characterisation.py",
+    "tests/unit/test_compute_characterisation.py",
+    "tests/unit/test_volume_trend.py",
+]
+
 
 # --- briefcase: native desktop installers (Windows MSI / macOS dmg) ----------
 # Build with `.[packaging]` installed:

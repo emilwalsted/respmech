@@ -214,3 +214,31 @@ def test_stage_ecg_reduction_reports_suppression_matching_the_pipeline(tmp_path)
     data_off = stage_ecg_reduction(s_off, str(path))
     assert data_off["ecg_applied"] is False
     assert data_off["suppression"] is None
+
+
+def test_remove_ecg_returns_one_c_ordered_array_matching_the_row_list():
+    # remove_ecg used to return a list of per-sample rows that every caller re-stacked
+    # with np.array; it now returns that stacked array itself. Pin that the values,
+    # dtype, shape and C memory layout are exactly what the old round trip produced.
+    emg, _tp, fs = _make_signal(seed=2)
+    kw = dict(samplingfrequency=fs, ecgminheight=0.2, ecgmindistance=0.5,
+              ecgminwidth=0.001, windowsize=0.4)
+    processed, _w, _p = E.remove_ecg(emg.copy(), emg[:, 0], **kw)
+    assert isinstance(processed, np.ndarray)
+    assert processed.shape == emg.shape
+    assert processed.flags["C_CONTIGUOUS"]
+
+
+@pytest.mark.parametrize("dtype", [np.float64, np.float32, np.int64])
+@pytest.mark.parametrize("n_samples, n_channels", [(0, 1), (0, 3), (1, 1), (5, 1), (7, 3)])
+def test_stack_channels_matches_the_former_list_of_rows_round_trip(dtype, n_samples, n_channels):
+    # Reference: what remove_ecg returned before (a list of per-sample rows) after the
+    # np.array every caller applies. Values, dtype, shape and bytes must be identical,
+    # including the shape of a recording without samples.
+    rng = np.random.default_rng(n_samples * 10 + n_channels)
+    retch = [(rng.standard_normal(n_samples) * 100).astype(dtype) for _ in range(n_channels)]
+    old = np.array(list(np.array(retch).T))
+    new = np.array(E._stack_channels(retch))
+    assert new.dtype == old.dtype
+    assert new.shape == old.shape
+    assert new.tobytes() == old.tobytes()

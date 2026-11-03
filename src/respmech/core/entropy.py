@@ -1,14 +1,20 @@
 # -*- coding: utf-8 -*-
 
-from __future__ import unicode_literals
+from __future__ import annotations, unicode_literals
+
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from math import factorial
 
 from respmech.core._cancel import check
 
+if TYPE_CHECKING:
+    from numpy.typing import ArrayLike, NDArray
 
-def _embed(x, order=3, delay=1):
+
+def _embed(x: NDArray[Any], order: int = 3, delay: int = 1) -> NDArray[np.float64]:
     """Time-delay embedding.
 
     Parameters
@@ -32,7 +38,7 @@ def _embed(x, order=3, delay=1):
     return Y.T
 
 
-def util_granulate_time_series(time_series, scale):
+def util_granulate_time_series(time_series: NDArray[Any], scale: int) -> NDArray[np.float64]:
     """Extract coarse-grained time series
 
     Args:
@@ -45,11 +51,11 @@ def util_granulate_time_series(time_series, scale):
     n = len(time_series)
     b = int(np.fix(n / scale))
     temp = np.reshape(time_series[0:b*scale], (b, scale))
-    cts = np.mean(temp, axis = 1)
+    cts: NDArray[np.float64] = np.mean(temp, axis = 1)
     return cts
 
 
-def shannon_entropy(time_series):
+def shannon_entropy(time_series: str | Sequence[Any] | NDArray[Any]) -> float:
     """Return the Shannon Entropy of the sample data.
 
     Args:
@@ -65,7 +71,7 @@ def shannon_entropy(time_series):
 
     # Create a frequency data
     data_set = list(set(time_series))
-    freq_list = []
+    freq_list: list[float] = []
     for entry in data_set:
         counter = 0.
         for i in time_series:
@@ -74,14 +80,15 @@ def shannon_entropy(time_series):
         freq_list.append(float(counter) / len(time_series))
 
     # Shannon entropy
-    ent = 0.0
+    ent: float = 0.0
     for freq in freq_list:
         ent += freq * np.log2(freq)
     ent = -ent
     return ent
 
 
-def sample_entropy(time_series, sample_length, tolerance = None, cancel_check = None):
+def sample_entropy(time_series: ArrayLike, sample_length: int, tolerance: float | None = None,
+                   cancel_check: Callable[[], bool] | None = None) -> NDArray[np.float64]:
     """Calculates the sample entropy of degree m of a time_series.
 
     This method uses chebychev norm.
@@ -203,11 +210,12 @@ def sample_entropy(time_series, sample_length, tolerance = None, cancel_check = 
                 j_ = j_[live]
                 Ntemp[L] += i_.size
 
-    sampen =  - np.log(Ntemp[1:] / Ntemp[:-1])
+    sampen: NDArray[np.float64] =  - np.log(Ntemp[1:] / Ntemp[:-1])
     return sampen
 
 
-def multiscale_entropy(time_series, sample_length, tolerance = None, maxscale = None):
+def multiscale_entropy(time_series: NDArray[Any], sample_length: int, tolerance: float | None = None,
+                       maxscale: int | None = None) -> NDArray[np.float64]:
     """Calculate the Multiscale Entropy of the given time series considering
     different time-scales of the time series.
 
@@ -237,7 +245,8 @@ def multiscale_entropy(time_series, sample_length, tolerance = None, maxscale = 
     return mse
 
 
-def permutation_entropy(time_series, order=3, delay=1, normalize=False):
+def permutation_entropy(time_series: ArrayLike, order: int = 3, delay: int = 1,
+                        normalize: bool = False) -> float:
     """Permutation Entropy.
 
     Parameters
@@ -300,13 +309,14 @@ def permutation_entropy(time_series, order=3, delay=1, normalize=False):
     _, c = np.unique(hashval, return_counts=True)
     # Use np.true_divide for Python 2 compatibility
     p = np.true_divide(c, c.sum())
-    pe = -np.multiply(p, np.log2(p)).sum()
+    pe: float = -np.multiply(p, np.log2(p)).sum()
     if normalize:
         pe /= np.log2(factorial(order))
     return pe
 
 
-def multiscale_permutation_entropy(time_series, m, delay, scale):
+def multiscale_permutation_entropy(time_series: NDArray[Any], m: int, delay: int,
+                                   scale: int) -> list[float]:
     """Calculate the Multiscale Permutation Entropy
 
     Args:
@@ -323,7 +333,7 @@ def multiscale_permutation_entropy(time_series, m, delay, scale):
             Complexity Analysis of Alzheimer’s Disease EEG. www.mdpi.com/1099-4300/14/7/1186
         [2] http://www.mathworks.com/matlabcentral/fileexchange/37288-multiscale-permutation-entropy-mpe/content/MPerm.m
     """
-    mspe = []
+    mspe: list[float] = []
     for i in range(scale):
         coarse_time_series = util_granulate_time_series(time_series, i + 1)
         pe = permutation_entropy(coarse_time_series, order=m, delay=delay)

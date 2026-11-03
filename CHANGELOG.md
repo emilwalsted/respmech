@@ -21,6 +21,18 @@ for the installers themselves.
   table as a CSV for the file on screen (without Poes the table is the file's averaged volume
   trace, which the panel does not draw as such). An analysis that does not tick the box writes exactly
   what it wrote before.
+- **Long recordings are analysed faster.** The drift correction is now vectorised (a
+  sequential accumulate in the same order as before), and ECG removal returns the cleaned EMG
+  channels as one array instead of a list of rows that every step rebuilt. On a one-hour
+  recording at 2 kHz with all signals, the analysis itself went from about 102 to 91 seconds.
+  Every number is unchanged: the results were compared value for value before and after.
+
+<!-- changelog-skip fde4263 static type annotations only (mypy --strict); no runtime behaviour or output changes -->
+<!-- changelog-skip 74aab0f static type annotations only (mypy --strict); no runtime behaviour or output changes -->
+<!-- changelog-skip e23ef46 static type annotations only (mypy --strict); no runtime behaviour or output changes -->
+<!-- changelog-skip 61ac922 static type annotations only (mypy --strict); no runtime behaviour or output changes -->
+<!-- changelog-skip 21ea842 mutation-testing configuration in pyproject.toml (the test selection mutmut runs); nothing an installed copy contains -->
+<!-- changelog-skip 8c9a58c follow-up inside this same change: keeps the released result shape for an ECG removal without samples, so a reader of this entry has nothing new to be told -->
 
 ## v2.5.0 — 2026-10-16
 

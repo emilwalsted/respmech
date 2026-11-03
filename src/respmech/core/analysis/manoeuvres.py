@@ -28,7 +28,23 @@ to measure.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+    from typing import Any
+
+    from numpy.typing import ArrayLike
+
+    from respmech.core.analysis.signals import Capabilities
+    from types import SimpleNamespace
+
+    from respmech.core.settings import IcSettings
+
+    #: one breath (or EMG-only segment) dict as ``core.compute`` builds it
+    Breath = Mapping[str, Any]
 
 #: kinds `extract()` treats as an inspiratory-capacity manoeuvre — `ic_fvc` is a
 #: single breath captured as BOTH an IC (its inspiration) and an FVC (its expiration),
@@ -46,15 +62,15 @@ _MAX_EFFORT_KINDS = frozenset({"max_insp", "sniff"})
 _FVC_MIN_DURATION_S = 1.0
 
 
-def _arr(x) -> np.ndarray:
+def _arr(x: ArrayLike) -> np.ndarray:
     return np.atleast_1d(np.asarray(x, dtype=float))
 
 
-def _peak_volume_index(breath) -> int:
+def _peak_volume_index(breath: Breath) -> int:
     return int(np.argmax(_arr(breath["volume"])))
 
 
-def _preceding_eelvs(breath, tidal_breaths, n: int) -> list[float]:
+def _preceding_eelvs(breath: Breath, tidal_breaths: Sequence[Breath], n: int) -> list[float]:
     """End-expiratory volume (a tidal breath's own last, expiratory, volume sample)
     of the up-to-``n`` tidal breaths immediately preceding ``breath`` in the
     recording, ordered oldest-to-newest. Breath NUMBERS (not list position — the
@@ -72,7 +88,8 @@ def _preceding_eelvs(breath, tidal_breaths, n: int) -> list[float]:
     return [float(_arr(b["volume"])[-1]) for b in prior]
 
 
-def _ic_eelv_pre(breath, insp, tidal_breaths, ic_cfg) -> tuple[float, float, int]:
+def _ic_eelv_pre(breath: Breath, insp: Mapping[str, Any], tidal_breaths: Sequence[Breath],
+                 ic_cfg: IcSettings) -> tuple[float, float, int]:
     """``(ic_eelv_pre, ic_eelv_pre_sd, ic_eelv_pre_n)`` — the mean (+ SD, + count) of
     up to ``preceding_breaths`` tidal breaths' own end-expiratory volume, falling back
     to this breath's OWN immediate pre-inspiratory volume sample (``n=1``, ``sd=0.0``)
@@ -88,7 +105,7 @@ def _ic_eelv_pre(breath, insp, tidal_breaths, ic_cfg) -> tuple[float, float, int
     return float(insp["volume"][0]), 0.0, 1
 
 
-def _trailing_plateau_s(flow, fs: float, threshold: float) -> float:
+def _trailing_plateau_s(flow: ArrayLike, fs: float, threshold: float) -> float:
     """How long, counting back from the very end of ``flow`` (the tail of the
     inspiration — a breath held at TLC just before the manoeuvre ends), the signal
     stays below ``threshold`` in magnitude without interruption. 0.0 when the last
@@ -113,8 +130,8 @@ def _trailing_plateau_s(flow, fs: float, threshold: float) -> float:
     return count / fs
 
 
-def _low_effort(ic_peak_in_flow: float, poes_ic_swing: float | None, tidal_breaths,
-                caps, ic_cfg) -> bool:
+def _low_effort(ic_peak_in_flow: float, poes_ic_swing: float | None, tidal_breaths: Sequence[Breath],
+                caps: Capabilities, ic_cfg: IcSettings) -> bool:
     """Compares THIS manoeuvre's own peak inspiratory flow (and, when Poes is
     available, its Poes swing) against the median of the file's own tidal breaths —
     never against another file, another run, or the mechanics table (see the module
@@ -147,7 +164,7 @@ def _low_effort(ic_peak_in_flow: float, poes_ic_swing: float | None, tidal_breat
     return flagged
 
 
-def _boundary(breath, tidal_breaths) -> bool:
+def _boundary(breath: Breath, tidal_breaths: Sequence[Breath]) -> bool:
     """True when ``breath`` is the first- or last-numbered breath among ``extract``'s
     OWN two inputs — this breath plus the tidal breaths it was given (never a
     manually excluded or differently-typed breath that may sit outside that set, since
@@ -156,10 +173,12 @@ def _boundary(breath, tidal_breaths) -> bool:
     breath, so it is worth a visible flag rather than silent trust."""
     numbers = {b["number"] for b in tidal_breaths}
     numbers.add(breath["number"])
-    return breath["number"] == min(numbers) or breath["number"] == max(numbers)
+    at_edge: bool = breath["number"] == min(numbers) or breath["number"] == max(numbers)
+    return at_edge
 
 
-def ic_acceptance(breath, tidal_breaths, caps, ic_cfg, *, vol_ic: float,
+def ic_acceptance(breath: Breath, tidal_breaths: Sequence[Breath], caps: Capabilities,
+                  ic_cfg: IcSettings, *, vol_ic: float,
                   ic_eelv_pre_sd: float, ic_eelv_pre_n: int, ic_peak_in_flow: float,
                   ic_plateau_s: float, poes_ic_swing: float | None) -> list[str]:
     """The ``quality`` flags for an IC/IC+FVC manoeuvre, EXCLUDING ``NOT_REPEATABLE``
@@ -191,7 +210,8 @@ def ic_acceptance(breath, tidal_breaths, caps, ic_cfg, *, vol_ic: float,
     return flags
 
 
-def _ic_fields(breath, kind: str, tidal_breaths, caps, s) -> dict:
+def _ic_fields(breath: Breath, kind: str, tidal_breaths: Sequence[Breath], caps: Capabilities,
+              s: SimpleNamespace) -> dict[str, Any]:
     insp = breath["inspiration"]
     fs = float(s.input.format.samplingfrequency)
     ic_cfg = s.processing.lung_volume.ic
@@ -202,7 +222,7 @@ def _ic_fields(breath, kind: str, tidal_breaths, caps, s) -> dict:
     ic_peak_in_flow = -float(_arr(insp["flow"]).min())
     ic_plateau_s = _trailing_plateau_s(insp["flow"], fs, ic_cfg.plateau_flow_lps)
 
-    out: dict = {
+    out: dict[str, Any] = {
         "kind": kind,
         "vol_ic": vol_ic,
         "ic_eelv_pre": ic_eelv_pre,
@@ -246,7 +266,8 @@ def _ic_fields(breath, kind: str, tidal_breaths, caps, s) -> dict:
     return out
 
 
-def max_effort_from_breath(breath, caps, s, kind=None) -> dict:
+def max_effort_from_breath(breath: Breath, caps: Capabilities, s: SimpleNamespace,
+                           kind: str | None = None) -> dict[str, Any]:
     """Reference values for a maximal-effort manoeuvre breath (``max_insp``/
     ``sniff``): the peak inspiratory Poes/Pdi SWING and the peak EMG RMS reached
     anywhere in the breath — each present only with its own channel(s). These are
@@ -267,13 +288,13 @@ def max_effort_from_breath(breath, caps, s, kind=None) -> dict:
     ordinary per-breath ``compute_segment_emg`` call in the mechanics loop — nothing
     upstream has computed an RMS envelope for it yet.
     """
-    out: dict = {}
+    out: dict[str, Any] = {}
     insp = breath["inspiration"]
     # A nasal sniff has no mouth flow, so the flow-based inspiration/expiration boundary
     # inside its typed breath is arbitrary: for ``sniff`` the swing is taken over the WHOLE
     # typed breath, from the same pre-inspiratory baseline.
     whole = kind == "sniff" and "expiration" in breath
-    def _span(ch):
+    def _span(ch: str) -> np.ndarray:
         x = _arr(insp[ch])
         return np.concatenate([x, _arr(breath["expiration"][ch])]) if whole else x
     if caps.poes:
@@ -300,7 +321,7 @@ def max_effort_from_breath(breath, caps, s, kind=None) -> dict:
     return out
 
 
-def validate_fvc_manoeuvre(breath) -> list[str]:
+def validate_fvc_manoeuvre(breath: Breath) -> list[str]:
     """Minimal, non-numeric quality flags for a breath's EXPIRATORY limb as a
     candidate forced-vital-capacity manoeuvre. Deliberately does not compute FVC,
     FEV1, PEF or any other spirometric value — that arithmetic is the FVC/MFVL analysis's
@@ -315,7 +336,7 @@ def validate_fvc_manoeuvre(breath) -> list[str]:
     return ["FVC_TOO_SHORT"] if duration < _FVC_MIN_DURATION_S else []
 
 
-def suggest_fvc(breaths: dict) -> int | None:
+def suggest_fvc(breaths: Mapping[int, Breath]) -> int | None:
     """A plain, deterministic heuristic hint for the UI (the "Suggested-hint"):
     the untyped, non-ignored breath with the LONGEST expiration in the file — a
     forced vital capacity manoeuvre is, by definition, a deliberately prolonged
@@ -343,7 +364,8 @@ def suggest_fvc(breaths: dict) -> int | None:
     return best_no
 
 
-def extract(breath, kind: str, tidal_breaths, caps, s) -> dict:
+def extract(breath: Breath, kind: str, tidal_breaths: Sequence[Breath], caps: Capabilities,
+            s: SimpleNamespace) -> dict[str, Any]:
     """The Manoeuvres-sheet row for one typed breath, as a REN function of raw breath
     dicts (never of ``calculatemechanics`` output — see the module docstring).
     ``tidal_breaths`` is the file's own non-ignored (untyped) breaths, in whatever
@@ -364,7 +386,7 @@ def extract(breath, kind: str, tidal_breaths, caps, s) -> dict:
     return {"kind": kind, "quality": []}
 
 
-def apply_repeatability(manoeuvres: dict, ic_cfg) -> None:
+def apply_repeatability(manoeuvres: Mapping[Any, dict[str, Any]], ic_cfg: IcSettings) -> None:
     """Second pass, run once per file AFTER every typed breath's own :func:`extract`
     result is in hand (``NOT_REPEATABLE`` needs to compare an IC against its OWN
     file's OTHER IC measurements, which a single call to ``extract`` never sees —

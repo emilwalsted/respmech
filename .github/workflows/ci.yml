@@ -392,3 +392,19 @@ jobs:
 
       - name: Synthetic golden reproduces the reference
         run: python -m pytest tests/golden/test_golden.py -q
+
+      # Informational only: the six engine modules are expected to pass mypy --strict,
+      # but a typing regression must not block a numerically sound change, so the step
+      # can fail without failing the job. mypy is pinned so a new release cannot turn
+      # the step red on its own.
+      - name: Type check the engine modules (mypy --strict, non-blocking)
+        continue-on-error: true
+        # Its own limit, well inside the job's 15 minutes: continue-on-error does not
+        # cover a job timeout, so a hung install must end the step, not the job.
+        timeout-minutes: 5
+        run: |
+          pip install "mypy==2.4.1"
+          python -m mypy --strict --follow-imports=silent --ignore-missing-imports \
+            src/respmech/core/compute.py src/respmech/core/emg.py \
+            src/respmech/core/entropy.py src/respmech/core/noise.py \
+            src/respmech/core/analysis/segments.py src/respmech/core/analysis/manoeuvres.py

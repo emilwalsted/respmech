@@ -44,11 +44,16 @@ from __future__ import annotations
 
 import bisect
 from collections import OrderedDict
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from respmech.core import emg as emglib
+
+if TYPE_CHECKING:
+    from numpy.typing import ArrayLike, NDArray
 
 
 class EmgSegmentationError(ValueError):
@@ -61,7 +66,7 @@ class EmgSegmentationError(ValueError):
     """
 
 
-def _slice_cols(cols, start: int, end: int):
+def _slice_cols(cols: NDArray[Any], start: int, end: int) -> NDArray[Any]:
     """Slice a (possibly absent) 2-D column matrix — mirrors ``compute._phase_dicts``'s
     own "an absent channel is an empty array/list, never sliced" handling."""
     if len(cols) == 0:
@@ -69,8 +74,9 @@ def _slice_cols(cols, start: int, end: int):
     return cols[start:end, :] if np.ndim(cols) > 1 else cols[start:end]
 
 
-def _make_segment(number: int, start: int, end: int, timecol, emgcolumns, entropycolumns,
-                  filename: str, ignored: bool, kind: str | None) -> OrderedDict:
+def _make_segment(number: int, start: int, end: int, timecol: NDArray[Any],
+                  emgcolumns: NDArray[Any], entropycolumns: NDArray[Any],
+                  filename: str, ignored: bool, kind: str | None) -> OrderedDict[str, Any]:
     # reshape(-1), not squeeze(): squeeze collapses a genuine 1-SAMPLE segment's (1,)
     # array to a 0-d scalar (no len(), no indexing), which every downstream consumer of
     # breath["time"] (build_processed_data, the diagnostic plots, this module's own
@@ -98,7 +104,8 @@ def _make_segment(number: int, start: int, end: int, timecol, emgcolumns, entrop
     ])
 
 
-def _attach_whole_file_rms_diagnostics(segment: OrderedDict, rms_s: float, fs: float) -> None:
+def _attach_whole_file_rms_diagnostics(segment: OrderedDict[str, Any], rms_s: float,
+                                       fs: float) -> None:
     """``rms_file_max_col_n``/``t_rms_file_max_col_n``/``rms_file_top3_col_n`` —
     whole-file-only diagnostics that let a reader spot WHERE in a long recording the
     peak EMG activity fell, and whether it was a single spike or sustained (top-3
@@ -181,11 +188,12 @@ class BurstDetection:
     #: the same bursts before :func:`_refine_edges` moved their edges (hysteresis levels
     #: only): wider, so used wherever "certainly not active" matters (the quiet masks) and
     #: to tell a burst cut off by the recording's own ends from a whole one
-    coarse_onsets: np.ndarray = None
-    coarse_offsets: np.ndarray = None
+    # Always set by detect_bursts, the only constructor; the None default is legacy.
+    coarse_onsets: np.ndarray = None  # type: ignore[assignment]
+    coarse_offsets: np.ndarray = None  # type: ignore[assignment]
 
 
-def rms_envelope(x, window: int) -> np.ndarray:
+def rms_envelope(x: ArrayLike, window: int) -> np.ndarray:
     """Centred moving RMS of a 1-D signal over ``window`` samples, same length as ``x``.
     Non-finite samples contribute nothing to their windows, so one bad sample cannot
     poison everything after it the way a plain cumulative sum would; a window in which
@@ -209,7 +217,7 @@ def rms_envelope(x, window: int) -> np.ndarray:
     return np.where(2 * cnt >= (hi - lo), env, np.nan)
 
 
-def _detrend(x, fs: float, window_s: float = 5.0) -> np.ndarray:
+def _detrend(x: ArrayLike, fs: float, window_s: float = 5.0) -> np.ndarray:
     """``x`` minus its own centred running mean over ``window_s`` seconds (non-finite
     samples ignored and left as they are): removes a DC offset and a slow baseline drift
     from the DETECTION signal, both of which the RMS would otherwise count as activity.
@@ -224,10 +232,11 @@ def _detrend(x, fs: float, window_s: float = 5.0) -> np.ndarray:
     hi = np.clip(idx - w // 2 + w, 0, x.size)
     cnt = ccnt[hi] - ccnt[lo]
     mean = np.where(cnt > 0, (csum[hi] - csum[lo]) / np.maximum(cnt, 1), 0.0)
-    return x - mean
+    detrended: np.ndarray = x - mean
+    return detrended
 
 
-def detect_bursts(emgcols, fs: float, *, threshold_frac: float, min_s: float,
+def detect_bursts(emgcols: ArrayLike, fs: float, *, threshold_frac: float, min_s: float,
                   smooth_s: float, min_contrast: float, filename: str = "") -> BurstDetection:
     """Find the EMG bursts of a tidal recording: on/off detection on the RMS envelope with
     a resting level taken from the low end of the envelope and hysteresis thresholds, with
@@ -332,7 +341,8 @@ def detect_bursts(emgcols, fs: float, *, threshold_frac: float, min_s: float,
                           len(traces), np.asarray(starts, dtype=int), np.asarray(ends, dtype=int))
 
 
-def _refine_edges(power, starts, ends, window: int, min_n: int = 1):
+def _refine_edges(power: NDArray[np.float64], starts: NDArray[Any], ends: NDArray[Any],
+                  window: int, min_n: int = 1) -> tuple[NDArray[Any], NDArray[Any]]:
     """Move each coarse edge to where the smoothed POWER envelope crosses half of that
     burst's own plateau. A centred window smears a step over ``window`` samples, and the
     on/off levels (a fraction of the peak, chosen to be robust to noise) sit well down
@@ -368,7 +378,8 @@ def _refine_edges(power, starts, ends, window: int, min_n: int = 1):
     return np.asarray(new_s, dtype=int), np.asarray(new_e, dtype=int)
 
 
-def _neural_timing(onsets, offsets, k: int, fs: float, *, truncated: bool = False) -> OrderedDict:
+def _neural_timing(onsets: NDArray[Any], offsets: NDArray[Any], k: int, fs: float, *,
+                   truncated: bool = False) -> OrderedDict[str, Any]:
     """Neural timing of cycle ``k`` (0-based): ``ti_emg`` = burst duration (onset to the
     half-power point of its end), ``te_emg`` = from this burst's end to the next one's
     onset, ``ttot_emg`` = onset to onset, ``ti_ttot_emg`` = ``ti_emg / ttot_emg`` and
@@ -389,9 +400,10 @@ def _neural_timing(onsets, offsets, k: int, fs: float, *, truncated: bool = Fals
                         ("ti_ttot_emg", nan), ("bf_emg", nan)])
 
 
-def fixed_windows(filename: str, timecol, emgcolumns, entropycolumns, fs: float,
+def fixed_windows(filename: str, timecol: NDArray[Any], emgcolumns: NDArray[Any],
+                  entropycolumns: NDArray[Any], fs: float,
                   *, window_s: float, hop_s: float, ignored_breaths: set[int],
-                  kinds: dict) -> OrderedDict:
+                  kinds: dict[int, str]) -> OrderedDict[int, OrderedDict[str, Any]]:
     """Equal windows of ``window_s`` seconds, one every ``hop_s`` seconds from the start
     of the recording, numbered from 1. Only complete windows count: a trailing piece
     shorter than a window is dropped rather than padded (it would bias the RMS and
@@ -412,9 +424,10 @@ def fixed_windows(filename: str, timecol, emgcolumns, entropycolumns, fs: float,
     return segments
 
 
-def emg_burst(filename: str, timecol, emgcolumns, entropycolumns, detect_emg, fs: float,
+def emg_burst(filename: str, timecol: NDArray[Any], emgcolumns: NDArray[Any],
+              entropycolumns: NDArray[Any], detect_emg: NDArray[Any], fs: float,
               *, threshold_frac: float, min_s: float, smooth_s: float, min_contrast: float,
-              ignored_breaths: set[int], kinds: dict) -> OrderedDict:
+              ignored_breaths: set[int], kinds: dict[int, str]) -> OrderedDict[int, OrderedDict[str, Any]]:
     """One segment per detected inspiratory EMG burst (see the module docstring for the
     exact extent of a segment). ``detect_emg`` is the signal the bursts are FOUND on:
     the ECG-removed EMG before any noise reduction (a noise profile is itself built from
@@ -447,7 +460,8 @@ def emg_burst(filename: str, timecol, emgcolumns, entropycolumns, detect_emg, fs
     return segments
 
 
-def burst_masks(breaths, n: int, fs: float, guard_s: float):
+def burst_masks(breaths: OrderedDict[int, OrderedDict[str, Any]], n: int, fs: float,
+                guard_s: float) -> tuple[NDArray[np.bool_], NDArray[np.bool_]]:
     """``(burst, interburst)`` boolean masks of length ``n`` over a recording segmented by
     :func:`emg_burst`. ``burst`` is the union of the bursts (their located edges).
     ``interburst`` is the periods BETWEEN two consecutive bursts, measured from the
@@ -473,8 +487,9 @@ def burst_masks(breaths, n: int, fs: float, guard_s: float):
     return burst, inter
 
 
-def whole_file(filename: str, timecol, emgcolumns, entropycolumns, rms_s: float, fs: float,
-              *, ignored_breaths: set[int], kinds: dict) -> OrderedDict:
+def whole_file(filename: str, timecol: NDArray[Any], emgcolumns: NDArray[Any],
+               entropycolumns: NDArray[Any], rms_s: float, fs: float,
+              *, ignored_breaths: set[int], kinds: dict[int, str]) -> OrderedDict[int, OrderedDict[str, Any]]:
     """The entire recording as one segment, numbered 1. ``ignored_breaths``/``kinds``
     are the already-resolved per-breath-number lookups ``compute.ignorebreaths``/
     ``compute.breathkinds`` build for the file (the same shape ``separateintobreathsbyflow``/
@@ -487,8 +502,9 @@ def whole_file(filename: str, timecol, emgcolumns, entropycolumns, rms_s: float,
     return OrderedDict([(1, segment)])
 
 
-def separators(filename: str, times_s, timecol, emgcolumns, entropycolumns, fs: float,
-               *, ignored_breaths: set[int], kinds: dict) -> OrderedDict:
+def separators(filename: str, times_s: Sequence[float], timecol: NDArray[Any],
+               emgcolumns: NDArray[Any], entropycolumns: NDArray[Any], fs: float,
+               *, ignored_breaths: set[int], kinds: dict[int, str]) -> OrderedDict[int, OrderedDict[str, Any]]:
     """``times_s`` (already validated by ``Settings.validate()`` as non-negative and
     strictly increasing — see ``SeparatorEntry``) split the recording into
     ``len(times_s) + 1`` segments, numbered from 1. A time at or beyond the
@@ -515,7 +531,8 @@ def separators(filename: str, times_s, timecol, emgcolumns, entropycolumns, fs: 
     return segments
 
 
-def remap_segment_number(old_bounds_s, new_bounds_s, old_number: int) -> int:
+def remap_segment_number(old_bounds_s: Sequence[float], new_bounds_s: Sequence[float],
+                         old_number: int) -> int:
     """Map a segment NUMBER under an OLD set of segment boundaries to its equivalent
     number under a NEW set (the manual-separator edit: placing or removing one
     boundary at a time), by finding where the OLD segment's own START TIME now falls

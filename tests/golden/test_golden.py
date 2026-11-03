@@ -30,9 +30,24 @@ def golden():
         return json.load(f)
 
 
+class _LazyScenarios(dict):
+    """Each scenario is run the first time a test asks for it, then cached.
+
+    Same results and the same total cost as ``gc.build_all()``; the difference is
+    WHERE the work happens. Run up front in the fixture, every scenario's engine
+    calls were attributed to the setup of the first test only, so coverage-based
+    test selection (mutmut's, for one) linked the engine to a single scenario and
+    never ran the other golden tests against a mutant they would have caught.
+    """
+
+    def __missing__(self, name):
+        self[name] = gc.run_scenario(name)
+        return self[name]
+
+
 @pytest.fixture(scope="module")
 def current():
-    return gc.build_all()
+    return _LazyScenarios()
 
 
 def _close(path, a, b):

@@ -138,3 +138,6 @@ patient-data/
 # macOS
 .DS_Store
 tests/golden/_prod_work_newcore/
+
+# mutmut working copy (pyproject [tool.mutmut])
+mutants/
