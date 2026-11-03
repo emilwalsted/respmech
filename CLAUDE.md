@@ -486,6 +486,14 @@ instrument.
   wrapped in a `timeout`); the full 2×2 (OS × Python) matrix runs only on
   master/PR/dispatch. Every job has `timeout-minutes`; concurrency is keyed per
   sha (push) or per PR number.
+- **The six engine modules pass `mypy --strict`** (`compute`, `emg`, `entropy`,
+  `noise`, `analysis/segments`, `analysis/manoeuvres`; command in the golden job of
+  `ci.yml`, a pinned, non-blocking step). Annotations only: numpy and settings types
+  are imported behind `TYPE_CHECKING` (the import budget in
+  `tests/unit/test_startup_imports.py` is unchanged), breath dicts are
+  `OrderedDict[str, Any]`, and the legacy settings namespace is `SimpleNamespace`. Keep
+  new code in those modules annotated; a `# type: ignore[...]` must name its code and
+  say why. Mutation testing of the same modules: `docs/MUTATION_TESTING.md`.
 
 ## Release (one tag triggers everything)
 
