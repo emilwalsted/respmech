@@ -17,13 +17,18 @@ but driven by a fixed, serialisable threshold spectrum.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from scipy import signal as _sig
 
 from respmech.core.emg import _amp_to_db, _db_to_amp, _stft, _istft
 from respmech.core._compat import trapezoid
+
+if TYPE_CHECKING:
+    from numpy.typing import ArrayLike, NDArray
 
 # Default fixed STFT parameters (decoupled from the noise-clip length — the bug fix).
 DEFAULT_N_FFT = 256
@@ -38,14 +43,15 @@ class NoiseProfileError(ValueError):
     pass
 
 
-def _smoothing_filter(n_grad_freq: int, n_grad_time: int) -> np.ndarray:
+def _smoothing_filter(n_grad_freq: int, n_grad_time: int) -> NDArray[np.float64]:
     f = np.outer(
         np.concatenate([np.linspace(0, 1, n_grad_freq + 1, endpoint=False),
                         np.linspace(1, 0, n_grad_freq + 2)])[1:-1],
         np.concatenate([np.linspace(0, 1, n_grad_time + 1, endpoint=False),
                         np.linspace(1, 0, n_grad_time + 2)])[1:-1],
     )
-    return f / np.sum(f)
+    smooth: NDArray[np.float64] = f / np.sum(f)
+    return smooth
 
 
 @dataclass
@@ -59,13 +65,14 @@ class NoiseProfile:
     n_grad_freq: int
     n_grad_time: int
     sr: int
-    noise_thresh: np.ndarray = field(repr=False)   # per-frequency threshold (dB)
+    noise_thresh: NDArray[np.float64] = field(repr=False)   # per-frequency threshold (dB)
 
     # -- construction -------------------------------------------------------
     @classmethod
-    def from_clip(cls, noise_clip, sr, *, n_fft=DEFAULT_N_FFT, hop_length=DEFAULT_HOP,
-                  win_length=DEFAULT_WIN, n_std_thresh=DEFAULT_N_STD,
-                  n_grad_freq=0, n_grad_time=4) -> "NoiseProfile":
+    def from_clip(cls, noise_clip: ArrayLike, sr: int, *, n_fft: int = DEFAULT_N_FFT,
+                  hop_length: int = DEFAULT_HOP, win_length: int = DEFAULT_WIN,
+                  n_std_thresh: float = DEFAULT_N_STD, n_grad_freq: int = 0,
+                  n_grad_time: int = 4) -> "NoiseProfile":
         noise_clip = np.asarray(noise_clip, dtype=float)
         if len(noise_clip) < n_fft:
             raise NoiseProfileError(
@@ -83,7 +90,7 @@ class NoiseProfile:
                    n_grad_time, sr, thresh)
 
     # -- application (deterministic; identical operator for every file) -----
-    def apply(self, signal, prop_decrease: float):
+    def apply(self, signal: ArrayLike, prop_decrease: float) -> NDArray[np.float64]:
         signal = np.asarray(signal, dtype=float)
         n = len(signal)
         sig_stft = _stft(signal, self.n_fft, self.hop_length, self.win_length)
@@ -105,20 +112,21 @@ class NoiseProfile:
         mag = np.abs(sig_stft)
         phase = np.divide(sig_stft, mag, out=np.ones_like(sig_stft), where=mag > 0)
         sig_amp = _db_to_amp(sig_db_masked) * phase
-        rec = np.asarray(_istft(sig_amp, self.n_fft, self.hop_length, self.win_length))
+        rec: NDArray[np.float64] = np.asarray(_istft(sig_amp, self.n_fft, self.hop_length,
+                                                     self.win_length))
         if len(rec) < n:
             rec = np.pad(rec, (0, n - len(rec)))
         return rec[:n]
 
     # -- serialisation ------------------------------------------------------
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {"n_fft": self.n_fft, "hop_length": self.hop_length,
                 "win_length": self.win_length, "n_std_thresh": self.n_std_thresh,
                 "n_grad_freq": self.n_grad_freq, "n_grad_time": self.n_grad_time,
                 "sr": self.sr, "noise_thresh": np.asarray(self.noise_thresh).tolist()}
 
     @classmethod
-    def from_dict(cls, d: dict) -> "NoiseProfile":
+    def from_dict(cls, d: dict[str, Any]) -> "NoiseProfile":
         return cls(d["n_fft"], d["hop_length"], d["win_length"], d["n_std_thresh"],
                    d["n_grad_freq"], d["n_grad_time"], d["sr"],
                    np.asarray(d["noise_thresh"], dtype=float))
@@ -128,10 +136,10 @@ class NoiseProfile:
 class NoiseProfileSet:
     """One :class:`NoiseProfile` per EMG channel + the chosen `prop_decrease`, built
     once and applied identically to every file in the test."""
-    profiles: list          # list[NoiseProfile], one per EMG channel
+    profiles: list[NoiseProfile]          # one per EMG channel
     prop_decrease: float
 
-    def apply_columns(self, emgcols: np.ndarray) -> np.ndarray:
+    def apply_columns(self, emgcols: ArrayLike) -> NDArray[np.float64]:
         emgcols = np.asarray(emgcols, dtype=float)
         if emgcols.shape[1] != len(self.profiles):
             raise NoiseProfileError(
@@ -141,25 +149,26 @@ class NoiseProfileSet:
             out[:, i] = prof.apply(emgcols[:, i], self.prop_decrease)
         return out
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {"prop_decrease": self.prop_decrease,
                 "profiles": [p.to_dict() for p in self.profiles]}
 
     @classmethod
-    def from_dict(cls, d: dict) -> "NoiseProfileSet":
+    def from_dict(cls, d: dict[str, Any]) -> "NoiseProfileSet":
         return cls([NoiseProfile.from_dict(p) for p in d["profiles"]], d["prop_decrease"])
 
 
 # --- quality metrics --------------------------------------------------------
 
-def inband_power(x, sr, band=EMG_BAND):
+def inband_power(x: ArrayLike, sr: float, band: tuple[float, float] = EMG_BAND) -> float:
     x = np.asarray(x, dtype=float)
     f, p = _sig.welch(x, sr, nperseg=min(1024, len(x)))
     m = (f >= band[0]) & (f <= band[1])
     return float(trapezoid(p[m], f[m]))
 
 
-def fidelity(raw_active, processed_active, sr, band=EMG_BAND):
+def fidelity(raw_active: ArrayLike, processed_active: ArrayLike, sr: float,
+             band: tuple[float, float] = EMG_BAND) -> float:
     """Fraction of in-band inspiratory EMG power retained (over-subtraction guard)."""
     denom = inband_power(raw_active, sr, band)
     if denom <= 0:
@@ -167,22 +176,26 @@ def fidelity(raw_active, processed_active, sr, band=EMG_BAND):
     return inband_power(processed_active, sr, band) / denom
 
 
-def snr_db(active, quiet, sr, band=EMG_BAND):
-    return 10.0 * np.log10((inband_power(active, sr, band) + 1e-30) /
+def snr_db(active: ArrayLike, quiet: ArrayLike, sr: float,
+           band: tuple[float, float] = EMG_BAND) -> float:
+    snr: float = 10.0 * np.log10((inband_power(active, sr, band) + 1e-30) /
                            (inband_power(quiet, sr, band) + 1e-30))
+    return snr
 
 
 # --- build from reference + fidelity-driven prop selection ------------------
 
-def build_profiles(reference_cols, sr, *, n_fft=DEFAULT_N_FFT, hop_length=DEFAULT_HOP,
-                   win_length=DEFAULT_WIN, n_std_thresh=DEFAULT_N_STD,
-                   n_grad_freq=0, n_grad_time=4, cancel_check=None) -> list:
+def build_profiles(reference_cols: ArrayLike, sr: int, *, n_fft: int = DEFAULT_N_FFT,
+                   hop_length: int = DEFAULT_HOP, win_length: int = DEFAULT_WIN,
+                   n_std_thresh: float = DEFAULT_N_STD, n_grad_freq: int = 0,
+                   n_grad_time: int = 4,
+                   cancel_check: Callable[[], bool] | None = None) -> list[NoiseProfile]:
     """One NoiseProfile per column of an EMG-free reference clip (shape [n, nch])."""
     from respmech.core._cancel import check as _ck
     reference_cols = np.asarray(reference_cols, dtype=float)
     if reference_cols.ndim == 1:
         reference_cols = reference_cols[:, None]
-    out = []
+    out: list[NoiseProfile] = []
     for i in range(reference_cols.shape[1]):
         _ck(cancel_check)                 # abort a superseded preview job between channels
         out.append(NoiseProfile.from_clip(reference_cols[:, i], sr, n_fft=n_fft,
@@ -192,9 +205,13 @@ def build_profiles(reference_cols, sr, *, n_fft=DEFAULT_N_FFT, hop_length=DEFAUL
     return out
 
 
-def select_prop_decrease(profiles, active_cols, quiet_cols, sr, *,
-                         target=DEFAULT_FIDELITY_TARGET, grid=None, band=EMG_BAND,
-                         cancel_check=None):
+def select_prop_decrease(profiles: Sequence[NoiseProfile], active_cols: ArrayLike,
+                         quiet_cols: ArrayLike, sr: float, *,
+                         target: float = DEFAULT_FIDELITY_TARGET,
+                         grid: Sequence[float] | None = None,
+                         band: tuple[float, float] = EMG_BAND,
+                         cancel_check: Callable[[], bool] | None = None,
+                         ) -> tuple[float, dict[str, Any]]:
     """Pick — ONCE per test — the highest ``prop_decrease`` whose worst-channel
     fidelity stays ≥ ``target`` on the test's active EMG. Returns
     (prop_decrease, report) where report lists per-channel fidelity/ΔSNR.
@@ -206,11 +223,11 @@ def select_prop_decrease(profiles, active_cols, quiet_cols, sr, *,
     if grid is None:
         grid = [round(x, 2) for x in np.arange(0.1, 1.001, 0.1)]
     from respmech.core._cancel import check as _ck
-    best = None
-    per_prop = {}
+    best: float | None = None
+    per_prop: dict[float, list[float]] = {}
     for prop in sorted(grid):
         _ck(cancel_check)                 # each prop step is a full per-channel STFT sweep
-        fids = []
+        fids: list[float] = []
         for i, prof in enumerate(profiles):
             proc = prof.apply(active_cols[:, i], prop)
             fids.append(fidelity(active_cols[:, i], proc, sr, band))
@@ -222,8 +239,11 @@ def select_prop_decrease(profiles, active_cols, quiet_cols, sr, *,
     return chosen, report
 
 
-def _prop_report(profiles, active_cols, quiet_cols, sr, prop, band, per_prop, target):
-    rows = []
+def _prop_report(profiles: Sequence[NoiseProfile], active_cols: NDArray[np.float64],
+                 quiet_cols: NDArray[np.float64], sr: float, prop: float,
+                 band: tuple[float, float], per_prop: dict[float, list[float]],
+                 target: float) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
     for i, prof in enumerate(profiles):
         proc_a = prof.apply(active_cols[:, i], prop)
         proc_q = prof.apply(quiet_cols[:, i], prop)

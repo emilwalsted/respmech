@@ -12,13 +12,17 @@ the call, so the batch / CLI / golden path (which never passes a checker) runs t
 same code with no extra float operations — byte-identical output.
 """
 
+from __future__ import annotations
+
+from collections.abc import Callable
+
 
 class Cancelled(BaseException):
     """Raised to abort a superseded compute early; only ever when a cancel_check is
     provided AND returns True."""
 
 
-def check(cancel_check):
+def check(cancel_check: Callable[[], bool] | None) -> None:
     """Raise :class:`Cancelled` iff a checker was supplied and reports cancellation.
     Inlined at hot-loop checkpoints; a no-op (single ``is not None`` test) by default."""
     if cancel_check is not None and cancel_check():
