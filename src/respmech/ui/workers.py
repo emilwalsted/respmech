@@ -537,11 +537,12 @@ def stage_ecg_reduction(settings: Settings, file_path: str, cancel_check=None) -
                 after = emglib.peak_window_rms(proc[:, detect].astype(float), peaks_samp, fs)
                 suppression = (1.0 - after / before) if (before and before == before) else float("nan")
             else:                                          # detect ONLY (cheap); processed == raw
-                from scipy import signal as _sig
-                pk, _props = _sig.find_peaks(
-                    emg[:, detect], height=s.processing.emg.minheight,
-                    distance=s.processing.emg.mindistance * fs,
-                    width=s.processing.emg.minwidth * fs)
+                # remove_ecg's own detector, so the markers are the R-peaks a run with ECG
+                # removal on subtracts at (this ran find_peaks on the raw channel, positive
+                # peaks only, until the R-peak polarity fix).
+                pk = emglib.detect_r_peaks(
+                    emg[:, detect], fs, s.processing.emg.minheight,
+                    s.processing.emg.mindistance, s.processing.emg.minwidth)
                 peaks = pk / fs
         except Cancelled:
             raise

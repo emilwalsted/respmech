@@ -958,7 +958,9 @@ def _write_run_report(result, settings, outputfolder: str,
                          f"suppression {supp_s}")
         if nr:
             L.append(f"  Noise reduction: prop_decrease {nr.get('prop_decrease')} "
-                     f"(fidelity target {nr.get('fidelity_target')})")
+                     f"(fidelity target {nr.get('fidelity_target')}"
+                     + ("; not reached on every channel, so the gentlest setting was used)"
+                        if nr.get("target_met") is False else ")"))
             for ch in nr.get("channels", []):
                 fid, dsnr = ch.get("fidelity"), ch.get("delta_snr_db")
                 if fid is not None and dsnr is not None:

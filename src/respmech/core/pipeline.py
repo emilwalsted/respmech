@@ -837,6 +837,12 @@ def _build_noise_set(settings, s, files, progress=None, clip=None, cancel_check=
         prop, report = noiselib.select_prop_decrease(
             profiles, active, quiet, s.input.format.samplingfrequency,
             target=cfg.fidelity_target, cancel_check=cancel_check)
+        if not report.get("target_met", True):
+            worst = min((ch["fidelity"] for ch in report.get("channels", [])), default=float("nan"))
+            warnings.warn(
+                f"auto_prop: no noise-reduction strength keeps every EMG channel's fidelity at "
+                f"or above the target {cfg.fidelity_target}; the gentlest setting "
+                f"(prop_decrease {prop}) is used, and the worst channel's fidelity is {worst:.2f}.")
     else:
         prop, report = cfg.prop_decrease, {"prop_decrease": cfg.prop_decrease, "auto": False}
     _emit(progress, ProgressEvent("stage", message=f"noise profile built (prop_decrease={prop})"))

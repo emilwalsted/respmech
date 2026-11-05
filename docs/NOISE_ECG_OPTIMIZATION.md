@@ -54,8 +54,9 @@ Hardcoded / effective parameters:
    requirement** even though the noise *source* is shared.
 
 ### 1.2 ECG removal — `emg.remove_ecg` → `emg.subtractecg`
-R-peaks are detected with `scipy.signal.find_peaks(peakch, height=minheight,
-distance=mindistance·fs, width=minwidth·fs)` on the `column_detect` channel. A
+R-peaks are detected with `scipy.signal.find_peaks(height=minheight,
+distance=mindistance·fs, width=minwidth·fs)` on the median-removed `column_detect`
+channel, in both polarities, and ONE polarity is kept for the whole channel (§8). A
 **time-aligned averaged ECG template** is built over `windowsize` (0.4 s) windows
 around the peaks (alignment search ±0.2 s); each beat is then time-aligned
 (`timeshift_average`) and amplitude-fitted (`amplitude_average`, range ±1.25, 1000
@@ -86,6 +87,11 @@ rejected as over-subtraction.
 
 Raw in-band inspiratory-vs-expiratory SNR ≈ **3.5 dB** (modest separation — typical
 for surface/oesophageal EMGdi).
+
+The sweeps in §3a to §3c were measured with the noise-reduction reconstruction as it was
+before 2.5.0, which mixed magnitude and phase additively and let fidelity exceed 1. Their
+ΔSNR and fidelity values, and the recommendation built on them, describe that version; the
+pipeline itself chooses the strength from §3d's automatic frontier.
 
 ### 3a. With the current 0.05 s noise clip
 Every fixed `n_fft` warns *“too large for length=100”*; the estimate is unstable and
@@ -132,16 +138,19 @@ The pipeline builds the shared profile from an **expiration-based rest reference
 for H5 that is **16.0 s of Baseline expiration → 497 STFT frames** (vs the ~7 frames
 of the legacy 0.05 s interval), a stable per-frequency estimate. It then auto-selects,
 from the whole-test frontier, the highest `prop_decrease` keeping the **worst channel**
-≥ target (0.8):
+≥ target (0.8). With the corrected reconstruction (fidelity is at most 1) and the
+per-channel R-peak polarity (§8), measured 04-11-2026:
 
-| Test | frames | auto `prop_decrease` | binding channel | per-channel fidelity / ΔSNR |
+| Test | auto `prop_decrease` | target met | worst channel | per-channel fidelity / ΔSNR |
 |---|---|---|---|---|
-| H5 | 497 | **0.5** | ch4 = 0.812 | fidelity 0.81–1.06, ΔSNR +0.26…+1.71 dB |
-| H6 | ~440 | **0.2** | ch2 = 0.839 | fidelity 0.84–1.13, ΔSNR +0.03…+1.20 dB |
+| H5 | **0.1** | yes | ch4 = 0.807 | fidelity 0.81–0.90, ΔSNR +0.20…+0.74 dB |
+| H6 | **0.1** | **no** | ch2 = 0.659 | fidelity 0.66–0.86, ΔSNR +0.19…+1.27 dB |
+| H1 (resampling) | **0.1** | **no** | ch1 = 0.569 | fidelity 0.57–0.72, ΔSNR +0.37…+1.50 dB |
 
-The stable reference lets H5 denoise more (0.5 vs the 0.2 the borderline reference
-forced) while every channel stays ≥ 0.8. The chosen value is applied **identically to
-all files** (verified by test).
+When no strength keeps every channel at the target, the gentlest on the grid (0.1) is used,
+and the report carries `target_met = False`: the run log's diagnostics, the run summary, the
+Preview status line and a warning say so. The chosen value is applied **identically to all
+files** (verified by test).
 
 ### Recommended noise-reduction settings
 - **`n_fft = 256`, `win_length = 256`, `hop_length = 64`** (decouple from clip length),
@@ -372,3 +381,157 @@ include drift, trend and the volume-peak thresholds (`_method_sensitive_key` in 
 module) wherever they already depend on the segmentation method, so a Preview panel
 can no longer keep showing a fidelity/reference-clip result computed under a
 volume-peak, drift or trend setting the user has since changed.
+
+## 8. R-peak polarity: one polarity per channel (04-11-2026)
+
+2.5.0 made the detector search both polarities and keep the taller lobe of each beat, so a
+channel with an inverted R-wave could be used for ECG removal. On the production recordings
+the QRS complexes are biphasic with R and S lobes of about the same size (median
+negative/positive peak height 0.87–1.24 on every file), so the taller lobe flipped between R
+and S from beat to beat. `_choose_polarity` now keeps one polarity for the whole channel. A
+polarity that finds at most half as many peaks as the other is not used, in either direction.
+When both find about as many, the negative peaks are used only when their median amplitude in
+the QRS band (8–30 Hz, second-order Butterworth, zero phase) is at least twice the size of the
+positive peaks', which is what an inverted R-wave looks like; otherwise the positive peaks, as
+before 2.5.0. `detect_r_peaks` does both steps for `remove_ecg`, and Preview & QC marks its
+peaks while ECG removal is off (until this fix that tab ran `find_peaks` on the raw channel,
+positive peaks only). At a sampling rate of 66 Hz or less the band cannot be formed and the
+median-removed values at the peaks are compared instead. Non-finite samples (inf, NaN) count as
+the median, so one can neither blank the channel nor crowd an R-wave out of the minimum
+distance.
+
+Measured with the same template subtraction for every variant, at the pre-2.5.0 R-peak
+instants (so every variant is judged at the same points), mean over the EMG channels:
+
+| File | beats on the S lobe in 2.5.0 | suppression 2.5.0 | suppression now (= before 2.5.0) |
+|---|---|---|---|
+| RIU_H1_60W | 20 % | 0.14 | 0.50 |
+| RIU_H5_40W | 47 % | 0.63 | 0.74 |
+| RIU_H5_60W | 26 % | 0.60 | 0.65 |
+| RIU_H5_Baseline | 26 % | 0.81 | 0.80 |
+| RIU_H5_IC | 48 % | 0.79 | 0.79 |
+| RIU_H5_Peak180W | 4 % | 0.61 | 0.64 |
+| RIU_H6_40W | 74 % | 0.67 | 0.78 |
+| RIU_H6_60W | 78 % | 0.73 | 0.73 |
+| RIU_H6_Baseline | 94 % | 0.50 | 0.65 |
+| RIU_H6_IC | 79 % | 0.53 | 0.53 |
+| RIU_H6_Peak220W | 29 % (17 of 19 beats found) | 0.19 | 0.24 |
+
+The suppression fell by more than 0.01 in seven of the eleven files. On clean synthetic data
+the template's ±0.2 s time-shift search absorbs a shift from the R to the S lobe and every
+detector removes the same amount, so the loss is an observation on these recordings, not a
+proven mechanism. On every production recording the rule gives exactly the pre-2.5.0 peaks
+(both searches find about as many peaks, and the QRS-band ratio is 0.71–1.35), so the
+remaining difference from the 07-07-2026 production golden is the reconstruction fix alone
+(and, for RIU_H1_60W, §7).
+
+Why the count guard and the QRS band (independent reviews, 04-11-2026). The first version
+compared median raw heights with a threshold of 2.0, and one large negative artefact, or a few
+negative ectopic beats, switched an upright channel onto those few peaks (35 beats to 1, and
+the true suppression at the R-waves from 0.91 to below 0). The second added a count guard on the negative side and
+lowered the threshold to 1.5. The second review found the guard's mirror (one or two positive
+artefacts held a clean inverted channel on those peaks) and that raw heights cannot tell a QRS
+lobe from a T-wave. With a threshold of 1.5, a deep negative T-wave took over an upright channel
+(every peak about 0.28 s late, QRS suppression 0.00), and an inverted R-wave over an upright
+T-wave above the height threshold kept the T-waves until |R|/T reached 1.6 in a clean and 2.6 in
+the noisiest channel at 72/min and the default minimum distance of 0.5 s (with the first
+version's 2.0, 2.2 to more than 6). In the QRS band the slow T-wave is small. Negative/positive ratios at the
+detected peaks, the reviewers' synthetic sweeps with five seeds each:
+
+| Case | raw height ratio | QRS-band ratio | channel uses |
+|---|---|---|---|
+| upright R, deep negative T, \|T\|/R 1.3–3.0 | 1.3–2.9 | 0.21–0.51 | positive (R) |
+| inverted R, upright T over the threshold, \|R\|/T 1.1–3.0, noise 0.05–0.15 | 1.0–2.5 | 5.6–19.6 | negative (R) |
+| biphasic, S/R 0.9–2.5 | 0.9–2.5 | 0.93–1.50 | positive (R) |
+| the 11 production recordings | 0.87–1.24 | 0.71–1.35 | positive (R) |
+
+The raw ratios of the three synthetic cases overlap widely; in the QRS band they separate,
+and the threshold 2.0 leaves a margin on both sides (1.5 would sit at the top of the biphasic
+sweep). The rule uses the R-waves in all four cases: an inverted R-wave over an upright T-wave
+from |R|/T 1.1 at every noise level at 72/min and the default minimum distance, where raw
+heights with 1.5 needed 1.6–2.6. Across the reviewers' synthetic batteries the rule does as well
+as raw heights with 1.5, or better, except in the kinds of case below. Better: the two-way guard keeps
+the beats in a recording of two beats and one artefact and in a clean inverted channel with one
+or two positive artefacts, and in very noisy channels (noise 0.3 of the R-wave) the rule found
+more of the QRS. On 3,000 random synthetic recordings (random QRS shapes including paced ones,
+T-waves, rhythms, sampling rates and noise), each analysed with five settings, the rule had the
+highest mean true ECG suppression at the R-waves of the four detectors for upright, biphasic and
+inverted channels alike: 0.52, 0.53 and 0.48, against 0.51, 0.43 and 0.14 before 2.5.0, 0.42,
+0.41 and 0.40 for 2.5.0, and 0.50, 0.44 and 0.33 for raw heights with 1.5.
+
+Ectopic beats of the other polarity that only the other search finds, in up to a third of the
+heartbeats, never switch a channel. More frequent ones are a trade-off, since one averaged
+template is subtracted. In the reviewers' cases with negative ectopic beats (2.5 times the
+R-wave, broad) in 46–77 % of the heartbeats, the rule kept the normal beats in eight of twelve,
+as before 2.5.0, and used the ectopic beats in the other four (59–77 %). Raw heights with 1.5
+used the ectopic beats in ten of twelve, which removes more ECG energy in total, since the
+ectopic beats carry most of it, but none from the normal beats.
+
+When the height threshold is below the EMG noise and the minimum distance short, both searches
+find mostly noise peaks, two to four times as many as there are beats, and their QRS-band
+medians come out close; the rule then often keeps the positive peaks, as before 2.5.0. In a
+sweep of the inverted-R case over noise (0.02–0.15 of the R-wave), threshold (0.3, or 0.6 of the
+T-wave), |R|/T (1.1–8), heart rate and minimum distance (576 combinations, five seeds each),
+the rule chose the negative R-waves in every case at the distance Auto-suggest sets (half the
+R-R interval: 0.42 s at 72/min, 0.6 s at 50/min) and at 0.5 s at 72/min, and missed them in 27
+of 480 at 0.3 s (72/min), 44 of 480 at 0.5 s at 50/min and 226 of 480 at 0.25 s (50/min). Raw
+heights with 1.5 chose the negative peaks where the rule did not in 28 of the 2,880, and the
+rule chose them where raw heights did not in 968.
+
+A channel whose larger QRS lobe is the negative one, but less than twice the positive one in the
+QRS band (an rS complex), stays on the smaller positive lobe, as before 2.5.0. In the reviewers'
+sweep of biphasic complexes (S/R 0.6–2.5, five QRS widths, three S widths, two T-waves, three
+noise levels, fixed and suggested settings), the mean true ECG suppression at the R-waves on the
+channels where this happened was 0.65–0.73 with the rule, 0.64–0.73 before 2.5.0, 0.69–0.78
+with raw heights at 1.5 (which used S on about a third of them) and 0.71–0.72 with 2.5.0. Over
+every channel whose negative lobe is the larger, including those the rule moves onto it, it was
+about 0.65 with the rule, 0.67–0.69 with raw heights at 1.5, 0.65–0.70 with 2.5.0 and 0.48–0.55
+before 2.5.0. Where the positive lobe is the larger or as large, the rule and raw heights at 1.5
+were equal and pre-2.5.0 within 0.01 (0.67–0.80); 2.5.0 was lower with fixed settings
+(0.72–0.73 against 0.78–0.79) and slightly higher with suggested ones (0.68 against 0.67). With
+a height threshold close to the small lobe's amplitude, beats are missed: at a threshold of 0.5
+with r at 0.5–0.7 of S, a median of 33 of 36 were found, and as few as 17. Using the negative lobe
+also when it is at least 1.5 times as tall and at least as large in the QRS band would have
+recovered most of these, but estimated on the random recordings it changed the mean suppression
+of no channel type by more than 0.005 (0.006 for one type and setting), so the simpler rule was
+kept.
+
+A minimum distance shorter than the time from the S-wave to a negative T-wave lets the negative
+search find both in every beat, twice as many peaks as the positive search, so the count guard
+drops the R-waves. In the reviewer's grid (RS complexes with S/R 0.8–1.0, a negative T-wave of
+0.5–0.8 of the R-wave, QT 0.40–0.44 s, 50–70/min, minimum distance 0.30–0.35 s) this happened in
+65 of 192 combinations: half the peaks on T-waves and a true suppression at the R-waves of
+0.56–0.63, against 0.90 before 2.5.0 and with raw heights at 1.5. Auto-suggest's distance (half
+the R-R interval) avoids it at rest, but the distance applies to every file of a test, so one
+chosen for the peak-load files of an exercise protocol can be too short for the resting ones.
+Simple changes to the guard fixed these but cost about as much elsewhere.
+
+The positive side is compared by size. A pacing spike has almost no QRS-band amplitude, and the
+broad QRS after it makes the band negative at the spike, so with a signed comparison the small
+positive band value of discordant T-waves won and every peak sat on a T-wave: in 98 of 216
+combinations of the reviewer's grid of paced rhythms (spike 1.5–8 times the QRS, 0.5–1.5 ms,
+QRS 32 or 46 ms, T-wave −0.4 or −0.8), all of which before 2.5.0, 2.5.0 and raw heights at 1.5
+handled. By size, 2 of the 216 remain, with a spike five times the QRS and 1 ms wide, whose band
+value is just above 0.
+
+Auto-suggest takes the height and width from the upright side, so on an inverted channel the
+suggested width can keep the narrower R-waves from being found at all (14 of 121 inverted
+channels in the reviewer's end-to-end test); lower *Min height* and *Min width* in Preview if
+the markers miss them.
+
+Choosing per channel by the larger median height (1.0) moved RIU_H5_IC and four H6 files onto
+the S lobe with mixed results and was rejected.
+
+Known limitation: one median is removed from the whole recording and the height threshold is
+fixed, so a large DC step or strong drift can lose the beats in part of a recording. After a
+step of 1.5 times the R-wave halfway through, 18–24 of 35 beats are found, and with a slow
+0.25 Hz wave of ±1.5 R-waves or a linear drift of 3 R-waves over the recording, 23 and 27 (the
+reviewers' cases; raw heights with 1.5 chose the same). 2.5.0's per-beat merge found 33–35.
+Before 2.5.0 the raw channel lost them too after a negative step and with the wave and the
+drift (18, 24 and 28), but not after a positive step.
+
+The synthetic `emg_only_burst` scenario has no ECG at all (noise and 70–90 Hz bursts only), so
+its detected peaks are noise maxima over the threshold, found about equally often in both
+polarities. 2.5.0's per-beat choice took 18 of 40 and 17 of 35 of them from the negative side;
+the rule keeps the positive ones (42 and 36). The production EMG golden and that scenario were
+re-baked with the rule.

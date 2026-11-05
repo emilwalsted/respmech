@@ -6,6 +6,55 @@ decision <date>" — never an internal ticket reference; this repo is public).
 
 ---
 
+**04-11-2026 — The ECG R-peak detector keeps one polarity per channel (the author chose a
+per-channel polarity on 04-11-2026; the count guard, the QRS-band comparison and the threshold
+follow the measurements and three independent reviews on 04 and 05-11-2026).** 2.5.0 made
+`remove_ecg` search both polarities and keep the taller lobe of each beat, so that a channel
+with an inverted R-wave could be used. On the production recordings the median
+negative/positive peak-height ratio is 0.87-1.24 on all eleven EMG files: biphasic complexes
+whose R and S lobes are nearly the same size. Beat by beat the taller lobe then flips between R
+and S (4-94 % of a file's beats on S), and the ECG suppression at the R-waves fell by more than
+0.01 in seven of eleven files (0.50 to 0.14 on one). On clean synthetic data the template's
+±0.2 s time-shift search absorbs a lobe shift, so the loss is measured on the real recordings
+rather than explained by a proven mechanism. Decision: `_choose_polarity` keeps ONE polarity for
+the whole channel. A polarity that finds at most half as many peaks as the other is not used, in
+either direction. Otherwise the negative peaks are used only when their median amplitude in the
+QRS band (8-30 Hz, second-order Butterworth, zero phase) is at least 2.0 times the size of the
+positive peaks'; else the positive peaks, as before 2.5.0. The first review showed that
+comparing median raw heights let one large negative artefact switch an upright channel onto
+that single peak (35 beats to 1, and the true suppression at the R-waves from 0.91 to below 0).
+The second showed that a guard on the negative side alone let one or two positive artefacts
+hold a clean inverted channel. It also showed that raw heights cannot tell a QRS lobe from a
+T-wave. With a threshold of 1.5, a deep negative T-wave took over an upright channel (QRS
+suppression 0.00), and an inverted R-wave stayed on its upright T-waves until |R|/T reached 1.6
+in a clean channel and 1.8-2.6 in noisier ones (at 72/min and the default 0.5 s distance). In
+the QRS band the T-wave is small. An inverted R-wave over an upright T-wave measures 5.6 or more
+there, and a deep negative T-wave 0.21-0.51 of the R-wave. Biphasic complexes up to S/R 2.5
+measure 0.93-1.50 and the production recordings 0.71-1.35, so 2.0 leaves a margin on both sides.
+The third found that a pacing spike, which has almost no QRS-band amplitude and a negative band
+value before a broad QRS, let discordant T-waves win a signed comparison, so the positive side is
+compared by size. On every production recording the rule gives exactly the pre-2.5.0 peaks.
+`detect_r_peaks` does the detection, Preview & QC marks the same peaks while ECG removal is off,
+and non-finite samples count as the median. Known limitations: one median is removed from the
+whole recording and the height threshold is fixed, so a large DC step or strong drift can lose
+the beats in part of a recording (18-24 of 35 after a step of 1.5 times the R-wave; 2.5.0's
+per-beat merge kept them, and before 2.5.0 the raw channel lost them after a negative step and
+with strong drift, too). A minimum distance shorter than the time from the S-wave to a negative
+T-wave lets the negative search find two peaks per beat, so the guard drops the R-waves (65 of
+192 combinations in the reviewer's grid; Auto-suggest's half R-R interval avoids it at rest).
+Rejected: keeping the per-beat merge; choosing per channel by the larger median height (1.0),
+which moved five production files onto the S lobe with mixed results; raw heights with a
+threshold of 1.5 (above) or 2.0, where the same inverted R-wave needed |R|/T of 2.2 to more than
+6; on top of the rule, the negative lobe whenever it is 1.5 times as tall and at least as large
+in the QRS band, which helps channels whose S lobe dominates but changed no channel type's mean
+suppression by more than 0.005 on 3,000 random synthetic recordings; and simple changes to the
+count guard against the double counting, which fixed it but cost about as much elsewhere. The
+production EMG golden and the synthetic `emg_only_burst` scenario (which has no ECG: its peaks
+are noise maxima) were re-baked with the rule; the numbers are in
+`docs/NOISE_ECG_OPTIMIZATION.md` §8.
+
+---
+
 **16-10-2026 — An unpublished tag is published to PyPI as itself, and the PyPI gate runs
 file by file (author's decision, 16-10-2026).** 2.5.0's tag-triggered *Publish to PyPI* run
 ran out of its 120 min ceiling at 67 % of a one-process test run, every test green so far,
