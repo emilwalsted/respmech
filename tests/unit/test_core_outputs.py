@@ -1168,6 +1168,22 @@ def test_diagnostics_names_channel_index_and_column_together(tmp_path):
     assert report.count("channel index 1 (column 3)") == 2   # ECG auto-detect AND per-file
 
 
+def test_diagnostics_says_when_the_fidelity_target_was_not_reached(tmp_path):
+    """auto_prop falls back to the gentlest prop_decrease when no strength keeps every
+    channel at the fidelity target; the run report must say so, not just print the target."""
+    from respmech.core.io.writers import _write_run_report
+
+    s = synth_settings(tmp_path)
+    base = {"prop_decrease": 0.1, "fidelity_target": 0.8,
+            "channels": [{"channel": 0, "fidelity": 0.67, "delta_snr_db": 0.4}]}
+    for target_met, expect in ((False, True), (True, False)):
+        result = SimpleNamespace(ok_files={}, failed_files={}, ecg_auto_report=None,
+                                 noise_report=dict(base, target_met=target_met))
+        path = _write_run_report(result, s, str(tmp_path), [], datetime(2026, 11, 4))
+        report = open(path, encoding="utf-8").read()
+        assert ("not reached on every channel, so the gentlest setting was used" in report) is expect
+
+
 def test_diagnostics_carries_per_file_quality_notices(tmp_path):
     """K-192/K-224: the ecg_auto_detect quality-check warning and the cardiac-gated
     peak's NaN reason were only raised via warnings.warn (stderr an app user never

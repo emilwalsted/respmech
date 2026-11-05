@@ -86,8 +86,9 @@ def test_selection_report_is_pinned(sig):
     prop, rep = N.select_prop_decrease(
         profs, np.column_stack([active, active]), np.column_stack([quiet, quiet]), SR)
     assert prop == 0.1
-    assert sorted(rep) == ["channels", "fidelity_target", "frontier", "prop_decrease"]
+    assert sorted(rep) == ["channels", "fidelity_target", "frontier", "prop_decrease", "target_met"]
     assert rep["prop_decrease"] == 0.1
+    assert rep["target_met"] is True       # 0.1 keeps both channels at or above 0.8
     assert rep["fidelity_target"] == N.DEFAULT_FIDELITY_TARGET
     row = rep["channels"][0]
     assert sorted(row) == ["channel", "delta_snr_db", "fidelity"]

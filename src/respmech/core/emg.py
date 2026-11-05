@@ -297,29 +297,99 @@ def _stack_channels(retch: list[NDArray[Any]]) -> NDArray[Any]:
     return np.ascontiguousarray(stacked)
 
 
-def _merge_peaks_by_distance(pos: NDArray[Any], pos_h: NDArray[Any], neg: NDArray[Any],
-                             neg_h: NDArray[Any], min_distance: float) -> NDArray[Any]:
-    """Union two polarities' peak indices, keeping only the taller of any two peaks
-    (one from each polarity) closer together than ``min_distance``: a single biphasic
-    R-wave must count once, not once per lobe. Ties keep the positive-polarity peak,
-    which reproduces the old positive-only detector exactly when a channel has no
-    genuine negative R-waves."""
-    if pos.size == 0:
-        return neg
-    if neg.size == 0:
-        return pos
-    idx = np.concatenate([pos, neg])
-    h = np.concatenate([pos_h, neg_h])
-    keep = np.ones(idx.size, dtype=bool)
-    for oi in np.argsort(-h, kind="stable"):   # tallest first; stable so an exact tie
-                                                # keeps the earlier (positive-polarity) entry
+# A channel's R-peaks come from ONE polarity, never a beat-by-beat mix (_choose_polarity).
+# Measured 04-11-2026:
+#  * On the production recordings the R and S lobes are about the same size (median
+#    negative/positive peak height 0.87-1.24 on all 11 EMG files). 2.5.0 took the taller lobe
+#    beat by beat, which put 4-94 % of a file's beats on the S lobe, and the ECG suppression at
+#    the R-waves fell by more than 0.01 in 7 of 11 files (H1 0.50 -> 0.14). On clean synthetic
+#    data the template's +-0.2 s time-shift search absorbs such a lobe shift, so the loss is an
+#    observation on real recordings, not a proven mechanism.
+#  * The count guard (_MIN_SHARE) keeps a polarity that finds only a few peaks -- one large
+#    artefact, a few ectopic beats -- from taking over a channel whose other polarity finds
+#    the beats, in both directions (35 beats -> 1, and the true suppression at the R-waves
+#    from 0.91 to below 0, without it).
+#  * The amplitudes are compared in the QRS band (_QRS_BAND_HZ), where the steep R and S
+#    deflections keep much of their size and P and T waves and baseline drift lose most of
+#    theirs. Comparing raw peak heights let a deep negative T-wave take over an upright
+#    channel, and an upright T-wave over the height threshold hold an inverted one. On the
+#    production recordings the negative/positive QRS-band ratio is 0.71-1.35, so
+#    _NEGATIVE_DOMINANCE = 2.0 keeps a margin above them. The positive side counts by size
+#    (abs), so a paced channel stays on its pacing spikes, not its discordant T-waves.
+#  * Limitations: one median is removed from the whole recording and the height threshold is
+#    fixed, so a large DC step or strong drift can lose the beats in part of a recording (18-24
+#    of 35 after a step of 1.5 times the R-wave). 2.5.0's per-beat choice kept them; before
+#    2.5.0 the raw channel lost them after a negative step and with strong drift, too. With a
+#    threshold below the EMG noise and a short minimum distance, both searches find mostly
+#    noise, the QRS-band medians come out close and the positive peaks are often kept, as
+#    before 2.5.0. And a minimum distance shorter than the time from the S-wave to a negative
+#    T-wave lets the negative search find two peaks per beat, so the guard drops the R-waves
+#    (docs/NOISE_ECG_OPTIMIZATION.md section 8).
+_QRS_BAND_HZ = (8.0, 30.0)
+_NEGATIVE_DOMINANCE = 2.0
+_MIN_SHARE = 0.5
 
-        if not keep[oi]:
-            continue
-        close = (np.abs(idx - idx[oi]) < min_distance) & keep
-        close[oi] = False
-        keep[close] = False
-    return np.sort(idx[keep])
+
+def _qrs_band(xr: NDArray[Any], fs: float) -> NDArray[np.float64]:
+    """``xr`` band-passed to the QRS band (second-order Butterworth, zero phase), or ``xr``
+    itself when the sampling rate is too low for the band or the channel too short to filter.
+    Non-finite samples count as 0 (the median), so one inf cannot turn the whole band to NaN."""
+    x = np.asarray(xr, dtype=float)
+    if not np.all(np.isfinite(x)):
+        x = np.where(np.isfinite(x), x, 0.0)
+    low, high = _QRS_BAND_HZ
+    if high >= 0.45 * fs:
+        return x
+    sos = signal.butter(2, [low, high], btype="band", fs=fs, output="sos")
+    if x.size <= 3 * (2 * sos.shape[0] + 1):        # sosfiltfilt's default padding
+        return x
+    return np.asarray(signal.sosfiltfilt(sos, x), dtype=float)
+
+
+def _choose_polarity(pos: NDArray[Any], neg: NDArray[Any], xr: NDArray[Any],
+                     fs: float) -> NDArray[Any]:
+    """The R-peaks of ONE polarity for the whole channel, never a per-beat mix.
+
+    A polarity that found nothing, or at most ``_MIN_SHARE`` as many peaks as the other, does
+    not find the beats, so the other one is used. When both found about as many, the
+    QRS-band amplitude of ``xr`` at the peaks (median) decides: the negative peaks are used
+    when theirs is at least ``_NEGATIVE_DOMINANCE`` times the size of the positive peaks' (an
+    inverted R-wave, ticket 5.7 / K-191), otherwise the positive peaks, as before 2.5.0. The
+    size, not the signed value: a pacing spike has almost no QRS-band amplitude, and the broad
+    QRS after it makes the band negative at the spike, which let the small positive band value
+    of discordant T-waves win."""
+    if neg.size == 0 or neg.size <= _MIN_SHARE * pos.size:
+        return pos
+    if pos.size == 0 or pos.size <= _MIN_SHARE * neg.size:
+        return neg
+    qrs = _qrs_band(xr, fs)
+    amp_pos = float(np.median(qrs[pos]))
+    amp_neg = float(np.median(-qrs[neg]))
+    if amp_neg > 0.0 and amp_neg >= _NEGATIVE_DOMINANCE * abs(amp_pos):
+        return neg
+    return pos
+
+
+def detect_r_peaks(peakch: NDArray[Any], samplingfrequency: float, ecgminheight: float,
+                   ecgmindistance: float, ecgminwidth: float) -> NDArray[Any]:
+    """The R-peaks (sample indices) ``remove_ecg`` subtracts the ECG template at, and what
+    Preview & QC marks while ECG removal is off: ``find_peaks`` on the median-removed channel
+    in both polarities, then ONE polarity for the whole channel (``_choose_polarity``).
+    Non-finite samples (NaN, inf) count as the median, so one cannot blank the whole channel
+    or crowd an R-wave out of the minimum distance."""
+    x = np.asarray(peakch, dtype=float)
+    finite = np.isfinite(x)
+    if finite.all():
+        xr = x - np.median(peakch)
+    elif finite.any():
+        xr = np.where(finite, x - np.median(x[finite]), 0.0)
+    else:
+        return np.array([], dtype=np.intp)
+    kw = dict(height=ecgminheight, distance=ecgmindistance * samplingfrequency,
+              width=ecgminwidth * samplingfrequency)
+    pos, _pos_props = signal.find_peaks(xr, **kw)
+    neg, _neg_props = signal.find_peaks(-xr, **kw)
+    return _choose_polarity(pos, neg, xr, samplingfrequency)
 
 
 def remove_ecg(emgecgchannels: ArrayLike, peakch: NDArray[Any], samplingfrequency: float,
@@ -331,15 +401,11 @@ def remove_ecg(emgecgchannels: ArrayLike, peakch: NDArray[Any], samplingfrequenc
     # a median-subtracted copy, so a channel with a DC offset made the suggested height
     # wrong for what this function actually saw. Peaks are searched on both polarities
     # (previously positive-only, per find_peaks' height= convention) so a channel whose
-    # R-wave is inverted can be detected too, then merged by _merge_peaks_by_distance so
-    # a biphasic complex is still counted once.
-    xr = np.asarray(peakch, dtype=float) - np.median(peakch)
-    min_distance = ecgmindistance * samplingfrequency
-    kw = dict(height=ecgminheight, distance=min_distance, width=ecgminwidth * samplingfrequency)
-    pos, pos_props = signal.find_peaks(xr, **kw)
-    neg, neg_props = signal.find_peaks(-xr, **kw)
-    peaks = _merge_peaks_by_distance(pos, pos_props["peak_heights"], neg, neg_props["peak_heights"],
-                                     min_distance)
+    # R-wave is inverted can be detected too, and _choose_polarity then keeps ONE polarity
+    # for the whole channel (2.5.0 took the taller lobe beat by beat, which mixed R and S
+    # lobes on biphasic complexes and degraded the template; see the comment above
+    # _choose_polarity). detect_r_peaks does both steps.
+    peaks = detect_r_peaks(peakch, samplingfrequency, ecgminheight, ecgmindistance, ecgminwidth)
     processedchannels, ecgwindows = subtractecg(emgecgchannels, peaks, samplingfrequency, windowsize, cancel_check=cancel_check)
     return processedchannels, ecgwindows, peaks / samplingfrequency
 
@@ -502,11 +568,13 @@ def suggest_ecg_settings(emg_matrix: ArrayLike, fs: float, *, hr_min_bpm: float 
     Picks the channel whose R-waves are clearest — most periodic *and* towering over the
     baseline — then derives ``find_peaks`` parameters (as ``remove_ecg`` consumes them) that
     capture those R-peaks and, as far as possible, only those. R-detection here is on the
-    DC-removed *positive* signal only (channel-scoring shortcut, not a detector); this is a
-    SUBSET of what ``remove_ecg`` itself now detects, which also DC-removes but additionally
-    searches the negative polarity for an inverted R-wave — so a
-    suggestion derived here is always directly usable by ``remove_ecg``, but a channel whose
-    R-wave is inverted may still score low here even though ``remove_ecg`` could detect it.
+    DC-removed *positive* signal only (channel-scoring shortcut, not a detector), the same
+    signal and polarity ``remove_ecg`` uses for an upright R-wave, so a suggestion for such a
+    channel is directly usable by ``remove_ecg``. ``remove_ecg`` switches a whole channel to
+    the negative polarity only when an inverted R-wave clearly dominates; such a channel may
+    score low here, and a height and width suggested from its positive side may not fit it
+    (a width taken from upright T-waves can keep the narrower inverted R-waves from being
+    found at all).
     Returns a dict of the 5 settings fields plus a ``_diagnostics`` entry (per-channel score,
     estimated bpm, confidence 'high'/'low').
 

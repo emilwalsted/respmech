@@ -7,6 +7,35 @@ for the installers themselves.
 
 ## Unreleased
 
+- **ECG removal finds the R-wave again, not the S-wave.** Since 2.5.0 the R-peak detector
+  searched both polarities and kept the taller lobe of each heartbeat. On recordings whose QRS
+  complex has an R and an S lobe of about the same size, which was every one of the eleven
+  validation recordings measured, that put 4 to 94 % of a recording's beats on the S lobe, and
+  less ECG was removed: on one recording the suppression around the R-waves fell from 50 % to
+  14 %, and on another two of 19 heartbeats were lost. A channel now uses one polarity for every
+  beat. A polarity that finds at most half as many peaks as the other is not used, so a large
+  artefact, or ectopic beats in up to a third of the heartbeats, cannot switch a channel. When
+  both find about as many, the negative peaks are used only when their size in the QRS band
+  (8 to 30 Hz) is at least twice that of the positive ones. That is how an inverted R-wave, which
+  2.5.0 set out to support, is recognised, also with an upright T-wave over the threshold, and a
+  deep negative T-wave no longer takes over an upright channel. On all eleven validation
+  recordings the detected R-peaks are the same as before 2.5.0 again, so ECG-removed EMG numbers
+  can change against 2.5.0. The detection still runs on the median-removed signal, as
+  Auto-suggest does, so a large DC step or strong drift within a recording can cost beats;
+  2.5.0's beat-by-beat choice kept them. Keep *Min gap* (`processing.emg.ecg_min_distance_s`) longer
+  than the time from the S-wave to a negative T-wave in the slowest file, or the downward search
+  can find both in every beat and the channel loses its R-waves (Auto-suggest's half R-R
+  interval stays clear of that at rest); and on an inverted channel, lower Auto-suggest's height
+  and width, which come from the upright side, if the markers miss the R-waves. With ECG removal
+  off, Preview & QC now marks the R-peaks a run with removal on would use; it marked the raw
+  channel's positive peaks.
+- **Noise reduction says when no strength meets the fidelity target.** With *Auto strength*
+  (`processing.emg.noise.auto_prop`), when no strength keeps every channel's fidelity at the
+  target, the gentlest one is used, as before. The run log's diagnostics, the run summary,
+  the Preview status line and a warning now say that the target was not reached, instead of
+  reporting the gentlest strength as if it had met it. Since 2.5.0's corrected fidelity
+  measure this does happen on real recordings: in two of three validation tests the worst
+  channel stays below 0.8 even at the gentlest strength.
 - **The average Campbell loop as numbers.** The averaged Campbell loop used to exist only
   as a figure. Tick *Average Campbell loop CSV
   (per file)* in Setup (`output.data.save_pv_average_csv`, off by default) and a run writes

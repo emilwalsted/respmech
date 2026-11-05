@@ -1613,7 +1613,9 @@ class RunScreen(QWidget):
         nr = getattr(result, "noise_report", None)
         if nr:
             self._append(f"  noise: prop_decrease {nr.get('prop_decrease')} "
-                         f"(fidelity target {nr.get('fidelity_target')})")
+                         f"(fidelity target {nr.get('fidelity_target')}"
+                         + ("; not reached on every channel, so the gentlest setting was used)"
+                            if nr.get("target_met") is False else ")"))
         # B02: failures first — a summary that lists nine successes before the one
         # failure buries the thing a reader actually needs to act on.
         for fname, fr in result.failed_files.items():

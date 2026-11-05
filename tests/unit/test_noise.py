@@ -107,6 +107,23 @@ def test_fidelity_metric():
     assert N.fidelity(x, 0.5 * x, sr) == pytest.approx(0.25, rel=1e-6)  # half amp -> quarter power
 
 
+def test_select_prop_reports_whether_the_target_was_met():
+    """When no prop_decrease on the grid keeps every channel at the target, the gentlest is
+    used and the report says so (target_met False), so the run log, the run summary, the
+    Preview status and a warning can tell the user instead of presenting a below-target
+    choice as if it had met the target."""
+    profiles = N.build_profiles(np.column_stack([_clip(0), _clip(1)]), 2000)
+    sr = 2000
+    t = np.arange(6000) / sr
+    active = np.column_stack([np.sin(2 * np.pi * 90 * t), np.sin(2 * np.pi * 120 * t)])
+    quiet = np.column_stack([0.2 * _clip(3, 6000), 0.2 * _clip(4, 6000)])
+    _p, ok = N.select_prop_decrease(profiles, active, quiet, sr, target=0.0)
+    assert ok["target_met"] is True
+    prop, miss = N.select_prop_decrease(profiles, active, quiet, sr, target=1.01)  # fidelity <= 1
+    assert miss["target_met"] is False
+    assert prop == min(miss["frontier"])
+
+
 def test_select_prop_picks_highest_above_target():
     profiles = N.build_profiles(np.column_stack([_clip(0), _clip(1)]), 2000)
     sr = 2000

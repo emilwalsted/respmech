@@ -216,6 +216,10 @@ def select_prop_decrease(profiles: Sequence[NoiseProfile], active_cols: ArrayLik
     fidelity stays ≥ ``target`` on the test's active EMG. Returns
     (prop_decrease, report) where report lists per-channel fidelity/ΔSNR.
 
+    When no value on the grid keeps every channel at the target, the gentlest one is
+    used and ``report["target_met"]`` is False, so a caller can say so instead of
+    presenting a below-target choice as if it had met the target.
+
     ``active_cols`` / ``quiet_cols``: representative inspiratory / expiratory EMG
     (ECG-removed) with one column per profile."""
     active_cols = np.asarray(active_cols, dtype=float)
@@ -236,6 +240,7 @@ def select_prop_decrease(profiles: Sequence[NoiseProfile], active_cols: ArrayLik
             best = prop
     chosen = best if best is not None else min(grid)  # if none qualify, gentlest
     report = _prop_report(profiles, active_cols, quiet_cols, sr, chosen, band, per_prop, target)
+    report["target_met"] = best is not None
     return chosen, report
 
 

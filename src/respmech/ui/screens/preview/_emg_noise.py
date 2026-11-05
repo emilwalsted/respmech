@@ -1446,8 +1446,13 @@ class _EmgNoiseMixin:
         target = nr.get("fidelity_target", 0.8)
         worst = min((r["fidelity"] for r in nr.get("channels", [])), default=float("nan"))
         self._set_fidelity_panel_title(chosen, worst, target)
-        msg = (f"Noise: prop_decrease {chosen} chosen "
-               f"(worst-channel fidelity {worst:.2f} vs target {target:.2f})")
+        if nr.get("target_met") is False:
+            msg = (f"Noise: no strength keeps every channel at the fidelity target {target:.2f}, "
+                   f"so the gentlest (prop_decrease {chosen}) is used "
+                   f"(worst-channel fidelity {worst:.2f})")
+        else:
+            msg = (f"Noise: prop_decrease {chosen} chosen "
+                   f"(worst-channel fidelity {worst:.2f} vs target {target:.2f})")
         for fr in result.ok_files.values():
             if getattr(fr, "ecg", None):
                 msg += f" · ECG suppression {fr.ecg.get('suppression', float('nan')):.0%}"
@@ -1485,8 +1490,13 @@ class _EmgNoiseMixin:
             target = nr.get("fidelity_target", 0.8)
             worst = min((r["fidelity"] for r in nr.get("channels", [])), default=float("nan"))
             self._set_fidelity_panel_title(chosen, worst, target)
-            self._set_status(f"Noise: prop_decrease {chosen} chosen "
-                             f"(worst-channel fidelity {worst:.2f} vs target {target:.2f}).")
+            if nr.get("target_met") is False:
+                self._set_status(f"Noise: no strength keeps every channel at the fidelity target "
+                                 f"{target:.2f}, so the gentlest (prop_decrease {chosen}) is used "
+                                 f"(worst-channel fidelity {worst:.2f}).")
+            else:
+                self._set_status(f"Noise: prop_decrease {chosen} chosen "
+                                 f"(worst-channel fidelity {worst:.2f} vs target {target:.2f}).")
         if noise.enabled and noise.auto_prop and self.state.settings.input.channels.emg:
             self._schedule("emg_all")                # re-condition with the chosen suppression
             self._schedule("emg_detail")
