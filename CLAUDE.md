@@ -329,8 +329,7 @@ special banner wording, one entry in `ui/screens/settings_screen.py`'s `_CARRIED
 write site that sets `ecg_reference_file`/`normalization_reference_file` in the first
 place (both are TOML/CLI-only fields today, confirmed by grep before the carried-over table shipped) — a
 future ticket that adds one must stamp the folder tag at that write site, mirroring
-`preview/_emg_noise.py`'s `_apply_noise_reference`/`_apply_noise_expiration` (lines
-~854/879), which is the one thing this ticket could not do for lack of a call site to
+`preview/_emg_noise.py`'s `_apply_noise_reference`/`_apply_noise_expiration`, which is the one thing this ticket could not do for lack of a call site to
 instrument.
 
 ## The app's shape (v2.x) — supersedes any older "three screens" description
