@@ -66,7 +66,7 @@ Two tabs:
 | Tab | What you do |
 |---|---|
 | **Setup** | Point at your recordings, map the data columns to channels — RespMech suggests roles from the file's own column names, or assign them visually from the data if you prefer — and choose what to save. Settings validate as you type — the status bar flags anything inconsistent. |
-| **Preview & QC** | See the analysis on one file *before* running the batch: breath segmentation, the Campbell loop and the per-breath table, and dedicated subtabs to tune **EMG – ECG reduction** and **EMG – noise reduction** against the live signal. Click a breath to exclude it. |
+| **Preview & QC** | See the analysis on one file *before* running the batch: breath segmentation, the Campbell loop and the per-breath table, and dedicated subtabs to tune **EMG – ECG reduction** and **EMG – noise reduction** against the live signal. Click a breath to mark it; right-click it to exclude it or to give it a type. |
 
 **Run & results** is a drawer, not a third tab: a compact "Run & results ▸" bar sits below Preview
 & QC's file list on every subtab, and opens into the batch's progress, per-file status, averaged
@@ -297,8 +297,8 @@ exactly the last expiration.
 Breaths are segmented by joining an inspiration with the following expiration, using the **flow**
 signal to find the transition. A *breath-separation buffer* absorbs "wobbly" flow around zero
 (common in quiet breathing); its length depends on your sampling and breathing frequency. In
-Preview & QC you can click any breath — e.g. an IC manoeuvre or a cough — to drop it from the
-analysis:
+Preview & QC you can right-click any breath (a cough, for example) and choose *Excluded* to drop it
+from the analysis:
 
 ![Breath segmentation and exclusion](docs/img/breath-exclusion.png)
 

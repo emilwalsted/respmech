@@ -1,8 +1,9 @@
 # Release & distribution (maintainer)
 
-Strategy: **PyPI package + a Homebrew tap** (CLI works out of the box; GUI is an
-optional extra). This keeps the CLI trivially installable everywhere and avoids
-bundling Qt into the Homebrew build.
+Strategy: **desktop installers (macOS dmg, Windows MSI) plus the PyPI package** (CLI
+works out of the box; GUI is an optional extra). A Homebrew formula for the CLI is
+prepared (section 3), but its tap is not yet published (see [INSTALL.md](INSTALL.md));
+the formula avoids bundling Qt into the Homebrew build.
 
 ## 1. Build
 ```bash
@@ -58,8 +59,9 @@ Users then install with `brew install emilwalsted/respmech/respmech`.
 ### CLI-only vs GUI
 The formula installs the **CLI only** (numpy/scipy/pandas as binary wheels — no
 compiler needed). Qt/PySide6 is large and not bundled; GUI users run
-`pip install "respmech[gui]"`. A signed/notarized `.app` bundle (via BeeWare
-Briefcase) can be added later for non-technical clinical users — see PLAN.md §7.
+`pip install "respmech[gui]"`. The desktop installers (a signed and notarised macOS dmg
+and a Windows MSI, built with BeeWare Briefcase by `.github/workflows/release.yml`) are the
+route for non-technical users; see [INSTALL.md](INSTALL.md) and [SIGNING.md](SIGNING.md).
 
 ## 4. Versioning
 `src/respmech/__init__.py`'s `__version__` is the **single source of truth** — the PyPI

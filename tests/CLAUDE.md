@@ -71,9 +71,10 @@ reproducibly (not flaky) on a barebones Linux container with only DejaVu/Bitstre
 installed: `respmech.ui.splash._resolve_svg_fonts()` falls back to
 `QFontDatabase.systemFont(FixedFont).family()`, which on such a container returns the
 generic string `"monospace"` — a name `QFontDatabase.families()` itself never lists (it
-only enumerates concrete family names). The real CI (`ci.yml`) only runs `tests/unit` on
-`windows-latest`/`macos-latest`, both of which have a real `Consolas`/`Menlo` install and
-never hit this fallback path, so this is a sandbox-only artefact, not a product defect.
+only enumerates concrete family names). In the real CI (`ci.yml`) the Windows and macOS
+jobs have a real `Consolas`/`Menlo` install and never hit this fallback path; the Linux job
+(`smoke-linux`) does hit it and deselects exactly this test, so this is a minimal-Linux
+artefact, not a product defect.
 Confirmed 29-07-2026 while baselining a documentation-only change (no Python touched):
 553 passed / 1 failed, before and after.
 
@@ -103,8 +104,9 @@ Building a test fixture for a "missing value" cell — a real, plausible state i
 result tables (e.g. an unreliable EMG detector writing NaN, or a genuinely absent
 field) — is not as simple as `pd.array([None, "a string"], dtype=object)` or
 `np.array([None, "a string"], dtype=object)` fed straight into `pd.DataFrame`: on
-this project's pinned pandas (3.0.5), mixing `None` with a string in either of
-those makes pandas infer its own `str` extension dtype for the column, and as
+the pandas this was found on (3.0.5; the project only requires `pandas>=2.0`), mixing
+`None` with a string in either of those makes pandas infer its own `str` extension
+dtype for the column, and as
 part of that inference it normalises the `None` to a float NaN before any
 application code ever sees it — so a test meant to cover "a real `None` survived
 into the model" silently covers NaN instead, twice over, without an error.
