@@ -19,7 +19,8 @@ What follows is the project memory that sits above both.
   in the `release-tag` environment and then creates the tag on `master`'s tip. See
   `docs/RELEASING.md`, "Requesting a release without pushing a tag".
 - PyPI (`publish-pypi.yml`) runs on the same tag behind a macOS test gate that runs the unit
-  suite file by file, like `ci.yml`. If that run does not finish, publish the SAME tag with a
+  suite file by file, like `ci.yml`, with the numerical golden in its own Linux job on
+  `ubuntu-24.04`. If that run does not finish, publish the SAME tag with a
   manual run from master and the `tag` input (`docs/RELEASING.md`, "When the tag's PyPI publish
   did not finish"); an empty `tag` is the TestPyPI dry-run. Do not cut a patch release just to
   get an unpublished version onto PyPI.
@@ -71,19 +72,16 @@ keeps working regardless of the release/pre-release flag).
 **Release → website hook.** The last step of `publish-release`
 ("Notify respmech.dk…") sends a `repository_dispatch` (`event_type:
 respmech-release`) to the website repo, which then refreshes its version and
-redeploys — so the site updates within seconds of a release.
+redeploys, so the site updates as soon as that deploy has finished.
 
 - Requires the secret **`WEBSITE_DISPATCH_TOKEN`** here: a fine-grained PAT with
   **Contents: write** on `emilwalsted/respmech-website`. If it is absent the step
   is skipped and the release/build is unaffected.
 - Without the hook, a new release reaches the site at the next explicitly
   requested website deploy: the website no longer deploys on a push to its `main`
-  and has no daily poll (explicit deploys since 05-10-2026). The dispatch is the
-  one automatic trigger kept there. Full docs: `deploy/README.md` in the website repo. Since 10-09-2026 the
-  website deploys through the shared engine `emilwalsted/onecom-deploy@deploy-v1`
-  (its SFTP secrets are set with `bin/setup-secrets respmech` from that repo; the
-  old `deploy/setup.sh` is gone), and the deploy result is read on the website
-  repo's `deploy-status` branch.
+  and has no daily poll (explicit deploys since 05-10-2026). Release dispatches like
+  this one are the only automatic triggers kept there. How a deploy is requested and
+  how its result is read is documented in the website repo (`deploy/README.md`).
 
 > When changing `release.yml`, keep the notify step **after** `gh release create`
 > and non-fatal (guarded on the token) so it can never break an installer build.

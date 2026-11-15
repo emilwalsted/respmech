@@ -26,9 +26,11 @@ sits alongside `docs/RELEASING.md` and `docs/SIGNING.md`.
 - **This file** for orientation and cross-cutting rules; `tests/CLAUDE.md` and
   `src/respmech/ui/CLAUDE.md` for test- and Qt-specific hazards.
 - **`docs/`**: `REVERSE_ENGINEERING.md` (the formulas/units v2 must match),
-  `PLAN.md` (target architecture), `RELEASING.md` + `SIGNING.md` (the release
+  `PLAN.md` (the original Phase 1 refactor proposal from before v2; the layout that was
+  built differs), `RELEASING.md` + `SIGNING.md` (the release
   runbook), `DISTRIBUTION.md`, `INSTALL.md`, `NOISE_ECG_OPTIMIZATION.md`,
-  `CARDIAC_GATED_PEAK_EMG.md`, `PTP_INVESTIGATION.md`, and `beslutninger.md`
+  `CARDIAC_GATED_PEAK_EMG.md`, `PTP_INVESTIGATION.md`, `MUTATION_TESTING.md`,
+  `PROFILING.md`, and `beslutninger.md`
   (dated decisions and "settled, don't reopen" points — read it before reopening
   anything that sounds already decided).
 - **`CHANGELOG.md`** is the canonical release log.
@@ -63,7 +65,7 @@ sits alongside `docs/RELEASING.md` and `docs/SIGNING.md`.
 - **A task is not done while its own CI is red.** A green local Linux run is
   necessary, not sufficient — the Windows/macOS jobs see real portability
   differences a Linux run structurally cannot.
-- Two decision records worth reading before you touch numbers or exclusions:
+- One decision record is worth reading before you touch numbers or exclusions:
   `docs/beslutninger.md` lists several number-changing ideas that were deliberately
   rejected — don't re-propose them without new evidence.
 
@@ -149,7 +151,7 @@ precisely where the original problem mattered most.
 
 ### Two different screenshot tools — do not confuse them (found 10-08-2026)
 
-`scripts/gen_readme_figures.py` is the **canonical generator for the 7 images in
+`scripts/gen_readme_figures.py` is the **canonical generator for the 10 images in
 `docs/img/`** that `README.md` embeds by name. Run it locally (`python scripts/gen_readme_figures.py`,
 offscreen Qt, deterministic) whenever a UI or figure change should be reflected in the
 README.
@@ -188,8 +190,9 @@ The protocol, after **every** push:
    within seconds of the push.
 2. Watch it to a verdict: `gh run watch <run-id> --exit-status` (or poll
    `gh run view <run-id>`). **`GUI smoke · ubuntu-latest` (~15 min) is the same claim
-   as your local suite and must be green. The Windows jobs (~35 min) must be green
-   before the work is reported done.** Read failures with
+   as your local suite and must be green. The Windows jobs (about an hour; 48 to 73 min in
+   the CI runs of November 2026) must be green before the work is reported done.** Read
+   failures with
    `gh run view <run-id> --log-failed`.
 3. macOS can queue for hours behind earlier runs — do not block the hand-off on it,
    but check the latest *completed* macOS smoke on the branch before starting new
@@ -280,17 +283,20 @@ file rail's badge, so none of them can disagree about what counts as carried.
 
 **The calculation core is deliberately blind to all of this.** `core.compute`/
 `core.pipeline`/`core._legacy_ns` still key purely on filename — `folder` is dropped at
-the `to_legacy_ns()` boundary (`excludebreaths=[[e.file, list(e.breaths)] for e in ...]`)
-and never reaches a run. The UI/settings layer alone decides which entries are even IN the
-list by the time a run starts (mutating `settings.processing.exclude_breaths` directly);
+the `to_legacy_ns()` boundary (`excludebreaths=_merged_exclude_breaths(...)`, which hands
+the engine `[file, breath numbers]` pairs only and also folds in the typed breaths that are
+excluded from the tidal average) and never reaches a run. The UI/settings layer alone
+decides which entries are even IN the list by the time a run starts (mutating
+`settings.processing.exclude_breaths` directly);
 compute's own numeric behaviour for a given list is byte-identical to before this ticket
 — any golden-test change here would be a bug in the change, not the reference.
 
 **A subtlety worth knowing before touching this again:** the folder tag is ONE per
 file-entry, not one per breath, because `ExcludeEntry.breaths` is a flat `list[int]`. Two
-self-review rounds converged on the same rule from opposite directions: `_toggle_breath`
-(`ui/screens/preview/_mechanics.py`) stamps `folder` **only when creating a brand-new
-entry** — an existing entry's `folder` is never rewritten by a plain click, even one that
+self-review rounds converged on the same rule from opposite directions: `_set_breath_type`
+(`ui/screens/preview/_mechanics.py`, the one funnel behind the breath-type menu;
+`_toggle_breath` calls it) stamps `folder` **only when creating a brand-new
+entry**: an existing entry's `folder` is never rewritten by a later choice, even one that
 un-excludes one of ITS OWN breaths, because the entry can hold a MIX of a breath the user
 just decided on and others still carried from a different folder that this click never
 looked at. An earlier version restamped on every touch; that silently "confirmed" the
@@ -320,9 +326,10 @@ not a mirrored second table. `CarriedOverState` is now dict-backed
 (`kinds_present() -> [(kind, names), …]`), with `exclude_files`/`breath_count_files`/
 `noise_reference` kept as properties so every pre-existing caller is unaffected; the two
 new kinds (`ecg_reference`, `normalization_reference`) follow `noise_reference`'s bool
-shape, since like it they name a single batch-wide reference, not a per-file list. **A
-future tagged kind (typed breaths `breath_types`, manual separators `separators`, reference resolution
-`references`/`reference_defaults`/`subjects`) adds ONE row here** (plus, if it needs
+shape, since like it they name a single batch-wide reference, not a per-file list. **The
+later tagged kinds (typed breaths `breath_types`, manual separators `separators`, segmentation
+overrides `overrides`, reference resolution `references`/`reference_defaults`/`subjects`) each
+added ONE row here, and a future one does the same** (plus, if it needs
 special banner wording, one entry in `ui/screens/settings_screen.py`'s `_CARRIED_PHRASES`)
 — never touch the six call sites individually again. Note the retrofitted
 `ecg_reference_folder`/`normalization_reference_folder` currently have NO live UI/CLI
@@ -354,7 +361,7 @@ instrument.
   of it with an empty recent-analyses list**, or a local dataset folder name ends
   up in a published image.
 - **Gating is inverted: every surface is always reachable.** It is the ACTION that
-  gets disabled (the Run button, "Process && write this file", clicking a breath),
+  gets disabled (the Run button, "Process && write this file", typing or excluding a breath),
   never the tab, with the reason spelled out as a full sentence at the action
   itself. The Run drawer's **commitment sheet** (files read, what will be written,
   blockers in fix-order) is the ONLY gating surface. During a run, Preview & QC's
@@ -397,7 +404,8 @@ instrument.
   inspiratory effort, sniff, rest, other, plus Tidal/Excluded; `rest` is offered only on the
   EMG-only segments tab); the choice lands in `processing.breath_types`. On a flow-bearing set every typed breath is
   also excluded from the tidal mechanics loop, and its values come from
-  `core.analysis.manoeuvres.extract`. A plain left click still toggles include/exclude.
+  `core.analysis.manoeuvres.extract`. A plain left click only marks a breath (a view aid,
+  allowed during a run); excluding or re-including one is the menu's Excluded/Tidal choice.
 - **EMG-only recordings have no breaths to split.** `core.analysis.segments` cuts them
   by `processing.segmentation.method`: `whole_file`, `separators` (times the user places
   with "Place separators" on the segments tab, stored as `processing.segmentation.separators`),
@@ -437,8 +445,8 @@ instrument.
   sentence naming the UI control — any new `validate()` check needs an entry in
   `_FRIENDLY_SETTINGS_ERRORS`/`_FRIENDLY_PREFIXES`.
 - `core/io/plan.py::plan_outputs()`: the one place that knows what a run WILL
-  write (`is_cap=True` = a ceiling, never a promise). `write_planned()` rewrites a
-  computed result to another folder without recomputing.
+  write (`is_cap=True` = a ceiling, never a promise). `core/io/writers.py::write_planned()`
+  rewrites a computed result to another folder without recomputing.
 - `core/settings.py::carried_over_state()`/`is_carried_folder()`: folder-tracked
   settings (`None` on either side always means unproven, never guessed;
   `normcase`+`normpath`).
@@ -461,7 +469,8 @@ instrument.
   cautions and never raises; only `Settings.validate()` blocks a run.
 - `core/settings.py::_CARRIED_KINDS` (imported by `settingsio/toml_io.py` as
   `_FOLDER_TAG_PATHS`): one row per folder-tagged setting (exclusions, breath counts, typed
-  breaths, separators, references and subjects, the noise, ECG and normalisation references). A new
+  breaths, separators and segmentation overrides, references, reference defaults and subjects, the
+  noise, ECG and normalisation references). A new
   filename-keyed setting gets a row there, not its own carried-over logic.
 - `core/analysis/manoeuvres.py::extract()`: a pure function of ONE raw breath dict plus the
   file's own tidal breaths, never of `calculatemechanics` output and never of another file, so
@@ -481,10 +490,10 @@ instrument.
   old.py -o new.toml` converts an old-style settings file with a migration report.
 - **Tests are the gate:** `pytest tests/unit` + `tests/golden` green. CI
   (`ci.yml`) runs **smoke-linux** on every push (~15 min; installs Qt libs from
-  the runner image's own index and only refreshes when needed, each apt call
-  wrapped in a `timeout`); the full 2×2 (OS × Python) matrix runs only on
-  master/PR/dispatch. Every job has `timeout-minutes`; concurrency is keyed per
-  sha (push) or per PR number.
+  the runner image's own index and only refreshes when needed, the first install and
+  the refresh each wrapped in a `timeout`, the step itself limited to 6 minutes); the
+  full 2×2 (OS × Python) matrix runs only on master/PR/dispatch. Every job has
+  `timeout-minutes`; concurrency is keyed per sha (push) or per PR number.
 - **The six engine modules pass `mypy --strict`** (`compute`, `emg`, `entropy`,
   `noise`, `analysis/segments`, `analysis/manoeuvres`; command in the golden job of
   `ci.yml`, a pinned, non-blocking step). Annotations only: numpy and settings types
@@ -502,7 +511,8 @@ instrument.
 Pushing `vX.Y.Z` (must point at `master`) triggers both `release.yml` (signed dmg +
 MSI, GitHub release marked Latest) and `publish-pypi.yml` (PyPI via Trusted
 Publishing/OIDC, no tokens, behind a macOS test gate that runs the unit suite file
-by file exactly like `ci.yml`'s macOS job; the one-process run it used before ran
+by file exactly like `ci.yml`'s macOS job, with the numerical golden in its own Linux job
+on `ubuntu-24.04`; the one-process run the macOS gate used before ran
 out of time at 67 % on v2.5.0. Race-sensitive asserts still tend to fail there
 first). If a tag's PyPI run does not finish, a manual run of `publish-pypi.yml`
 from master with the `tag` input publishes that same tag; never cut a new version
